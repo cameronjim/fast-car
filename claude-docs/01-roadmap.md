@@ -11,7 +11,11 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
 
 - [x] 0.1 Create repo skeleton per `02-repo-layout.md`
       Done 2026-08-22: directories, top-level READMEs, .gitignore, .clang-format added.
-- [ ] 0.2 `sim-cpu` image + lockfile; `f1tenth_gym` runs headless in it
+- [x] 0.2 `sim-cpu` image + lockfile; `f1tenth_gym` runs headless in it
+      Done 2026-08-22: docker/sim-cpu/ (Dockerfile + uv.lock, f1tenth_gym
+      pinned to a commit SHA on its v1.0.0/gymnasium branch, CPU-only
+      torch) built and its headless gym+torch smoke test run in CI on
+      every push touching that image (job sim-cpu-image).
 - [ ] 0.3 `train-cuda` image + lockfile on Desktop A; torch sees the GPU
 - [ ] 0.4 `ros-dev` image (ROS 2 Humble) + lockfile
 - [ ] 0.5 Port/replace the Foxy-era `f1tenth_gym_ros` bridge to Humble (known cost, scheduled)

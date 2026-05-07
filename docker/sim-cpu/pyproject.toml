@@ -1,0 +1,40 @@
+[project]
+name = "sim-cpu"
+version = "0.1.0"
+description = """
+Dependency manifest for the sim-cpu image (claude-docs/03-environments.md).
+CPU-only headless simulation: Python, CPU torch, racer_gym. Currently
+racer_gym means upstream f1tenth_gym pinned to a commit SHA, since the
+racer_gym fork (sim/racer_gym/, roadmap task S.1) does not exist yet.
+This project is never built into a wheel; it exists only so uv can lock
+this image's dependencies. NEVER add ROS or CUDA packages here.
+"""
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "f1tenth_gym",
+    "torch",
+]
+
+[tool.uv]
+package = false
+# The lock only needs to be valid for the Linux container this image
+# actually builds (see Dockerfile); it does not need to resolve on the
+# arm64 Mac used for local pre-verification, which uses its own throwaway
+# venv instead (see docker/sim-cpu/README.md).
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[tool.uv.sources]
+# f1tenth/f1tenth_gym main branch is still the old gym==0.19.0 / numpy<=1.22
+# API. The v1.0.0 branch (gymnasium-based, poetry-packaged) is the modern
+# API and is what racer_gym (task S.1) will fork from, so pin to it here.
+# Pinned to a commit SHA, not a branch, because the branch moves.
+f1tenth_gym = { git = "https://github.com/f1tenth/f1tenth_gym.git", rev = "5a301bd0ae1ceaf7dec653e7549c8d099db58a6b" }
+# CPU-only wheel index keeps CUDA out of this image entirely.
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

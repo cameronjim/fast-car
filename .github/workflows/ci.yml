@@ -45,7 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # astral-sh/setup-uv only tags rolling majors up through v7; v8+ are
+      # exact-version tags only, so this is pinned to the exact latest
+      # release rather than a rolling major tag.
+      - uses: astral-sh/setup-uv@v10.0.1
 
       - name: pytest + coverage gates per package
         run: .github/scripts/run_python_tests.sh
@@ -67,6 +70,10 @@ jobs:
         run: |
           apt-get update
           apt-get install -y git python3-colcon-common-extensions build-essential
+          # Container jobs check out as a different uid than the one that
+          # owns the bind-mounted workspace, which git refuses to touch by
+          # default ("dubious ownership"). Mark it safe before checkout.
+          git config --global --add safe.directory '*'
 
       - uses: actions/checkout@v7
 

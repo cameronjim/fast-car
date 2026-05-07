@@ -12,10 +12,18 @@
 # notice and passes instead of silently doing nothing.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+# GitHub Actions steps already run with cwd = the repo root, so no need to
+# shell out to git for that (and inside the ros:humble container, git
+# refuses to even answer `rev-parse` here with a "dubious ownership" error
+# because the checkout is owned by a different uid than the container user).
 
+# ROS's setup.bash references variables (e.g. AMENT_TRACE_SETUP_FILES) that
+# are legitimately unset before sourcing it, which trips `set -u`. Relax
+# just for the source line, per the standard ROS + `set -u` workaround.
+set +u
 # shellcheck disable=SC1091
 source /opt/ros/humble/setup.bash
+set -u
 
 cd ros_ws
 

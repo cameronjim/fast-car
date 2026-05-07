@@ -9,7 +9,8 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
 
 ## Phase 0 — Environments and repo (hardware + sim tracks share this)
 
-- [ ] 0.1 Create repo skeleton per `02-repo-layout.md`
+- [x] 0.1 Create repo skeleton per `02-repo-layout.md`
+      Done 2026-08-22: directories, top-level READMEs, .gitignore, .clang-format added.
 - [ ] 0.2 `sim-cpu` image + lockfile; `f1tenth_gym` runs headless in it
 - [ ] 0.3 `train-cuda` image + lockfile on Desktop A; torch sees the GPU
 - [ ] 0.4 `ros-dev` image (ROS 2 Humble) + lockfile

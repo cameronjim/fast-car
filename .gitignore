@@ -1,0 +1,26 @@
+# Not in git: rosbags, checkpoints, and other run data (see claude-docs/10-conventions.md).
+data/
+
+# Generated bindings — CI regenerates these from config/vehicle_params.yaml; never commit
+# generated code (see claude-docs/10-conventions.md, claude-docs/06-vehicle-params.md).
+**/generated/
+*_generated.py
+*_generated.hpp
+*_generated.cpp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# colcon build artifacts
+ros_ws/build/
+ros_ws/install/
+ros_ws/log/
+
+# macOS
+.DS_Store

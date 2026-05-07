@@ -18,8 +18,24 @@ FROM python:3.11-slim
 
 # git is needed only to fetch the pinned f1tenth_gym commit during `uv
 # sync`; it is not part of the runtime the smoke test exercises.
+#
+# The rest of these are runtime shared libraries, not a display/GUI stack:
+# f1tenth_gym's opencv-python and pygame dependencies are manylinux wheels
+# that dynamically link against a handful of X11/GL client libraries even
+# when no window is ever opened (manylinux policy assumes these are always
+# present on the host; python:3.11-slim has none of them). Without these,
+# `import cv2` / `import pygame` fail at import time with a missing
+# .so, well before render_mode or headlessness ever come into it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        libxcb1 \
+        libx11-6 \
+        libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin the uv binary itself to the same version used to generate uv.lock

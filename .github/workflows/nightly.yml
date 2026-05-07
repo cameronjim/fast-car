@@ -1,0 +1,53 @@
+name: nightly
+
+# STUB for the Desktop A self-hosted-runner nightly job described in
+# claude-docs/12-testing.md "CI wiring": "Nightly (Desktop A runner):
+# L4-full, L5-long, training smoke." Desktop A (claude-docs/03-
+# environments.md: RTX 3060, `train-cuda` image) is not wired up as a
+# GitHub Actions self-hosted runner yet. This workflow exists only to hold
+# the schedule + workflow_dispatch entry point; it runs on ubuntu-latest,
+# prints what the real nightly job will do, and exits 0. It does not build,
+# train, or test anything.
+#
+# The owner will wire the self-hosted runner on Desktop A (runner
+# registration, labels, `train-cuda` availability) separately. Do NOT add
+# self-hosted runner configuration, runner labels, or secrets to this file -
+# that is an explicit owner decision, not something for CI-wiring task 0.6
+# to add speculatively.
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # nightly, ~02:00 America/Los_Angeles (09:00 UTC)
+  workflow_dispatch: {}
+
+jobs:
+  nightly-stub:
+    name: Nightly stub (Desktop A runner not wired yet)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print nightly plan
+        run: |
+          cat <<'EOF'
+          This is a stub for the nightly job in claude-docs/12-testing.md
+          ("CI wiring: Nightly (Desktop A runner): L4-full, L5-long,
+          training smoke").
+
+          Once the Desktop A self-hosted runner is wired up, this workflow's
+          `runs-on` will point at it, and this job will actually run:
+
+            - L4-full: the full replay/golden test suite over the complete
+              committed rosbag set in tests/bags/, including every
+              fault-injection case, not just the small subset run on every
+              push (that is L4-small, in ci.yml).
+            - L5-long: the long sim-in-loop battery (many laps, full
+              randomization ranges) against racer_gym, headless, seeded.
+            - Training smoke test: a short SAC run completes, loss is
+              finite, and the resulting checkpoint loads through the
+              deployment contract (racer_policy).
+
+          None of that runs here yet. The Desktop A runner is not wired up,
+          and this job intentionally does no building, training, or testing.
+          EOF
+
+      - name: Exit clean
+        run: exit 0

@@ -1,0 +1,87 @@
+name: CI
+
+# Per claude-docs/12-testing.md "CI wiring": every push runs L1-L3, L4-small,
+# L5-short, and merge is blocked on green - there are no skip labels. See
+# claude-docs/01-roadmap.md task 0.6 and claude-docs/03-environments.md for
+# which pinned images each job is meant to run in once those images exist
+# (docker/sim-cpu is task 0.2, docker/ros-dev is task 0.4). Every job below
+# that stands in for one of those images says so in a comment.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint (ruff + clang-format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: ruff check + ruff format --check
+        run: .github/scripts/lint_python.sh
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+
+      - name: clang-format --dry-run -Werror
+        run: .github/scripts/lint_cpp.sh
+
+  unit-and-property:
+    name: L1 unit + L2 property (pytest)
+    runs-on: ubuntu-latest
+    # INTERIM: claude-docs/03-environments.md says Python tests run in the
+    # `sim-cpu` image. That image is roadmap task 0.2 and does not exist
+    # yet, so this job uses bare ubuntu-latest + uv for now.
+    # TODO(task 0.2): once docker/sim-cpu/ has a built, pinned image with a
+    # lockfile, run this job inside that image instead.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+
+      - name: pytest + coverage gates per package
+        run: .github/scripts/run_python_tests.sh
+
+  l3-and-cpp:
+    name: L3 node tests + C++ build (ros-dev)
+    runs-on: ubuntu-latest
+    # INTERIM CONTAINER: claude-docs/03-environments.md specifies that CI
+    # runs colcon/C++ jobs in the repo's own `ros-dev` image, but that image
+    # is roadmap task 0.4 and does not exist yet. Using the stock
+    # `ros:humble` image from Docker Hub until then.
+    # TODO(task 0.4): once docker/ros-dev/ has a built, pinned image, point
+    # `container.image` at that image instead, and drop the apt-get
+    # bootstrap step below (colcon etc. will already be baked in).
+    container:
+      image: ros:humble
+    steps:
+      - name: Install git + colcon (interim bootstrap, see TODO above)
+        run: |
+          apt-get update
+          apt-get install -y git python3-colcon-common-extensions build-essential
+
+      - uses: actions/checkout@v7
+
+      - name: colcon build + colcon test
+        run: .github/scripts/ros_build_test.sh
+
+  l4-small-l5-short:
+    name: L4-small replay + L5-short sim-in-loop (placeholder)
+    runs-on: ubuntu-latest
+    # Placeholder until roadmap task 0.9 (replay/golden + sim-in-loop
+    # runners, bench checklist runner) and task S.2 (tracker lap test as the
+    # L5 regression canary) land. See claude-docs/12-testing.md L4/L5 and
+    # "CI wiring".
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check for L4/L5 entry points
+        run: .github/scripts/l4_l5_placeholder.sh

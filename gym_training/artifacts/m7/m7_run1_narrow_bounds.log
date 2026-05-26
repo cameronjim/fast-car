@@ -1,0 +1,1608 @@
+Using cuda device
+/mnt/c/Users/CJ/code/cpen391/f1tenth-autonomous-racing/.claude/worktrees/rl-agent-simulator-optimization-64161d/gym_training/f1rl/train.py:81: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:822.)
+  print(f"carried the learned entropy coefficient {float(model.log_ent_coef.exp()):.4f}")
+carried the learned entropy coefficient 0.0111
+warm started from artifacts/m5/best_model.zip, replay buffer left empty
+Logging to runs/sac_m7_versus/tb/SAC_2
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 78.8     |
+|    ep_rew_mean     | -5.46    |
+| time/              |          |
+|    episodes        | 4        |
+|    fps             | 533      |
+|    time_elapsed    | 1        |
+|    total_timesteps | 752      |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 99.4     |
+|    ep_rew_mean     | 2.07     |
+| time/              |          |
+|    episodes        | 8        |
+|    fps             | 697      |
+|    time_elapsed    | 1        |
+|    total_timesteps | 1264     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 115      |
+|    ep_rew_mean     | 5.08     |
+| time/              |          |
+|    episodes        | 12       |
+|    fps             | 892      |
+|    time_elapsed    | 2        |
+|    total_timesteps | 2304     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 139      |
+|    ep_rew_mean     | 10.9     |
+| time/              |          |
+|    episodes        | 16       |
+|    fps             | 939      |
+|    time_elapsed    | 2        |
+|    total_timesteps | 2720     |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [0] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 129      |
+|    ep_rew_mean     | 9.02     |
+| time/              |          |
+|    episodes        | 20       |
+|    fps             | 1017     |
+|    time_elapsed    | 3        |
+|    total_timesteps | 3576     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 131      |
+|    ep_rew_mean     | 9.32     |
+| time/              |          |
+|    episodes        | 24       |
+|    fps             | 1048     |
+|    time_elapsed    | 3        |
+|    total_timesteps | 4040     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 137      |
+|    ep_rew_mean     | 10       |
+| time/              |          |
+|    episodes        | 28       |
+|    fps             | 1098     |
+|    time_elapsed    | 4        |
+|    total_timesteps | 4960     |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [1] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 149      |
+|    ep_rew_mean     | 12.1     |
+| time/              |          |
+|    episodes        | 32       |
+|    fps             | 1115     |
+|    time_elapsed    | 4        |
+|    total_timesteps | 5432     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 146      |
+|    ep_rew_mean     | 10.6     |
+| time/              |          |
+|    episodes        | 36       |
+|    fps             | 1131     |
+|    time_elapsed    | 5        |
+|    total_timesteps | 5928     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 147      |
+|    ep_rew_mean     | 10.9     |
+| time/              |          |
+|    episodes        | 40       |
+|    fps             | 1135     |
+|    time_elapsed    | 5        |
+|    total_timesteps | 6128     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 140      |
+|    ep_rew_mean     | 9.84     |
+| time/              |          |
+|    episodes        | 44       |
+|    fps             | 1147     |
+|    time_elapsed    | 5        |
+|    total_timesteps | 6560     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 136      |
+|    ep_rew_mean     | 9.47     |
+| time/              |          |
+|    episodes        | 48       |
+|    fps             | 1170     |
+|    time_elapsed    | 6        |
+|    total_timesteps | 7312     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 133      |
+|    ep_rew_mean     | 8.87     |
+| time/              |          |
+|    episodes        | 52       |
+|    fps             | 1176     |
+|    time_elapsed    | 6        |
+|    total_timesteps | 7680     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 137      |
+|    ep_rew_mean     | 9.7      |
+| time/              |          |
+|    episodes        | 56       |
+|    fps             | 1192     |
+|    time_elapsed    | 7        |
+|    total_timesteps | 8424     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 139      |
+|    ep_rew_mean     | 10.1     |
+| time/              |          |
+|    episodes        | 60       |
+|    fps             | 1203     |
+|    time_elapsed    | 7        |
+|    total_timesteps | 9008     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 140      |
+|    ep_rew_mean     | 10.8     |
+| time/              |          |
+|    episodes        | 64       |
+|    fps             | 1105     |
+|    time_elapsed    | 9        |
+|    total_timesteps | 10056    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 142      |
+|    ep_rew_mean     | 11.1     |
+| time/              |          |
+|    episodes        | 68       |
+|    fps             | 656      |
+|    time_elapsed    | 17       |
+|    total_timesteps | 11416    |
+| train/             |          |
+|    actor_loss      | -17.8    |
+|    critic_loss     | 3.19     |
+|    ent_coef        | 0.011    |
+|    ent_coef_loss   | -1.6     |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 192      |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 184      |
+|    ep_rew_mean     | 20.1     |
+| time/              |          |
+|    episodes        | 72       |
+|    fps             | 437      |
+|    time_elapsed    | 37       |
+|    total_timesteps | 16496    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.79     |
+|    ent_coef        | 0.00903  |
+|    ent_coef_loss   | -1.66    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 832      |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 211      |
+|    ep_rew_mean     | 26.1     |
+| time/              |          |
+|    episodes        | 76       |
+|    fps             | 413      |
+|    time_elapsed    | 44       |
+|    total_timesteps | 18248    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.54     |
+|    ent_coef        | 0.00861  |
+|    ent_coef_loss   | -1.34    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 1024     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 220      |
+|    ep_rew_mean     | 28.2     |
+| time/              |          |
+|    episodes        | 80       |
+|    fps             | 397      |
+|    time_elapsed    | 48       |
+|    total_timesteps | 19120    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.47     |
+|    ent_coef        | 0.00836  |
+|    ent_coef_loss   | -1.45    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 1152     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 220      |
+|    ep_rew_mean     | 28.5     |
+| time/              |          |
+|    episodes        | 84       |
+|    fps             | 377      |
+|    time_elapsed    | 54       |
+|    total_timesteps | 20504    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.57     |
+|    ent_coef        | 0.00801  |
+|    ent_coef_loss   | -1.26    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 1344     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 217      |
+|    ep_rew_mean     | 28       |
+| time/              |          |
+|    episodes        | 88       |
+|    fps             | 371      |
+|    time_elapsed    | 59       |
+|    total_timesteps | 21928    |
+| train/             |          |
+|    actor_loss      | -18.5    |
+|    critic_loss     | 1.43     |
+|    ent_coef        | 0.0078   |
+|    ent_coef_loss   | -1.08    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 1472     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 232      |
+|    ep_rew_mean     | 31.8     |
+| time/              |          |
+|    episodes        | 92       |
+|    fps             | 353      |
+|    time_elapsed    | 67       |
+|    total_timesteps | 23840    |
+| train/             |          |
+|    actor_loss      | -18.5    |
+|    critic_loss     | 1.41     |
+|    ent_coef        | 0.00753  |
+|    ent_coef_loss   | -0.612   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 1728     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 245      |
+|    ep_rew_mean     | 34.9     |
+| time/              |          |
+|    episodes        | 96       |
+|    fps             | 337      |
+|    time_elapsed    | 77       |
+|    total_timesteps | 26320    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.42     |
+|    ent_coef        | 0.00727  |
+|    ent_coef_loss   | -0.258   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 2048     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 251      |
+|    ep_rew_mean     | 36.2     |
+| time/              |          |
+|    episodes        | 100      |
+|    fps             | 328      |
+|    time_elapsed    | 85       |
+|    total_timesteps | 28248    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.23     |
+|    ent_coef        | 0.00724  |
+|    ent_coef_loss   | -0.295   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 2304     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 275      |
+|    ep_rew_mean     | 41.7     |
+| time/              |          |
+|    episodes        | 104      |
+|    fps             | 321      |
+|    time_elapsed    | 96       |
+|    total_timesteps | 31040    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.25     |
+|    ent_coef        | 0.00722  |
+|    ent_coef_loss   | -0.0338  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 2624     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 299      |
+|    ep_rew_mean     | 46.7     |
+| time/              |          |
+|    episodes        | 108      |
+|    fps             | 314      |
+|    time_elapsed    | 107      |
+|    total_timesteps | 33792    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.11     |
+|    ent_coef        | 0.00727  |
+|    ent_coef_loss   | -0.0224  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 2944     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 329      |
+|    ep_rew_mean     | 53.4     |
+| time/              |          |
+|    episodes        | 112      |
+|    fps             | 307      |
+|    time_elapsed    | 118      |
+|    total_timesteps | 36328    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.3      |
+|    ent_coef        | 0.00734  |
+|    ent_coef_loss   | 0.239    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 3264     |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [1] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+Eval num_timesteps=40000, episode_reward=126.97 +/- 84.47
+Episode length: 648.38 +/- 373.98
+---------------------------------
+| eval/              |          |
+|    mean_ep_length  | 648      |
+|    mean_reward     | 127      |
+| time/              |          |
+|    total_timesteps | 40000    |
+| train/             |          |
+|    actor_loss      | -18.5    |
+|    critic_loss     | 1.18     |
+|    ent_coef        | 0.00756  |
+|    ent_coef_loss   | 0.188    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 3776     |
+---------------------------------
+New best mean reward!
+eval at 40000 steps, cap 12.00 m/s: clean 69% over 16 episodes, 0 laps, no lap, overtake 69%
+new best racing policy at score 82.50, saved to runs/sac_m7_versus/best/best_racing_model
+-------------------------------------
+| eval/                  |          |
+|    collision_free_rate | 0.688    |
+|    laps_per_episode    | 0        |
+|    overtake_rate       | 0.688    |
+|    racing_score        | 82.5     |
+-------------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 356      |
+|    ep_rew_mean     | 59.5     |
+| time/              |          |
+|    episodes        | 116      |
+|    fps             | 247      |
+|    time_elapsed    | 165      |
+|    total_timesteps | 40992    |
+| train/             |          |
+|    actor_loss      | -18.5    |
+|    critic_loss     | 1.02     |
+|    ent_coef        | 0.00767  |
+|    ent_coef_loss   | 0.143    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 3904     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 381      |
+|    ep_rew_mean     | 65       |
+| time/              |          |
+|    episodes        | 120      |
+|    fps             | 247      |
+|    time_elapsed    | 175      |
+|    total_timesteps | 43464    |
+| train/             |          |
+|    actor_loss      | -18.5    |
+|    critic_loss     | 0.993    |
+|    ent_coef        | 0.00773  |
+|    ent_coef_loss   | -0.125   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 4160     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 404      |
+|    ep_rew_mean     | 70.1     |
+| time/              |          |
+|    episodes        | 124      |
+|    fps             | 246      |
+|    time_elapsed    | 191      |
+|    total_timesteps | 47104    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 1.08     |
+|    ent_coef        | 0.0078   |
+|    ent_coef_loss   | -0.209   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 4608     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 426      |
+|    ep_rew_mean     | 75       |
+| time/              |          |
+|    episodes        | 128      |
+|    fps             | 244      |
+|    time_elapsed    | 203      |
+|    total_timesteps | 49848    |
+| train/             |          |
+|    actor_loss      | -18.4    |
+|    critic_loss     | 0.883    |
+|    ent_coef        | 0.00796  |
+|    ent_coef_loss   | 0.149    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 4992     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 445      |
+|    ep_rew_mean     | 79.4     |
+| time/              |          |
+|    episodes        | 132      |
+|    fps             | 244      |
+|    time_elapsed    | 208      |
+|    total_timesteps | 50928    |
+| train/             |          |
+|    actor_loss      | -18.3    |
+|    critic_loss     | 0.898    |
+|    ent_coef        | 0.00795  |
+|    ent_coef_loss   | 0.0067   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 5120     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 468      |
+|    ep_rew_mean     | 84.9     |
+| time/              |          |
+|    episodes        | 136      |
+|    fps             | 244      |
+|    time_elapsed    | 225      |
+|    total_timesteps | 55128    |
+| train/             |          |
+|    actor_loss      | -18.3    |
+|    critic_loss     | 0.918    |
+|    ent_coef        | 0.00799  |
+|    ent_coef_loss   | -0.266   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 5632     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 479      |
+|    ep_rew_mean     | 87.7     |
+| time/              |          |
+|    episodes        | 140      |
+|    fps             | 243      |
+|    time_elapsed    | 229      |
+|    total_timesteps | 55960    |
+| train/             |          |
+|    actor_loss      | -18.3    |
+|    critic_loss     | 0.903    |
+|    ent_coef        | 0.00792  |
+|    ent_coef_loss   | -0.1     |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 5760     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 505      |
+|    ep_rew_mean     | 93.3     |
+| time/              |          |
+|    episodes        | 144      |
+|    fps             | 243      |
+|    time_elapsed    | 244      |
+|    total_timesteps | 59536    |
+| train/             |          |
+|    actor_loss      | -18.2    |
+|    critic_loss     | 1.11     |
+|    ent_coef        | 0.00753  |
+|    ent_coef_loss   | -0.0903  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 6208     |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [1] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 537      |
+|    ep_rew_mean     | 100      |
+| time/              |          |
+|    episodes        | 148      |
+|    fps             | 244      |
+|    time_elapsed    | 258      |
+|    total_timesteps | 63160    |
+| train/             |          |
+|    actor_loss      | -18.2    |
+|    critic_loss     | 0.882    |
+|    ent_coef        | 0.00766  |
+|    ent_coef_loss   | -0.169   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 6656     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 561      |
+|    ep_rew_mean     | 106      |
+| time/              |          |
+|    episodes        | 152      |
+|    fps             | 244      |
+|    time_elapsed    | 266      |
+|    total_timesteps | 65064    |
+| train/             |          |
+|    actor_loss      | -18.1    |
+|    critic_loss     | 0.883    |
+|    ent_coef        | 0.00767  |
+|    ent_coef_loss   | 0.295    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 6912     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 581      |
+|    ep_rew_mean     | 110      |
+| time/              |          |
+|    episodes        | 156      |
+|    fps             | 245      |
+|    time_elapsed    | 284      |
+|    total_timesteps | 69792    |
+| train/             |          |
+|    actor_loss      | -18      |
+|    critic_loss     | 0.886    |
+|    ent_coef        | 0.00761  |
+|    ent_coef_loss   | -0.0408  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 7488     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 603      |
+|    ep_rew_mean     | 115      |
+| time/              |          |
+|    episodes        | 160      |
+|    fps             | 245      |
+|    time_elapsed    | 288      |
+|    total_timesteps | 70928    |
+| train/             |          |
+|    actor_loss      | -18      |
+|    critic_loss     | 0.836    |
+|    ent_coef        | 0.00753  |
+|    ent_coef_loss   | 0.0723   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 7616     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 602      |
+|    ep_rew_mean     | 114      |
+| time/              |          |
+|    episodes        | 164      |
+|    fps             | 245      |
+|    time_elapsed    | 292      |
+|    total_timesteps | 71888    |
+| train/             |          |
+|    actor_loss      | -17.9    |
+|    critic_loss     | 0.894    |
+|    ent_coef        | 0.0075   |
+|    ent_coef_loss   | -0.0212  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 7744     |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [0] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 614      |
+|    ep_rew_mean     | 117      |
+| time/              |          |
+|    episodes        | 168      |
+|    fps             | 246      |
+|    time_elapsed    | 295      |
+|    total_timesteps | 72624    |
+| train/             |          |
+|    actor_loss      | -17.9    |
+|    critic_loss     | 0.77     |
+|    ent_coef        | 0.00747  |
+|    ent_coef_loss   | -0.174   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 7808     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 594      |
+|    ep_rew_mean     | 113      |
+| time/              |          |
+|    episodes        | 172      |
+|    fps             | 245      |
+|    time_elapsed    | 303      |
+|    total_timesteps | 74528    |
+| train/             |          |
+|    actor_loss      | -17.9    |
+|    critic_loss     | 0.855    |
+|    ent_coef        | 0.00745  |
+|    ent_coef_loss   | 0.0164   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 8064     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 588      |
+|    ep_rew_mean     | 112      |
+| time/              |          |
+|    episodes        | 176      |
+|    fps             | 248      |
+|    time_elapsed    | 314      |
+|    total_timesteps | 78176    |
+| train/             |          |
+|    actor_loss      | -17.8    |
+|    critic_loss     | 0.786    |
+|    ent_coef        | 0.00738  |
+|    ent_coef_loss   | 0.29     |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 8512     |
+---------------------------------
+Eval num_timesteps=80000, episode_reward=139.09 +/- 75.60
+Episode length: 707.06 +/- 334.64
+---------------------------------
+| eval/              |          |
+|    mean_ep_length  | 707      |
+|    mean_reward     | 139      |
+| time/              |          |
+|    total_timesteps | 80000    |
+| train/             |          |
+|    actor_loss      | -17.7    |
+|    critic_loss     | 0.855    |
+|    ent_coef        | 0.00739  |
+|    ent_coef_loss   | -0.0702  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 8768     |
+---------------------------------
+New best mean reward!
+eval at 80000 steps, cap 12.00 m/s: clean 75% over 16 episodes, 0 laps, no lap, overtake 75%
+new best racing policy at score 90.00, saved to runs/sac_m7_versus/best/best_racing_model
+-------------------------------------
+| eval/                  |          |
+|    collision_free_rate | 0.75     |
+|    laps_per_episode    | 0        |
+|    overtake_rate       | 0.75     |
+|    racing_score        | 90       |
+-------------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 601      |
+|    ep_rew_mean     | 115      |
+| time/              |          |
+|    episodes        | 180      |
+|    fps             | 233      |
+|    time_elapsed    | 344      |
+|    total_timesteps | 80336    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 628      |
+|    ep_rew_mean     | 121      |
+| time/              |          |
+|    episodes        | 184      |
+|    fps             | 235      |
+|    time_elapsed    | 363      |
+|    total_timesteps | 85376    |
+| train/             |          |
+|    actor_loss      | -17.6    |
+|    critic_loss     | 0.732    |
+|    ent_coef        | 0.00738  |
+|    ent_coef_loss   | 0.0212   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 9408     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 650      |
+|    ep_rew_mean     | 125      |
+| time/              |          |
+|    episodes        | 188      |
+|    fps             | 235      |
+|    time_elapsed    | 368      |
+|    total_timesteps | 86720    |
+| train/             |          |
+|    actor_loss      | -17.6    |
+|    critic_loss     | 0.831    |
+|    ent_coef        | 0.0074   |
+|    ent_coef_loss   | 0.0305   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 9600     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 648      |
+|    ep_rew_mean     | 125      |
+| time/              |          |
+|    episodes        | 192      |
+|    fps             | 235      |
+|    time_elapsed    | 375      |
+|    total_timesteps | 88664    |
+| train/             |          |
+|    actor_loss      | -17.5    |
+|    critic_loss     | 0.78     |
+|    ent_coef        | 0.00739  |
+|    ent_coef_loss   | -0.0946  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 9856     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 660      |
+|    ep_rew_mean     | 127      |
+| time/              |          |
+|    episodes        | 196      |
+|    fps             | 237      |
+|    time_elapsed    | 390      |
+|    total_timesteps | 92912    |
+| train/             |          |
+|    actor_loss      | -17.5    |
+|    critic_loss     | 0.878    |
+|    ent_coef        | 0.0074   |
+|    ent_coef_loss   | 0.157    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 10368    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 666      |
+|    ep_rew_mean     | 128      |
+| time/              |          |
+|    episodes        | 200      |
+|    fps             | 239      |
+|    time_elapsed    | 397      |
+|    total_timesteps | 95128    |
+| train/             |          |
+|    actor_loss      | -17.4    |
+|    critic_loss     | 0.75     |
+|    ent_coef        | 0.00744  |
+|    ent_coef_loss   | -0.156   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 10624    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 666      |
+|    ep_rew_mean     | 128      |
+| time/              |          |
+|    episodes        | 204      |
+|    fps             | 240      |
+|    time_elapsed    | 402      |
+|    total_timesteps | 96616    |
+| train/             |          |
+|    actor_loss      | -17.4    |
+|    critic_loss     | 0.743    |
+|    ent_coef        | 0.00749  |
+|    ent_coef_loss   | 0.224    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 10816    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 666      |
+|    ep_rew_mean     | 128      |
+| time/              |          |
+|    episodes        | 208      |
+|    fps             | 243      |
+|    time_elapsed    | 415      |
+|    total_timesteps | 101008   |
+| train/             |          |
+|    actor_loss      | -17.3    |
+|    critic_loss     | 0.947    |
+|    ent_coef        | 0.00773  |
+|    ent_coef_loss   | 0.177    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 11392    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 666      |
+|    ep_rew_mean     | 128      |
+| time/              |          |
+|    episodes        | 212      |
+|    fps             | 243      |
+|    time_elapsed    | 423      |
+|    total_timesteps | 103328   |
+| train/             |          |
+|    actor_loss      | -17.3    |
+|    critic_loss     | 0.78     |
+|    ent_coef        | 0.00781  |
+|    ent_coef_loss   | -0.295   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 11648    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 666      |
+|    ep_rew_mean     | 128      |
+| time/              |          |
+|    episodes        | 216      |
+|    fps             | 245      |
+|    time_elapsed    | 440      |
+|    total_timesteps | 108208   |
+| train/             |          |
+|    actor_loss      | -17.2    |
+|    critic_loss     | 0.701    |
+|    ent_coef        | 0.00755  |
+|    ent_coef_loss   | -0.146   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 12288    |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [0] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 673      |
+|    ep_rew_mean     | 130      |
+| time/              |          |
+|    episodes        | 220      |
+|    fps             | 246      |
+|    time_elapsed    | 447      |
+|    total_timesteps | 110528   |
+| train/             |          |
+|    actor_loss      | -17.1    |
+|    critic_loss     | 0.855    |
+|    ent_coef        | 0.00766  |
+|    ent_coef_loss   | 0.0199   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 12544    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 664      |
+|    ep_rew_mean     | 128      |
+| time/              |          |
+|    episodes        | 224      |
+|    fps             | 247      |
+|    time_elapsed    | 454      |
+|    total_timesteps | 112528   |
+| train/             |          |
+|    actor_loss      | -17.1    |
+|    critic_loss     | 0.734    |
+|    ent_coef        | 0.00754  |
+|    ent_coef_loss   | -0.0864  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 12800    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 672      |
+|    ep_rew_mean     | 130      |
+| time/              |          |
+|    episodes        | 228      |
+|    fps             | 248      |
+|    time_elapsed    | 469      |
+|    total_timesteps | 116728   |
+| train/             |          |
+|    actor_loss      | -17      |
+|    critic_loss     | 0.896    |
+|    ent_coef        | 0.00762  |
+|    ent_coef_loss   | 0.0424   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 13312    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 664      |
+|    ep_rew_mean     | 128      |
+| time/              |          |
+|    episodes        | 232      |
+|    fps             | 249      |
+|    time_elapsed    | 475      |
+|    total_timesteps | 118712   |
+| train/             |          |
+|    actor_loss      | -17      |
+|    critic_loss     | 0.786    |
+|    ent_coef        | 0.00758  |
+|    ent_coef_loss   | 0.0445   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 13568    |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [1] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+Eval num_timesteps=120000, episode_reward=138.21 +/- 75.50
+Episode length: 705.06 +/- 338.14
+---------------------------------
+| eval/              |          |
+|    mean_ep_length  | 705      |
+|    mean_reward     | 138      |
+| time/              |          |
+|    total_timesteps | 120000   |
+| train/             |          |
+|    actor_loss      | -16.9    |
+|    critic_loss     | 0.847    |
+|    ent_coef        | 0.00766  |
+|    ent_coef_loss   | -0.0813  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 13760    |
+---------------------------------
+eval at 120000 steps, cap 12.00 m/s: clean 75% over 16 episodes, 0 laps, no lap, overtake 75%
+-------------------------------------
+| eval/                  |          |
+|    collision_free_rate | 0.75     |
+|    laps_per_episode    | 0        |
+|    overtake_rate       | 0.75     |
+|    racing_score        | 90       |
+-------------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 671      |
+|    ep_rew_mean     | 130      |
+| time/              |          |
+|    episodes        | 236      |
+|    fps             | 240      |
+|    time_elapsed    | 509      |
+|    total_timesteps | 122608   |
+| train/             |          |
+|    actor_loss      | -16.9    |
+|    critic_loss     | 0.72     |
+|    ent_coef        | 0.00762  |
+|    ent_coef_loss   | 0.029    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 14080    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 683      |
+|    ep_rew_mean     | 132      |
+| time/              |          |
+|    episodes        | 240      |
+|    fps             | 241      |
+|    time_elapsed    | 516      |
+|    total_timesteps | 124824   |
+| train/             |          |
+|    actor_loss      | -16.9    |
+|    critic_loss     | 0.822    |
+|    ent_coef        | 0.00743  |
+|    ent_coef_loss   | -0.655   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 14336    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 675      |
+|    ep_rew_mean     | 130      |
+| time/              |          |
+|    episodes        | 244      |
+|    fps             | 241      |
+|    time_elapsed    | 523      |
+|    total_timesteps | 126608   |
+| train/             |          |
+|    actor_loss      | -16.8    |
+|    critic_loss     | 0.795    |
+|    ent_coef        | 0.00717  |
+|    ent_coef_loss   | -0.217   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 14592    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 675      |
+|    ep_rew_mean     | 130      |
+| time/              |          |
+|    episodes        | 248      |
+|    fps             | 243      |
+|    time_elapsed    | 541      |
+|    total_timesteps | 131712   |
+| train/             |          |
+|    actor_loss      | -16.8    |
+|    critic_loss     | 0.786    |
+|    ent_coef        | 0.00716  |
+|    ent_coef_loss   | -0.23    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 15232    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 667      |
+|    ep_rew_mean     | 129      |
+| time/              |          |
+|    episodes        | 252      |
+|    fps             | 244      |
+|    time_elapsed    | 545      |
+|    total_timesteps | 133112   |
+| train/             |          |
+|    actor_loss      | -16.7    |
+|    critic_loss     | 0.722    |
+|    ent_coef        | 0.00709  |
+|    ent_coef_loss   | 0.176    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 15360    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 667      |
+|    ep_rew_mean     | 129      |
+| time/              |          |
+|    episodes        | 256      |
+|    fps             | 244      |
+|    time_elapsed    | 548      |
+|    total_timesteps | 134128   |
+| train/             |          |
+|    actor_loss      | -16.7    |
+|    critic_loss     | 0.64     |
+|    ent_coef        | 0.00717  |
+|    ent_coef_loss   | -0.195   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 15488    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 655      |
+|    ep_rew_mean     | 126      |
+| time/              |          |
+|    episodes        | 260      |
+|    fps             | 245      |
+|    time_elapsed    | 559      |
+|    total_timesteps | 137160   |
+| train/             |          |
+|    actor_loss      | -16.7    |
+|    critic_loss     | 0.802    |
+|    ent_coef        | 0.00706  |
+|    ent_coef_loss   | 0.0322   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 15872    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 679      |
+|    ep_rew_mean     | 132      |
+| time/              |          |
+|    episodes        | 264      |
+|    fps             | 246      |
+|    time_elapsed    | 567      |
+|    total_timesteps | 139984   |
+| train/             |          |
+|    actor_loss      | -16.6    |
+|    critic_loss     | 0.635    |
+|    ent_coef        | 0.00711  |
+|    ent_coef_loss   | 0.159    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 16256    |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [1] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 696      |
+|    ep_rew_mean     | 135      |
+| time/              |          |
+|    episodes        | 268      |
+|    fps             | 249      |
+|    time_elapsed    | 578      |
+|    total_timesteps | 144360   |
+| train/             |          |
+|    actor_loss      | -16.5    |
+|    critic_loss     | 0.817    |
+|    ent_coef        | 0.0071   |
+|    ent_coef_loss   | 0.181    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 16768    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 707      |
+|    ep_rew_mean     | 138      |
+| time/              |          |
+|    episodes        | 272      |
+|    fps             | 250      |
+|    time_elapsed    | 584      |
+|    total_timesteps | 146328   |
+| train/             |          |
+|    actor_loss      | -16.5    |
+|    critic_loss     | 0.684    |
+|    ent_coef        | 0.00726  |
+|    ent_coef_loss   | 0.425    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 17024    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 696      |
+|    ep_rew_mean     | 135      |
+| time/              |          |
+|    episodes        | 276      |
+|    fps             | 250      |
+|    time_elapsed    | 588      |
+|    total_timesteps | 147760   |
+| train/             |          |
+|    actor_loss      | -16.5    |
+|    critic_loss     | 0.772    |
+|    ent_coef        | 0.00735  |
+|    ent_coef_loss   | -0.0385  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 17216    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 688      |
+|    ep_rew_mean     | 134      |
+| time/              |          |
+|    episodes        | 280      |
+|    fps             | 250      |
+|    time_elapsed    | 591      |
+|    total_timesteps | 148528   |
+| train/             |          |
+|    actor_loss      | -16.4    |
+|    critic_loss     | 0.769    |
+|    ent_coef        | 0.0074   |
+|    ent_coef_loss   | -0.275   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 17344    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 680      |
+|    ep_rew_mean     | 132      |
+| time/              |          |
+|    episodes        | 284      |
+|    fps             | 250      |
+|    time_elapsed    | 607      |
+|    total_timesteps | 152240   |
+| train/             |          |
+|    actor_loss      | -16.4    |
+|    critic_loss     | 0.801    |
+|    ent_coef        | 0.00743  |
+|    ent_coef_loss   | 0.282    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 17792    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 687      |
+|    ep_rew_mean     | 134      |
+| time/              |          |
+|    episodes        | 288      |
+|    fps             | 249      |
+|    time_elapsed    | 623      |
+|    total_timesteps | 155712   |
+| train/             |          |
+|    actor_loss      | -16.4    |
+|    critic_loss     | 0.81     |
+|    ent_coef        | 0.0071   |
+|    ent_coef_loss   | -0.182   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 18240    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 703      |
+|    ep_rew_mean     | 137      |
+| time/              |          |
+|    episodes        | 292      |
+|    fps             | 249      |
+|    time_elapsed    | 639      |
+|    total_timesteps | 159440   |
+| train/             |          |
+|    actor_loss      | -16.3    |
+|    critic_loss     | 0.601    |
+|    ent_coef        | 0.00695  |
+|    ent_coef_loss   | 0.342    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 18688    |
+---------------------------------
+Eval num_timesteps=160000, episode_reward=132.60 +/- 84.50
+Episode length: 656.62 +/- 361.41
+---------------------------------
+| eval/              |          |
+|    mean_ep_length  | 657      |
+|    mean_reward     | 133      |
+| time/              |          |
+|    total_timesteps | 160000   |
+| train/             |          |
+|    actor_loss      | -16.3    |
+|    critic_loss     | 0.656    |
+|    ent_coef        | 0.00702  |
+|    ent_coef_loss   | 0.225    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 18752    |
+---------------------------------
+eval at 160000 steps, cap 12.00 m/s: clean 69% over 16 episodes, 0 laps, no lap, overtake 69%
+-------------------------------------
+| eval/                  |          |
+|    collision_free_rate | 0.688    |
+|    laps_per_episode    | 0        |
+|    overtake_rate       | 0.688    |
+|    racing_score        | 82.5     |
+-------------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 697      |
+|    ep_rew_mean     | 136      |
+| time/              |          |
+|    episodes        | 296      |
+|    fps             | 241      |
+|    time_elapsed    | 674      |
+|    total_timesteps | 162568   |
+| train/             |          |
+|    actor_loss      | -16.2    |
+|    critic_loss     | 0.62     |
+|    ent_coef        | 0.00698  |
+|    ent_coef_loss   | 0.182    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 19072    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 704      |
+|    ep_rew_mean     | 138      |
+| time/              |          |
+|    episodes        | 300      |
+|    fps             | 241      |
+|    time_elapsed    | 684      |
+|    total_timesteps | 165136   |
+| train/             |          |
+|    actor_loss      | -16.2    |
+|    critic_loss     | 0.668    |
+|    ent_coef        | 0.00693  |
+|    ent_coef_loss   | 0.0231   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 19392    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 704      |
+|    ep_rew_mean     | 138      |
+| time/              |          |
+|    episodes        | 304      |
+|    fps             | 241      |
+|    time_elapsed    | 697      |
+|    total_timesteps | 168400   |
+| train/             |          |
+|    actor_loss      | -16.2    |
+|    critic_loss     | 0.743    |
+|    ent_coef        | 0.00722  |
+|    ent_coef_loss   | 0.185    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 19776    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 703      |
+|    ep_rew_mean     | 138      |
+| time/              |          |
+|    episodes        | 308      |
+|    fps             | 241      |
+|    time_elapsed    | 704      |
+|    total_timesteps | 170112   |
+| train/             |          |
+|    actor_loss      | -16.1    |
+|    critic_loss     | 0.734    |
+|    ent_coef        | 0.00709  |
+|    ent_coef_loss   | 0.168    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 20032    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 688      |
+|    ep_rew_mean     | 135      |
+| time/              |          |
+|    episodes        | 312      |
+|    fps             | 241      |
+|    time_elapsed    | 715      |
+|    total_timesteps | 173040   |
+| train/             |          |
+|    actor_loss      | -16.1    |
+|    critic_loss     | 0.607    |
+|    ent_coef        | 0.00716  |
+|    ent_coef_loss   | -0.0565  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 20352    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 688      |
+|    ep_rew_mean     | 135      |
+| time/              |          |
+|    episodes        | 316      |
+|    fps             | 241      |
+|    time_elapsed    | 732      |
+|    total_timesteps | 176968   |
+| train/             |          |
+|    actor_loss      | -16      |
+|    critic_loss     | 0.762    |
+|    ent_coef        | 0.00715  |
+|    ent_coef_loss   | -0.27    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 20864    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 680      |
+|    ep_rew_mean     | 133      |
+| time/              |          |
+|    episodes        | 320      |
+|    fps             | 241      |
+|    time_elapsed    | 738      |
+|    total_timesteps | 178416   |
+| train/             |          |
+|    actor_loss      | -16.1    |
+|    critic_loss     | 0.688    |
+|    ent_coef        | 0.00701  |
+|    ent_coef_loss   | -0.316   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 21056    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 697      |
+|    ep_rew_mean     | 137      |
+| time/              |          |
+|    episodes        | 324      |
+|    fps             | 241      |
+|    time_elapsed    | 759      |
+|    total_timesteps | 183312   |
+| train/             |          |
+|    actor_loss      | -16      |
+|    critic_loss     | 0.603    |
+|    ent_coef        | 0.00694  |
+|    ent_coef_loss   | -0.344   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 21696    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 697      |
+|    ep_rew_mean     | 137      |
+| time/              |          |
+|    episodes        | 328      |
+|    fps             | 241      |
+|    time_elapsed    | 767      |
+|    total_timesteps | 185616   |
+| train/             |          |
+|    actor_loss      | -16      |
+|    critic_loss     | 0.715    |
+|    ent_coef        | 0.00681  |
+|    ent_coef_loss   | 0.187    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 21952    |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [1] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 704      |
+|    ep_rew_mean     | 139      |
+| time/              |          |
+|    episodes        | 332      |
+|    fps             | 241      |
+|    time_elapsed    | 787      |
+|    total_timesteps | 190272   |
+| train/             |          |
+|    actor_loss      | -16      |
+|    critic_loss     | 0.58     |
+|    ent_coef        | 0.00707  |
+|    ent_coef_loss   | -0.152   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 22528    |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [0] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 695      |
+|    ep_rew_mean     | 137      |
+| time/              |          |
+|    episodes        | 336      |
+|    fps             | 241      |
+|    time_elapsed    | 793      |
+|    total_timesteps | 191712   |
+| train/             |          |
+|    actor_loss      | -15.9    |
+|    critic_loss     | 0.791    |
+|    ent_coef        | 0.00706  |
+|    ent_coef_loss   | 0.258    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 22720    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 687      |
+|    ep_rew_mean     | 136      |
+| time/              |          |
+|    episodes        | 340      |
+|    fps             | 241      |
+|    time_elapsed    | 804      |
+|    total_timesteps | 194400   |
+| train/             |          |
+|    actor_loss      | -16      |
+|    critic_loss     | 0.816    |
+|    ent_coef        | 0.00703  |
+|    ent_coef_loss   | 0.126    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 23040    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 694      |
+|    ep_rew_mean     | 137      |
+| time/              |          |
+|    episodes        | 344      |
+|    fps             | 241      |
+|    time_elapsed    | 816      |
+|    total_timesteps | 197472   |
+| train/             |          |
+|    actor_loss      | -15.9    |
+|    critic_loss     | 0.59     |
+|    ent_coef        | 0.00697  |
+|    ent_coef_loss   | -0.192   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 23424    |
+---------------------------------
+Eval num_timesteps=200000, episode_reward=130.26 +/- 64.82
+Episode length: 644.38 +/- 282.34
+---------------------------------
+| eval/              |          |
+|    mean_ep_length  | 644      |
+|    mean_reward     | 130      |
+| time/              |          |
+|    total_timesteps | 200000   |
+| train/             |          |
+|    actor_loss      | -15.9    |
+|    critic_loss     | 0.725    |
+|    ent_coef        | 0.00689  |
+|    ent_coef_loss   | -0.0526  |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 23744    |
+---------------------------------
+eval at 200000 steps, cap 12.00 m/s: clean 44% over 16 episodes, 0 laps, no lap, overtake 88%
+-------------------------------------
+| eval/                  |          |
+|    collision_free_rate | 0.438    |
+|    laps_per_episode    | 0        |
+|    overtake_rate       | 0.875    |
+|    racing_score        | 61.2     |
+-------------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 694      |
+|    ep_rew_mean     | 138      |
+| time/              |          |
+|    episodes        | 348      |
+|    fps             | 235      |
+|    time_elapsed    | 850      |
+|    total_timesteps | 200016   |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 704      |
+|    ep_rew_mean     | 140      |
+| time/              |          |
+|    episodes        | 352      |
+|    fps             | 235      |
+|    time_elapsed    | 860      |
+|    total_timesteps | 202168   |
+| train/             |          |
+|    actor_loss      | -15.9    |
+|    critic_loss     | 0.644    |
+|    ent_coef        | 0.00704  |
+|    ent_coef_loss   | -0.101   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 24000    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 704      |
+|    ep_rew_mean     | 140      |
+| time/              |          |
+|    episodes        | 356      |
+|    fps             | 234      |
+|    time_elapsed    | 877      |
+|    total_timesteps | 206112   |
+| train/             |          |
+|    actor_loss      | -15.9    |
+|    critic_loss     | 0.743    |
+|    ent_coef        | 0.00704  |
+|    ent_coef_loss   | 0.182    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 24512    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 715      |
+|    ep_rew_mean     | 142      |
+| time/              |          |
+|    episodes        | 360      |
+|    fps             | 234      |
+|    time_elapsed    | 891      |
+|    total_timesteps | 209040   |
+| train/             |          |
+|    actor_loss      | -15.9    |
+|    critic_loss     | 0.682    |
+|    ent_coef        | 0.00691  |
+|    ent_coef_loss   | -0.17    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 24896    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 723      |
+|    ep_rew_mean     | 144      |
+| time/              |          |
+|    episodes        | 364      |
+|    fps             | 234      |
+|    time_elapsed    | 904      |
+|    total_timesteps | 212120   |
+| train/             |          |
+|    actor_loss      | -15.8    |
+|    critic_loss     | 0.775    |
+|    ent_coef        | 0.00715  |
+|    ent_coef_loss   | 0.0755   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 25280    |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [1] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 708      |
+|    ep_rew_mean     | 141      |
+| time/              |          |
+|    episodes        | 368      |
+|    fps             | 234      |
+|    time_elapsed    | 914      |
+|    total_timesteps | 214488   |
+| train/             |          |
+|    actor_loss      | -15.9    |
+|    critic_loss     | 0.713    |
+|    ent_coef        | 0.00718  |
+|    ent_coef_loss   | 0.0472   |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 25536    |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 708      |
+|    ep_rew_mean     | 142      |
+| time/              |          |
+|    episodes        | 372      |
+|    fps             | 234      |
+|    time_elapsed    | 923      |
+|    total_timesteps | 216568   |
+| train/             |          |
+|    actor_loss      | -15.8    |
+|    critic_loss     | 0.819    |
+|    ent_coef        | 0.00717  |
+|    ent_coef_loss   | 0.199    |
+|    learning_rate   | 0.0003   |
+|    n_updates       | 25792    |
+---------------------------------

@@ -1,0 +1,24 @@
+Monza: 20 deterministic episodes at a 12.00 m/s cap
+episode   0  progress   1351.7m  steps  6000  laps 3  39.99s 39.43s 39.42s  clean
+episode   1  progress   1355.6m  steps  6000  laps 3  39.97s 39.22s 39.23s  clean
+episode   2  progress   1354.5m  steps  6000  laps 3  39.97s 39.38s 39.26s  clean
+episode   3  progress   1354.4m  steps  6000  laps 3  39.89s 39.37s 39.37s  clean
+episode   4  progress   1355.2m  steps  6000  laps 3  40.02s 39.27s 39.24s  clean
+episode   5  progress   1355.0m  steps  6000  laps 3  39.95s 39.30s 39.27s  clean
+episode   6  progress   1354.3m  steps  6000  laps 3  39.97s 39.31s 39.29s  clean
+episode   7  progress   1355.2m  steps  6000  laps 3  39.99s 39.22s 39.34s  clean
+episode   8  progress   1354.3m  steps  6000  laps 3  40.04s 39.27s 39.29s  clean
+episode   9  progress   1353.3m  steps  6000  laps 3  39.93s 39.31s 39.35s  clean
+episode  10  progress   1353.1m  steps  6000  laps 3  39.95s 39.36s 39.44s  clean
+episode  11  progress   1352.8m  steps  6000  laps 3  40.00s 39.21s 39.36s  clean
+episode  12  progress   1355.2m  steps  6000  laps 3  39.83s 39.42s 39.31s  clean
+episode  13  progress   1354.7m  steps  6000  laps 3  39.84s 39.32s 39.37s  clean
+episode  14  progress   1349.8m  steps  6000  laps 3  40.00s 39.26s 39.47s  clean
+episode  15  progress   1356.4m  steps  6000  laps 3  39.94s 39.25s 39.25s  clean
+episode  16  progress   1355.1m  steps  6000  laps 3  39.94s 39.24s 39.36s  clean
+episode  17  progress   1356.0m  steps  6000  laps 3  40.01s 39.24s 39.23s  clean
+episode  18  progress   1354.8m  steps  6000  laps 3  39.93s 39.31s 39.28s  clean
+episode  19  progress   1353.3m  steps  6000  laps 3  39.88s 39.49s 39.33s  clean
+progress mean 1354.2m std 1.5m, collision free 100.00%, laps completed 60 over 20 episodes
+lap time best 39.21s mean 39.53s
+flying lap best 39.21s mean 39.32s over 40 laps

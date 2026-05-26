@@ -1,0 +1,10 @@
+build/
+f1tenth_gym_ros/
+install/
+log/
+.vscode/
+data/
+__pycache__/
+*.db3
+*.csv
+*.pkl

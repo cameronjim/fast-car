@@ -1,15 +1,4 @@
-"""
-LiDAR gap-following launch.
-
-Brings up the safety/AEB node and the reactive gap-following controller.
-
-Use sim:=false to run on the physical car (uses /odom instead of
-/ego_racecar/odom).
-
-Launch:
-    ros2 launch reactive_control gap_follow_launch.py
-    ros2 launch reactive_control gap_follow_launch.py sim:=false
-"""
+"""brings up the safety node and the gap-following controller."""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
@@ -18,12 +7,6 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description() -> LaunchDescription:
-    """
-    Generate the launch description for LiDAR gap following.
-
-    Returns:
-        The launch description.
-    """
     sim = LaunchConfiguration('sim')
     odom_topic = PythonExpression(["'/ego_racecar/odom' if '", sim, "' == 'true' else '/odom'"])
 

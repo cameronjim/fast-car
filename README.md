@@ -71,11 +71,33 @@ f1tenth-autonomous-racing/
 
 Each package is a standard ROS 2 `ament_python` package.
 
+## Where it runs
+
+This is ROS 2 software, so both the simulator and the car run on Linux (Ubuntu).
+There is no Windows or macOS path. The code itself is identical in both places;
+the only difference is which odometry topic it reads, which the `sim` launch
+argument handles for you.
+
+**Simulator.** The [F1TENTH Gym](https://github.com/f1tenth/f1tenth_gym_ros)
+environment (`f1tenth_gym_ros`) is a ROS 2 bridge around the F1TENTH physics
+simulator. It runs on a Linux machine, usually inside Docker, and gives you a
+virtual car on a track that publishes the same topics as the real one (`/scan`,
+odometry, and so on). It publishes ground-truth odometry on `/ego_racecar/odom`.
+This is where you develop, train SAC, and test without risking hardware.
+
+**Physical car.** The real F1TENTH car has a small onboard computer running Ubuntu
+and ROS 2 (on the standard build this is an NVIDIA Jetson). You SSH into the car,
+clone and build this workspace there, and launch with `sim:=false`. The car's own
+driver stack provides the LiDAR scan and odometry on `/odom` and turns the final
+`/drive` command into motor and steering signals. Your laptop is only a terminal
+into the car over the network; the code runs on the car itself.
+
 ## Getting started
 
-You need ROS 2 and a workspace. To run in simulation you also need
-[f1tenth_gym_ros](https://github.com/f1tenth/f1tenth_gym_ros); follow its README
-to bring up the simulator.
+You need a Linux machine with ROS 2 and a workspace. To run in simulation you also
+need [f1tenth_gym_ros](https://github.com/f1tenth/f1tenth_gym_ros); follow its
+README to bring up the simulator. To run on the car, SSH into it first and do the
+following there.
 
 Clone both packages into the `src/` folder of a ROS 2 workspace and build:
 

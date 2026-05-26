@@ -8,3 +8,8 @@ export/
 # milestone deliverables are the one place a checkpoint belongs in the repo
 !artifacts/**/*.zip
 !artifacts/**/*.pt
+
+# scratch training logs at the package root
+/m7_*.log
+/*_train.log
+/m7_diag.py

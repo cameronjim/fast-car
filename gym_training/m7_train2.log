@@ -1,0 +1,271 @@
+Using cuda device
+/mnt/c/Users/CJ/code/cpen391/f1tenth-autonomous-racing/.claude/worktrees/rl-agent-simulator-optimization-64161d/gym_training/f1rl/train.py:81: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:822.)
+  print(f"carried the learned entropy coefficient {float(model.log_ent_coef.exp()):.4f}")
+carried the learned entropy coefficient 0.0105
+warm started from runs/sac_m7_versus_wide/best/best_racing_model.zip, replay buffer left empty
+Logging to runs/sac_m7_versus_wide2/tb/SAC_1
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 59.8     |
+|    ep_rew_mean     | -8.47    |
+| time/              |          |
+|    episodes        | 4        |
+|    fps             | 463      |
+|    time_elapsed    | 1        |
+|    total_timesteps | 704      |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 73.4     |
+|    ep_rew_mean     | -6.8     |
+| time/              |          |
+|    episodes        | 8        |
+|    fps             | 555      |
+|    time_elapsed    | 1        |
+|    total_timesteps | 928      |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [1] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 83       |
+|    ep_rew_mean     | -3.96    |
+| time/              |          |
+|    episodes        | 12       |
+|    fps             | 703      |
+|    time_elapsed    | 1        |
+|    total_timesteps | 1376     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 83.9     |
+|    ep_rew_mean     | -2.98    |
+| time/              |          |
+|    episodes        | 16       |
+|    fps             | 773      |
+|    time_elapsed    | 2        |
+|    total_timesteps | 1680     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 84.7     |
+|    ep_rew_mean     | -3.41    |
+| time/              |          |
+|    episodes        | 20       |
+|    fps             | 858      |
+|    time_elapsed    | 2        |
+|    total_timesteps | 2056     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 87.7     |
+|    ep_rew_mean     | -2.74    |
+| time/              |          |
+|    episodes        | 24       |
+|    fps             | 901      |
+|    time_elapsed    | 2        |
+|    total_timesteps | 2288     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 85.5     |
+|    ep_rew_mean     | -3.36    |
+| time/              |          |
+|    episodes        | 28       |
+|    fps             | 974      |
+|    time_elapsed    | 2        |
+|    total_timesteps | 2688     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 83.5     |
+|    ep_rew_mean     | -3.93    |
+| time/              |          |
+|    episodes        | 32       |
+|    fps             | 1012     |
+|    time_elapsed    | 3        |
+|    total_timesteps | 3088     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 84.9     |
+|    ep_rew_mean     | -2.79    |
+| time/              |          |
+|    episodes        | 36       |
+|    fps             | 1031     |
+|    time_elapsed    | 3        |
+|    total_timesteps | 3296     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 84.8     |
+|    ep_rew_mean     | -2.52    |
+| time/              |          |
+|    episodes        | 40       |
+|    fps             | 1132     |
+|    time_elapsed    | 3        |
+|    total_timesteps | 4072     |
+---------------------------------
+/home/cj/venvs/f1rl/lib/python3.12/site-packages/gymnasium/wrappers/env_checker.py:59: RuntimeWarning: agents [0] spawned inside the collision margin (0.005 m). A collision halt rejects the move that causes contact, so a car that starts in contact cannot move until it is reset to a clear pose.
+  return self.env.reset(**kwargs)
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 86       |
+|    ep_rew_mean     | -2.16    |
+| time/              |          |
+|    episodes        | 44       |
+|    fps             | 1141     |
+|    time_elapsed    | 3        |
+|    total_timesteps | 4208     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 86.2     |
+|    ep_rew_mean     | -2.46    |
+| time/              |          |
+|    episodes        | 48       |
+|    fps             | 1157     |
+|    time_elapsed    | 3        |
+|    total_timesteps | 4432     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 86.6     |
+|    ep_rew_mean     | -2.74    |
+| time/              |          |
+|    episodes        | 52       |
+|    fps             | 1185     |
+|    time_elapsed    | 4        |
+|    total_timesteps | 4776     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 87.1     |
+|    ep_rew_mean     | -2.95    |
+| time/              |          |
+|    episodes        | 56       |
+|    fps             | 1227     |
+|    time_elapsed    | 4        |
+|    total_timesteps | 5272     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 87.7     |
+|    ep_rew_mean     | -2.44    |
+| time/              |          |
+|    episodes        | 60       |
+|    fps             | 1243     |
+|    time_elapsed    | 4        |
+|    total_timesteps | 5664     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 87.1     |
+|    ep_rew_mean     | -2.75    |
+| time/              |          |
+|    episodes        | 64       |
+|    fps             | 1248     |
+|    time_elapsed    | 4        |
+|    total_timesteps | 5952     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 87.8     |
+|    ep_rew_mean     | -2.58    |
+| time/              |          |
+|    episodes        | 68       |
+|    fps             | 1262     |
+|    time_elapsed    | 4        |
+|    total_timesteps | 6280     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 87.8     |
+|    ep_rew_mean     | -2.42    |
+| time/              |          |
+|    episodes        | 72       |
+|    fps             | 1280     |
+|    time_elapsed    | 5        |
+|    total_timesteps | 6752     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 88.5     |
+|    ep_rew_mean     | -2.47    |
+| time/              |          |
+|    episodes        | 76       |
+|    fps             | 1280     |
+|    time_elapsed    | 5        |
+|    total_timesteps | 6968     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 86.9     |
+|    ep_rew_mean     | -2.74    |
+| time/              |          |
+|    episodes        | 80       |
+|    fps             | 1281     |
+|    time_elapsed    | 5        |
+|    total_timesteps | 7224     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 86.8     |
+|    ep_rew_mean     | -2.85    |
+| time/              |          |
+|    episodes        | 84       |
+|    fps             | 1312     |
+|    time_elapsed    | 6        |
+|    total_timesteps | 7896     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 87.3     |
+|    ep_rew_mean     | -2.66    |
+| time/              |          |
+|    episodes        | 88       |
+|    fps             | 1314     |
+|    time_elapsed    | 6        |
+|    total_timesteps | 8056     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 88.2     |
+|    ep_rew_mean     | -2.66    |
+| time/              |          |
+|    episodes        | 92       |
+|    fps             | 1328     |
+|    time_elapsed    | 6        |
+|    total_timesteps | 8400     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 88.3     |
+|    ep_rew_mean     | -2.55    |
+| time/              |          |
+|    episodes        | 96       |
+|    fps             | 1345     |
+|    time_elapsed    | 6        |
+|    total_timesteps | 8824     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 88.4     |
+|    ep_rew_mean     | -2.64    |
+| time/              |          |
+|    episodes        | 100      |
+|    fps             | 1353     |
+|    time_elapsed    | 6        |
+|    total_timesteps | 9280     |
+---------------------------------
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 89.4     |
+|    ep_rew_mean     | -2.36    |
+| time/              |          |
+|    episodes        | 104      |
+|    fps             | 1348     |
+|    time_elapsed    | 6        |
+|    total_timesteps | 9424     |
+---------------------------------

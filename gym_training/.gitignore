@@ -1,0 +1,10 @@
+runs/
+videos/
+.pytest_cache/
+export/
+*.zip
+*.pt
+
+# milestone deliverables are the one place a checkpoint belongs in the repo
+!artifacts/**/*.zip
+!artifacts/**/*.pt

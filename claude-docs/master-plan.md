@@ -129,6 +129,22 @@ the working summary.
 - An even beam count has no ray dead ahead, so `(target - n // 2) * angle_increment` biases
   the aim by half a beam: 2.5 deg at 108 beams, enough to make the gap follower drift. Read
   `angle_min` off the sim and use `angle_min + target * angle_increment`.
+- M5's residual bounds cannot race. At 0.15 rad and 1.5 m/s the ego's floor is the planner's
+  command minus 1.5, so against a 4 m/s rival it can never slow below roughly 8 m/s: every
+  encounter is pass or crash. Widening to 0.25 rad and 4.0 m/s is what turned M7 from
+  stuck-at-the-baseline into a pass. The wider bounds cost a collapse first (6% clean at 40k)
+  and take about 250k steps to recover.
+- At 108 beams a 0.31 m car subtends less than one beam at 8 m, so the rival is a one-ray
+  disparity until roughly 4 m out. The policy learns to read it, but that resolution, not
+  steering or grip, is what sets the remaining failures: every m7 loss is a late reaction
+  ending in contact at 0.6 to 0.7 m.
+- Hand-placed two-car spawns land inside the collision margin often enough to matter (1 seed in
+  20 at 0.15 m jitter). A car halted at spawn never drives out, so it sits on the racing line
+  as a parked obstacle and the episode is unwinnable. `VersusEgoWrapper` redraws the spawn
+  until every car's minimum scan clears half the car's width.
+- M7 results: 90% overtake success at a 10% ego collision rate over 40 randomized episodes,
+  mean 2.29 s to pass, against the embedded planner's 67.5% and 32.5% on the same spawns.
+  Single 20-episode blocks swing from 85% to 95%, so gate head-to-head runs on at least two.
 - ament_pep257's D403 requires capitalized docstring openers, which contradicts CLAUDE.md's
   lowercase rule, and ament_copyright wants Apache headers this MIT repo does not carry. Both
   lint tests fail by construction in every package; treat colcon test's pytest results as the
@@ -145,7 +161,7 @@ the working summary.
 | M4 | speed curriculum to 6.5-8 m/s, multi-map, light randomization | done |
 | M5 | residual RL beats or ties pure pursuit | done |
 | M6 | policy export, `rl_agent_node` ROS demo, README rewrite | done |
-| M7 | head-to-head overtaking vs the gap follower | |
+| M7 | head-to-head overtaking vs the gap follower | done |
 
 ## Acceptance gates
 
@@ -153,3 +169,5 @@ the working summary.
 - M5: residual RL beats pure pursuit's lap time on at least one map.
 - M6: exported policy demoed in f1tenth_gym_ros; online trainer survives 3+ auto-reset
   episodes.
+- M7: at least 80% overtake success with at most 10% ego collisions over 20 randomized
+  head-to-head episodes.

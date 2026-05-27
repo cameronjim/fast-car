@@ -15,6 +15,11 @@ OPPONENT_INDEX = 1
 # the margin defaults to this much clear air past the car's own length
 OVERTAKE_CLEARANCE_M = 1.0
 
+# a car spawned inside the collision margin is halted where it stands and never drives out,
+# so a draw that lands one there is redrawn rather than raced
+SPAWN_CLEARANCE_SLACK_M = 0.05
+MAX_SPAWN_DRAWS = 10
+
 
 @dataclass(frozen=True)
 class VersusConfig:
@@ -95,6 +100,11 @@ def spawn_poses(
     return np.array([ego, opponent], dtype=np.float64)
 
 
+def spawn_is_clear(scans, clearance_m: float) -> bool:
+    """true when every car was placed with room to drive away from where it stands."""
+    return all(float(np.min(np.asarray(scan))) >= float(clearance_m) for scan in scans)
+
+
 class VersusEgoWrapper(gym.Wrapper):
     """ego-only view of a two-agent env, with agent_1 driven by the scripted gap follower."""
 
@@ -130,6 +140,9 @@ class VersusEgoWrapper(gym.Wrapper):
             if config.overtake_margin_m is not None
             else float(inner.sim.vehicle_params.length) + OVERTAKE_CLEARANCE_M
         )
+        self.min_spawn_clearance_m = (
+            0.5 * float(inner.sim.vehicle_params.width) + SPAWN_CLEARANCE_SLACK_M
+        )
         self.track_length_m = float(inner.track.centerline.spline.s_frame_max)
         self._use_raceline = config.spawn_line == "raceline"
         spawn_spline = (inner.track.raceline if self._use_raceline else inner.track.centerline).spline
@@ -155,13 +168,27 @@ class VersusEgoWrapper(gym.Wrapper):
             use_raceline=self._use_raceline,
         )
 
+    def _reset_on_clear_spawn(self, seed, options: dict):
+        """reset, redrawing the spawn while either car lands inside the collision margin."""
+        if "poses" in options:
+            return self.env.reset(seed=seed, options=options)
+        for _ in range(MAX_SPAWN_DRAWS):
+            obs, info = self.env.reset(
+                seed=seed, options={**options, "poses": self._sample_poses()}
+            )
+            scans = [obs[agent_id]["scan"] for agent_id in (self._ego_id, self._opponent_id)]
+            if spawn_is_clear(scans, self.min_spawn_clearance_m):
+                return obs, info
+        raise RuntimeError(
+            f"no clear two-car spawn in {MAX_SPAWN_DRAWS} draws; the jitter or the gap range "
+            f"does not fit this track"
+        )
+
     def reset(self, *, seed=None, options=None):
         if seed is not None:
             self._rng = np.random.default_rng(seed)
         options = dict(options or {})
-        # the spawn draw has to happen before reset, so it cannot use the env's own rng
-        options.setdefault("poses", self._sample_poses())
-        obs, info = self.env.reset(seed=seed, options=options)
+        obs, info = self._reset_on_clear_spawn(seed, options)
 
         cfg = self.config
         self._opponent_speed_cap_mps = float(

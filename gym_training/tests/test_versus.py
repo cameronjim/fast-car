@@ -12,6 +12,7 @@ from f1rl.envs.versus import (
     OvertakeBonus,
     VersusConfig,
     advance_s,
+    spawn_is_clear,
     spawn_poses,
 )
 
@@ -78,6 +79,17 @@ def test_lateral_jitter_moves_the_cars_off_the_line():
     poses = spawn_poses(track, opponent_s_m=0.0, gap_m=5.0, ego_ey_m=0.0, opponent_ey_m=0.4)
 
     assert np.linalg.norm(poses[OPPONENT_INDEX][:2]) == pytest.approx(track.radius_m - 0.4)
+
+
+def test_a_spawn_with_room_on_every_car_is_clear():
+    assert spawn_is_clear([np.full(12, 3.0), np.full(12, 0.9)], 0.21)
+
+
+def test_a_car_placed_inside_the_margin_fails_the_spawn_check():
+    pinned = np.full(12, 3.0)
+    pinned[4] = 0.02
+
+    assert not spawn_is_clear([np.full(12, 3.0), pinned], 0.21)
 
 
 @pytest.mark.slow

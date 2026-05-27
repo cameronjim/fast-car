@@ -44,6 +44,43 @@ to collision drops under its thresholds, which at 8 m/s happens on the approach 
 corners. `/drive_raw` stays in the 6.4 to 7.9 m/s band the policy asked for while `/drive`
 dips to 2.0 m/s. The legacy physics in that bridge differ from the training sim too.
 
+## Head to head
+
+M7 is a race, not a time trial, so it gets outcomes rather than a lap-time row. The ego is a
+residual SAC policy warm started from m5; the rival is `GapFollowerOpponent`, a port of
+`reactive_control`'s gap follower running on `agent_1` at reactive_control's own tuned
+constants. Both cars spawn on the Spielberg raceline facing forward, the ego 5 to 15 m behind
+with 0.15 m of lateral jitter, and the opponent draws a fresh speed cap in 3.0 to 4.5 m/s each
+episode. An overtake counts when the ego's unwrapped centerline lead passes 1.58 m, the car's
+length plus a metre. Episodes run 18 s.
+
+| driver | overtake success | ego collisions | mean time to pass |
+| --- | --- | --- | --- |
+| pure pursuit (zero residual) | 67.5% | 32.5% | 2.63 s |
+| rl residual (m7) | 90.0% | 10.0% | 2.29 s |
+
+Both rows are the same 40 episodes: two blocks of 20 seeds, reported together because one
+block alone is not stable. The policy scores 95% / 5% on seeds 0-19 and 85% / 15% on seeds
+100-119, and the planner 85% / 15% and 50% / 50%. Quoting only the better block would have
+claimed 95%.
+
+The zero-residual row is the same control m5 uses: a zero action reproduces the embedded
+planner exactly, so this is the tuned pure pursuit driver meeting the same opponent on the same
+spawns. It is a real driver rather than a straw man, and it already passes most of the time,
+because a 3.5 m/s rival on a 12 m/s line gets swallowed. What it cannot do is avoid the rival
+it fails to pass. The policy cuts collisions by a factor of three and passes half a second
+sooner.
+
+Two caveats. The opponent is much slower than the ego, so this measures "arrive at a slow car
+at 11 m/s and get around it", not wheel-to-wheel racing between equals; the gap follower's own
+clean ceiling on Spielberg is about 5.5 m/s against the residual's 11. And the residual bounds
+here are wider than m5's, 0.25 rad and 4.0 m/s against 0.15 and 1.5, because at m5's bounds the
+ego cannot drop below roughly 8 m/s and so can never slow behind a 4 m/s car. That change is
+what made the run work, and it is why the m7 policy is not a drop-in m5 replacement.
+
+Artifacts live in `artifacts/m7/`, including the gate logs for all four blocks and an mp4 of a
+clean pass.
+
 ## The residual rows
 
 `rl residual (m5)` embeds the tuned pure pursuit planner in the training env. The planner replans against the reference line every 100 Hz physics step and the policy adds a bounded delta at 50 Hz: at most 0.15 rad of steering and 1.5 m/s of speed, clipped to the vehicle's steering limit and a 12 m/s ceiling. A zero action is therefore the planner itself, which makes the baseline exactly reproducible: driven that way through the same wrapper over the same 20 randomized-start episodes, the embedded planner laps Spielberg in 37.99 s, matching its own row above. Mean lap is the flying-lap mean over 40 laps for Spielberg and Monza and 20 for YasMarina, all 20/20 collision-free.

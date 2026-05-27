@@ -24,6 +24,7 @@ from .versus import (
     VersusConfig,
     VersusEgoWrapper,
     advance_s,
+    spawn_is_clear,
     spawn_poses,
 )
 
@@ -38,6 +39,7 @@ __all__ = [
     "VersusEgoWrapper",
     "OvertakeBonus",
     "advance_s",
+    "spawn_is_clear",
     "spawn_poses",
     "compose_command",
     "raceline_context",

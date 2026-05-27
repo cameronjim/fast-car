@@ -145,6 +145,12 @@ the working summary.
 - M7 results: 90% overtake success at a 10% ego collision rate over 40 randomized episodes,
   mean 2.29 s to pass, against the embedded planner's 67.5% and 32.5% on the same spawns.
   Single 20-episode blocks swing from 85% to 95%, so gate head-to-head runs on at least two.
+- The hand-rolled `SACTrainer` in `learned_control/sac` clears the M2 task unmodified, run
+  through `f1rl/train_handrolled.py`: 20/20 collision-free, 115.13 s best and 115.20 s mean
+  against SB3's 116.08 and 116.14, converged by 250k of a 600k budget, 52 min on one env
+  against SB3's 42 min on eight. Its actor squashes to [0, 1], so the adapter maps affinely
+  and stores the [0, 1] action; its log_prob is missing one log 2 per dim, which tunes alpha
+  1.39 nats more deterministic than the nominal target.
 - ament_pep257's D403 requires capitalized docstring openers, which contradicts CLAUDE.md's
   lowercase rule, and ament_copyright wants Apache headers this MIT repo does not carry. Both
   lint tests fail by construction in every package; treat colcon test's pytest results as the

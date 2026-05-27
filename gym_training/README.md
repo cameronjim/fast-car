@@ -238,6 +238,25 @@ the exported contract and the evaluation agree with the policy that was trained.
 `obs_config.json` marks each feature with a `deployable` flag, and `export_policy.py`
 prints a warning when it exports a policy that depends on a sim-only feature.
 
+## The hand-rolled SAC comparison
+
+`f1rl.train_handrolled` runs the `SACTrainer` from `learned_control/sac` against the env
+built from `configs/sac_m2.yaml`, so the student implementation and stable-baselines3 solve
+the identical task. It imports the ROS package by path, leaves it unmodified, and owns the
+two mismatches in the adapter: one env rather than eight, because that trainer has no vec
+support, and an affine map at the env boundary, because its actor squashes to `[0, 1]` while
+the wrapper's action box is `[-1, 1]`.
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m f1rl.train_handrolled --out-dir artifacts/handrolled
+QT_QPA_PLATFORM=offscreen python -m f1rl.train_handrolled --gate-only \
+    --out-dir artifacts/handrolled --gate-episodes 20
+```
+
+Training ends by gating `best.pth`, the highest-scoring evaluation round, over 20
+deterministic episodes. `--resume` picks a killed run back up from `checkpoint.pth`, though
+the replay buffer restarts empty. Results are in `leaderboard.md`.
+
 ## Notes for tuning
 
 - SAC is gradient-bound, not simulation-bound. `train_freq: 64` with

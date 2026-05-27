@@ -18,6 +18,8 @@ A generated raceline row uses `f1rl.track.generate_raceline` output at the defau
 | Spielberg | pure pursuit (generated raceline) | 38.64 s | 38.74 s | 0% | 9.20 m/s |
 | Spielberg | rl sac (m4, 9.5 cap) | 37.97 s | 38.03 s | 0% | 9.50 m/s |
 | Spielberg | rl sac (m6 deploy, 8.0 cap) | 43.43 s | 43.45 s | 0% | 7.92 m/s |
+| Spielberg | rl sac sb3 (m2, 3.0 cap) | 116.08 s | 116.14 s | 0% | 3.00 m/s |
+| Spielberg | rl sac hand-rolled (3.0 cap) | 115.13 s | 115.20 s | 0% | 3.00 m/s |
 | Spielberg | rl residual (m5) | 33.40 s | 33.42 s | 0% | 11.07 m/s |
 | YasMarina | pure pursuit | n/a | n/a | 100% | 9.60 m/s |
 | YasMarina | pure pursuit (centerline) | 100.75 s | 100.82 s | 0% | 4.00 m/s |
@@ -43,6 +45,54 @@ not the policy: the demo's safety node brakes to its PB1 and PB2 caps whenever f
 to collision drops under its thresholds, which at 8 m/s happens on the approach to most
 corners. `/drive_raw` stays in the 6.4 to 7.9 m/s band the policy asked for while `/drive`
 dips to 2.0 m/s. The legacy physics in that bridge differ from the training sim too.
+
+## Hand-rolled SAC
+
+The two 3.0 m/s rows are the same task twice. `rl sac sb3 (m2)` is the M2 policy trained by
+stable-baselines3; `rl sac hand-rolled` is the `SACTrainer` in `learned_control/sac`, the
+implementation written for the ROS online trainer, run against the identical env through
+`f1rl/train_handrolled.py`. Same `configs/sac_m2.yaml`: Spielberg, 3.0 m/s cap,
+`RL_RANDOM_RANDOM` starts, the wrapper's progress reward, 116-dim observation, from scratch
+with no BC warm start and no reference actor. Both rows are 20 deterministic episodes on the
+same seeds. Their top-speed column is the cap, not a measurement: at 3 m/s both policies sit
+on the cap for most of the lap.
+
+The hand-rolled trainer clears it: 20/20 collision-free, 115.13 s best and 115.20 s mean
+against SB3's 116.08 and 116.14. It laps 5/5 in evaluation by 100k steps, matches SB3's lap
+time by 250k, and its evaluation curve is flat from there to the 600k budget, so the best
+checkpoint at 350k is a plateau pick rather than a lucky round.
+
+Reading that 0.95 s as "the student code beats the library" would be wrong twice over. The
+task is easy enough that both policies are speed-capped almost everywhere, so the gap is a
+racing line worth under a second, not a capability difference. And the two runs differ in
+more than the algorithm:
+
+| | sb3 | hand-rolled |
+| --- | --- | --- |
+| envs | 8 subproc workers | 1, the trainer has no vec support |
+| net arch | [256, 256] actor and critic | [256, 128], fixed in `learned_control/sac/model.py` |
+| batch | 512 | 256 |
+| update cadence | 64 gradient steps per 512 transitions | 1 per 10 transitions |
+| replay | 1M | 600k, so nothing is evicted either |
+| wall clock to 600k | 42 min | 52 min |
+
+The gradient-to-experience ratio comes out close, 1 update per 8 transitions against 1 per 10,
+which is most of why the single-env run is competitive at all. What it costs is wall clock:
+one env at 108 beams runs about 300 steps/s end to end, so 52 minutes buys what eight workers
+buy in 42.
+
+Two quirks of the hand-rolled implementation are worth naming because the adapter had to work
+around one and could not fix the other. `SACActorNet.sample` squashes to `[0, 1]` rather than
+`[-1, 1]`, so `train_handrolled.py` maps affinely at the env boundary and stores the `[0, 1]`
+form in the replay buffer, keeping the critics' action space the one the actor emits. And the
+log-prob it returns carries tanh's Jacobian correction only, one `log 2` per dimension short of
+the true density of the halved action, so automatic entropy tuning settles about 1.39 nats more
+deterministic than the nominal `-action_dim` target. Alpha collapsing to 0.006 by 200k steps and
+staying there is that, not entropy collapse from a diverging critic: the policy keeps improving
+after it happens.
+
+Artifacts live in `artifacts/handrolled/`: the best checkpoint, the rolling checkpoint, the
+20-episode gate log, the per-eval curve csv, and the full training log.
 
 ## Head to head
 

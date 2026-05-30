@@ -1,0 +1,37 @@
+[project]
+name = "ros-dev-tools"
+version = "0.1.0"
+description = """
+Dependency manifest for the ros-dev image (claude-docs/03-environments.md,
+roadmap task 0.4). This is NOT the Python test tooling that colcon/ament
+pull in for a package's own `colcon test` run -- that comes from apt
+(python3-pytest via ros-dev-tools / rosdep, ros-humble-ament-cmake-pytest,
+ros-humble-launch-testing) so it stays consistent with whatever pytest
+version the ROS Humble apt repo itself expects launch_testing to run
+under. This uv-managed venv exists for standalone L1/L2 Python tests that
+are not ROS nodes and do not go through colcon at all (hypothesis property
+tests, plain-Python unit tests under tools/ or racer_policy's non-ROS
+logic) and for local `pytest`/`hypothesis` invocations during development.
+Its venv is put first on PATH (see Dockerfile) so an ad-hoc `pytest` call
+resolves to this pinned version rather than whatever apt happened to
+install. NEVER add ROS or CUDA packages here -- this is Python test
+tooling only.
+"""
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "pytest",
+    "pytest-cov",
+    "hypothesis",
+]
+
+[tool.uv]
+package = false
+# ros-dev is the one image explicitly meant to run on both amd64 desktops
+# and arm64 Macs (claude-docs/03-environments.md), so unlike sim-cpu's
+# lock (x86_64-linux only, since the sim-cpu image is never built for
+# arm64) this lock must resolve for both container architectures the
+# ros-dev image is actually built for.
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]

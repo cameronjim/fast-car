@@ -26,7 +26,17 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
       `docker run --gpus all train-cuda:local` on Desktop A per
       docker/train-cuda/README.md and confirms `torch.cuda.is_available()`
       before this ticks to `[x]`.
-- [ ] 0.4 `ros-dev` image (ROS 2 Humble) + lockfile
+- [x] 0.4 `ros-dev` image (ROS 2 Humble) + lockfile
+      Done 2026-08-22: docker/ros-dev/ (Dockerfile pinned to the
+      ros:humble-ros-base multi-arch manifest digest, no CUDA, + uv.lock
+      for pytest/hypothesis test tooling) built and its colcon toolchain
+      smoke test (build+test a throwaway ament_cmake and ament_python
+      package pair) run in CI on every push touching that image (job
+      ros-dev-image). The interim `ros:humble` container in the
+      l3-and-cpp job is kept for now (ros_ws/src has no real packages
+      yet, so swapping in the built image would add job complexity for
+      no coverage gain); TODO left in ci.yml/ros_build_test.sh to swap
+      once real packages land.
 - [ ] 0.5 Port/replace the Foxy-era `f1tenth_gym_ros` bridge to Humble (known cost, scheduled)
 - [x] 0.6 CI per `12-testing.md`: lint, L1–L3 on every push, coverage gates (100% branch on
       envelope + safety gate logic), nightly job stub on Desktop A

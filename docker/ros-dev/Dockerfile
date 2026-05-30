@@ -70,13 +70,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-ament-cmake-pytest \
     && rm -rf /var/lib/apt/lists/*
 
-# rosdep init writes /etc/ros/rosdep/sources.list.d/20-default.list;
-# `rosdep update` then fetches the rosdistro index into the build layer so
-# a later `rosdep install` (once ros_ws/src has package.xml files with
-# real dependencies) doesn't need network access at dev/CI time. This is
-# the one network-dependent step in this build; it fetches from
-# raw.githubusercontent.com and is expected to work in GitHub Actions.
-RUN rosdep init && rosdep update
+# ros:humble-ros-base already ships with rosdep initialized (it runs
+# `rosdep init` as part of its own image build, leaving
+# /etc/ros/rosdep/sources.list.d/20-default.list in place) -- running
+# `rosdep init` again here fails with "default sources list file already
+# exists". Only `rosdep update` is ours to run: it fetches the rosdistro
+# index into this build layer so a later `rosdep install` (once
+# ros_ws/src has package.xml files with real dependencies) doesn't need
+# network access at dev/CI time. This is the one network-dependent step
+# in this build; it fetches from raw.githubusercontent.com and is
+# expected to work in GitHub Actions.
+RUN rosdep update
 
 # Pin the uv binary itself to the same version used to generate uv.lock
 # locally (matches sim-cpu/train-cuda), so `uv sync --locked` resolves the

@@ -76,5 +76,9 @@ COUNT="$(echo "$PACKAGE_XMLS" | wc -l | tr -d ' ')"
 echo "Found ${COUNT} package.xml file(s); running colcon build + colcon test."
 
 colcon build --symlink-install --base-paths .
-colcon test --base-paths .
+# console_direct+: stream each test's own stdout/stderr straight to the
+# console as it runs, instead of only colcon's pass/fail summary -- a
+# failing assertion needs its message to be actionable from the CI log
+# alone (there is no test-artifact upload from this job).
+colcon test --base-paths . --event-handlers console_direct+
 colcon test-result --verbose

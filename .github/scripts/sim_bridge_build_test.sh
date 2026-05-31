@@ -20,7 +20,10 @@
 #
 # `rosdep install` resolves racer_gym_bridge's package.xml ROS
 # dependencies (e.g. ackermann_msgs) that ros-dev's apt bootstrap does not
-# install by default.
+# install by default. The Dockerfile's own `apt-get update && ... && rm
+# -rf /var/lib/apt/lists/*` (standard image-size hygiene) leaves this
+# container's apt package index empty, so `apt-get update` is run again
+# here before rosdep can install anything new.
 #
 # Scaffold-aware like ros_build_test.sh: with no package.xml under
 # sim/bridge yet, prints a clear notice and passes instead of failing.
@@ -51,6 +54,9 @@ export PYTHONPATH="${VENV_SITE_PACKAGES}${PYTHONPATH:+:${PYTHONPATH}}"
 
 echo "Sanity check: f1tenth_gym importable from system python3 via PYTHONPATH..."
 python3 -c "import f1tenth_gym; print('f1tenth_gym OK:', f1tenth_gym.__file__)"
+
+echo "Refreshing apt package index (Dockerfile clears it after its own installs)..."
+apt-get update
 
 echo "Resolving ROS package dependencies for ${WORKSPACE_DIR} with rosdep..."
 rosdep update >/dev/null

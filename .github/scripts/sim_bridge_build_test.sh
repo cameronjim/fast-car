@@ -55,63 +55,13 @@ export PYTHONPATH="${VENV_SITE_PACKAGES}${PYTHONPATH:+:${PYTHONPATH}}"
 echo "Sanity check: f1tenth_gym importable from system python3 via PYTHONPATH..."
 python3 -c "import f1tenth_gym; print('f1tenth_gym OK:', f1tenth_gym.__file__)"
 
-# DIAGNOSTIC (task 0.5 CI debugging): colcon test's own crash report for
-# racer_gym_bridge's launch_testing run is a bare "terminate called without
-# an active exception" / SIGABRT with no Python traceback -- i.e. the abort
-# happens below Python's exception machinery. PYTHONFAULTHANDLER makes CPython
-# install a low-level handler that dumps the Python-level stack of every
-# thread on a fatal signal, which colcon's own capture does not enable.
-# Also run the same rclpy+gym construction colcon would run, standalone and
-# with -X faulthandler, to localize the abort before colcon's own (noisier)
-# invocation.
+# PYTHONFAULTHANDLER: if a launch_testing subprocess ever aborts again (a
+# missing native shared library surfaces as a bare SIGABRT with no Python
+# traceback inside a colcon-test-launched subprocess, rather than a clean
+# ImportError -- see the ros-dev Dockerfile comment on the X11/GL client
+# libs for exactly this failure mode), this makes CPython dump each
+# thread's Python-level stack on the fatal signal instead of nothing.
 export PYTHONFAULTHANDLER=1
-echo "Diagnostic: constructing rclpy + f1tenth_gym together outside colcon..."
-set +e
-python3 -X faulthandler -c "
-import rclpy
-print('rclpy imported', flush=True)
-import f1tenth_gym  # noqa: F401
-print('f1tenth_gym imported', flush=True)
-import numpy as np
-import gymnasium as gym
-from f1tenth_gym.envs.track import Track
-print('building track...', flush=True)
-xs = np.linspace(0, 50, 100)
-ys = np.sin(xs / 3.0) * 3.0
-velxs = np.full_like(xs, 3.0)
-track = Track.from_refline(x=xs, y=ys, velx=velxs)
-print('track built, making env...', flush=True)
-env = gym.make(
-    'f1tenth_gym:f1tenth-v0',
-    config={
-        'seed': 42,
-        'map': track,
-        'num_agents': 1,
-        'ego_idx': 0,
-        'observation_config': {'type': 'features', 'features': ['scan', 'pose_x', 'pose_y', 'pose_theta', 'linear_vel_x', 'linear_vel_y', 'ang_vel_z']},
-    },
-    render_mode=None,
-)
-print('env made, calling rclpy.init()...', flush=True)
-rclpy.init()
-print('rclpy.init() OK, resetting env...', flush=True)
-obs, info = env.reset(seed=42)
-print('env.reset() OK, creating a node...', flush=True)
-node = rclpy.create_node('diag_node')
-print('node created, stepping env...', flush=True)
-action = np.array([[0.0, 2.0]])
-obs, r, term, trunc, info = env.step(action)
-print('env.step() OK, spinning once...', flush=True)
-rclpy.spin_once(node, timeout_sec=0.5)
-print('spin_once OK, shutting down...', flush=True)
-node.destroy_node()
-env.close()
-rclpy.shutdown()
-print('DIAGNOSTIC DONE', flush=True)
-"
-diag_status=$?
-set -e
-echo "Diagnostic finished with exit code ${diag_status}"
 
 echo "Refreshing apt package index (Dockerfile clears it after its own installs)..."
 apt-get update

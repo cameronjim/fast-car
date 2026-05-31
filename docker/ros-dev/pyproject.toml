@@ -14,14 +14,27 @@ tests, plain-Python unit tests under tools/ or racer_policy's non-ROS
 logic) and for local `pytest`/`hypothesis` invocations during development.
 Its venv is put first on PATH (see Dockerfile) so an ad-hoc `pytest` call
 resolves to this pinned version rather than whatever apt happened to
-install. NEVER add ROS or CUDA packages here -- this is Python test
-tooling only.
+install. NEVER add CUDA packages here -- training happens in train-cuda.
+
+f1tenth_gym (roadmap task 0.5) is the one exception to "Python test
+tooling only": the gym<->ROS bridge (sim/bridge/racer_gym_bridge) needs
+the pinned gym importable from the SAME python3.10 that colcon/rclpy use
+in this image (Humble's system interpreter) so its L3 launch_testing node
+tests can actually step a real env, and it is CPU-only Python, so pulling
+it in here does not violate the "never contains CUDA" rule above. It is
+NOT put on PATH/site-packages ahead of the system interpreter for the
+same reason pytest/coverage are individually symlinked instead of the
+whole venv (see Dockerfile): doing so would shadow python3 and break
+colcon/ament_cmake. Instead, CI adds this venv's site-packages to
+PYTHONPATH only for the sim-bridge-test job's colcon invocation (see
+.github/workflows/ci.yml and .github/scripts/sim_bridge_build_test.sh).
 """
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "pytest",
     "pytest-cov",
     "hypothesis",
+    "f1tenth_gym",
 ]
 
 [tool.uv]
@@ -35,3 +48,10 @@ environments = [
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
     "sys_platform == 'linux' and platform_machine == 'aarch64'",
 ]
+
+[tool.uv.sources]
+# Same pin as docker/sim-cpu/pyproject.toml -- f1tenth/f1tenth_gym's main
+# branch is still the old gym==0.19.0 API; the v1.0.0 branch (gymnasium,
+# per-agent dict observations) is what this repo targets, pinned to a
+# commit SHA rather than the branch, which moves.
+f1tenth_gym = { git = "https://github.com/f1tenth/f1tenth_gym.git", rev = "5a301bd0ae1ceaf7dec653e7549c8d099db58a6b" }

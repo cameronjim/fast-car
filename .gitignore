@@ -16,11 +16,15 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
 
 # colcon build artifacts
 ros_ws/build/
 ros_ws/install/
 ros_ws/log/
+sim/bridge/build/
+sim/bridge/install/
+sim/bridge/log/
 
 # macOS
 .DS_Store

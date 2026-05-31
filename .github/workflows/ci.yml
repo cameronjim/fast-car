@@ -133,8 +133,16 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: colcon build + colcon test sim/bridge/racer_gym_bridge
+        # --shm-size: rclpy's default RMW (Fast-DDS) uses a shared-memory
+        # transport that needs more than docker's 64 MB default /dev/shm;
+        # under the default size the launch_testing node process aborts
+        # (SIGABRT, "terminate called without an active exception", no
+        # Python traceback -- a native allocation failure below rclpy) as
+        # soon as the bridge node's publishers/subscriptions are created.
+        # This is the standard fix for rclpy-in-Docker, not a workaround
+        # for anything specific to this package.
         run: |
-          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/sim_bridge_build_test.sh"
 
   changes:

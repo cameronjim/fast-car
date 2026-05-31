@@ -19,6 +19,7 @@ job (see .github/workflows/ci.yml) exercises this module through
 from __future__ import annotations
 
 import math
+import signal
 import time
 import unittest
 
@@ -213,4 +214,14 @@ class TestBridgeNode(unittest.TestCase):
 @launch_testing.post_shutdown_test()
 class TestBridgeNodeShutdown(unittest.TestCase):
     def test_clean_exit(self, proc_info):
-        launch_testing.asserts.assertExitCodes(proc_info)
+        # launch_testing stops every launched process with SIGINT at the
+        # end of the test session. rclpy's spin() can be deep inside a
+        # non-interruptible C call (gym env.step()) when that signal
+        # arrives, in which case the process is terminated by the signal
+        # itself rather than returning control to our try/finally for a
+        # sys.exit(0) -- Python/subprocess reports that as exit code
+        # -SIGINT, not a crash. That is what "asked to stop, stopped" looks
+        # like for this node, so it is an allowable clean-exit outcome
+        # alongside 0, matching the common launch_testing pattern for
+        # long-running ROS nodes.
+        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -signal.SIGINT])

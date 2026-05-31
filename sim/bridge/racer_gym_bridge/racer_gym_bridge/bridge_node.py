@@ -244,7 +244,14 @@ def main(args: list[str] | None = None) -> None:
         rclpy.spin(node)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # rclpy installs its own SIGINT handler that already calls
+        # rclpy.try_shutdown() -- launch_testing's post-shutdown check
+        # (and a plain Ctrl-C from a launch file) delivers exactly that
+        # signal, so an unconditional rclpy.shutdown() here double-shuts
+        # the context and raises RCLError, which turns a clean exit into
+        # a nonzero one. Only shut down if it is still our job to do so.
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

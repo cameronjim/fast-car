@@ -18,6 +18,12 @@ __pycache__/
 .mypy_cache/
 .coverage
 
+# Bench session records written by racer_bench.engine.write_session_record
+# (roadmap task 0.9) are run output, not curated fixtures -- same rule as
+# data/ above (claude-docs/10-conventions.md). Real session notes belong in
+# docs/notes/ once written up.
+tests/bench/sessions/
+
 # colcon build artifacts
 ros_ws/build/
 ros_ws/install/

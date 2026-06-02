@@ -16,6 +16,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
 
 # colcon build artifacts
 ros_ws/build/

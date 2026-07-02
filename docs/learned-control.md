@@ -1,13 +1,25 @@
-# Learning-based control (BC + SAC)
+# Learning-based control (BC + SAC), the v1 approach
 
-This document explains the `learned_control` package: how the driving data is
-prepared, how the behavioural cloning model is trained, and how Soft Actor-Critic
-refines it. It assumes you know basic deep learning and some reinforcement
-learning, and fills in the specifics of this implementation.
+This document explains the behavioural cloning and online Soft Actor-Critic stack in the
+`learned_control` package: how the driving data is prepared, how the cloning model is
+trained, and how SAC refines it. It assumes you know basic deep learning and some
+reinforcement learning, and fills in the specifics of this implementation.
 
-The short version: collecting enough real driving data to train a reinforcement
-learning policy from scratch on a physical car is not practical, so the policy is
-first trained to copy recorded driving with behavioural cloning, then improved in
+**This is the legacy path, kept as a comparison, not the training path.** It was built
+around a physical car and around training inside ROS, one environment step per `/scan`
+message, which caps learning at real time. The policies that actually race are trained in
+`gym_training/` against the simulator's Python API, hundreds of times faster, from scratch
+and with no demonstration data at all. That story is
+[rl-training.md](rl-training.md); the two are worth reading together, because the contrast
+between them is most of what this project learned.
+
+What still runs from this document: `bc_demo_node`, `sac_demo_node` and `sac_train_node`,
+with their shipped weights, against the same simulator and the same safety node. Nothing
+here has been deleted or rewritten to match the newer stack.
+
+The short version of the v1 design: collecting enough real driving data to train a
+reinforcement learning policy from scratch on a physical car is not practical, so the
+policy is first trained to copy recorded driving with behavioural cloning, then improved in
 the simulator with Soft Actor-Critic that starts from the cloned policy.
 
 Contents:
@@ -62,7 +74,9 @@ steering and speed commands.
 ## Behavioural cloning
 
 Behavioural cloning (BC) is plain supervised learning: given a scan, predict the
-steering and speed a human would have used.
+steering and speed a human would have used. It exists here because the v1 stack had no way
+to collect experience cheaply; the gym trainer needs no demonstrations, so nothing in
+`gym_training/` uses BC.
 
 The model (`bc/model.py`) is a small multilayer perceptron:
 
@@ -195,6 +209,10 @@ walls, steer smoothly, and never crash. The crash penalty is large so the policy
 strongly prefers finishing a lap over taking risks.
 
 ## Online training loop
+
+This is the part the gym trainer replaced. It is kept runnable because it is the honest
+comparison: the same algorithm family, the same simulator physics, learning at real time
+inside ROS instead of at 8000 steps per second outside it.
 
 `sac_train_node` runs SAC live in the simulator. Each LiDAR scan produces an
 action, the reward is computed, and the transition is stored in the replay

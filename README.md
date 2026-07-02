@@ -1,45 +1,141 @@
 # F1TENTH Autonomous Racing
 
-Autonomous driving software for the [F1TENTH](https://f1tenth.org/) platform, a
-1/10 scale race car that carries a planar LiDAR, a camera, and a small onboard
-computer running ROS 2. The same code runs in the [F1TENTH Gym](https://github.com/f1tenth/f1tenth_gym_ros)
-simulator and on the physical car.
+Autonomous racing software for the [F1TENTH](https://f1tenth.org/) platform, a 1/10 scale
+race car with a planar LiDAR and a small onboard computer. The physical car is retired, so
+everything here targets the simulator: reinforcement learning policies trained from scratch
+against the F1TENTH Gym, classical controllers as the baseline they have to beat, and a ROS 2
+demo stack that runs a trained policy in `f1tenth_gym_ros`.
 
-The goal of the project is to get the car to drive a track on its own, as fast as
-it can without crashing, and to compare two very different ways of doing that:
+The project is in two halves, and they meet at exactly one place.
 
-- **Classical reactive control.** Hand-written controllers that react directly to
-  the current sensor reading. No training, no data, no model. They are simple,
-  predictable, and easy to reason about.
-- **Learning-based control.** A neural network that takes a LiDAR scan and outputs
-  steering and speed. It is trained first by copying recorded human driving
-  (behavioural cloning) and then improved in simulation with reinforcement
-  learning (Soft Actor-Critic).
+```
+gym_training/  (plain python, no ROS)          ROS 2 workspace
+  trains policies in f1tenth_gym       ->      learned_control/ runs the exported policy
+  exports policy.pt + obs_config.json          reactive_control/ classical baselines
+                                               f1tenth_gym_ros (external) simulates the car
+```
 
-Both approaches plug into the same safety layer, so they can be swapped without
-changing how the car is kept safe.
+Training happens on the left. Nothing there imports ROS, and the training loop steps the
+simulator directly at roughly 8000 physics steps per second, which is what makes racing
+policies reachable in under an hour on one GPU. The right side is the demo: it loads a
+policy that was trained on the left, plus the `obs_config.json` that tells it exactly how to
+rebuild the observation that policy expects. It also keeps the classical controllers and the
+older learned stack runnable for comparison.
 
-## What is in here
+| Where | What it does |
+|---|---|
+| [`gym_training/`](gym_training) | SAC and PPO against the F1TENTH Gym API, pure pursuit baseline, raceline generation, policy export |
+| [`learned_control/`](learned_control) | ROS 2: runs an exported policy, plus the legacy BC and online SAC nodes, plus the safety node |
+| [`reactive_control/`](reactive_control) | ROS 2: gap following, wall following, camera lane following, safety node |
 
-The code is split into two ROS 2 packages.
+Deep dives:
 
-| Package | Approach | Controllers | Sensors |
+- [docs/rl-training.md](docs/rl-training.md): observation, action, reward, the speed
+  curriculum, residual RL, and the results.
+- [docs/reactive-control.md](docs/reactive-control.md): gap following, wall following,
+  camera following, the safety node, and the math behind each.
+- [docs/learned-control.md](docs/learned-control.md): behavioural cloning and online SAC,
+  the v1 approach, kept as a comparison.
+
+## Results
+
+Spielberg, the map every controller has run. Full table, per-map numbers, and the caveats
+that make the comparison honest are in
+[gym_training/leaderboard.md](gym_training/leaderboard.md).
+
+| Controller | Best lap | Clean | Control rate |
 |---|---|---|---|
-| [`reactive_control`](reactive_control) | Classical, no learning | gap following, wall following, camera lane following | LiDAR, camera |
-| [`learned_control`](learned_control) | Learning-based | behavioural cloning, Soft Actor-Critic | LiDAR |
+| pure pursuit on the shipped raceline | 37.99 s | 0% crash, one attempt | 100 Hz |
+| SAC trained from scratch (M4) | 37.97 s | 100% over 20 episodes | 25 Hz |
+| residual SAC over pure pursuit (M5) | 33.40 s | 100% over 20 episodes | 50 Hz deltas over a 100 Hz planner |
+| SAC on the deployable feature set (M6) | 43.43 s | 100% over 20 episodes | 25 Hz, and this is the one the ROS demo runs |
 
-If you just want the details of how each controller works, jump to the
-deep-dive docs:
+On Monza and YasMarina the shipped racelines run closer to a wall than half the car's width,
+so pure pursuit needs a generated line to lap at all: 42.04 s and 50.98 s against the
+residual policy's 39.21 s and 43.70 s.
 
-- [docs/reactive-control.md](docs/reactive-control.md): gap following, wall
-  following, camera following, the safety node, and the math behind each.
-- [docs/learned-control.md](docs/learned-control.md): data preparation,
-  behavioural cloning, Soft Actor-Critic, the reward function, and the formulas.
+The M6 row is slower on purpose. It gives up `frenet_pose`, which no real car has, and stops
+its speed curriculum at 8 m/s rather than the 9.5 m/s the policy can survive, because the
+demo needs to finish every lap rather than set a record. Driven live in `f1tenth_gym_ros` the
+same policy laps in 63.8 s, mostly because the safety node brakes on time to collision at
+every corner entry while the policy's own command never drops below 6.4 m/s.
 
-## How it works
+## Training side quick start
 
-Every setup runs two nodes: a **controller** that decides where to go, and a
-**safety node** that has the final say before anything reaches the car.
+Ubuntu, Python 3.12, a CUDA GPU for SAC. WSL2 works and is what this was developed on.
+
+```bash
+python -m venv ~/venvs/f1rl && source ~/venvs/f1rl/bin/activate
+pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu126
+pip install -r gym_training/requirements.txt
+
+cd gym_training
+pytest tests/ -q
+
+python -m f1rl.train --config configs/sac_deploy.yaml
+python -m f1rl.evaluate --model runs/sac_deploy/best/best_racing_model.zip \
+    --config configs/sac_deploy.yaml --episodes 20 --speed-cap 8.0
+python -m f1rl.export_policy --model runs/sac_deploy/best/best_racing_model.zip \
+    --config configs/sac_deploy.yaml --out-dir artifacts/m6_deploy --speed-cap 8.0
+```
+
+Torch must come from the cu126 index. Rendering needs a display, so headless boxes set
+`QT_QPA_PLATFORM=offscreen` before anything that renders. Maps download on first use.
+
+`configs/sac_deploy.yaml` is the config to copy for anything that has to run on ROS: it
+trains on the features the deploy node can rebuild from `/scan` and `/odom` alone. The other
+configs include `frenet_pose`, which is a simulator luxury and makes the export sim-only.
+[gym_training/README.md](gym_training/README.md) has the rest of the commands.
+
+## ROS side quick start
+
+Linux with ROS 2, and [f1tenth_gym_ros](https://github.com/f1tenth/f1tenth_gym_ros) for the
+simulator. That bridge targets ROS 2 Foxy, so its Docker image is the sane way to run it.
+Build the image from its README, add `ros-foxy-ackermann-msgs` and a CPU build of PyTorch to
+it, which is everything these two packages need that the bridge does not already install,
+then put them in the same workspace:
+
+```bash
+cd /sim_ws/src
+git clone <this-repo>
+cd /sim_ws
+colcon build
+source install/local_setup.bash
+```
+
+Run the simulator bridge, then one controller launch beside it:
+
+```bash
+# classical baselines
+ros2 launch reactive_control gap_follow_launch.py
+ros2 launch reactive_control wall_follow_launch.py
+ros2 launch reactive_control cv_launch.py
+
+# a policy trained in gym_training
+ros2 launch learned_control rl_demo_launch.py \
+    policy_path:=/path/to/policy.pt obs_config_path:=/path/to/obs_config.json
+
+# the v1 learned stack, for comparison
+ros2 launch learned_control bc_launch.py
+ros2 launch learned_control sac_demo_launch.py
+ros2 launch learned_control sac_train_launch.py
+```
+
+An export dropped into `learned_control/policies/` ships with the package and becomes the
+default for `rl_demo_launch.py`, so the two arguments above are only needed to point at
+another one.
+
+Every launch takes `sim:=true|false`, which picks `/ego_racecar/odom` or `/odom`. The
+physical car is retired, so `sim:=false` is untested legacy.
+
+Under WSL2 the Foxy default DDS hangs on node creation. Installing
+`ros-foxy-rmw-cyclonedds-cpp` and exporting `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` fixes
+it, and costs nothing anywhere else.
+
+## How the ROS stack keeps itself safe
+
+Every launch runs two nodes: a controller that decides where to go, and a safety node that
+has the final say before anything reaches the car.
 
 ```
 sensors ->  controller  ->  drive command  ->  safety node  ->  /drive  ->  car
@@ -48,144 +144,19 @@ sensors ->  controller  ->  drive command  ->  safety node  ->  /drive  ->  car
                                                   LiDAR
 ```
 
-The controller publishes a drive command. The safety node watches the LiDAR,
-works out the closest obstacle and the time until a collision, and brakes in
-stages if needed. If something is too close it stops the car and raises an
-emergency-stop flag on `/kys`, which the controllers listen to. Keeping safety in
-its own node means the driving logic can change freely, including an unpredictable
-learned policy, without weakening the part that prevents crashes.
+The safety node watches the LiDAR, computes the closest obstacle in the cone the car is
+steering into and the time to collision, and brakes in stages. Below the full-brake
+threshold it zeroes the command and latches an emergency stop on `/kys`, which the
+controllers listen to, then releases it once the hold-off has passed and the forward sector
+is clear again. Keeping that in its own node is what makes it safe to put an unpredictable
+learned policy in the controller slot.
 
-The reactive controllers publish steering on `/drive` and take their allowed speed
-from the safety node on `/speed`. The learned controller publishes on `/drive_raw`
-and the safety node republishes the gated result on `/drive`. Either way the
-safety node is the last step before the car.
+Topic wiring differs between the two packages, and it matters:
 
-## Repository layout
-
-```
-f1tenth-autonomous-racing/
-  reactive_control/    gap following, wall following, camera following, safety
-  learned_control/     behavioural cloning + Soft Actor-Critic, safety
-  docs/                deep-dive explanations of the algorithms
-```
-
-Each package is a standard ROS 2 `ament_python` package.
-
-## Where it runs
-
-This is ROS 2 software, so both the simulator and the car run on Linux (Ubuntu).
-There is no Windows or macOS path. The code itself is identical in both places;
-the only difference is which odometry topic it reads, which the `sim` launch
-argument handles for you.
-
-**Simulator.** The [F1TENTH Gym](https://github.com/f1tenth/f1tenth_gym_ros)
-environment (`f1tenth_gym_ros`) is a ROS 2 bridge around the F1TENTH physics
-simulator. It runs on a Linux machine, usually inside Docker, and gives you a
-virtual car on a track that publishes the same topics as the real one (`/scan`,
-odometry, and so on). It publishes ground-truth odometry on `/ego_racecar/odom`.
-This is where you develop, train SAC, and test without risking hardware.
-
-**Physical car.** The real F1TENTH car has a small onboard computer running Ubuntu
-and ROS 2 (on the standard build this is an NVIDIA Jetson). You SSH into the car,
-clone and build this workspace there, and launch with `sim:=false`. The car's own
-driver stack provides the LiDAR scan and odometry on `/odom` and turns the final
-`/drive` command into motor and steering signals. Your laptop is only a terminal
-into the car over the network; the code runs on the car itself.
-
-## Getting started
-
-You need a Linux machine with ROS 2 and a workspace. To run in simulation you also
-need [f1tenth_gym_ros](https://github.com/f1tenth/f1tenth_gym_ros); follow its
-README to bring up the simulator. To run on the car, SSH into it first and do the
-following there.
-
-Clone both packages into the `src/` folder of a ROS 2 workspace and build:
-
-```bash
-cd ~/f1tenth_ws/src
-git clone <this-repo>
-cd ~/f1tenth_ws
-colcon build
-source install/local_setup.bash
-```
-
-Every launch file takes a `sim` argument that picks the right odometry topic:
-
-- `sim:=true` (the default) uses `/ego_racecar/odom`, which is what the simulator
-  publishes.
-- `sim:=false` uses `/odom`, which is what the physical car publishes.
-
-So the same command runs in either place, you just flip one argument.
-
-## Running the reactive controllers
-
-Each command launches the chosen controller together with the safety node.
-
-```bash
-# LiDAR gap following
-ros2 launch reactive_control gap_follow_launch.py
-
-# wall following (follows the right-hand wall)
-ros2 launch reactive_control wall_follow_launch.py
-
-# camera lane following
-ros2 launch reactive_control cv_launch.py
-```
-
-Add `sim:=false` to any of them to run on the physical car, for example:
-
-```bash
-ros2 launch reactive_control gap_follow_launch.py sim:=false
-```
-
-## Running the learned controller
-
-```bash
-# run the trained behavioural cloning policy
-ros2 launch learned_control bc_launch.py
-
-# run the trained SAC policy (inference only)
-ros2 launch learned_control sac_demo_launch.py
-
-# train SAC online in the simulator
-ros2 launch learned_control sac_train_launch.py
-```
-
-The same `sim:=false` switch applies to `bc_launch.py` and `sac_demo_launch.py`
-for the physical car. SAC training is meant for the simulator, since it resets
-the car after a crash.
-
-## Training your own models
-
-This repo ships with trained weights, but you can retrain from your own driving
-data. The full pipeline is:
-
-```
-ROS bag -> extract_dataset -> preprocess -> BC training -> SAC training -> demo
-```
-
-1. Record a bag while driving the car, then convert and preprocess it:
-
-   ```bash
-   python preprocessing/extract_dataset.py --bag <your_bag> --output training_data.csv
-   python preprocessing/preprocess.py
-   ```
-
-2. Train the behavioural cloning model:
-
-   ```bash
-   python bc/train.py --data processed/data.csv --epochs 100 --batch-size 256 --lr 1e-3 --out bc/bc_model.pth
-   ```
-
-3. Initialize a SAC checkpoint from the BC weights, then refine it with
-   `sac_train_launch.py`:
-
-   ```bash
-   python sac/train.py --bc-weights bc/bc_model.pth --out sac/sac_checkpoint.pth
-   ```
-
-See [docs/learned-control.md](docs/learned-control.md) for what each step does and
-why.
+- reactive controllers publish steering on `/drive` and read their allowed speed from the
+  safety node on `/speed`.
+- learned controllers publish on `/drive_raw`, and the learned safety node republishes the
+  gated result on `/drive`.
 
 ## Topics
 
@@ -201,20 +172,24 @@ why.
 
 ## Configuration
 
-Tuning values for each controller live in that package's `config/*.yaml` and are
-loaded by the launch files. You can also change them while the car is running:
+ROS tuning values live in each package's `config/*.yaml` and are loaded by the launch files,
+and can be changed while a node runs:
 
 ```bash
 ros2 param set /safety_node ttc_fb 0.9
 ros2 param set /gap_follow_node max_speed 1.2
 ```
 
+Training runs are configured entirely by one yaml in `gym_training/configs/`. Anything the
+trained policy needs at inference time is written into the exported `obs_config.json`, never
+copied by hand into the deploy node.
+
 ## Dependencies
 
-ROS 2 with `rclpy` and the standard message packages (`std_msgs`, `sensor_msgs`,
-`nav_msgs`, `ackermann_msgs`, `rcl_interfaces`), plus `numpy`. The camera
-controller also needs `opencv` and `cv_bridge`. The learned controller needs
-PyTorch, and training needs `pandas`.
+The ROS packages need `rclpy` and the standard message packages (`std_msgs`, `sensor_msgs`,
+`nav_msgs`, `ackermann_msgs`, `rcl_interfaces`), plus `numpy`. The camera controller also
+needs `opencv` and `cv_bridge`. Running an exported policy needs PyTorch, CPU is enough.
+Training needs the pinned stack in `gym_training/requirements.txt`.
 
 ## License
 

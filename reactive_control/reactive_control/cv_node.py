@@ -1,10 +1,4 @@
-"""
-Camera path-following node.
-
-Processes RGB camera images to detect the track path using image thresholding
-and contour filtering. Computes a steering angle using a PID controller and
-publishes Ackermann drive commands.
-"""
+"""ros node steering from a forward rgb camera by tracking the track contour."""
 
 import rclpy
 import numpy as np
@@ -19,29 +13,16 @@ from rcl_interfaces.msg import SetParametersResult
 from rclpy.parameter import Parameter
 from typing import List
 
+MIN_CONTOUR_TOP_ROW_PX = 200
+MIN_CONTOUR_AREA_PX = 10000
+TARGET_ROW_PX = 400
+RIGHT_BIAS_RAD = 0.2
+
 
 class CvNode(Node):
-    """
-    Vision-based path-following controller.
-
-    Detects the track from a forward RGB camera feed using morphological
-    filtering and contour extraction. Computes a steering error relative to the
-    image center and applies PID control to generate a steering command.
-
-    Speed is received from an external safety node and passed through to the
-    drive command.
-    """
+    """vision path-following controller; speed comes from the safety node."""
 
     def __init__(self) -> None:
-        """
-        Initialize the camera node.
-
-        Sets up ROS publishers/subscribers, declares PID parameters, registers
-        the dynamic parameter callback, and initializes internal control state.
-
-        Returns:
-            None
-        """
         super().__init__('cv_node')
         self.cam_sub = self.create_subscription(Image, '/camera/color/image_raw', self.cam_callback, 10)
         self.kys_sub = self.create_subscription(Bool, '/kys', self.kys_callback, 10)
@@ -64,20 +45,6 @@ class CvNode(Node):
         self.speed = 0.0
 
     def cam_callback(self, msg: Image) -> None:
-        """
-        Camera image callback.
-
-        Converts the ROS image to OpenCV format, extracts a binary mask
-        representing the track, computes a steering target, and publishes a
-        PID-controlled steering command. If no valid path is detected, no
-        command is published.
-
-        Args:
-            msg (Image): Incoming RGB image message.
-
-        Returns:
-            None
-        """
         if self.kys_latched:
             return
 
@@ -86,17 +53,16 @@ class CvNode(Node):
         path_img, success = cam_filter_path(img)
 
         if not success:
-            self.get_logger().info("No path detected.")
+            self.get_logger().info("no path detected")
             return
 
-        x, y, straight = get_target(path_img)
+        target_x, target_row, straight = get_target(path_img)
 
-        img_w = img.shape[1]
+        img_width = img.shape[1]
+        offset_px = target_x - (img_width / 2)
 
-        x_target = x - (img_w / 2)
-
-        # Bias to the right to get a better view of the track
-        angle = - np.arctan2(x_target, y) - 0.2
+        # biased right so the camera keeps more of the track in frame
+        angle = - np.arctan2(offset_px, target_row) - RIGHT_BIAS_RAD
 
         pid_angle = self.pid.pid_err(angle, self.get_clock().now().nanoseconds * 1e-9)
 
@@ -110,82 +76,34 @@ class CvNode(Node):
         self.drive_pub.publish(drive_msg)
 
     def kys_callback(self, msg: Bool) -> None:
-        """
-        Emergency stop callback.
-
-        Latches the stop condition when triggered by the safety node.
-
-        Args:
-            msg (Bool): Stop flag from the safety node.
-
-        Returns:
-            None
-        """
-        if msg.data:
-            self.kys_latched = True
+        self.kys_latched = msg.data
 
     def speed_callback(self, msg: AckermannDriveStamped) -> None:
-        """
-        Speed update callback.
-
-        Receives externally computed speed commands (e.g., from the safety
-        node) and stores them for use in drive commands.
-
-        Args:
-            msg (AckermannDriveStamped): Speed command message.
-
-        Returns:
-            None
-        """
         self.speed = msg.drive.speed
 
     def on_param_change(self, params: List[Parameter]) -> SetParametersResult:
-        """
-        Handle dynamic parameter updates.
-
-        Updates the PID gains when parameters are changed at runtime via ROS2
-        parameter services.
-
-        Args:
-            params (List[Parameter]): List of updated parameters.
-
-        Returns:
-            SetParametersResult: Result indicating whether the update succeeded.
-        """
-        for p in params:
-            if p.name == 'K_p':
-                self.K_p = float(p.value)
+        """apply pid gain changes made through the ros parameter service at runtime."""
+        for param in params:
+            if param.name == 'K_p':
+                self.K_p = float(param.value)
                 self.pid.K_p = self.K_p
-            elif p.name == 'K_i':
-                self.K_i = float(p.value)
+            elif param.name == 'K_i':
+                self.K_i = float(param.value)
                 self.pid.K_i = self.K_i
-            elif p.name == 'K_d':
-                self.K_d = float(p.value)
+            elif param.name == 'K_d':
+                self.K_d = float(param.value)
                 self.pid.K_d = self.K_d
 
         return SetParametersResult(successful=True)
 
 
 def cam_filter_path(img) -> tuple[np.ndarray, bool]:
-    """
-    Extract a binary mask representing the track path.
-
-    Applies grayscale conversion, morphological filtering, thresholding, and
-    contour selection based on area and vertical position.
-
-    Args:
-        img (np.ndarray): Input BGR image.
-
-    Returns:
-        tuple:
-            mask (np.ndarray): Binary image of the detected path.
-            success (bool): True if a valid path was found.
-    """
+    """binary mask of the track, from an open-close pass then the first big low contour."""
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     kernel = np.ones((9, 9), np.uint8)
     img = cv2.erode(img, kernel, iterations=2)
     img = cv2.dilate(img, kernel, iterations=2)
-    ret, img = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+    _, img = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
     contours, hierarchy = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
     mask = np.zeros(img.shape[:2], dtype="uint8")
@@ -195,7 +113,7 @@ def cam_filter_path(img) -> tuple[np.ndarray, bool]:
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
         area = cv2.contourArea(contour)
-        if y > 200 and area > 10000:
+        if y > MIN_CONTOUR_TOP_ROW_PX and area > MIN_CONTOUR_AREA_PX:
             cv2.drawContours(mask, [contour], -1, 255, -1)
             success = True
             break
@@ -203,40 +121,16 @@ def cam_filter_path(img) -> tuple[np.ndarray, bool]:
     return (mask, success)
 
 
-def get_target(img, target_row=400) -> tuple[float, int, bool]:
-    """
-    Determine the steering target from a binary path image.
-
-    Samples a horizontal row of the mask and computes the mean x-position of
-    the detected path pixels.
-
-    Args:
-        img (np.ndarray): Binary path mask.
-        target_row (int): Image row used for target extraction.
-
-    Returns:
-        tuple:
-            x (float): Mean x-coordinate of detected path pixels.
-            y (int): Row used for detection.
-            straight (bool): True if no path was detected.
-    """
+def get_target(img, target_row=TARGET_ROW_PX) -> tuple[float, int, bool]:
+    """mean x of the path pixels on one image row; straight is true when the row is empty."""
     row = img[target_row, :]
-    indices = np.argwhere(row > 0)
-    if len(indices) == 0:
+    path_px = np.argwhere(row > 0)
+    if len(path_px) == 0:
         return (0, target_row, True)
-    return (np.mean(indices), target_row, False)
+    return (np.mean(path_px), target_row, False)
 
 
 def main(args=None) -> None:
-    """
-    Entry point for the camera path-following node.
-
-    Args:
-        args: Command-line arguments passed to rclpy.
-
-    Returns:
-        None
-    """
     rclpy.init(args=args)
     cv_node = CvNode()
     rclpy.spin(cv_node)

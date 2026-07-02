@@ -1,11 +1,13 @@
-"""
-Reward function for SAC training on the F1Tenth car.
-
-Called every step by sac_train_node to compute the reward signal
-from raw LiDAR ranges, speed, steering angle, and crash flag.
-"""
+"""per-step reward for sac training, from raw lidar ranges, speed, steering, and crash flag."""
 
 import numpy as np
+
+SURVIVAL_BONUS = 0.1
+SPEED_GAIN = 0.1
+WALL_MARGIN_M = 0.5
+WALL_PENALTY_GAIN = 2.0
+JERK_PENALTY_GAIN = 0.8
+CRASH_PENALTY = 50.0
 
 
 def compute_reward(
@@ -15,37 +17,20 @@ def compute_reward(
     done: bool,
     prev_steering: float = 0.0,
 ) -> float:
-    """Compute single-step reward for SAC training.
-
-    Args:
-        lidar_ranges: Downsampled LiDAR distances in **meters** (before
-            normalization), shape (num_rays,).
-        speed: Physical forward speed in m/s.
-        steering_angle: Physical steering angle in radians.
-        done: True when the episode ends (emergency stop / crash).
-        prev_steering: Previous step's steering angle (for jerk penalty).
-
-    Returns:
-        Scalar reward value.
-    """
+    """reward for one step; lidar_ranges are metres, before normalization."""
     reward = 0.0
 
-    # 1. Survival bonus: reward for staying alive
-    reward += 0.1
+    reward += SURVIVAL_BONUS
+    reward += speed * SPEED_GAIN
 
-    # 2. Forward progress: encourage speed
-    reward += speed * 0.1
-
-    # 3. Wall proximity: penalise being close to obstacles
     min_range = float(np.min(lidar_ranges))
-    if min_range < 0.5:
-        reward -= (0.5 - min_range) * 2.0
+    if min_range < WALL_MARGIN_M:
+        reward -= (WALL_MARGIN_M - min_range) * WALL_PENALTY_GAIN
 
-    # 4. Steering smoothness: penalise jerk (change), NOT absolute steering
-    reward -= 0.8 * abs(steering_angle - prev_steering)
+    # penalises jerk, not absolute steering, so a sustained turn is not taxed
+    reward -= JERK_PENALTY_GAIN * abs(steering_angle - prev_steering)
 
-    # 5. Crash penalty: penalise crashing
     if done:
-        reward -= 50.0
+        reward -= CRASH_PENALTY
 
     return reward

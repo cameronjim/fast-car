@@ -1,11 +1,4 @@
-"""Soft Actor-Critic algorithm: replay buffer, trainer, and checkpoint helpers.
-
-Imported by the ROS2 sac_train_node for online simulator training.
-Can also be run standalone to initialise a checkpoint from BC weights:
-
-    python sac/train.py --bc-weights bc/bc_model.pth \
-                            --out sac/sac_checkpoint.pth
-"""
+"""soft actor-critic algorithm: replay buffer, trainer, and checkpoint io, no ros."""
 
 from __future__ import annotations
 import argparse
@@ -15,32 +8,17 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-# Handle both ROS2 package imports and standalone execution
+# works both as an installed ros2 package and when run straight out of sac/
 try:
     from learned_control.sac.model import SACActorNet, SACCriticNet
 except ImportError:
     from model import SACActorNet, SACCriticNet
 
 
-# ---------------------------------------------------------------------------
-# Replay Buffer
-# ---------------------------------------------------------------------------
-
 class ReplayBuffer:
-    """Fixed-capacity circular replay buffer backed by pre-allocated numpy arrays."""
+    """fixed-capacity circular buffer backed by pre-allocated numpy arrays."""
 
     def __init__(self, capacity: int, state_dim: int, action_dim: int) -> None:
-        """
-        Initializes the replay buffer with pre-allocated numpy arrays.
-
-        Args:
-            capacity: Maximum number of transitions to store.
-            state_dim: Dimension of the state vector.
-            action_dim: Dimension of the action vector.
-
-        Returns:
-            None
-        """
         self.capacity = capacity
         self.states = np.zeros((capacity, state_dim), dtype=np.float32)
         self.actions = np.zeros((capacity, action_dim), dtype=np.float32)
@@ -51,19 +29,7 @@ class ReplayBuffer:
         self.size = 0
 
     def push(self, state, action, reward, next_state, done) -> None:
-        """
-        Store a single transition, overwriting old entries if the buffer is full.
-
-        Args:
-            state: The current state.
-            action: The action taken.
-            reward: The reward received.
-            next_state: The next state.
-            done: Whether the episode ended.
-
-        Returns:
-            None
-        """
+        """store one transition, overwriting the oldest once full."""
         self.states[self.ptr] = state
         self.actions[self.ptr] = action
         self.rewards[self.ptr] = reward
@@ -73,15 +39,7 @@ class ReplayBuffer:
         self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Sample a random batch of transitions.
-
-        Args:
-            batch_size: The number of transitions to sample.
-
-        Returns:
-            A tuple of (states, actions, rewards, next_states, dones) as numpy arrays.
-        """
+        """random batch of (states, actions, rewards, next_states, dones)."""
         idx = np.random.randint(0, self.size, size=batch_size)
         return (
             self.states[idx],
@@ -92,21 +50,11 @@ class ReplayBuffer:
         )
 
     def __len__(self) -> int:
-        """
-        Return the number of transitions currently stored.
-
-        Returns:
-            The number of stored transitions.
-        """
         return self.size
 
 
-# ---------------------------------------------------------------------------
-# SAC Trainer
-# ---------------------------------------------------------------------------
-
 class SACTrainer:
-    """Soft Actor-Critic training logic (networks, optimisers, update step)."""
+    """networks, optimisers, and the single sac update step."""
 
     def __init__(
         self,
@@ -126,100 +74,51 @@ class SACTrainer:
         target_entropy: float | None = None,
         device: str = "cpu",
     ) -> None:
-        """
-        Initializes the SAC trainer with networks, optimizers, and replay buffer.
-
-        Args:
-            actor: The actor network.
-            critic1: The first critic network.
-            critic2: The second critic network.
-            state_dim: Dimension of the state vector.
-            action_dim: Dimension of the action vector.
-            lr_actor: Learning rate for the actor.
-            lr_critic: Learning rate for both critics.
-            lr_alpha: Learning rate for the entropy temperature.
-            gamma: Discount factor.
-            tau: Polyak averaging coefficient for target network updates.
-            buffer_size: Maximum replay buffer capacity.
-            batch_size: Number of transitions per gradient step.
-            target_entropy: Target entropy for auto-tuning alpha. Defaults to -action_dim.
-            device: The device to run training on.
-
-        Returns:
-            None
-        """
         self.device = torch.device(device)
         self.gamma = gamma
         self.tau = tau
         self.batch_size = batch_size
 
-        # --- networks ---
         self.actor = actor.to(self.device)
         self.critic1 = critic1.to(self.device)
         self.critic2 = critic2.to(self.device)
         self.target_critic1 = copy.deepcopy(self.critic1)
         self.target_critic2 = copy.deepcopy(self.critic2)
-        # Freeze targets (updated via polyak only)
+        # targets move by polyak averaging only, never by gradient
         for p in self.target_critic1.parameters():
             p.requires_grad = False
         for p in self.target_critic2.parameters():
             p.requires_grad = False
 
-        # --- optimisers ---
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=lr_actor)
         self.critic1_optim = torch.optim.Adam(self.critic1.parameters(), lr=lr_critic)
         self.critic2_optim = torch.optim.Adam(self.critic2.parameters(), lr=lr_critic)
 
-        # --- entropy temperature (auto-tuned) ---
         self.target_entropy = (
             target_entropy if target_entropy is not None else -float(action_dim)
         )
         self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
         self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=lr_alpha)
 
-        # --- replay buffer ---
         self.buffer = ReplayBuffer(buffer_size, state_dim, action_dim)
         self.reference_actor = None
 
         self.total_updates = 0
 
-    # ---- properties ----
     @property
     def alpha(self) -> float:
-        """Current entropy temperature (exponentiated log_alpha)."""
+        """current entropy temperature."""
         return self.log_alpha.exp().item()
 
-    # ---- buffer helpers ----
     def store(self, state, action, reward, next_state, done) -> None:
-        """
-        Push a transition into the replay buffer.
-
-        Args:
-            state: The current state.
-            action: The action taken.
-            reward: The reward received.
-            next_state: The next state.
-            done: Whether the episode ended.
-
-        Returns:
-            None
-        """
         self.buffer.push(state, action, reward, next_state, done)
 
     def ready(self) -> bool:
-        """True when the buffer has enough samples for one batch."""
+        """true once the buffer holds at least one full batch."""
         return len(self.buffer) >= self.batch_size
 
     def set_reference_actor(self, actor: SACActorNet | None) -> None:
-        """
-        Freeze a reference policy used for BC-style regularization.
-
-        Args:
-            actor: The actor to use as reference. Pass None to disable.
-
-        Returns:
-            None
-        """
+        """freeze a copy of actor as the bc regularization target; None disables it."""
         if actor is None:
             self.reference_actor = None
             return
@@ -228,23 +127,13 @@ class SACTrainer:
         for p in self.reference_actor.parameters():
             p.requires_grad = False
 
-    # ---- single SAC update step ----
     def update(
         self,
         *,
         update_actor: bool = True,
         bc_reg_weight: float = 0.0,
     ) -> dict | None:
-        """
-        Run one gradient step on all networks.
-
-        Args:
-            update_actor: If True, update the actor and entropy temperature.
-            bc_reg_weight: Weight for the BC regularization loss. Set to 0 to disable.
-
-        Returns:
-            A dict of training metrics, or None if the buffer is not ready.
-        """
+        """one gradient step on every network, or None while the buffer is short."""
         if not self.ready():
             return None
 
@@ -259,7 +148,6 @@ class SACTrainer:
 
         alpha = self.log_alpha.exp().detach()
 
-        # ---- critic targets ----
         with torch.no_grad():
             na, nlp, _ = self.actor.sample(ns)
             tq1 = self.target_critic1(ns, na)
@@ -267,7 +155,6 @@ class SACTrainer:
             target_q = torch.min(tq1, tq2) - alpha * nlp
             target = r + self.gamma * (1.0 - d) * target_q
 
-        # ---- update critic 1 ----
         q1 = self.critic1(s, a)
         c1_loss = F.mse_loss(q1, target)
         self.critic1_optim.zero_grad()
@@ -275,7 +162,6 @@ class SACTrainer:
         torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), 1.0)
         self.critic1_optim.step()
 
-        # ---- update critic 2 ----
         q2 = self.critic2(s, a)
         c2_loss = F.mse_loss(q2, target)
         self.critic2_optim.zero_grad()
@@ -288,14 +174,12 @@ class SACTrainer:
         bc_loss_value = float("nan")
 
         if update_actor:
-            # ---- update actor ----
             new_a, log_prob, _ = self.actor.sample(s)
             q1_new = self.critic1(s, new_a)
             q2_new = self.critic2(s, new_a)
             q_new = torch.min(q1_new, q2_new)
             actor_loss = (alpha * log_prob - q_new).mean()
 
-            bc_loss_value = float("nan")
             if self.reference_actor is not None and bc_reg_weight > 0.0:
                 with torch.no_grad():
                     ref_action = self.reference_actor.get_action(
@@ -311,7 +195,6 @@ class SACTrainer:
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
             self.actor_optim.step()
 
-            # ---- update alpha (entropy temperature) ----
             alpha_loss = -(
                 self.log_alpha * (log_prob.detach() + self.target_entropy)
             ).mean()
@@ -323,7 +206,6 @@ class SACTrainer:
             actor_loss_value = actor_loss.item()
             alpha_loss_value = alpha_loss.item()
 
-        # ---- soft (Polyak) target update ----
         with torch.no_grad():
             for tp, p in zip(
                 self.target_critic1.parameters(), self.critic1.parameters()
@@ -345,17 +227,8 @@ class SACTrainer:
             "bc_loss": round(bc_loss_value, 5),
         }
 
-    # ---- checkpoint I/O ----
     def save(self, path: str) -> None:
-        """
-        Save all network weights and optimizer states to a checkpoint file.
-
-        Args:
-            path: The output .pth file path.
-
-        Returns:
-            None
-        """
+        """write every network and optimizer state to one checkpoint file."""
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         torch.save(
             {
@@ -375,15 +248,7 @@ class SACTrainer:
         )
 
     def load(self, path: str) -> None:
-        """
-        Load all network weights and optimizer states from a checkpoint file.
-
-        Args:
-            path: The .pth checkpoint file path.
-
-        Returns:
-            None
-        """
+        """restore every network and optimizer state from a checkpoint file."""
         ckpt = torch.load(path, map_location=self.device, weights_only=True)
         self.actor.load_state_dict(ckpt["actor"])
         self.critic1.load_state_dict(ckpt["critic1"])
@@ -398,10 +263,6 @@ class SACTrainer:
         self.total_updates = ckpt.get("total_updates", 0)
 
 
-# ---------------------------------------------------------------------------
-# Standalone helper: create initial checkpoint from BC weights
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Initialise a SAC checkpoint (optionally from BC weights)"
@@ -413,10 +274,10 @@ if __name__ == "__main__":
 
     if args.bc_weights:
         actor = SACActorNet.from_bc(args.bc_weights, num_lidar_rays=args.num_lidar)
-        print(f"Actor initialised from BC weights: {args.bc_weights}")
+        print(f"actor initialised from bc weights: {args.bc_weights}")
     else:
         actor = SACActorNet(num_lidar_rays=args.num_lidar)
-        print("Actor initialised with random weights")
+        print("actor initialised with random weights")
 
     critic1 = SACCriticNet(num_lidar_rays=args.num_lidar)
     critic2 = SACCriticNet(num_lidar_rays=args.num_lidar)
@@ -426,4 +287,4 @@ if __name__ == "__main__":
         state_dim=args.num_lidar,
     )
     trainer.save(args.out)
-    print(f"Checkpoint saved to {args.out}")
+    print(f"checkpoint saved to {args.out}")

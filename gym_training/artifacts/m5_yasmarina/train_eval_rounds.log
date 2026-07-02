@@ -1,0 +1,23 @@
+eval at 50000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 49.39s
+new best racing policy at score 106.07, saved to runs/sac_residual_yasmarina/best/best_racing_model
+eval at 100000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 45.91s
+new best racing policy at score 106.53, saved to runs/sac_residual_yasmarina/best/best_racing_model
+eval at 150000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 47.31s
+eval at 200000 steps, cap 12.00 m/s: clean 0% over 12 episodes, 0 laps, no lap
+eval at 250000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 44.88s
+new best racing policy at score 106.68, saved to runs/sac_residual_yasmarina/best/best_racing_model
+eval at 300000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 44.68s
+new best racing policy at score 106.71, saved to runs/sac_residual_yasmarina/best/best_racing_model
+eval at 350000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 44.19s
+new best racing policy at score 106.79, saved to runs/sac_residual_yasmarina/best/best_racing_model
+eval at 400000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 45.16s
+eval at 450000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 44.11s
+new best racing policy at score 106.80, saved to runs/sac_residual_yasmarina/best/best_racing_model
+eval at 500000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 44.49s
+eval at 550000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 44.11s
+eval at 600000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 43.70s
+new best racing policy at score 106.86, saved to runs/sac_residual_yasmarina/best/best_racing_model
+eval at 650000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 44.24s
+eval at 700000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 43.88s
+eval at 750000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 43.71s
+eval at 800000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 43.73s

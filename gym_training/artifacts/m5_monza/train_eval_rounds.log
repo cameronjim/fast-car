@@ -1,0 +1,20 @@
+eval at 50000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 42.33s
+new best racing policy at score 107.09, saved to runs/sac_residual_monza/best/best_racing_model
+eval at 100000 steps, cap 12.00 m/s: clean 0% over 12 episodes, 0 laps, no lap
+eval at 150000 steps, cap 12.00 m/s: clean 0% over 12 episodes, 3 laps, best lap 41.42s
+eval at 200000 steps, cap 12.00 m/s: clean 0% over 12 episodes, 0 laps, no lap
+eval at 250000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 39.63s
+new best racing policy at score 107.57, saved to runs/sac_residual_monza/best/best_racing_model
+eval at 300000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 40.49s
+eval at 350000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 40.32s
+eval at 400000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 39.53s
+new best racing policy at score 107.59, saved to runs/sac_residual_monza/best/best_racing_model
+eval at 450000 steps, cap 12.00 m/s: clean 92% over 12 episodes, 35 laps, best lap 39.50s
+eval at 500000 steps, cap 12.00 m/s: clean 0% over 12 episodes, 0 laps, no lap
+eval at 550000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 39.24s
+new best racing policy at score 107.65, saved to runs/sac_residual_monza/best/best_racing_model
+eval at 600000 steps, cap 12.00 m/s: clean 92% over 12 episodes, 33 laps, best lap 39.00s
+eval at 650000 steps, cap 12.00 m/s: clean 67% over 12 episodes, 28 laps, best lap 39.67s
+eval at 700000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 39.60s
+eval at 750000 steps, cap 12.00 m/s: clean 8% over 12 episodes, 10 laps, best lap 40.68s
+eval at 800000 steps, cap 12.00 m/s: clean 0% over 12 episodes, 1 laps, best lap 40.14s

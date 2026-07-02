@@ -1,0 +1,85 @@
+# m7: head-to-head on spielberg, residual sac warm started from m5 against a scripted gap follower
+
+env:
+  maps: [Spielberg]
+  num_beams: 108
+  features: [scan, linear_vel_x, ang_vel_z, delta, frenet_pose]
+  scan_range_max_m: 30.0
+  lidar_noise_std: 0.01
+  lidar_dropout_prob: 0.0
+  lidar_range_bias_std: 0.0
+  # the versus wrapper overrides every reset with its own two-car spawn
+  reset_strategy: RL_RANDOM_RANDOM
+  reference_line: RACELINE
+  continuous_laps: true
+  action_repeat: 2
+  # control steps, so 18 s: the pass lands inside 6 s, and short episodes keep most
+  # transitions in wheel-to-wheel racing rather than solo lapping
+  max_episode_steps: 900
+  wrong_way_steps: 100
+  steer_max_rad: 0.4189
+  speed_min_mps: 0.5
+  speed_cap_mps: 12.0
+  residual:
+    enabled: true
+    reference: shipped
+    # wider than m5's 0.15 / 1.5: a race needs room to pick a line off the raceline and,
+    # above all, to brake. at 1.5 the ego could never drop under 8 m/s against a 4 m/s rival
+    dsteer_max_rad: 0.25
+    dspeed_max_mps: 4.0
+    curvature_horizons_m: [5.0, 10.0, 15.0, 20.0, 30.0]
+    pure_pursuit:
+      speed_scale: 1.2
+  versus:
+    enabled: true
+    spawn_line: raceline
+    gap_min_m: 5.0
+    gap_max_m: 15.0
+    # the residual policy trains on spawns exactly on the line, and pays for more than this
+    lateral_jitter_m: 0.15
+    opponent_speed_min_mps: 3.0
+    opponent_speed_max_mps: 4.5
+    overtake_bonus: 20.0
+    # the opponent block is left at reactive_control's tuned constants: measured alone on
+    # spielberg they lap clean 10/10 at every cap up to 5.5 m/s, and widening its range only
+    # slows it down
+  obs_norm:
+    speed_mps: 12.0
+    yaw_rate_rps: 5.0
+    steer_rad: 0.4189
+    ey_m: 5.0
+    ref_lateral_m: 2.0
+    curvature_radpm: 0.5
+  reward:
+    w_prog: 1.0
+    w_rate: 0.05
+    collision_penalty: 10.0
+    lap_bonus: 50.0
+    target_lap_time_sec: 60.0
+
+algo:
+  name: sac
+  policy: MlpPolicy
+  net_arch: [256, 256]
+  learning_rate: 0.0003
+  buffer_size: 600000
+  batch_size: 512
+  gamma: 0.99
+  tau: 0.005
+  train_freq: 64
+  gradient_steps: 64
+  # m5 already drives the line, so this primes the buffer with racing rather than exploring
+  learning_starts: 10000
+  ent_coef: auto
+  device: cuda
+
+run:
+  total_steps: 1000000
+  n_envs: 8
+  eval_n_envs: 4
+  seed: 0
+  resume_from: artifacts/m5/best_model.zip
+  eval_freq: 40000
+  eval_episodes: 16
+  checkpoint_freq: 200000
+  log_dir: runs

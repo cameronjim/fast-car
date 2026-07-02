@@ -1,0 +1,47 @@
+eval at 50000 steps, cap 4.50 m/s: clean 100% over 12 episodes, 12 laps, best lap 135.80s
+new best racing policy at score 102.21, saved to runs/sac_deploy/best/best_racing_model
+eval at 100000 steps, cap 4.50 m/s: clean 100% over 12 episodes, 12 laps, best lap 91.79s
+new best racing policy at score 103.27, saved to runs/sac_deploy/best/best_racing_model
+eval at 150000 steps, cap 5.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 70.94s
+new best racing policy at score 104.23, saved to runs/sac_deploy/best/best_racing_model
+eval at 200000 steps, cap 5.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 70.57s
+new best racing policy at score 104.25, saved to runs/sac_deploy/best/best_racing_model
+eval at 250000 steps, cap 5.50 m/s: clean 100% over 12 episodes, 24 laps, best lap 63.99s
+new best racing policy at score 104.69, saved to runs/sac_deploy/best/best_racing_model
+eval at 300000 steps, cap 5.50 m/s: clean 100% over 12 episodes, 24 laps, best lap 63.65s
+new best racing policy at score 104.71, saved to runs/sac_deploy/best/best_racing_model
+eval at 350000 steps, cap 6.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 58.30s
+new best racing policy at score 105.15, saved to runs/sac_deploy/best/best_racing_model
+eval at 400000 steps, cap 6.00 m/s: clean 100% over 12 episodes, 24 laps, best lap 58.16s
+new best racing policy at score 105.16, saved to runs/sac_deploy/best/best_racing_model
+eval at 450000 steps, cap 6.50 m/s: clean 100% over 12 episodes, 24 laps, best lap 53.44s
+new best racing policy at score 105.61, saved to runs/sac_deploy/best/best_racing_model
+eval at 500000 steps, cap 6.50 m/s: clean 100% over 12 episodes, 24 laps, best lap 53.39s
+new best racing policy at score 105.62, saved to runs/sac_deploy/best/best_racing_model
+eval at 550000 steps, cap 7.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 49.69s
+new best racing policy at score 106.04, saved to runs/sac_deploy/best/best_racing_model
+eval at 600000 steps, cap 7.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 49.55s
+new best racing policy at score 106.05, saved to runs/sac_deploy/best/best_racing_model
+eval at 650000 steps, cap 7.50 m/s: clean 100% over 12 episodes, 36 laps, best lap 46.30s
+new best racing policy at score 106.48, saved to runs/sac_deploy/best/best_racing_model
+eval at 700000 steps, cap 7.50 m/s: clean 100% over 12 episodes, 36 laps, best lap 46.37s
+eval at 750000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.68s
+new best racing policy at score 106.87, saved to runs/sac_deploy/best/best_racing_model
+eval at 800000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.51s
+new best racing policy at score 106.89, saved to runs/sac_deploy/best/best_racing_model
+eval at 850000 steps, cap 8.00 m/s: clean 83% over 12 episodes, 30 laps, best lap 43.48s
+eval at 900000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.66s
+eval at 950000 steps, cap 8.00 m/s: clean 50% over 12 episodes, 21 laps, best lap 43.96s
+eval at 1000000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.64s
+eval at 1050000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.56s
+eval at 1100000 steps, cap 8.00 m/s: clean 92% over 12 episodes, 33 laps, best lap 43.56s
+eval at 1150000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.59s
+eval at 1200000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.48s
+new best racing policy at score 106.90, saved to runs/sac_deploy/best/best_racing_model
+eval at 1250000 steps, cap 8.00 m/s: clean 92% over 12 episodes, 33 laps, best lap 43.46s
+eval at 1300000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.44s
+new best racing policy at score 106.91, saved to runs/sac_deploy/best/best_racing_model
+eval at 1350000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.46s
+eval at 1400000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.46s
+eval at 1450000 steps, cap 8.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 43.51s
+eval at 1500000 steps, cap 8.00 m/s: clean 92% over 12 episodes, 33 laps, best lap 43.47s

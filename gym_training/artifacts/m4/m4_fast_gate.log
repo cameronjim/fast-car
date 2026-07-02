@@ -1,0 +1,20 @@
+=== cap 9.5 ===
+episode  19  progress   1439.0m  steps  4000  laps 4  38.54s 38.01s 38.04s 37.97s  clean
+progress mean 1439.7m std 1.1m, collision free 100.00%, laps completed 80 over 20 episodes
+lap time best 37.97s mean 38.16s
+flying lap best 37.97s mean 38.03s over 60 laps
+=== cap 9.25 ===
+episode  19  progress   1402.8m  steps  4000  laps 4  39.50s 39.02s 39.04s 39.04s  clean
+progress mean 1402.9m std 0.8m, collision free 100.00%, laps completed 80 over 20 episodes
+lap time best 38.97s mean 39.15s
+flying lap best 38.97s mean 39.03s over 60 laps
+=== cap 9.0 ===
+episode  19  progress   1364.9m  steps  4000  laps 3  40.61s 40.05s 40.16s  clean
+progress mean 1366.3m std 1.1m, collision free 100.00%, laps completed 60 over 20 episodes
+lap time best 39.99s mean 40.24s
+flying lap best 39.99s mean 40.09s over 40 laps
+=== cap 10.0 ===
+episode  19  progress   1510.4m  steps  4000  laps 4  36.73s 36.27s 36.21s 36.28s  clean
+progress mean 1253.8m std 390.4m, collision free 65.00%, laps completed 64 over 20 episodes
+lap time best 36.16s mean 36.41s
+flying lap best 36.16s mean 36.25s over 44 laps

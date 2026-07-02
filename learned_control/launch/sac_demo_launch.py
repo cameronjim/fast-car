@@ -1,15 +1,4 @@
-"""
-SAC demo launch.
-
-Runs the best SAC checkpoint with the safety node. No training.
-
-Use sim:=false to run on the physical car (uses /odom instead of
-/ego_racecar/odom).
-
-Launch:
-    ros2 launch learned_control sac_demo_launch.py
-    ros2 launch learned_control sac_demo_launch.py sim:=false
-"""
+"""brings up the safety node and the sac inference node on the best checkpoint."""
 import os
 
 from launch import LaunchDescription
@@ -21,12 +10,6 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description() -> LaunchDescription:
-    """
-    Generate the launch description for the SAC demo node.
-
-    Returns:
-        The launch description.
-    """
     share = get_package_share_directory('learned_control')
     sim = LaunchConfiguration('sim')
     odom_topic = PythonExpression(["'/ego_racecar/odom' if '", sim, "' == 'true' else '/odom'"])
@@ -36,7 +19,6 @@ def generate_launch_description() -> LaunchDescription:
             'sim', default_value='true',
             description='true for the F1TENTH Gym simulator (/ego_racecar/odom), '
                         'false for the physical car (/odom)'),
-        # Safety node
         Node(
             package='learned_control',
             executable='safety_node',
@@ -47,7 +29,6 @@ def generate_launch_description() -> LaunchDescription:
                 {'odom_topic': odom_topic},
             ],
         ),
-        # SAC demo node (inference only, best checkpoint)
         Node(
             package='learned_control',
             executable='sac_demo_node',

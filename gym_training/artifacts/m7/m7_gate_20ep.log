@@ -1,0 +1,28 @@
+ seed      outcome  pass at  end gap  closest  opp cap  laps
+    0       passed     2.0s   127.2m     0.4m    4.22     0
+    1       passed     2.8s   131.5m     0.7m    3.47     0
+    2       passed     1.9s   128.7m     0.6m    3.90     0
+    3       passed     1.9s   122.2m     0.5m    4.10     0
+    4       passed     2.4s   127.1m     0.8m    3.91     0
+    5       passed     2.3s   141.6m     0.8m    3.08     0
+    6      contact        -    -0.6m     0.7m    4.48     0
+    7       passed     2.5s   136.0m     0.6m    3.45     0
+    8       passed     3.5s   114.0m     0.6m    4.30     0
+    9       passed     1.9s   129.3m     0.4m    4.07     0
+   10       passed     1.8s   133.2m     0.9m    3.77     0
+   11       passed     2.0s   134.4m     0.4m    3.22     0
+   12       passed     2.7s   127.5m     0.8m    3.52     0
+   13       passed     2.3s   140.2m     0.3m    3.12     0
+   14       passed     2.7s   130.4m     0.8m    3.70     0
+   15       passed     2.5s   128.8m     0.5m    3.86     0
+   16       passed     2.1s   133.7m     0.7m    3.93     0
+   17       passed     1.8s   142.1m     0.7m    3.32     0
+   18       passed     2.7s   118.7m     0.7m    4.45     0
+   19       passed     2.7s   131.9m     0.5m    3.47     0
+
+overtake success 95% over 20 episodes
+clean overtakes  95%
+ego collisions   5%
+opponent crashes 0%
+mean time to pass 2.34s
+outcomes passed 19, contact 1, solo crash 0, stuck behind 0

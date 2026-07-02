@@ -1,0 +1,24 @@
+YasMarina: 20 deterministic episodes at a 12.00 m/s cap
+episode   0  progress   1092.7m  steps  6000  laps 2  44.10s 43.72s  clean
+episode   1  progress   1085.9m  steps  6000  laps 2  44.27s 43.72s  clean
+episode   2  progress   1090.6m  steps  6000  laps 2  44.03s 43.71s  clean
+episode   3  progress   1086.5m  steps  6000  laps 2  44.28s 43.71s  clean
+episode   4  progress   1092.0m  steps  6000  laps 2  44.03s 43.71s  clean
+episode   5  progress   1081.7m  steps  6000  laps 2  44.18s 43.71s  clean
+episode   6  progress   1085.8m  steps  6000  laps 2  44.28s 43.70s  clean
+episode   7  progress   1093.9m  steps  6000  laps 2  44.27s 43.70s  clean
+episode   8  progress   1089.9m  steps  6000  laps 2  44.17s 43.71s  clean
+episode   9  progress   1086.4m  steps  6000  laps 2  44.27s 43.72s  clean
+episode  10  progress   1089.1m  steps  6000  laps 2  44.25s 43.71s  clean
+episode  11  progress   1087.0m  steps  6000  laps 2  44.16s 43.72s  clean
+episode  12  progress   1080.6m  steps  6000  laps 2  44.25s 43.71s  clean
+episode  13  progress   1096.5m  steps  6000  laps 2  44.27s 43.70s  clean
+episode  14  progress   1086.2m  steps  6000  laps 2  44.20s 43.71s  clean
+episode  15  progress   1095.5m  steps  6000  laps 2  44.22s 43.71s  clean
+episode  16  progress   1086.8m  steps  6000  laps 2  44.31s 43.70s  clean
+episode  17  progress   1092.7m  steps  6000  laps 2  44.22s 43.71s  clean
+episode  18  progress   1096.4m  steps  6000  laps 2  44.25s 43.71s  clean
+episode  19  progress   1080.3m  steps  6000  laps 2  44.27s 43.72s  clean
+progress mean 1088.8m std 4.8m, collision free 100.00%, laps completed 40 over 20 episodes
+lap time best 43.70s mean 43.96s
+flying lap best 43.70s mean 43.71s over 20 laps

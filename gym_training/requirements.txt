@@ -1,0 +1,19 @@
+# torch comes from the cu126 wheel index:
+#   pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu126
+torch==2.13.0+cu126
+
+gymnasium==0.29.1
+stable_baselines3==2.9.0
+numpy==2.5.2
+numba==0.67.0
+scipy==1.18.0
+tensorboard==2.21.0
+moviepy==2.2.1
+pyyaml==6.0.3
+opencv-python-headless==5.0.0.93
+trajectory-planning-helpers==0.79
+# quadprog 0.1.7 ships a broken wheel (undefined symbol on import)
+quadprog==0.1.13
+pytest==9.1.1
+
+f1tenth_gym @ git+https://github.com/f1tenth/f1tenth_gym.git@02383a9619788af18bacddc6954cb309582cc7e0

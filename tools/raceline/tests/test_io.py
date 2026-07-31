@@ -75,3 +75,25 @@ def test_written_file_has_hash_commented_header(tmp_path):
     header_lines = [line for line in text.splitlines() if line.startswith("#")]
     assert len(header_lines) >= 4
     assert any("raceline for track_id=gym_oval" in line for line in header_lines)
+
+
+def test_written_file_uses_lf_line_endings_only(tmp_path):
+    """Regression test: csv.writer's RFC 4180 default is CRLF, which silently corrupts
+    the last column of every row (and the header match) for the simple C++ reader
+    (ros_ws/src/racer_control/include/racer_control/raceline.hpp), which splits lines on
+    '\\n' only via std::getline and does not itself expect a trailing '\\r'. Caught by the
+    L5 tracker lap canary's first CI run: tracker_node refused to start because the
+    committed raceline's header didn't byte-match. write_raceline_csv must always emit
+    plain '\\n' line endings, matching the '#'-commented header lines above it."""
+    original = _tiny_raceline()
+    path = tmp_path / "raceline.csv"
+    write_raceline_csv(
+        path,
+        original,
+        track_id="gym_oval",
+        vehicle_params_schema_version="0.1.0",
+        vehicle_params_sysid_session_id="none-preliminary",
+        generation_params={},
+    )
+    raw = path.read_bytes()
+    assert b"\r" not in raw, "written raceline CSV must use LF-only line endings, found a CR byte"

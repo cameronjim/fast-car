@@ -59,7 +59,14 @@ def write_raceline_csv(
     with path.open("w", newline="", encoding="utf-8") as f:
         for line in header_lines:
             f.write(line + "\n")
-        writer = csv.writer(f)
+        # lineterminator="\n": csv.writer's default is "\r\n" (RFC 4180), which would leave
+        # a trailing "\r" on every field the simple C++ reader
+        # (ros_ws/src/racer_control/include/racer_control/raceline.hpp) parses with
+        # std::getline (splits on "\n" only) -- silently corrupting the last column of
+        # every row (a "\r"-contaminated target_speed_mps) and, on the header row, failing
+        # its exact string match. Plain "\n" keeps this file consistent with the
+        # "#"-commented header lines above, which are written with "\n" directly.
+        writer = csv.writer(f, lineterminator="\n")
         writer.writerow(_COLUMNS)
         for i in range(len(raceline)):
             writer.writerow(

@@ -75,6 +75,27 @@ TEST(Raceline, LoadFromCsvThrowsOnMissingFile) {
   EXPECT_THROW(Raceline::load_from_csv(fixture_path("does_not_exist.csv")), RacelineLoadError);
 }
 
+TEST(Raceline, LoadFromCsvToleratesCrlfLineEndings) {
+  // Regression test: caught by the L5 tracker lap canary's first CI run.
+  // tools/raceline/io.py's writer used to emit "\r\n" (csv.writer's RFC 4180 default),
+  // which -- combined with this reader's std::getline (splits on '\n' only) -- left a
+  // trailing '\r' on the header line and every row's last field, failing the header match
+  // outright. io.py now always writes plain '\n'; this test guards the OTHER half of the
+  // fix, that this reader tolerates a CRLF file regardless (defense in depth against any
+  // future producer of this format that isn't tools/raceline).
+  std::string path = fixture_path("crlf_scratch.csv");
+  {
+    std::ofstream out(path, std::ios::binary);
+    out << "s_m,x_m,y_m,heading_rad,curvature_1pm,target_speed_mps\r\n";
+    out << "0.0,0.0,0.0,0.0,0.0,3.0\r\n";
+    out << "1.0,1.0,0.0,0.0,0.0,4.0\r\n";
+  }
+  Raceline raceline = Raceline::load_from_csv(path);
+  EXPECT_EQ(raceline.size(), 2u);
+  EXPECT_DOUBLE_EQ(raceline.at(1).target_speed_mps, 4.0);
+  std::remove(path.c_str());
+}
+
 TEST(Raceline, LoadFromCsvThrowsOnBadHeader) {
   // Reuses the fixture directory; asserts against a file this test writes itself so the
   // error path is exercised without depending on another fixture file's exact contents.

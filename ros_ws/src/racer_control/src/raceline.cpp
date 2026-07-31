@@ -58,6 +58,14 @@ Raceline Raceline::load_from_csv(const std::string& path) {
 
   while (std::getline(file, line)) {
     ++line_number;
+    // std::getline splits on '\n' only; a CRLF-terminated file (or any file that picks up
+    // "\r\n" line endings from a Windows editor/tool) would otherwise leave a trailing '\r'
+    // stuck to the last field of every line, corrupting the header match and every row's
+    // last (target_speed_mps) column. Defense in depth: tools/raceline/io.py writes plain
+    // "\n" line endings, but this reader should not silently misparse a file that doesn't.
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
     if (line.empty()) {
       continue;
     }

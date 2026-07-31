@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>l5_tracker_lap</name>
+  <version>0.1.0</version>
+  <description>
+    L5 sim-in-loop tracker lap test (roadmap task S.2, claude-docs/12-testing.md): the
+    regression canary for the whole classical stack. Runs racer_gym_bridge and
+    racer_control's tracker_node together against the committed config/tracks/gym_oval
+    raceline and asserts N&gt;=2 laps complete within a committed lap-time band. This
+    package has no library code of its own -- it exists only to host this integration
+    test, which needs both racer_gym_bridge and racer_control built and installed
+    together in the same workspace (see .github/scripts/l5_tracker_lap_test.sh).
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>racer_gym_bridge</test_depend>
+  <test_depend>racer_control</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

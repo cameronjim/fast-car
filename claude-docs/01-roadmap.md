@@ -49,8 +49,15 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
       Done 2026-08-22: GitHub Actions CI is live with scaffold-aware coverage gates that
       bind automatically once a package gains source and tests; the sim-cpu/ros-dev image
       swap-in for the interim ubuntu-latest/ros:humble jobs happens with tasks 0.2/0.4.
-- [ ] 0.7 `vehicle_params.yaml` schema + binding generator + cross-language round-trip test
+- [x] 0.7 `vehicle_params.yaml` schema + binding generator + cross-language round-trip test
       (see `06-vehicle-params.md`, `12-testing.md` L1)
+      Done 2026-08-22: config/vehicle_params.schema.json + an initial
+      config/vehicle_params.yaml sourced from the f1tenth_gym default vehicle
+      params (cited in the yaml, meta.sysid_session_id = "none-preliminary");
+      tools/gen_params.py validates against the schema and generates Python,
+      C++17, and C bindings, covered by tools/tests/ (schema refusal tests,
+      hypothesis property tests, and a compiled C++/C round-trip test),
+      100% coverage on gen_params.py, green in CI.
 - [ ] 0.8 `docs/conventions.md` seeded from `10-conventions.md`
 - [x] 0.9 Test harnesses scaffolded: replay/golden framework + bag-mutation fault injectors
       (`12-testing.md` L4), sim-in-loop runner (L5), bench checklist runner (L6)
@@ -94,8 +101,9 @@ Fail → lower speed target, or pivot to scope option C.**
 
 ## Sim track (parallel with Phases 1–2; needs no car)
 
-- [ ] S.1 Model upgrades in gym fork: load transfer, Pacejka front/rear, first-order actuator
-      dynamics, transport delay (see `07-sim-and-sysid.md`)
+- [x] S.1 Model upgrades in gym fork: load transfer, Pacejka front/rear, first-order actuator
+      dynamics, transport delay (see `07-sim-and-sysid.md`) -- 2026-08-22, sim/racer_gym,
+      PR #9
 - [ ] S.2 Raceline optimizer + tracking controller running in sim; tracker lap test committed
       as the CI regression canary (L5)
 - [ ] S.3 Training pipeline: SAC/PPO residual on base controller, envelope enforced in env

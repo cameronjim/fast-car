@@ -75,7 +75,7 @@ class TestBuildTrackFromRaceline(unittest.TestCase):
                 f.write(_SQUARE_RACELINE_CSV)
             track = build_track_from_raceline(raceline_path)
         self.assertGreater(len(track.centerline.xs), 0)
-        self.assertGreater(len(track.raceline.velxs), 0)
+        self.assertGreater(len(track.raceline.vxs), 0)
 
 
 @pytest.mark.launch_test

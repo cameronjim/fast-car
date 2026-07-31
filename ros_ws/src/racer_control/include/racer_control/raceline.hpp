@@ -61,7 +61,7 @@ class Raceline {
   // returns that point's index. If the whole loop is shorter than lookahead_m, returns the
   // point farthest from (x, y).
   std::size_t advance_to_lookahead(std::size_t from_index, double x, double y,
-                                    double lookahead_m) const;
+                                   double lookahead_m) const;
 
  private:
   std::vector<RacelinePoint> points_;

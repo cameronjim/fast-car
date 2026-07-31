@@ -67,9 +67,10 @@ Raceline Raceline::load_from_csv(const std::string& path) {
     std::vector<std::string> fields = split_csv_line(line);
     if (!found_header) {
       if (fields != kExpectedHeader) {
-        throw RacelineLoadError(path + ": expected CSV header 's_m,x_m,y_m,heading_rad,"
-                                        "curvature_1pm,target_speed_mps', got '" +
-                                 line + "'");
+        throw RacelineLoadError(path +
+                                ": expected CSV header 's_m,x_m,y_m,heading_rad,"
+                                "curvature_1pm,target_speed_mps', got '" +
+                                line + "'");
       }
       found_header = true;
       continue;
@@ -115,7 +116,7 @@ std::size_t Raceline::nearest_index(double x, double y) const {
 }
 
 std::size_t Raceline::advance_to_lookahead(std::size_t from_index, double x, double y,
-                                            double lookahead_m) const {
+                                           double lookahead_m) const {
   const std::size_t n = points_.size();
   std::size_t idx = from_index % n;
   std::size_t best_index = idx;

@@ -2,12 +2,12 @@
 // the sign-convention cases from claude-docs/06-vehicle-params.md taken verbatim: steering
 // angle is the road-wheel angle in radians, LEFT positive; REP-103 frames (x forward, y
 // left, z up; yaw counter-clockwise positive).
-#include "racer_control/pure_pursuit.hpp"
-
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <vector>
+
+#include "racer_control/pure_pursuit.hpp"
 
 namespace racer_control {
 namespace {
@@ -56,7 +56,8 @@ TEST(PurePursuitController, TargetToTheLeftProducesPositiveSteering) {
   PurePursuitController controller(default_config());
 
   PurePursuitCommand cmd = controller.compute_command(raceline, 0.0, 0.0, 0.0);
-  EXPECT_GT(cmd.steering_angle_rad, 0.0) << "target to the left must yield positive (left) steering";
+  EXPECT_GT(cmd.steering_angle_rad, 0.0)
+      << "target to the left must yield positive (left) steering";
 }
 
 TEST(PurePursuitController, TargetToTheRightProducesNegativeSteering) {

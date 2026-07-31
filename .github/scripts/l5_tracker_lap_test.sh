@@ -25,7 +25,12 @@ set +u
 source /opt/ros/humble/setup.bash
 set -u
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# GitHub Actions' docker-run step already sets cwd = the repo root (`-w /workspace`), so no
+# need to shell out to git for that -- and inside this container, git refuses to even
+# answer `rev-parse` here with a "dubious ownership" error, because the bind-mounted
+# workspace is owned by a different uid than the container's user (same reasoning as
+# sim_bridge_build_test.sh, which avoids git for the same reason).
+REPO_ROOT="$PWD"
 RACER_L5_WS_DIR="/tmp/racer_l5_ws"
 
 PACKAGE_XMLS="$(find "$REPO_ROOT/sim/bridge" "$REPO_ROOT/ros_ws/src/racer_control" \

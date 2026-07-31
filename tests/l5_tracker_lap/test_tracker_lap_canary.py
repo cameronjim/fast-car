@@ -63,19 +63,20 @@ _RACELINE_PATH = _REPO_ROOT / "config" / "tracks" / "gym_oval" / "raceline.csv"
 _TEST_SEED = 11
 _TARGET_LAPS = 2
 
-# Timing band for _TARGET_LAPS laps' wall-clock time. WIDE and PROVISIONAL: this is the
-# FIRST reference for this stack (claude-docs/12-testing.md L5: "the regression canary for
-# the whole classical stack"). A one-off Python-prototype pure-pursuit run against this
-# exact raceline (same lookahead formula, same raceline speed profile, driven directly
-# through gym.step with no ROS/launch overhead) measured 11.66s of SIM time for 2 laps,
-# matching the gym's own independent lap-toggle-based episode termination at ~11.7s.
-# This band is centered loosely around that figure but kept wide to absorb: (a) the real
-# C++ tracker's own gains differing slightly from the prototype's, and (b) this test
-# measuring WALL-clock time (rclpy spin loop + real bridge stepping), which can run slower
-# than pure sim time under CI load. Tighten to a real +-25% band around a value measured by
-# this test itself once CI has run it, per this task's instructions.
-_LAP_TIME_LOW_S = 5.0
-_LAP_TIME_HIGH_S = 35.0
+# Timing band for _TARGET_LAPS laps' wall-clock time. This is the FIRST reference for this
+# stack (claude-docs/12-testing.md L5: "the regression canary for the whole classical
+# stack"): the real racer_control C++ tracker + racer_gym_bridge, run together in this
+# exact CI job, measured 18.79s wall-clock for 2 laps (see this test's own printed
+# diagnostic in CI logs). Band is +-25% around that measured value, per this task's
+# instructions ("commit the band with slack... since this is the FIRST reference"; it
+# tightens deliberately later, claude-docs/12-testing.md). A prior one-off Python-prototype
+# pure-pursuit run against this same raceline (no ROS/launch overhead, pure gym.step)
+# measured 11.66s of SIM time for 2 laps -- the real stack's wall-clock number being higher
+# than that sim-time-only figure is expected (rclpy spin loop + real bridge stepping
+# overhead) and is exactly why the band is centered on THIS test's own measurement, not the
+# prototype's.
+_LAP_TIME_LOW_S = 14.0
+_LAP_TIME_HIGH_S = 24.0
 
 # Overall wall-clock budget for the whole test before giving up.
 _MAX_TEST_WALL_S = 90.0

@@ -57,7 +57,7 @@ class PurePursuitController {
   // and computes steering from the standard pure-pursuit curvature formula
   // (`2*y_vehicle_frame / lookahead_distance^2`).
   PurePursuitCommand compute_command(const Raceline& raceline, double x_m, double y_m,
-                                      double yaw_rad) const;
+                                     double yaw_rad) const;
 
  private:
   PurePursuitConfig config_;

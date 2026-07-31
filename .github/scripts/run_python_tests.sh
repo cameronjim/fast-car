@@ -6,8 +6,8 @@
 #   - ros_ws/src/racer_policy/          : >=90% coverage (contract loader)
 #   - sysid/fitting/                    : >=90% coverage
 #   - evaluation/analysis/              : >=90% coverage
-#   - everything else (training/racer_train, tools/, other ros_ws Python
-#     packages)                         : coverage reported, not gated
+#   - everything else (training/racer_train, tools/, sim/racer_gym, other
+#     ros_ws Python packages)           : coverage reported, not gated
 #
 # Each package is delegated to pytest_gate.sh, which is scaffold-aware: a
 # package with no .py source yet prints a NOTICE and passes. Once a package
@@ -36,6 +36,7 @@ run "evaluation/analysis" line90
 # Normal packages: reported, not gated.
 run "training/racer_train" report
 run "tools" report
+run "sim/racer_gym" report
 
 # Any other ros_ws Python package (racer_policy is handled above with its
 # explicit gate; C++-only packages like racer_safety/racer_control are

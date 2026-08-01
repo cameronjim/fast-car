@@ -112,7 +112,19 @@ Fail → lower speed target, or pivot to scope option C.**
       two same-code CI runs' measured wall-clock variance, 11.6-18.8s -- see that test's
       own comment; a real +-25% band was too tight given that spread), all green in CI,
       PR #13.
-- [ ] S.3 Training pipeline: SAC/PPO residual on base controller, envelope enforced in env
+- [x] S.3 Training pipeline: SAC/PPO residual on base controller, envelope enforced in env
+      Done 2026-08-22: training/racer_train/ (gymnasium ResidualRacerEnv wrapping
+      sim/racer_gym: Python port of racer_control's pure-pursuit base controller,
+      bounded residual action, training/envelope's apply() enforced in-env, reward =
+      progress - crash - envelope violation only), SAC via stable-baselines3,
+      training/configs/s3/ experiment config, train.py emitting a deployment contract
+      ros_ws/src/racer_policy's load_contract + verify_against_environment loads.
+      Cross-language divergence test: a committed fixture (deterministic synthetic
+      states + the committed raceline) run through both this Python controller and a
+      new racer_control pure_pursuit_cli binary, compared by a colcon CTest within
+      1e-6. Nightly training-smoke job runs a real tiny SAC run on CPU (torch/SB3 kept
+      out of the per-push L1 job via a separate dependency group). All green in CI,
+      PR #15.
 - [x] S.4 Envelope module (bounds, rate limits, OOD fallback) as a standalone library with
       100% branch coverage + the property test: any input, any state → output in bounds (L1/L2)
       Done 2026-08-22: training/envelope/ (bounds, rate limits, OOD fallback trigger + a

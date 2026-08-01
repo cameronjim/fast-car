@@ -66,6 +66,19 @@ install(TARGETS tracker_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# -- pure_pursuit_cli: tiny CLI harness for the S.3 cross-language base-controller
+#    divergence test (see src/pure_pursuit_cli.cpp's header comment). Built unconditionally
+#    (not gated behind BUILD_TESTING) -- it is a small, useful-on-its-own diagnostic binary,
+#    same treatment as tracker_node above, not test-only scaffolding. -------------------
+add_executable(pure_pursuit_cli src/pure_pursuit_cli.cpp)
+add_dependencies(pure_pursuit_cli racer_control_generate_vehicle_params)
+target_include_directories(pure_pursuit_cli PRIVATE "${RACER_GENERATED_DIR}")
+target_link_libraries(pure_pursuit_cli racer_control_core)
+
+install(TARGETS pure_pursuit_cli
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
   install(DIRECTORY launch
     DESTINATION share/${PROJECT_NAME}
@@ -86,6 +99,31 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_tracker_node_launch.py
     TARGET test_tracker_node_launch
+  )
+
+  # -- S.3 cross-language base-controller divergence test ------------------------------
+  # Runs the committed fixture (training/racer_train/tests/fixtures/divergence_states.csv +
+  # divergence_expected.json, generated deterministically by
+  # training/racer_train/tests/generate_divergence_fixture.py from
+  # racer_train.raceline.PurePursuitController, the Python port of this exact algorithm)
+  # through the pure_pursuit_cli binary just built above, and asserts they agree within a
+  # stated tolerance -- claude-docs/12-testing.md's L5 "envelope-in-env test" divergence
+  # pattern, applied to the base controller. A plain CTest (not ament_cmake_pytest, which
+  # this package does not otherwise need): compare_divergence.py is invoked directly as a
+  # subprocess, and `colcon test` runs every CTest registered for an ament_cmake package.
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(
+    NAME test_pure_pursuit_cli_divergence
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/divergence/compare_divergence.py"
+            --cli "$<TARGET_FILE:pure_pursuit_cli>"
+            --raceline "${RACER_REPO_ROOT}/config/tracks/gym_oval/raceline.csv"
+            --states "${RACER_REPO_ROOT}/training/racer_train/tests/fixtures/divergence_states.csv"
+            --expected "${RACER_REPO_ROOT}/training/racer_train/tests/fixtures/divergence_expected.json"
+            --tolerance 1e-6
+  )
+  set_tests_properties(test_pure_pursuit_cli_divergence PROPERTIES
+    LABELS "racer_control_divergence"
   )
 endif()
 

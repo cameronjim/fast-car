@@ -100,7 +100,16 @@ Fail → lower speed target, or pivot to scope option C.**
       Done 2026-08-22: training/envelope/ (bounds, rate limits, OOD fallback trigger + a
       reference distance scorer, speed cap, single apply() entry point), 100% branch
       coverage and the hypothesis property test green in CI, mypy clean.
-- [ ] S.5 Deployment contract implemented; one refusal test per mismatch class, all green (L1)
+- [x] S.5 Deployment contract implemented; one refusal test per mismatch class, all green (L1)
+      Done 2026-08-22: ros_ws/src/racer_policy/ (plain Python package, ROS-free):
+      contract.yaml + contract.schema.json, load_contract() (manifest validation,
+      contract_version major check, policy.pt checksum) and
+      verify_against_environment() (vehicle_params version, observation field
+      order/dtype/units/missing/extra, LiDAR beam_count/fov/downsample), each mismatch a
+      specific hard-refusal exception with no override. torch stays lazily imported inside
+      load_model() only. One test per mismatch class plus a hypothesis property test and a
+      real-vehicle_params integration test, 99.8% coverage (>=90% gate), mypy clean, green
+      in CI. policy_node (rclpy wiring) is task 5.2.
 - [ ] S.6 Sim dynamics regression battery: sysid maneuvers in sim vs. committed references,
       run on every `racer_gym` change (L5)
 

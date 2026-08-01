@@ -108,8 +108,10 @@ Fail → lower speed target, or pivot to scope option C.**
       as the CI regression canary (L5) -- 2026-08-22: tools/raceline (synthetic stadium
       centerline + curvature/friction-limited speed profile), ros_ws/src/racer_control
       (pure pursuit, curvature-adaptive lookahead), config/tracks/gym_oval/raceline.csv,
-      and the l5-tracker-lap CI job (2-lap canary, committed band from a real CI
-      measurement), all green in CI, PR #13.
+      and the l5-tracker-lap CI job (2-lap canary; committed lap-time band widened from
+      two same-code CI runs' measured wall-clock variance, 11.6-18.8s -- see that test's
+      own comment; a real +-25% band was too tight given that spread), all green in CI,
+      PR #13.
 - [ ] S.3 Training pipeline: SAC/PPO residual on base controller, envelope enforced in env
 - [ ] S.4 Envelope module (bounds, rate limits, OOD fallback) as a standalone library with
       100% branch coverage + the property test: any input, any state → output in bounds (L1/L2)

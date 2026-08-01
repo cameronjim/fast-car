@@ -1,19 +1,16 @@
 name: nightly
 
-# STUB for the Desktop A self-hosted-runner nightly job described in
-# claude-docs/12-testing.md "CI wiring": "Nightly (Desktop A runner):
-# L4-full, L5-long, training smoke." Desktop A (claude-docs/03-
-# environments.md: RTX 3060, `train-cuda` image) is not wired up as a
-# GitHub Actions self-hosted runner yet. This workflow exists only to hold
-# the schedule + workflow_dispatch entry point; it runs on ubuntu-latest,
-# prints what the real nightly job will do, and exits 0. It does not build,
-# train, or test anything.
+# claude-docs/12-testing.md "CI wiring": "Nightly (Desktop A runner): L4-full, L5-long,
+# training smoke." Desktop A (claude-docs/03-environments.md: RTX 3060, `train-cuda` image)
+# is not wired up as a GitHub Actions self-hosted runner yet, so L4-full and L5-long are
+# still a stub (see the nightly-stub job below). The training smoke test (roadmap S.3) does
+# NOT need a GPU or Desktop A -- a few hundred SAC steps on CPU takes seconds -- so it runs
+# for real here, on ubuntu-latest, today.
 #
-# The owner will wire the self-hosted runner on Desktop A (runner
-# registration, labels, `train-cuda` availability) separately. Do NOT add
-# self-hosted runner configuration, runner labels, or secrets to this file -
-# that is an explicit owner decision, not something for CI-wiring task 0.6
-# to add speculatively.
+# The owner will wire the self-hosted runner on Desktop A (runner registration, labels,
+# `train-cuda` availability) separately for L4-full/L5-long. Do NOT add self-hosted runner
+# configuration, runner labels, or secrets to this file -- that is an explicit owner
+# decision, not something for this task to add speculatively.
 
 on:
   schedule:
@@ -22,18 +19,15 @@ on:
 
 jobs:
   nightly-stub:
-    name: Nightly stub (Desktop A runner not wired yet)
+    name: Nightly stub (Desktop A runner not wired yet -- L4-full/L5-long only)
     runs-on: ubuntu-latest
     steps:
       - name: Print nightly plan
         run: |
           cat <<'EOF'
-          This is a stub for the nightly job in claude-docs/12-testing.md
-          ("CI wiring: Nightly (Desktop A runner): L4-full, L5-long,
-          training smoke").
-
-          Once the Desktop A self-hosted runner is wired up, this workflow's
-          `runs-on` will point at it, and this job will actually run:
+          This is a stub for the parts of the nightly job in claude-docs/12-testing.md
+          ("CI wiring: Nightly (Desktop A runner): L4-full, L5-long, training smoke") that
+          still need the Desktop A self-hosted runner:
 
             - L4-full: the full replay/golden test suite over the complete
               committed rosbag set in tests/bags/, including every
@@ -41,13 +35,36 @@ jobs:
               push (that is L4-small, in ci.yml).
             - L5-long: the long sim-in-loop battery (many laps, full
               randomization ranges) against racer_gym, headless, seeded.
-            - Training smoke test: a short SAC run completes, loss is
-              finite, and the resulting checkpoint loads through the
-              deployment contract (racer_policy).
 
-          None of that runs here yet. The Desktop A runner is not wired up,
-          and this job intentionally does no building, training, or testing.
+          Once the Desktop A self-hosted runner is wired up, this job's `runs-on` will point
+          at it, and it will actually run both of the above. Neither runs here yet -- this
+          job intentionally does no building, training, or testing for them.
+
+          The THIRD nightly item, the training smoke test, no longer needs Desktop A (a tiny
+          SAC run is a few hundred CPU steps, seconds of wall time) and now runs for real in
+          the training-smoke job below, on every scheduled run of this workflow.
           EOF
 
       - name: Exit clean
         run: exit 0
+
+  training-smoke:
+    name: Training smoke test (SAC pipeline, CPU, roadmap S.3)
+    runs-on: ubuntu-latest
+    # claude-docs/12-testing.md L5: "Nightly long run: training smoke test -- a tiny SAC run
+    # (minutes) completes, loss is finite, checkpoint loads through the deployment contract.
+    # Catches pipeline rot early." training/racer_train/pyproject.toml deliberately keeps
+    # torch + stable-baselines3 out of its "dev" dependency group (so the per-push L1 job in
+    # ci.yml never installs them); `uv sync --group train --dev` here is what pulls them in.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Install racer_train with the train extras (torch + stable-baselines3)
+        working-directory: training/racer_train
+        run: uv sync --group train --dev
+
+      - name: Run the training smoke test
+        working-directory: training/racer_train
+        run: uv run pytest -m slow -v

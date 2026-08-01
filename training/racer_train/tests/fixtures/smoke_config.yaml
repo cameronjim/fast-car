@@ -1,0 +1,44 @@
+# Tiny config for the L5 nightly training-smoke test (tests/test_training_smoke.py) only --
+# NOT an experiment config under training/configs/ (it produces no reportable result, just
+# proves the pipeline runs end to end in minutes on CPU). Same shape as
+# training/configs/s3/sac_residual_0.1.0.yaml, just with a handful of steps and a tiny net.
+name: sac_residual_smoke
+
+seed: 0
+
+env:
+  track_csv: config/tracks/gym_oval/raceline.csv
+  lidar_downsample_factor: 10
+  timestep_s: 0.02
+  max_episode_steps: 50
+  action:
+    steering_scale_rad: 0.4189
+    speed_scale_mps: 5.0
+
+pure_pursuit:
+  lookahead_min_m: 0.4
+  lookahead_max_m: 1.5
+  lookahead_curvature_ref_1pm: 0.4
+
+envelope:
+  residual_fraction_steering: 0.2
+  residual_fraction_speed: 0.15
+  speed_cap_mps: 8.0
+  ood_threshold: 3.0
+  ood_reference_state: [3.0, 0.0, 0.0, 0.0, 0.0]
+  ood_reference_scale: [5.0, 2.0, 0.5, 1.0, 1.0]
+
+reward:
+  progress_weight: 1.0
+  crash_penalty: 10.0
+  envelope_violation_penalty: 0.1
+
+sac:
+  total_timesteps: 300
+  learning_rate: 0.0003
+  buffer_size: 1000
+  batch_size: 32
+  learning_starts: 50
+  train_freq: 1
+  gradient_steps: 1
+  net_arch: [16, 16]

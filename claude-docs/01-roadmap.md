@@ -95,8 +95,11 @@ Fail → lower speed target, or pivot to scope option C.**
 - [ ] S.2 Raceline optimizer + tracking controller running in sim; tracker lap test committed
       as the CI regression canary (L5)
 - [ ] S.3 Training pipeline: SAC/PPO residual on base controller, envelope enforced in env
-- [ ] S.4 Envelope module (bounds, rate limits, OOD fallback) as a standalone library with
+- [x] S.4 Envelope module (bounds, rate limits, OOD fallback) as a standalone library with
       100% branch coverage + the property test: any input, any state → output in bounds (L1/L2)
+      Done 2026-08-22: training/envelope/ (bounds, rate limits, OOD fallback trigger + a
+      reference distance scorer, speed cap, single apply() entry point), 100% branch
+      coverage and the hypothesis property test green in CI, mypy clean.
 - [ ] S.5 Deployment contract implemented; one refusal test per mismatch class, all green (L1)
 - [ ] S.6 Sim dynamics regression battery: sysid maneuvers in sim vs. committed references,
       run on every `racer_gym` change (L5)

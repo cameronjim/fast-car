@@ -1,0 +1,432 @@
+{
+  "meta": {
+    "racer_gym_version": "0.1.0",
+    "repo_commit": "6b22c46d85a7c3139244d7dff10d5f7e15763599",
+    "seed": 1234,
+    "vehicle_params_fallback_flags": {
+      "command_to_torque_delay": true,
+      "pacejka_front": true,
+      "pacejka_rear": true,
+      "steer_time_constant": true,
+      "throttle_time_constant": true,
+      "track_width": true
+    },
+    "vehicle_params_meta": {
+      "fit_date": "2026-08-22",
+      "schema_version": "0.1.0",
+      "sysid_session_id": "none-preliminary"
+    }
+  },
+  "records": [
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 0.0,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.01,
+      "x_m": 0.2997080385684967,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 0.7988399999999998,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.11,
+      "x_m": 0.33337343856849666,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 1.7498399999999994,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.21,
+      "x_m": 0.4608074385684966,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 2.602901859947657,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.31,
+      "x_m": 0.6810178227478019,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.1416809020414473,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.41000000000000003,
+      "x_m": 0.9704038226704075,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.4726843785700106,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.51,
+      "x_m": 1.302447173064919,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.676039173233539,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.61,
+      "x_m": 1.660697428707316,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.8009719169809517,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.71,
+      "x_m": 2.035048118977596,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.877725408267361,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.81,
+      "x_m": 2.4192902478879894,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9248795669606453,
+      "steer_angle_rad": 0.0,
+      "t_s": 0.91,
+      "x_m": 2.8096092660645713,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9538491244987424,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.01,
+      "x_m": 3.203661672729633,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9716468180046736,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.11,
+      "x_m": 3.6000077182937074,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9825809820392637,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.21,
+      "x_m": 3.9977628803789504,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.989298478499998,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.31,
+      "x_m": 4.396383745156578,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9934254294545677,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.41,
+      "x_m": 4.795536461729527,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9959608567943485,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.51,
+      "x_m": 5.195015925966165,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9975185180958936,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.61,
+      "x_m": 5.594696130402736,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9984754805346365,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.71,
+      "x_m": 5.994499661284594,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9990633985295534,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.81,
+      "x_m": 6.3943789588146505,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9994245909387365,
+      "steer_angle_rad": 0.0,
+      "t_s": 1.9100000000000001,
+      "x_m": 6.794304804227973,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.999646492560356,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.0100000000000002,
+      "x_m": 7.194259246728379,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9997828197046306,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.11,
+      "x_m": 7.594231258091908,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.999866573442572,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.21,
+      "x_m": 7.9942140630355825,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999180282622016,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.31,
+      "x_m": 8.394203499106816,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.999949639967281,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.41,
+      "x_m": 8.794197009067531,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.99996906088655,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.5100000000000002,
+      "x_m": 9.194193021856828,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.999980992293106,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.61,
+      "x_m": 9.594190572280095,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999883224539725,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.71,
+      "x_m": 9.994189067361841,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999928258005033,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.81,
+      "x_m": 10.39418814280254,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.99999559246966,
+      "steer_angle_rad": 0.0,
+      "t_s": 2.91,
+      "x_m": 10.794187574791687,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.999997292196334,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.0100000000000002,
+      "x_m": 11.194187225829403,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.99999833643784,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.11,
+      "x_m": 11.59418701144146,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999989779764706,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.21,
+      "x_m": 11.994186879730405,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.999999372111172,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.31,
+      "x_m": 12.394186798812605,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999996142511702,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.41,
+      "x_m": 12.794186749100065,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.999999763011933,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.5100000000000002,
+      "x_m": 13.194186718558747,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999998544043702,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.61,
+      "x_m": 13.594186699795427,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999999105520896,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.71,
+      "x_m": 13.994186688268025,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.999999945046917,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.81,
+      "x_m": 14.394186681186067,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999999662391073,
+      "steer_angle_rad": 0.0,
+      "t_s": 3.91,
+      "x_m": 14.794186676835205,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    },
+    {
+      "slip_angle_rad": 0.0,
+      "speed_mps": 3.9999999782232236,
+      "steer_angle_rad": 0.0,
+      "t_s": 4.0,
+      "x_m": 15.154186674374808,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "yaw_rate_radps": 0.0
+    }
+  ]
+}

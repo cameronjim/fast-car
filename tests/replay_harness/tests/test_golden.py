@@ -14,6 +14,7 @@ import pytest
 from racer_replay.golden import (
     compare_to_golden,
     load_golden,
+    load_golden_meta,
     regenerate_golden,
     save_golden,
 )
@@ -140,3 +141,54 @@ class TestRegenerateGolden:
         before = golden_path.read_text()
         compare_to_golden([{"x": 999.0, "speed_mps": 2.0}], golden_path, tolerances)
         assert golden_path.read_text() == before
+
+
+class TestProvenanceMeta:
+    """The optional {"meta": ..., "records": [...]} wrapper (roadmap task S.6):
+    backward compatible with every bare-list golden this module already writes."""
+
+    def test_bare_list_golden_has_no_meta(self, tmp_path):
+        golden_path = tmp_path / "golden.json"
+        save_golden(golden_path, [{"x": 1.0}])
+        assert load_golden_meta(golden_path) == {}
+        assert load_golden(golden_path) == [{"x": 1.0}]
+
+    def test_save_with_meta_round_trips_records_and_meta(self, tmp_path):
+        golden_path = tmp_path / "golden.json"
+        meta = {"racer_gym_version": "0.1.0", "seed": 123}
+        records = [{"x": 1.0, "speed_mps": 2.0}, {"x": 1.1, "speed_mps": 2.1}]
+        save_golden(golden_path, records, meta=meta)
+        assert load_golden(golden_path) == records
+        assert load_golden_meta(golden_path) == meta
+
+    def test_wrapped_golden_still_compares_normally(self, tmp_path, tolerances):
+        golden_path = tmp_path / "golden.json"
+        save_golden(golden_path, [{"x": 1.0, "speed_mps": 2.0}], meta={"seed": 1})
+        result = compare_to_golden([{"x": 1.005, "speed_mps": 2.0}], golden_path, tolerances)
+        assert result.ok
+
+    def test_missing_meta_key_in_object_form_raises_type_error(self, tmp_path):
+        # An object golden with no "records" list is neither recognized shape.
+        golden_path = tmp_path / "golden.json"
+        golden_path.write_text(json.dumps({"meta": {"seed": 1}}))
+        with pytest.raises(TypeError, match="JSON list"):
+            load_golden(golden_path)
+
+    def test_regenerate_golden_writes_meta(self, tmp_path):
+        golden_path = tmp_path / "golden.json"
+        regenerate_golden(
+            [{"x": 1.0}],
+            golden_path,
+            reason="first generation, see PR",
+            meta={"seed": 7},
+        )
+        assert load_golden(golden_path) == [{"x": 1.0}]
+        assert load_golden_meta(golden_path) == {"seed": 7}
+
+    def test_save_with_meta_none_is_byte_identical_to_default(self, tmp_path):
+        path_a = tmp_path / "a.json"
+        path_b = tmp_path / "b.json"
+        records = [{"x": 1.0}]
+        save_golden(path_a, records)
+        save_golden(path_b, records, meta=None)
+        assert path_a.read_text() == path_b.read_text()

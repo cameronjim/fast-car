@@ -1,0 +1,43 @@
+[project]
+name = "racer-sim-regression"
+version = "0.1.0"
+description = """
+S.6 sim dynamics regression battery (claude-docs/12-testing.md L5 "Model-upgrade
+regression", claude-docs/01-roadmap.md task S.6): a fixed, seeded battery of sysid-style
+maneuvers (throttle step, steering step, constant-radius circle at a few speeds, coastdown
+-- claude-docs/07-sim-and-sysid.md's real-world battery, run here in racer_gym instead) run
+through racer_gym's dynamics and checked against committed references (racer_sim_regression/
+references/) using tests/replay_harness's golden/tolerance engine. Runs on every push
+touching sim/racer_gym/** (see .github/workflows/ci.yml's sim-regression-battery job).
+
+Depends on racer_gym directly (unlike tests/sim_in_loop, which keeps f1tenth_gym/racer_gym
+optional so its own plumbing tests run gym-free) because every maneuver needs
+racer_gym.build_env and the raw dynamics state, not just a gym-generic Env/observation.
+racer_replay is deliberately NOT declared as a uv dependency here: it is a
+`package = false`, pytest-pythonpath-only project (see tests/replay_harness/pyproject.toml's
+own comment) with no [build-system], so it is not pip-installable the way racer_gym is.
+It is imported instead by adding tests/replay_harness/ to sys.path at runtime
+(racer_sim_regression/_replay_import.py) -- the same "load by path, not by uv dependency"
+pattern sim/racer_gym/racer_gym/params.py already uses for tools/gen_params.py.
+"""
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "racer-gym",
+    "numpy",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.uv.sources]
+# racer_gym (roadmap S.1) lives in this monorepo; racer-sim-regression is not a separate
+# distribution racer_gym is published to, so a path source (not a version pin) is correct.
+racer-gym = { path = "../../sim/racer_gym", editable = true }
+
+[tool.uv]
+# Same "dependency manifest, not a wheel" shape as tests/replay_harness and
+# tests/sim_in_loop -- `pythonpath` below makes racer_sim_regression/ importable from
+# tests/ without an install step.
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

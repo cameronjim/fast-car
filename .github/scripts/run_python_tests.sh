@@ -47,6 +47,12 @@ run "tests/replay_harness" report
 run "tests/sim_in_loop" report
 run "tests/bench" report
 
+# tests/sim_regression (roadmap task S.6) is deliberately NOT run here: it installs and
+# steps the pinned f1tenth_gym through several maneuvers (like sim/racer_gym above), which
+# is not free, and 12-testing.md only requires the S.6 battery on a racer_gym change -- it
+# runs in its own path-filtered CI job instead (sim-regression-battery in ci.yml), gated on
+# sim/racer_gym/**, tests/sim_regression/**, and tests/replay_harness/** actually changing.
+
 # sim/bridge/racer_gym_bridge (roadmap task 0.5): the pure, ROS-free logic
 # in conversions.py runs here with no ROS/gym install (its pyproject.toml
 # is a standalone test-only manifest); bridge_node.py and the L3

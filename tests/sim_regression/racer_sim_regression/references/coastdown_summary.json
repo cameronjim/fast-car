@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "racer_gym_version": "0.1.0",
+    "repo_commit": "6b22c46d85a7c3139244d7dff10d5f7e15763599",
+    "seed": 1234,
+    "vehicle_params_fallback_flags": {
+      "command_to_torque_delay": true,
+      "pacejka_front": true,
+      "pacejka_rear": true,
+      "steer_time_constant": true,
+      "throttle_time_constant": true,
+      "track_width": true
+    },
+    "vehicle_params_meta": {
+      "fit_date": "2026-08-22",
+      "schema_version": "0.1.0",
+      "sysid_session_id": "none-preliminary"
+    }
+  },
+  "records": [
+    {
+      "brake_target_speed_mps": 0.0,
+      "cruise_speed_mps": 5.0,
+      "mean_decel_mps2": 8.771929824561402,
+      "time_to_near_zero_s": 0.5700000000000001
+    }
+  ]
+}

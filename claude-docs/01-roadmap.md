@@ -15,8 +15,11 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
 - [ ] 0.3 `train-cuda` image + lockfile on Desktop A; torch sees the GPU
 - [ ] 0.4 `ros-dev` image (ROS 2 Humble) + lockfile
 - [ ] 0.5 Port/replace the Foxy-era `f1tenth_gym_ros` bridge to Humble (known cost, scheduled)
-- [ ] 0.6 CI per `12-testing.md`: lint, L1–L3 on every push, coverage gates (100% branch on
+- [x] 0.6 CI per `12-testing.md`: lint, L1–L3 on every push, coverage gates (100% branch on
       envelope + safety gate logic), nightly job stub on Desktop A
+      Done 2026-08-22: GitHub Actions CI is live with scaffold-aware coverage gates that
+      bind automatically once a package gains source and tests; the sim-cpu/ros-dev image
+      swap-in for the interim ubuntu-latest/ros:humble jobs happens with tasks 0.2/0.4.
 - [ ] 0.7 `vehicle_params.yaml` schema + binding generator + cross-language round-trip test
       (see `06-vehicle-params.md`, `12-testing.md` L1)
 - [ ] 0.8 `docs/conventions.md` seeded from `10-conventions.md`

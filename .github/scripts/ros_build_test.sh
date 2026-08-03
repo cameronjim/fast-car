@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Builds and tests ros_ws with colcon (L3 node tests + C++ build/unit tests).
 #
-# INTERIM CONTAINER: this runs inside the stock `ros:humble` image from
-# Docker Hub because the repo's own `ros-dev` image (roadmap task 0.4,
-# claude-docs/03-environments.md) does not exist yet.
-# TODO(task 0.4): once docker/ros-dev/ has a built, pinned image, point the
-# workflow's `container:` at that image instead, and drop the apt-get
-# bootstrap step in ci.yml (colcon etc. will already be baked in).
+# INTERIM CONTAINER, KEPT DELIBERATELY: this runs inside the stock
+# `ros:humble` image from Docker Hub rather than the repo's own `ros-dev`
+# image (roadmap task 0.4, claude-docs/03-environments.md), which now
+# exists (docker/ros-dev/) and is built + smoke-tested by its own CI job.
+# The swap is deferred until ros_ws/src has real packages -- see the
+# l3-and-cpp job comment in .github/workflows/ci.yml for the full
+# reasoning (job-shape cost vs. zero coverage gain while ros_ws is empty).
+# TODO(task 0.4 follow-up): once ros_ws/src has real packages, point the
+# workflow's `container:` at the built ros-dev image instead, and drop the
+# apt-get bootstrap step in ci.yml (colcon etc. will already be baked in).
 #
 # Scaffold-aware: with no package.xml under ros_ws/src yet, prints a clear
 # notice and passes instead of silently doing nothing.

@@ -116,8 +116,15 @@ Fail → lower speed target, or pivot to scope option C.**
 - [ ] S.4 Envelope module (bounds, rate limits, OOD fallback) as a standalone library with
       100% branch coverage + the property test: any input, any state → output in bounds (L1/L2)
 - [ ] S.5 Deployment contract implemented; one refusal test per mismatch class, all green (L1)
-- [ ] S.6 Sim dynamics regression battery: sysid maneuvers in sim vs. committed references,
-      run on every `racer_gym` change (L5)
+- [x] S.6 Sim dynamics regression battery: sysid maneuvers in sim vs. committed references,
+      run on every `racer_gym` change (L5) -- 2026-08-22: tests/sim_regression
+      (racer_sim_regression) -- throttle step, steering step, constant-radius circle at
+      three speeds, coastdown -- checked against committed references
+      (racer_sim_regression/references/) with racer_replay's golden/tolerance engine
+      (extended with a backward-compatible provenance header), plus a determinism test, the
+      regression gate itself, and an injected-parameter canary test proving the comparison
+      actually fails on a real dynamics change; sim-regression-battery CI job (path-filtered
+      to sim/racer_gym, tests/sim_regression, tests/replay_harness), all green in CI, PR #14.
 
 ## Merged (car + sim)
 

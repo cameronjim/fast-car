@@ -37,7 +37,13 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
       yet, so swapping in the built image would add job complexity for
       no coverage gain); TODO left in ci.yml/ros_build_test.sh to swap
       once real packages land.
-- [ ] 0.5 Port/replace the Foxy-era `f1tenth_gym_ros` bridge to Humble (known cost, scheduled)
+- [x] 0.5 Port/replace the Foxy-era `f1tenth_gym_ros` bridge to Humble (known cost, scheduled)
+      Done 2026-08-22: sim/bridge/racer_gym_bridge, a clean-room bridge against the pinned
+      gymnasium-API f1tenth_gym (not a port -- upstream targets the old gym==0.19.0 API).
+      Publishes /scan and /sim/ground_truth_odom, subscribes to /drive, offers /sim/reset.
+      L1 + L3 launch_testing tests green in CI (new sim-bridge-test job, ros-dev image +
+      pinned gym); docker/ros-dev also gained a pytest<9.1 pin and X11/GL libs the gym's
+      renderer needs, fixes surfaced while getting this job green.
 - [x] 0.6 CI per `12-testing.md`: lint, L1–L3 on every push, coverage gates (100% branch on
       envelope + safety gate logic), nightly job stub on Desktop A
       Done 2026-08-22: GitHub Actions CI is live with scaffold-aware coverage gates that

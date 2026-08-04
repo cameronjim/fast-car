@@ -55,6 +55,16 @@ FROM ros:humble-ros-base@sha256:75dd3aba34a3838dadbb31a9f7bef769bdfa8713e6cec686
 #   ROS apt repo, not pip.
 # ros-humble-ament-cmake-gtest / ros-humble-ament-cmake-pytest: wires gtest
 #   (C++) and pytest (Python) into `colcon test` for ament_cmake packages.
+# libgl1/libglib2.0-0/libsm6/libxext6/libxrender1/libxcb1/libx11-6/libgomp1:
+#   same reasoning as docker/sim-cpu/Dockerfile -- f1tenth_gym's env
+#   construction (roadmap task 0.5) eagerly builds a renderer even when
+#   render_mode=None, which imports opencv-python/pygame; those manylinux
+#   wheels dynamically link a handful of X11/GL client libraries that a
+#   minimal ROS base image does not carry. Without these, `import cv2`
+#   fails at import time -- and inside a colcon-test-launched
+#   launch_testing subprocess that failure surfaces as a bare SIGABRT
+#   ("terminate called without an active exception", no Python traceback)
+#   rather than a clean ImportError, which is what first exposed this.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
@@ -68,6 +78,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-launch-testing-ament-cmake \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        libxcb1 \
+        libx11-6 \
+        libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # ros:humble-ros-base already ships with rosdep initialized (it runs

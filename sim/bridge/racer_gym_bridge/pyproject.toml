@@ -1,0 +1,33 @@
+[project]
+name = "racer-gym-bridge-tests"
+version = "0.1.0"
+description = """
+Standalone L1 test dependency manifest for sim/bridge/racer_gym_bridge
+(roadmap task 0.5, claude-docs/12-testing.md). This is NOT the ROS/colcon
+packaging for the node -- that is package.xml/setup.py/setup.cfg, built
+with colcon inside the ros-dev image via ament_python. This file exists
+only so a bare `uv run pytest` (claude-docs/02-repo-layout.md: "Python
+packages: racer_*, importable, pyproject.toml each, managed with uv") can
+exercise the pure, ROS-free logic in racer_gym_bridge/conversions.py with
+no ROS or f1tenth_gym installation at all (L1: "Pure logic, no ROS, no
+hardware"). test_bridge_node.py in this same test/ directory needs rclpy
+and f1tenth_gym (L3, launch_testing); it calls pytest.importorskip and
+skips cleanly under this manifest, and runs for real in CI's ros-dev-based
+sim-bridge-test job, which has both installed via colcon + this repo's
+docker/ros-dev image (see that job and docker/ros-dev/pyproject.toml).
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# Makes `racer_gym_bridge` importable from test/ without a colcon install
+# step: prepends this pyproject.toml's own directory (which contains the
+# racer_gym_bridge/ package dir) to sys.path before collection.
+pythonpath = ["."]

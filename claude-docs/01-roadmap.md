@@ -45,7 +45,9 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
       swap-in for the interim ubuntu-latest/ros:humble jobs happens with tasks 0.2/0.4.
 - [ ] 0.7 `vehicle_params.yaml` schema + binding generator + cross-language round-trip test
       (see `06-vehicle-params.md`, `12-testing.md` L1)
-- [ ] 0.8 `docs/conventions.md` seeded from `10-conventions.md`
+- [x] 0.8 `docs/conventions.md` seeded from `10-conventions.md`
+      Done 2026-08-22: docs/conventions.md seeded, tooling preferences section included per
+      03-environments.md; claude-docs stay authoritative on conflict.
 - [ ] 0.9 Test harnesses scaffolded: replay/golden framework + bag-mutation fault injectors
       (`12-testing.md` L4), sim-in-loop runner (L5), bench checklist runner (L6)
 

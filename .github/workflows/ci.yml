@@ -96,6 +96,55 @@ jobs:
       - name: colcon build + colcon test
         run: .github/scripts/ros_build_test.sh
 
+  sim-bridge-test:
+    name: sim/bridge racer_gym_bridge build + test (ros-dev + gym)
+    runs-on: ubuntu-latest
+    # Roadmap task 0.5: the gym<->ROS bridge. Builds this repo's own
+    # `ros-dev` image (docker/ros-dev/, roadmap task 0.4) -- which now
+    # carries the pinned f1tenth_gym dependency for this job, see
+    # docker/ros-dev/pyproject.toml -- and runs `colcon build` +
+    # `colcon test` for sim/bridge/racer_gym_bridge inside it. See
+    # .github/scripts/sim_bridge_build_test.sh for how f1tenth_gym is made
+    # importable to the system python3.10 that rclpy/colcon use, without
+    # shadowing python3 the way prepending the whole uv venv to PATH would.
+    #
+    # Separate job rather than folding into l3-and-cpp: that job
+    # deliberately still runs in the stock `ros:humble` image (see its own
+    # comment) and does not carry f1tenth_gym; this needed its own
+    # container shape and it wasn't worth re-plumbing that job for one
+    # package. Runs on every push (unlike the path-filtered
+    # `ros-dev-image` job below) since sim/bridge changes independently of
+    # docker/ros-dev/ -- on a push that touches both, the image gets built
+    # twice (no cross-job cache sharing mid-run), which is accepted cost
+    # for keeping each job simple; `cache-from/to: type=gha` still makes
+    # repeat builds on unrelated pushes fast.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ros-dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/ros-dev
+          tags: ros-dev:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: colcon build + colcon test sim/bridge/racer_gym_bridge
+        # --shm-size: rclpy's default RMW (Fast-DDS) uses a shared-memory
+        # transport that needs more than docker's 64 MB default /dev/shm;
+        # under the default size the launch_testing node process aborts
+        # (SIGABRT, "terminate called without an active exception", no
+        # Python traceback -- a native allocation failure below rclpy) as
+        # soon as the bridge node's publishers/subscriptions are created.
+        # This is the standard fix for rclpy-in-Docker, not a workaround
+        # for anything specific to this package.
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/sim_bridge_build_test.sh"
+
   changes:
     name: Detect changed paths
     runs-on: ubuntu-latest

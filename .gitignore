@@ -23,6 +23,9 @@ __pycache__/
 ros_ws/build/
 ros_ws/install/
 ros_ws/log/
+sim/bridge/build/
+sim/bridge/install/
+sim/bridge/log/
 
 # macOS
 .DS_Store

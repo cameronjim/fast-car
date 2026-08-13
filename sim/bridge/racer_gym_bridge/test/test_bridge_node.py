@@ -1,0 +1,227 @@
+"""L3 node tests for racer_gym_bridge's bridge_node (claude-docs/12-testing.md).
+
+Launches the real node via launch_testing and drives it with a plain rclpy
+client node, per the L3 checklist: nominal behavior, correct QoS (a
+`reliable` subscriber must NOT see the `best_effort` /scan stream),
+responds to /drive, clean shutdown.
+
+Needs rclpy, the launch_testing family, and f1tenth_gym -- none of which
+are available under the bare `uv run pytest` L1 run (see this package's
+pyproject.toml). The `pytest.importorskip` calls below make that run skip
+this whole module cleanly instead of erroring. This module DOES run for
+real in CI: the ros-dev image now carries f1tenth_gym (same pinned SHA as
+sim-cpu, docker/ros-dev/pyproject.toml) and colcon/launch_testing come
+from the ROS apt repo baked into that image, so the `sim-bridge-test` CI
+job (see .github/workflows/ci.yml) exercises this module through
+`colcon test`.
+"""
+
+from __future__ import annotations
+
+import math
+import signal
+import time
+import unittest
+
+import pytest
+
+pytest.importorskip("rclpy")
+pytest.importorskip("launch_testing")
+pytest.importorskip("f1tenth_gym")
+
+import launch
+import launch_testing
+import launch_testing.actions
+import launch_testing.asserts
+import rclpy
+from ackermann_msgs.msg import AckermannDriveStamped
+from launch_ros.actions import Node as LaunchNode
+from nav_msgs.msg import Odometry
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import LaserScan
+from std_srvs.srv import Trigger
+
+# Fast, deterministic parameters for the test run: a higher step rate than
+# the gym default (100 Hz) would give keeps the test itself quick without
+# changing anything about correctness; a fixed seed keeps it deterministic.
+_TEST_STEP_RATE_HZ = 20.0
+_TEST_SEED = 7
+
+
+@pytest.mark.launch_test
+def generate_test_description():
+    bridge_node = LaunchNode(
+        package="racer_gym_bridge",
+        executable="bridge_node",
+        name="bridge_node",
+        parameters=[{"step_rate_hz": _TEST_STEP_RATE_HZ, "seed": _TEST_SEED}],
+    )
+    return launch.LaunchDescription(
+        [
+            bridge_node,
+            launch_testing.actions.ReadyToTest(),
+        ]
+    )
+
+
+def _reliable_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+    )
+
+
+def _best_effort_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+    )
+
+
+class TestBridgeNode(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        rclpy.init()
+        cls._wait_for_bridge_up()
+
+    @classmethod
+    def tearDownClass(cls):
+        rclpy.shutdown()
+
+    @staticmethod
+    def _wait_for_bridge_up() -> None:
+        """Block until bridge_node has published at least one /scan message.
+
+        f1tenth_gym numba-jits its scan/dynamics kernels on the first
+        env.reset()/step() call, which BridgeNode.__init__ triggers before
+        it ever starts its publish timer. On a cold CI runner that JIT
+        warm-up can take much longer than any individual test's own timing
+        budget -- without this barrier, whichever test happens to run
+        first (alphabetically, unittest's default order) eats that cost
+        and sees zero messages, while every later test passes because the
+        JIT is already warm. Waiting here, once, for the whole class
+        removes that order-dependent flakiness.
+        """
+        warmup_node = rclpy.create_node("test_bridge_node_warmup")
+        try:
+            received = []
+            warmup_node.create_subscription(LaserScan, "/scan", received.append, _best_effort_qos())
+            deadline = time.time() + 60.0
+            while not received and time.time() < deadline:
+                rclpy.spin_once(warmup_node, timeout_sec=0.2)
+            if not received:
+                raise RuntimeError("bridge_node did not publish /scan within 60s of launch")
+        finally:
+            warmup_node.destroy_node()
+
+    def setUp(self):
+        self.node = rclpy.create_node("test_bridge_node_client")
+
+    def tearDown(self):
+        self.node.destroy_node()
+
+    def _spin_for(self, seconds: float) -> None:
+        end = time.time() + seconds
+        while time.time() < end:
+            rclpy.spin_once(self.node, timeout_sec=0.05)
+
+    def test_scan_publishes_best_effort_with_finite_ranges(self):
+        received = []
+        self.node.create_subscription(LaserScan, "/scan", received.append, _best_effort_qos())
+        self._spin_for(3.0)
+
+        self.assertGreater(len(received), 0, "no /scan messages received on a best_effort sub")
+        msg = received[-1]
+        self.assertGreater(len(msg.ranges), 0)
+        self.assertTrue(
+            all(math.isfinite(r) for r in msg.ranges),
+            "non-finite value in /scan ranges",
+        )
+        self.assertGreater(msg.range_max, msg.range_min)
+        self.assertAlmostEqual(
+            msg.angle_increment,
+            (msg.angle_max - msg.angle_min) / (len(msg.ranges) - 1),
+            places=6,
+        )
+
+    def test_scan_rate_is_approximately_the_configured_step_rate(self):
+        received = []
+        self.node.create_subscription(LaserScan, "/scan", received.append, _best_effort_qos())
+        window_s = 2.0
+        self._spin_for(window_s)
+
+        rate_hz = len(received) / window_s
+        # Generous band: CI runners are not real-time, so only check we are
+        # in the right ballpark rather than tightly bound.
+        self.assertGreater(rate_hz, _TEST_STEP_RATE_HZ * 0.4)
+        self.assertLess(rate_hz, _TEST_STEP_RATE_HZ * 2.5)
+
+    def test_scan_is_best_effort_not_reliable(self):
+        """A `reliable` subscriber must not see the `best_effort` /scan stream.
+
+        This is the QoS check claude-docs/12-testing.md asks every node
+        test to include, applied to prove /scan is genuinely best_effort
+        (not accidentally left at a default reliable profile).
+        """
+        received = []
+        self.node.create_subscription(LaserScan, "/scan", received.append, _reliable_qos())
+        self._spin_for(2.0)
+        self.assertEqual(
+            len(received),
+            0,
+            "a reliable subscriber received /scan messages; QoS is not best_effort",
+        )
+
+    def test_drive_command_moves_the_car(self):
+        odoms = []
+        self.node.create_subscription(
+            Odometry, "/sim/ground_truth_odom", odoms.append, _reliable_qos()
+        )
+        drive_pub = self.node.create_publisher(AckermannDriveStamped, "/drive", _reliable_qos())
+
+        self._spin_for(0.5)  # let discovery settle before publishing
+
+        cmd = AckermannDriveStamped()
+        cmd.drive.steering_angle = 0.0
+        cmd.drive.speed = 2.0
+
+        end = time.time() + 3.0
+        while time.time() < end:
+            drive_pub.publish(cmd)
+            rclpy.spin_once(self.node, timeout_sec=0.05)
+
+        self.assertGreater(len(odoms), 0, "no /sim/ground_truth_odom messages received")
+        self.assertGreater(
+            odoms[-1].twist.twist.linear.x,
+            0.1,
+            "car did not respond to a forward /drive speed command",
+        )
+
+    def test_reset_service(self):
+        client = self.node.create_client(Trigger, "/sim/reset")
+        self.assertTrue(
+            client.wait_for_service(timeout_sec=10.0), "/sim/reset service not available"
+        )
+        future = client.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=10.0)
+        result = future.result()
+        self.assertIsNotNone(result, "/sim/reset call did not complete")
+        self.assertTrue(result.success)
+
+
+@launch_testing.post_shutdown_test()
+class TestBridgeNodeShutdown(unittest.TestCase):
+    def test_clean_exit(self, proc_info):
+        # launch_testing stops every launched process with SIGINT at the
+        # end of the test session. rclpy's spin() can be deep inside a
+        # non-interruptible C call (gym env.step()) when that signal
+        # arrives, in which case the process is terminated by the signal
+        # itself rather than returning control to our try/finally for a
+        # sys.exit(0) -- Python/subprocess reports that as exit code
+        # -SIGINT, not a crash. That is what "asked to stop, stopped" looks
+        # like for this node, so it is an allowable clean-exit outcome
+        # alongside 0, matching the common launch_testing pattern for
+        # long-running ROS nodes.
+        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -signal.SIGINT])

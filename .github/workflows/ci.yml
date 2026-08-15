@@ -62,39 +62,34 @@ jobs:
   l3-and-cpp:
     name: L3 node tests + C++ build (ros-dev)
     runs-on: ubuntu-latest
-    # INTERIM CONTAINER, KEPT DELIBERATELY (task 0.4 decision): the repo's
-    # own `ros-dev` image now exists (docker/ros-dev/, roadmap task 0.4,
-    # built + smoke-tested by the ros-dev-image job below) but this job
-    # still uses the stock `ros:humble` image rather than swapping onto it.
-    # Reason: `container:` jobs need a pullable image reference before any
-    # step runs, so using our own freshly-built image here would mean
-    # trading this job's shape for the sim-cpu-image/train-cuda-image
-    # pattern (build with buildx, then `docker run -v $PWD:/repo ...`
-    # instead of `container:`) -- a real increase in job complexity and a
-    # docker-build-with-cache step added to a job that runs on EVERY push
-    # (unlike the path-filtered image-build jobs). ros_ws/src has no real
-    # packages yet, so that swap would buy zero additional test coverage
-    # right now. Deferring until a roadmap task lands actual packages under
-    # ros_ws/src, at which point the swap is worth the added job shape.
-    # TODO(task 0.4 follow-up): once ros_ws/src has real packages, point
-    # this job at the built ros-dev image (see ros-dev-image job for the
-    # build step to reuse) and drop the apt-get bootstrap below.
-    container:
-      image: ros:humble
+    # CONTAINER SWAP (task 0.4 follow-up, done here): this job used to run inside the
+    # stock `ros:humble` image via `container:`, deliberately deferred until ros_ws/src
+    # had real packages (see the TODO this comment replaces, in git history). Roadmap task
+    # S.2 lands ros_ws/src/racer_control, the first real package -- it needs ackermann_msgs
+    # and the launch_testing/gtest ROS test packages, all already baked into this repo's
+    # own `ros-dev` image (docker/ros-dev/, roadmap task 0.4). This job now builds that
+    # image and runs inside it the same way the sim-bridge-test job below already does,
+    # instead of the `container:` + apt-get bootstrap shape used before.
     steps:
-      - name: Install git + colcon (interim bootstrap, see TODO above)
-        run: |
-          apt-get update
-          apt-get install -y git python3-colcon-common-extensions build-essential
-          # Container jobs check out as a different uid than the one that
-          # owns the bind-mounted workspace, which git refuses to touch by
-          # default ("dubious ownership"). Mark it safe before checkout.
-          git config --global --add safe.directory '*'
-
       - uses: actions/checkout@v7
 
-      - name: colcon build + colcon test
-        run: .github/scripts/ros_build_test.sh
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ros-dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/ros-dev
+          tags: ros-dev:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: colcon build + colcon test ros_ws
+        # --shm-size: same rclpy/Fast-DDS shared-memory requirement as the sim-bridge-test
+        # job below (see its own comment for the full explanation).
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/ros_build_test.sh"
 
   sim-bridge-test:
     name: sim/bridge racer_gym_bridge build + test (ros-dev + gym)
@@ -144,6 +139,39 @@ jobs:
         run: |
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/sim_bridge_build_test.sh"
+
+  l5-tracker-lap:
+    name: L5 tracker lap canary (racer_gym_bridge + racer_control, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # Roadmap task S.2: the regression canary for the whole classical (non-learned) stack
+    # (claude-docs/12-testing.md L5). Builds sim/bridge/racer_gym_bridge,
+    # ros_ws/src/racer_control, and tests/l5_tracker_lap together in one colcon workspace
+    # (see .github/scripts/l5_tracker_lap_test.sh) inside this repo's own `ros-dev` image,
+    # same pattern as l3-and-cpp/sim-bridge-test above. A sibling job rather than folding
+    # into either of those: it needs BOTH f1tenth_gym (sim-bridge-test's dependency) AND
+    # racer_control's C++ build (l3-and-cpp's dependency) built into the SAME workspace so
+    # the launch_testing test can launch both bridge_node and tracker_node together, which
+    # neither existing job's workspace shape supports on its own.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ros-dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/ros-dev
+          tags: ros-dev:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: colcon build + colcon test the combined L5 workspace
+        # --shm-size: same rclpy/Fast-DDS shared-memory requirement as the other ros-dev
+        # jobs above (see sim-bridge-test's comment for the full explanation).
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_tracker_lap_test.sh"
 
   changes:
     name: Detect changed paths

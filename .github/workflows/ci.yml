@@ -295,14 +295,17 @@ jobs:
         run: docker run --rm ros-dev:ci
 
   l4-small-l5-short:
-    name: L4-small replay + L5-short sim-in-loop (placeholder)
+    name: L4-small replay + L5-short sim-in-loop
     runs-on: ubuntu-latest
-    # Placeholder until roadmap task 0.9 (replay/golden + sim-in-loop
-    # runners, bench checklist runner) and task S.2 (tracker lap test as the
-    # L5 regression canary) land. See claude-docs/12-testing.md L4/L5 and
-    # "CI wiring".
+    # Roadmap task 0.9 landed the L4/L5 harness frameworks
+    # (tests/replay_harness, tests/sim_in_loop) and this job now runs their
+    # self-tests as the L4-small/L5-short content -- see the script's own
+    # header comment for why that's a stand-in, not a real replay/sim-in-loop
+    # run, until tasks 2.8 (real bags) / S.2 (tracker lap test) land.
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check for L4/L5 entry points
+      - uses: astral-sh/setup-uv@v10.0.1
+
+      - name: L4-small / L5-short harness self-tests
         run: .github/scripts/l4_l5_placeholder.sh

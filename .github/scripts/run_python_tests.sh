@@ -38,6 +38,15 @@ run "training/racer_train" report
 run "tools" report
 run "sim/racer_gym" report
 
+# L4/L5/L6 test harness scaffolds (roadmap task 0.9, claude-docs/12-testing.md).
+# Each is a standalone, ROS/gym-free dependency manifest (same pattern as
+# sim/bridge/racer_gym_bridge below): report-gated, not coverage-enforced,
+# since these are harness/tooling packages rather than the correctness-
+# critical decision logic 12-testing.md names for a hard gate.
+run "tests/replay_harness" report
+run "tests/sim_in_loop" report
+run "tests/bench" report
+
 # sim/bridge/racer_gym_bridge (roadmap task 0.5): the pure, ROS-free logic
 # in conversions.py runs here with no ROS/gym install (its pyproject.toml
 # is a standalone test-only manifest); bridge_node.py and the L3

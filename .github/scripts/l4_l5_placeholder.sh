@@ -1,35 +1,44 @@
 #!/usr/bin/env bash
-# Placeholder for L4-small (replay/golden tests on small committed rosbags)
-# and L5-short (headless sim-in-loop, short) per claude-docs/12-testing.md
-# "CI wiring": both are supposed to run on every push. The real harnesses
-# land in:
-#   - roadmap task 0.9: replay/golden framework + bag-mutation fault
-#     injectors (L4), sim-in-loop runner (L5), bench checklist runner (L6)
-#   - roadmap task S.2: tracker lap test committed as the CI regression
-#     canary (L5)
+# L4-small (replay/golden) and L5-short (headless sim-in-loop) per
+# claude-docs/12-testing.md "CI wiring": both are supposed to run on every
+# push.
 #
-# Until those tasks land, this step only looks for their entry points and
-# always passes with a loud notice - it is not a real test gate yet, and it
-# must not become a silent no-op once 0.9/S.2 add real content: whoever
-# lands those tasks needs to replace this script's body with the real L4/L5
-# runner invocations, not just leave it printing notices forever.
+# Roadmap task 0.9 landed the harness *frameworks*
+# (tests/replay_harness, tests/sim_in_loop, tests/bench) but not yet any
+# real content to run them on: no curated rosbags exist (tests/bags/ is
+# still empty -- they arrive with hardware, roadmap task 2.8), and no real
+# tracker/reference track exists yet for a real lap test (roadmap task
+# S.2). So there is no real L4/L5 *pipeline* run to wire in here yet.
+#
+# What this script runs instead, as the most honest stand-in available
+# right now: each harness's own self-tests (run_python_tests.sh already
+# runs these too, via pytest_gate.sh "report" gate -- this is deliberately
+# redundant with that, not a replacement for it, so that L4-small/L5-short
+# stays green/red independent of whether someone reshuffles
+# run_python_tests.sh's package list). This is the harness working, not a
+# replay/sim-in-loop result -- whoever lands task 2.8 (real bags) or S.2
+# (tracker lap test) should replace the calls below with the real
+# runner invocations against real fixtures/tracks.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
+export PATH="${HOME}/.local/bin:${PATH}"
+
 BAG_FILES="$(find tests/bags -type f -not -name '.gitkeep' 2>/dev/null || true)"
 if [ -n "$BAG_FILES" ]; then
-  echo "NOTICE: tests/bags/ has content, but no L4 replay runner is wired yet (task 0.9)."
+  echo "NOTICE: tests/bags/ has content, but no L4 replay runner is wired yet (task 2.8)."
 else
-  echo "NOTICE: tests/bags/ is empty. No L4 replay fixtures yet (task 0.9)."
+  echo "NOTICE: tests/bags/ is empty. No L4 replay fixtures yet (task 2.8)."
 fi
 
-SIM_ENTRY_POINTS="$(find sim tests -type f \( -iname '*sim_in_loop*' -o -iname '*tracker_lap*' \) 2>/dev/null || true)"
-if [ -n "$SIM_ENTRY_POINTS" ]; then
-  echo "NOTICE: possible L5 sim-in-loop entry point(s) found, but no runner is wired yet (task 0.9/S.2)."
-else
-  echo "NOTICE: no L5 sim-in-loop entry points yet (task 0.9/S.2)."
-fi
+echo "::group::L4-small stand-in: tests/replay_harness self-tests (golden engine + fault injectors)"
+(cd tests/replay_harness && uv sync --all-extras --dev && uv run pytest --cov=. --cov-report=term-missing)
+echo "::endgroup::"
 
-echo "NOTICE: L4-small and L5-short are placeholders until tasks 0.9 and S.2 land. Passing."
-exit 0
+echo "::group::L5-short stand-in: tests/sim_in_loop self-tests (fake-env plumbing; gym-backed test skips without f1tenth_gym installed)"
+(cd tests/sim_in_loop && uv sync --all-extras --dev && uv run pytest --cov=. --cov-report=term-missing)
+echo "::endgroup::"
+
+echo "NOTICE: no real tracker/reference track exists yet for a real L5 lap test (task S.2)."
+echo "L4-small/L5-short harness self-tests passed. Real replay/sim-in-loop runs land with tasks 2.8/S.2."

@@ -1,0 +1,33 @@
+[project]
+name = "racer-bench"
+version = "0.1.0"
+description = """
+L6 bench/HIL checklist runner scaffold (roadmap task 0.9, claude-docs/12-testing.md
+L6): an executable-checklist engine where a bench procedure is a YAML file
+of steps, each either scripted (a command run and its output checked) or
+human-confirm (prompt yes/no, record the answer). Every run produces a
+timestamped session record file -- "results get written down" -- per
+12-testing.md's rule that a measurement living only in a terminal
+scrollback didn't happen.
+
+Only one procedure file exists so far (procedures/template_wheels_off_actuation.yaml),
+and it is clearly a template with placeholder steps: real bench procedures
+(wheels-off-ground actuation sweep, ingest-board timestamp sanity, VESC
+config diff, rail brownout drill) arrive with the hardware tasks that need
+them (Phase 1, claude-docs/01-roadmap.md), not with this scaffold.
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+# Same pattern as sim/bridge/racer_gym_bridge/pyproject.toml: dependency
+# manifest only, not a wheel to build. `pythonpath` makes racer_bench/
+# importable from tests/ without an install step.
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

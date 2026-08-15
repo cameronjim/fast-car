@@ -1,0 +1,32 @@
+[project]
+name = "racer-replay"
+version = "0.1.0"
+description = """
+L4 replay/golden test harness (roadmap task 0.9, claude-docs/12-testing.md
+L4): a golden-comparison engine with stated per-field tolerances, and
+bag-mutation fault injectors (NaNs, timestamp jumps, dropped frames,
+out-of-order messages, frozen sensors) built over an abstract message-stream
+interface. No ROS and no rosbag2 dependency here on purpose -- the mutators
+and the golden engine operate on a small in-repo message model
+(racer_replay.streams.StreamMessage) so they are fully unit-testable now,
+before any real rosbag exists (bags arrive with hardware in Phase 2, see
+01-roadmap.md task 2.8). Real rosbag2 readers will implement the same
+MessageStream protocol later rather than this package growing a rosbag2
+dependency now.
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pytest",
+    "pytest-cov",
+    "hypothesis",
+]
+
+[tool.uv]
+# Same pattern as sim/bridge/racer_gym_bridge/pyproject.toml: this is a
+# plain dependency manifest, not a wheel to build. `pythonpath` below makes
+# racer_replay/ importable from tests/ without an install step.
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

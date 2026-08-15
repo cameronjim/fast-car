@@ -8,11 +8,16 @@ covered by the L1/L2 tests in tools/tests/ per claude-docs/12-testing.md. Not bu
 wheel; tools/conftest.py puts this directory on sys.path so tests can `import gen_params`
 directly (see claude-docs/02-repo-layout.md: tools/ is a script directory, not a ROS/Python
 package with its own src layout).
+
+Also covers tools/raceline/ (roadmap task S.2): the offline raceline optimizer. It imports
+gen_params the same sys.path way and adds numpy for the geometry/speed-profile math; see
+tools/raceline/__init__.py for the pipeline.
 """
 requires-python = ">=3.11"
 dependencies = [
     "pyyaml>=6.0",
     "jsonschema>=4.20",
+    "numpy>=1.26",
 ]
 
 [tool.uv]

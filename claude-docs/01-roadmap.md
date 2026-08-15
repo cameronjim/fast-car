@@ -49,8 +49,15 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
       Done 2026-08-22: GitHub Actions CI is live with scaffold-aware coverage gates that
       bind automatically once a package gains source and tests; the sim-cpu/ros-dev image
       swap-in for the interim ubuntu-latest/ros:humble jobs happens with tasks 0.2/0.4.
-- [ ] 0.7 `vehicle_params.yaml` schema + binding generator + cross-language round-trip test
+- [x] 0.7 `vehicle_params.yaml` schema + binding generator + cross-language round-trip test
       (see `06-vehicle-params.md`, `12-testing.md` L1)
+      Done 2026-08-22: config/vehicle_params.schema.json + an initial
+      config/vehicle_params.yaml sourced from the f1tenth_gym default vehicle
+      params (cited in the yaml, meta.sysid_session_id = "none-preliminary");
+      tools/gen_params.py validates against the schema and generates Python,
+      C++17, and C bindings, covered by tools/tests/ (schema refusal tests,
+      hypothesis property tests, and a compiled C++/C round-trip test),
+      100% coverage on gen_params.py, green in CI.
 - [x] 0.8 `docs/conventions.md` seeded from `10-conventions.md`
       Done 2026-08-22: docs/conventions.md seeded, tooling preferences section included per
       03-environments.md; claude-docs stay authoritative on conflict.

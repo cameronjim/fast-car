@@ -6,8 +6,8 @@
 #   - ros_ws/src/racer_policy/          : >=90% coverage (contract loader)
 #   - sysid/fitting/                    : >=90% coverage
 #   - evaluation/analysis/              : >=90% coverage
-#   - everything else (training/racer_train, tools/, other ros_ws Python
-#     packages)                         : coverage reported, not gated
+#   - everything else (training/racer_train, tools/, sim/racer_gym, other
+#     ros_ws Python packages)           : coverage reported, not gated
 #
 # Each package is delegated to pytest_gate.sh, which is scaffold-aware: a
 # package with no .py source yet prints a NOTICE and passes. Once a package
@@ -36,6 +36,7 @@ run "evaluation/analysis" line90
 # Normal packages: reported, not gated.
 run "training/racer_train" report
 run "tools" report
+run "sim/racer_gym" report
 
 # L4/L5/L6 test harness scaffolds (roadmap task 0.9, claude-docs/12-testing.md).
 # Each is a standalone, ROS/gym-free dependency manifest (same pattern as

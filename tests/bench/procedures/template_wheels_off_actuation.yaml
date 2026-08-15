@@ -1,0 +1,60 @@
+# TEMPLATE -- not a real bench procedure. Copy this file and fill in the
+# placeholders once the hardware in question exists (see
+# claude-docs/01-roadmap.md Phase 1: chassis/ESC/servo, roadmap task 1.1).
+#
+# Modeled on claude-docs/12-testing.md L6's "wheels-off-ground actuation
+# sweep after ANY change to the command path": commands go in, measured
+# wheel/steering response comes out, compared to expected
+# direction/magnitude/signs. The `scripted` steps below are placeholders
+# (`echo` stands in for a real command-path script that does not exist
+# yet); the `human_confirm` steps are the actual point of this procedure
+# until an automated response-measurement rig exists.
+#
+# Run with: racer_bench.engine.load_procedure(this file) + run_procedure().
+
+name: template_wheels_off_actuation
+description: >
+  TEMPLATE. Wheels-off-ground actuation sweep: send known steering/throttle
+  commands through the real command path (racer_control -> racer_safety ->
+  racer_drivers/vesc_node) and have a human confirm the physical response
+  matches the expected direction, magnitude, and sign convention from
+  claude-docs/06-vehicle-params.md before any on-track session that
+  touched that path.
+
+steps:
+  - id: chassis_secured
+    type: human_confirm
+    description: Placeholder safety precondition -- replace with the real pre-flight check.
+    prompt: "PLACEHOLDER: is the chassis secured with all wheels off the ground?"
+
+  - id: command_path_smoke
+    type: scripted
+    description: >
+      PLACEHOLDER for a real command-path smoke script (e.g. publish a
+      known /drive_raw command and confirm racer_safety forwards it to
+      /drive unmodified). `echo` stands in until that script exists.
+    command: ["echo", "PLACEHOLDER: replace with the real command-path smoke test"]
+    expect:
+      returncode: 0
+      stdout_contains: "PLACEHOLDER"
+
+  - id: steering_left_positive
+    type: human_confirm
+    description: >
+      PLACEHOLDER. Send a positive steering command (left turn, per the
+      left-positive convention in claude-docs/04-architecture.md) and
+      confirm the road wheels actually turn left.
+    prompt: "PLACEHOLDER: did a positive steering command turn the wheels left?"
+
+  - id: throttle_forward_positive
+    type: human_confirm
+    description: >
+      PLACEHOLDER. Send a small positive drive command and confirm the
+      rear wheels spin forward (drive-positive per
+      claude-docs/04-architecture.md), not backward.
+    prompt: "PLACEHOLDER: did a positive drive command spin the wheels forward?"
+
+  - id: brake_command_stops_wheels
+    type: human_confirm
+    description: PLACEHOLDER. Confirm a brake/zero command actually stops wheel rotation.
+    prompt: "PLACEHOLDER: did the brake/zero command stop the wheels?"

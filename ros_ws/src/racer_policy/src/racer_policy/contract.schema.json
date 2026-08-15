@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cameronjim/fast-car/ros_ws/src/racer_policy/contract.schema.json",
+  "title": "policy_deployment_contract",
+  "description": "Schema for a deployable policy's contract.yaml (claude-docs/08-learning.md 'Deployment contract'). additionalProperties is false at every level so a manifest with a missing OR extra field fails validation -- there is no lenient/partial contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "policy",
+    "observation_schema",
+    "normalization",
+    "action_space",
+    "actuator_assumptions",
+    "vehicle_params",
+    "training"
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256_hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "observation_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "dtype", "units"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 127},
+        "dtype": {
+          "type": "string",
+          "enum": ["float32", "float64", "int32", "int64", "bool"],
+          "description": "The dtype the policy was TRAINED against for this field. Compared against the live topic's actual dtype at deploy time -- a mismatch is a hard refusal (claude-docs/12-testing.md L1 'wrong dtype')."
+        },
+        "units": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 127,
+          "description": "SI unit string (CLAUDE.md invariant 4), e.g. 'm/s', 'rad', 'dimensionless'. Compared verbatim against the live field's units at deploy time (claude-docs/12-testing.md L1 'wrong units string')."
+        }
+      }
+    },
+    "action_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "low", "high", "units"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 127},
+        "low": {"type": "number"},
+        "high": {"type": "number"},
+        "units": {"type": "string", "minLength": 1, "maxLength": 127}
+      }
+    }
+  },
+  "properties": {
+    "contract_version": {
+      "allOf": [{"$ref": "#/$defs/semver"}],
+      "description": "Semver of the CONTRACT FORMAT (not the policy). The loader refuses on a major-version mismatch against the loader's own supported major (claude-docs/08-learning.md)."
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "checksum_sha256"],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "Filename of the policy weights artifact, relative to the contract directory (e.g. 'policy.pt')."
+        },
+        "checksum_sha256": {
+          "allOf": [{"$ref": "#/$defs/sha256_hex"}],
+          "description": "sha256 hex digest of the policy artifact's raw bytes, computed at training/export time. Verified byte-for-byte at load_contract() time -- a mismatch is a hard refusal, never a warning."
+        }
+      }
+    },
+    "observation_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields", "lidar"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/observation_field"},
+          "description": "Low-dimensional observation fields IN THE EXACT ORDER the policy was trained on (claude-docs/08-learning.md 'Boring choices, committed': velocity, yaw rate, slip proxy, raceline-relative pose, ...). Order is part of the contract: a live topic set with the same fields in a different order is a hard refusal."
+        },
+        "lidar": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["beam_count", "fov_rad", "downsample_factor"],
+          "properties": {
+            "beam_count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096,
+              "units": "dimensionless (count)",
+              "description": "Number of LiDAR beams AFTER downsampling, as seen by the policy."
+            },
+            "fov_rad": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 6.2832,
+              "units": "rad",
+              "description": "Total LiDAR field of view the beams span."
+            },
+            "downsample_factor": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024,
+              "units": "dimensionless (integer factor)",
+              "description": "Integer downsampling factor applied to the raw /scan beam count to reach beam_count."
+            }
+          }
+        }
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mean", "std"],
+      "description": "Observation normalization statistics from training time, one entry per flattened observation element (the low-dimensional fields, in order, followed by the downsampled LiDAR beams).",
+      "properties": {
+        "mean": {"type": "array", "items": {"type": "number"}, "minItems": 1, "maxItems": 4352},
+        "std": {"type": "array", "items": {"type": "number", "exclusiveMinimum": 0}, "minItems": 1, "maxItems": 4352}
+      }
+    },
+    "action_space": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields", "scaling", "residual_limits"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/action_field"},
+          "description": "Residual action bounds the policy was trained to output, IN ORDER (e.g. steering_residual_rad, speed_residual_mps)."
+        },
+        "scaling": {
+          "type": "string",
+          "enum": ["linear"],
+          "description": "How a raw network output in [-1, 1] is mapped onto [low, high] for each action field. Only 'linear' is supported; anything else is out of scope until asked (CLAUDE.md)."
+        },
+        "residual_limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["steering_fraction", "speed_fraction"],
+          "description": "Envelope residual fractions (claude-docs/05-safety.md, training/envelope/) the policy was TRAINED against. These are recorded for provenance/audit; the live envelope/ library is still the one enforcing them at deploy time (claude-docs/02-repo-layout.md: 'Never fork its logic').",
+          "properties": {
+            "steering_fraction": {"type": "number", "minimum": 0, "maximum": 1, "units": "dimensionless (fraction)"},
+            "speed_fraction": {"type": "number", "minimum": 0, "maximum": 1, "units": "dimensionless (fraction)"}
+          }
+        }
+      }
+    },
+    "actuator_assumptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rate_limit_steering_rad_s", "rate_limit_speed_mps_s", "command_delay_s"],
+      "description": "Actuator dynamics the policy was trained against (claude-docs/08-learning.md 'Actuator assumptions trained against: rate limits, delays').",
+      "properties": {
+        "rate_limit_steering_rad_s": {"type": "number", "exclusiveMinimum": 0, "units": "rad/s"},
+        "rate_limit_speed_mps_s": {"type": "number", "exclusiveMinimum": 0, "units": "m/s^2"},
+        "command_delay_s": {"type": "number", "minimum": 0, "units": "s"}
+      }
+    },
+    "vehicle_params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "sysid_session_id"],
+      "description": "Which config/vehicle_params.yaml (claude-docs/06-vehicle-params.md) version and sysid session this policy was trained against.",
+      "properties": {
+        "schema_version": {"allOf": [{"$ref": "#/$defs/semver"}]},
+        "sysid_session_id": {"type": "string", "minLength": 1, "maxLength": 127}
+      }
+    },
+    "training": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["config_hash", "git_sha"],
+      "description": "Reproducibility provenance (claude-docs/10-conventions.md: 'Experiments are reproducible from: config file + git SHA + seed + vehicle_params version').",
+      "properties": {
+        "config_hash": {"allOf": [{"$ref": "#/$defs/sha256_hex"}]},
+        "git_sha": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}
+      }
+    }
+  }
+}

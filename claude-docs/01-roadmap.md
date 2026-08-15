@@ -98,8 +98,9 @@ Fail → lower speed target, or pivot to scope option C.**
 
 ## Sim track (parallel with Phases 1–2; needs no car)
 
-- [ ] S.1 Model upgrades in gym fork: load transfer, Pacejka front/rear, first-order actuator
-      dynamics, transport delay (see `07-sim-and-sysid.md`)
+- [x] S.1 Model upgrades in gym fork: load transfer, Pacejka front/rear, first-order actuator
+      dynamics, transport delay (see `07-sim-and-sysid.md`) -- 2026-08-22, sim/racer_gym,
+      PR #9
 - [ ] S.2 Raceline optimizer + tracking controller running in sim; tracker lap test committed
       as the CI regression canary (L5)
 - [ ] S.3 Training pipeline: SAC/PPO residual on base controller, envelope enforced in env

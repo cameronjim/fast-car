@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_safety</name>
+  <version>0.1.0</version>
+  <description>
+    C++ safety layer 3 (roadmap milestone 1, claude-docs/05-safety.md): safety_node is the
+    SOLE publisher of /drive. Gates /drive_raw -&gt; /drive with a staleness watchdog, command
+    sanity + bounds/rate-limit clamping (vehicle_params-sourced), TTC braking from /scan, a
+    global speed cap, and a stubbed covariance gate (TODO roadmap task 2.6: no /pose source
+    exists yet). Emits racer_msgs/SafetyEvent on every intervention. Gate/decision logic
+    (include/racer_safety/gate_logic.hpp) is ROS-free and gtest-unit-tested per
+    claude-docs/12-testing.md L1, separated from safety_node.cpp's ROS plumbing.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>ackermann_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>racer_msgs</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

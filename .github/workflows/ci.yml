@@ -9,6 +9,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -91,6 +92,34 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/ros_build_test.sh"
 
+  racer-safety-coverage:
+    name: racer_safety gate-logic branch coverage (100% gate, ros-dev)
+    runs-on: ubuntu-latest
+    # Milestone 1 (claude-docs/05-safety.md layer 3, claude-docs/12-testing.md: "racer_safety
+    # gate[s] at 100% branch on decision logic"). A separate job (not folded into l3-and-cpp
+    # above) because it needs its OWN --coverage-instrumented build of racer_safety
+    # (RACER_SAFETY_COVERAGE=ON) rather than the plain build l3-and-cpp already produces --
+    # see .github/scripts/racer_safety_coverage.sh for the full build+test+gcovr pipeline,
+    # scoped to gate_logic.cpp/.hpp only.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ros-dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/ros-dev
+          tags: ros-dev:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: racer_safety coverage build + gtest + gcovr gate
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/racer_safety_coverage.sh"
+
   sim-bridge-test:
     name: sim/bridge racer_gym_bridge build + test (ros-dev + gym)
     runs-on: ubuntu-latest
@@ -172,6 +201,33 @@ jobs:
         run: |
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_tracker_lap_test.sh"
+
+  e2e-sim-safety:
+    name: Milestone 1 e2e (bridge_node + safety_node, real command path, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # Milestone 1 (claude-docs/12-testing.md L5-flavored): headless end-to-end test of the
+    # real command path (/drive_raw -> safety_node -> /drive -> bridge_node, no test-only
+    # remaps -- see tests/e2e_sim_safety/test_sim_safety_e2e.py's docstring for why this
+    # differs from l5-tracker-lap above). Same workspace-combination pattern as l5-tracker-lap
+    # (needs f1tenth_gym AND racer_safety's C++ build in the same workspace).
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ros-dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/ros-dev
+          tags: ros-dev:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: colcon build + colcon test the combined e2e workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/e2e_sim_safety_test.sh"
 
   changes:
     name: Detect changed paths

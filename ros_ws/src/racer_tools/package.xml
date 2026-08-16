@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_tools</name>
+  <version>0.1.0</version>
+  <description>
+    Teleop, bag utilities, timing-gate reader (claude-docs/02-repo-layout.md). Milestone 1
+    adds keyboard_teleop_node: terminal keyboard teleop publishing /drive_raw (claude-docs/04-
+    architecture.md). Keymap/step/clamp logic (racer_tools/keymap.py) is pure Python,
+    unit-tested without a TTY per claude-docs/12-testing.md L1.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>ackermann_msgs</depend>
+  <!-- tools/gen_params.py's own dependencies (racer_tools/vehicle_params_loader.py loads it
+       in-process on the system python3 ament_python nodes run under; see that module's
+       docstring for why this differs from sim/racer_gym's approach). -->
+  <depend>python3-yaml</depend>
+  <depend>python3-jsonschema</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

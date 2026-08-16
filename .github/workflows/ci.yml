@@ -180,6 +180,7 @@ jobs:
       sim_cpu: ${{ steps.filter.outputs.sim_cpu }}
       train_cuda: ${{ steps.filter.outputs.train_cuda }}
       ros_dev: ${{ steps.filter.outputs.ros_dev }}
+      sim_racer_gym: ${{ steps.filter.outputs.sim_racer_gym }}
     steps:
       - uses: actions/checkout@v7
 
@@ -196,6 +197,12 @@ jobs:
             ros_dev:
               - 'docker/ros-dev/**'
               - '.github/workflows/ci.yml'
+            sim_racer_gym:
+              - 'sim/racer_gym/**'
+              - 'tests/sim_regression/**'
+              - 'tests/replay_harness/**'
+              - '.github/workflows/ci.yml'
+              - '.github/scripts/sim_regression_battery.sh'
 
   sim-cpu-image:
     name: sim-cpu image build + headless gym smoke test
@@ -321,6 +328,30 @@ jobs:
 
       - name: Run colcon build+test smoke test inside the built image
         run: docker run --rm ros-dev:ci
+
+  sim-regression-battery:
+    name: S.6 sim dynamics regression battery (racer_gym vs. committed references)
+    needs: changes
+    if: needs.changes.outputs.sim_racer_gym == 'true'
+    runs-on: ubuntu-latest
+    # Roadmap task S.6 (claude-docs/12-testing.md L5 "Model-upgrade regression"): a fixed,
+    # seeded battery of sysid-style maneuvers (throttle step, steering step, constant-radius
+    # circle at a few speeds, coastdown -- tests/sim_regression/) run through racer_gym's
+    # dynamics and checked against committed references. Path-filtered (the `changes` job
+    # above) to every push touching sim/racer_gym/**, tests/sim_regression/**, or
+    # tests/replay_harness/** (the golden/tolerance engine this battery reuses) -- unlike
+    # the always-run unit-and-property job, this job actually steps the pinned f1tenth_gym
+    # through several maneuvers, so it is gated rather than running on every unrelated push.
+    # Bare ubuntu-latest + uv, same as run_python_tests.sh's "report" gate for sim/racer_gym
+    # itself: racer_gym's own pyproject.toml pins f1tenth_gym via a git+commit source, so no
+    # docker image is needed here.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+
+      - name: S.6 battery vs. committed references
+        run: .github/scripts/sim_regression_battery.sh
 
   l4-small-l5-short:
     name: L4-small replay + L5-short sim-in-loop

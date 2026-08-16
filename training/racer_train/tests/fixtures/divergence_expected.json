@@ -1,0 +1,178 @@
+[
+  {
+    "steering_angle_rad": -0.2187225083829972,
+    "speed_mps": 5.848024
+  },
+  {
+    "steering_angle_rad": 0.1631130250647837,
+    "speed_mps": 7.031092
+  },
+  {
+    "steering_angle_rad": 0.10689413976048184,
+    "speed_mps": 8.041986
+  },
+  {
+    "steering_angle_rad": -0.0697526880097885,
+    "speed_mps": 8.939286
+  },
+  {
+    "steering_angle_rad": 0.1930379526723098,
+    "speed_mps": 9.754389
+  },
+  {
+    "steering_angle_rad": -0.09436056952135527,
+    "speed_mps": 10.506351
+  },
+  {
+    "steering_angle_rad": -0.14031783675249454,
+    "speed_mps": 9.754288
+  },
+  {
+    "steering_angle_rad": 0.08057278474425193,
+    "speed_mps": 8.939175
+  },
+  {
+    "steering_angle_rad": -0.19755368065575774,
+    "speed_mps": 8.041863
+  },
+  {
+    "steering_angle_rad": 0.03999283121680447,
+    "speed_mps": 7.030952
+  },
+  {
+    "steering_angle_rad": 0.3308032265994659,
+    "speed_mps": 5.847867
+  },
+  {
+    "steering_angle_rad": 0.1941041335778599,
+    "speed_mps": 5.337496
+  },
+  {
+    "steering_angle_rad": 0.4189,
+    "speed_mps": 5.337507
+  },
+  {
+    "steering_angle_rad": 0.3947673430093377,
+    "speed_mps": 5.337519
+  },
+  {
+    "steering_angle_rad": -0.3266311132690237,
+    "speed_mps": 5.337531
+  },
+  {
+    "steering_angle_rad": 0.12600322407667916,
+    "speed_mps": 5.337543
+  },
+  {
+    "steering_angle_rad": -0.4189,
+    "speed_mps": 5.337556
+  },
+  {
+    "steering_angle_rad": -0.4189,
+    "speed_mps": 5.337568
+  },
+  {
+    "steering_angle_rad": 0.36611955377294875,
+    "speed_mps": 5.337581
+  },
+  {
+    "steering_angle_rad": -0.03766176638087672,
+    "speed_mps": 5.337595
+  },
+  {
+    "steering_angle_rad": 0.4189,
+    "speed_mps": 5.337608
+  },
+  {
+    "steering_angle_rad": 0.4189,
+    "speed_mps": 5.337622
+  },
+  {
+    "steering_angle_rad": -0.12151578316881194,
+    "speed_mps": 6.165087
+  },
+  {
+    "steering_angle_rad": 0.10814312017141717,
+    "speed_mps": 7.296957
+  },
+  {
+    "steering_angle_rad": -0.02355809027862372,
+    "speed_mps": 8.275438
+  },
+  {
+    "steering_angle_rad": -0.2176795677377371,
+    "speed_mps": 9.149872
+  },
+  {
+    "steering_angle_rad": 0.08739143259370112,
+    "speed_mps": 9.947735
+  },
+  {
+    "steering_angle_rad": -0.0989474251895833,
+    "speed_mps": 10.323473
+  },
+  {
+    "steering_angle_rad": -0.05568323332150059,
+    "speed_mps": 9.55703
+  },
+  {
+    "steering_angle_rad": 0.22339665335644537,
+    "speed_mps": 8.723504
+  },
+  {
+    "steering_angle_rad": -0.05397136548505851,
+    "speed_mps": 7.801426
+  },
+  {
+    "steering_angle_rad": 0.11623370579496538,
+    "speed_mps": 6.754625
+  },
+  {
+    "steering_angle_rad": 0.385239265638476,
+    "speed_mps": 5.512824
+  },
+  {
+    "steering_angle_rad": -0.4189,
+    "speed_mps": 5.337499
+  },
+  {
+    "steering_angle_rad": -0.11717786678058555,
+    "speed_mps": 5.33751
+  },
+  {
+    "steering_angle_rad": -0.2768769031132446,
+    "speed_mps": 5.337522
+  },
+  {
+    "steering_angle_rad": -0.4189,
+    "speed_mps": 5.337534
+  },
+  {
+    "steering_angle_rad": 0.4189,
+    "speed_mps": 5.337546
+  },
+  {
+    "steering_angle_rad": 0.285034769693583,
+    "speed_mps": 5.337559
+  },
+  {
+    "steering_angle_rad": 0.41305362318789096,
+    "speed_mps": 5.337571
+  },
+  {
+    "steering_angle_rad": 0.4189,
+    "speed_mps": 5.337585
+  },
+  {
+    "steering_angle_rad": -0.1008032872177757,
+    "speed_mps": 5.337598
+  },
+  {
+    "steering_angle_rad": -0.08129245186640713,
+    "speed_mps": 5.337612
+  },
+  {
+    "steering_angle_rad": -0.06933516987197796,
+    "speed_mps": 5.337625
+  }
+]

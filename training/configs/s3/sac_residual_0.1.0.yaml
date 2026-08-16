@@ -1,0 +1,57 @@
+# SAC residual training config (roadmap S.3, claude-docs/02-repo-layout.md naming:
+# configs/<phase>/<name>_<semver>.yaml). Never edit this file after it has produced a
+# committed result -- copy it and bump the semver instead.
+#
+# Physical constants (wheelbase, steering limits, rate limits, speed range) are NOT here --
+# they come from config/vehicle_params.yaml via the generated binding at env-construction
+# time (CLAUDE.md invariant 2). Everything below is a genuine training/tuning knob.
+name: sac_residual_gym_oval
+
+seed: 0
+
+env:
+  track_csv: config/tracks/gym_oval/raceline.csv
+  lidar_downsample_factor: 10 # 1080 raw beams -> 108, matches the contract fixture in
+    # ros_ws/src/racer_policy/tests/conftest.py
+  timestep_s: 0.02 # 50 Hz, claude-docs/08-learning.md "Inference target: 50 Hz"
+  max_episode_steps: 2000 # 40s of sim time per episode at 50 Hz
+  action:
+    steering_scale_rad: 0.4189 # raw policy action in [-1, 1] maps to +-this many rad of
+      # residual BEFORE the envelope's residual_fraction_steering tightens it further
+    speed_scale_mps: 5.0 # +-this many m/s of residual before the envelope tightens it
+
+pure_pursuit:
+  lookahead_min_m: 0.4
+  lookahead_max_m: 1.5
+  lookahead_curvature_ref_1pm: 0.4
+
+envelope:
+  residual_fraction_steering: 0.2 # fraction of the full steering range the residual may use
+  residual_fraction_speed: 0.15 # fraction of the full speed range the residual may use
+  speed_cap_mps: 8.0 # conservative training-time cap, well under vehicle_params'
+    # global_speed_cap_mps=20.0 (which is a dynamics-model validity bound, not a validated
+    # safety cap -- see config/vehicle_params.yaml's own comment)
+  ood_threshold: 3.0 # starting point pending Phase 5 tuning (claude-docs/08-learning.md)
+  # Reference low-dim state for the distance-based OOD scorer, in
+  # racer_train.observation.LOW_DIM_FIELDS order: velocity_mps, yaw_rate_rad_s, slip_proxy,
+  # raceline_lateral_error_m, raceline_heading_error_rad. "Nominal following" state: moderate
+  # forward speed, near-zero yaw rate/slip/lateral-error/heading-error.
+  ood_reference_state: [3.0, 0.0, 0.0, 0.0, 0.0]
+  # Per-dimension normalizer so no one dimension (e.g. velocity, in m/s) dominates the
+  # distance purely because of its units -- generous "normal driving" spreads, not fitted.
+  ood_reference_scale: [5.0, 2.0, 0.5, 1.0, 1.0]
+
+reward:
+  progress_weight: 1.0
+  crash_penalty: 10.0
+  envelope_violation_penalty: 0.1
+
+sac:
+  total_timesteps: 200000
+  learning_rate: 0.0003
+  buffer_size: 100000
+  batch_size: 256
+  learning_starts: 1000
+  train_freq: 1
+  gradient_steps: 1
+  net_arch: [64, 64]

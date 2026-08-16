@@ -16,6 +16,16 @@ Regeneration is deliberately loud and requires an explicit reason
 refresh is a defect."): :func:`regenerate_golden` refuses to run without a
 non-empty ``reason``, and always logs a warning banner reminding the caller
 that the PR must explain *why* the golden changed.
+
+Provenance header (added for roadmap task S.6, backward compatible): a
+golden file may optionally be a JSON *object* ``{"meta": {...}, "records":
+[...]}`` instead of a bare JSON list. ``meta`` is free-form (e.g. the
+producing library's version/commit, a params-file identity, the seed used)
+and is never read by :func:`compare_to_golden` -- it exists purely so a
+reviewer/future-debugger can see what produced a committed reference
+without re-deriving it. Every golden file written by this module before
+this change, and every golden file written today without passing ``meta``,
+remains a bare list; :func:`load_golden` accepts both shapes.
 """
 
 from __future__ import annotations
@@ -65,7 +75,7 @@ class GoldenComparisonResult:
         return "\n".join(lines)
 
 
-def load_golden(path: Path) -> list[Record]:
+def _load_golden_json(path: Path) -> Any:
     if not path.exists():
         raise FileNotFoundError(
             f"golden file not found: {path}\n"
@@ -74,16 +84,56 @@ def load_golden(path: Path) -> list[Record]:
             "explaining what it captures."
         )
     with path.open("r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    if not isinstance(data, list):
-        raise TypeError(f"golden file {path} must contain a JSON list of records")
-    return data
+        return json.load(fh)
 
 
-def save_golden(path: Path, records: list[Record]) -> None:
+def load_golden(path: Path) -> list[Record]:
+    """Load a golden file's records.
+
+    Accepts both shapes this module ever writes: a bare JSON list of
+    records (the original, still-default format), and the optional
+    ``{"meta": {...}, "records": [...]}`` provenance-header wrapper (see
+    module docstring) -- either way this returns just the record list, so
+    every existing caller (:func:`compare_to_golden` included) needs no
+    changes to support wrapped golden files.
+    """
+    data = _load_golden_json(path)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("records"), list):
+        return data["records"]
+    raise TypeError(
+        f"golden file {path} must contain a JSON list of records, or an object of the form "
+        '{"meta": {...}, "records": [...]}'
+    )
+
+
+def load_golden_meta(path: Path) -> dict[str, Any]:
+    """Return a golden file's provenance ``meta`` dict, or ``{}`` if it has none.
+
+    A bare-list golden file (no wrapper) has no provenance header by
+    construction, so this returns ``{}`` for it rather than raising --
+    "no provenance recorded" is a normal, valid state for older/simple
+    goldens, not an error.
+    """
+    data = _load_golden_json(path)
+    if isinstance(data, dict) and isinstance(data.get("meta"), dict):
+        return data["meta"]
+    return {}
+
+
+def save_golden(path: Path, records: list[Record], *, meta: dict[str, Any] | None = None) -> None:
+    """Write a golden file.
+
+    With ``meta=None`` (the default) this writes the original bare-list
+    format, byte-for-byte as before -- fully backward compatible. Passing
+    ``meta`` wraps the records with a provenance header (see module
+    docstring); :func:`load_golden` reads either shape transparently.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload: Any = records if meta is None else {"meta": meta, "records": records}
     with path.open("w", encoding="utf-8") as fh:
-        json.dump(records, fh, indent=2, sort_keys=True)
+        json.dump(payload, fh, indent=2, sort_keys=True)
         fh.write("\n")
 
 
@@ -120,13 +170,21 @@ def compare_to_golden(
     )
 
 
-def regenerate_golden(actual_records: list[Record], golden_path: Path, *, reason: str) -> None:
+def regenerate_golden(
+    actual_records: list[Record],
+    golden_path: Path,
+    *,
+    reason: str,
+    meta: dict[str, Any] | None = None,
+) -> None:
     """Overwrite (or create) a golden file. Requires an explicit, non-empty reason.
 
     This is the ONLY way this module ever writes a golden file --
     :func:`compare_to_golden` never does, even on mismatch. Callers exposing
     this as a CLI flag should gate it behind an explicit ``--regenerate``
-    flag (never a default/auto behavior on test failure).
+    flag (never a default/auto behavior on test failure). ``meta`` is
+    forwarded to :func:`save_golden` unchanged (see its docstring); omitting
+    it writes the original bare-list format.
     """
     if not reason or not reason.strip():
         raise ValueError(
@@ -134,5 +192,5 @@ def regenerate_golden(actual_records: list[Record], golden_path: Path, *, reason
             "golden output changed -- claude-docs/12-testing.md: a silent golden "
             "refresh is a defect. Pass the reason you will also put in the PR."
         )
-    save_golden(golden_path, actual_records)
+    save_golden(golden_path, actual_records, meta=meta)
     logger.warning(REGENERATE_BANNER.format(path=golden_path, reason=reason.strip()))

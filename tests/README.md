@@ -27,3 +27,12 @@ their packages instead. See `claude-docs/12-testing.md`.
   session record. `bench/procedures/template_wheels_off_actuation.yaml` is
   a placeholder template -- real procedures arrive with the hardware tasks
   that need them (Phase 1). Roadmap task 0.9.
+- `sim_regression/` (`racer_sim_regression`): the S.6 sim dynamics
+  regression battery -- a fixed, seeded set of sysid-style maneuvers
+  (throttle step, steering step, constant-radius circle at a few speeds,
+  coastdown) run through `sim/racer_gym`'s dynamics and checked against
+  committed references (`racer_sim_regression/references/`) with
+  `replay_harness`'s golden/tolerance engine. Runs in its own CI job on
+  every push touching `sim/racer_gym/**` (see
+  `.github/workflows/ci.yml`'s `sim-regression-battery` job and
+  `.github/scripts/sim_regression_battery.sh`). Roadmap task S.6.

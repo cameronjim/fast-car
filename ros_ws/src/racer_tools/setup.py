@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "racer_gym_bridge"
+package_name = "racer_tools"
 
 setup(
     name=package_name,
@@ -15,14 +15,13 @@ setup(
     maintainer="cameronjim",
     maintainer_email="64621038+cameronjim@users.noreply.github.com",
     description=(
-        "ROS 2 Humble bridge between the pinned f1tenth_gym simulator and the racer "
-        "topics (roadmap task 0.5)."
+        "Teleop, bag utilities, timing-gate reader (roadmap milestone 1: keyboard_teleop_node)."
     ),
     license="TODO: License declaration",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "bridge_node = racer_gym_bridge.bridge_node:main",
+            "keyboard_teleop_node = racer_tools.keyboard_teleop_node:main",
         ],
     },
 )

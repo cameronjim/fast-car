@@ -32,7 +32,9 @@ Claude Code follows them as written until then.
 ## Git
 
 - Conventional commits (`feat:`, `fix:`, `docs:`, `sysid:`, `eval:` ...). Small PRs/commits,
-  one roadmap task per branch: `task/<id>-<slug>` (e.g. `task/2.4-adopt-ekf`).
+  one milestone per branch (a milestone bundles related roadmap tasks; each task still
+  individually meets its 12-testing definition of done and gets its roadmap tick in the same
+  PR): `milestone/<n>-<slug>` (e.g. `milestone/1-sim-teleop`).
 - Never commit: `data/` (bags, checkpoints), secrets, generated bindings (CI regenerates).
 - Always commit: configs that produced results, prereg docs, drift records, session notes.
 - A PR that changes behavior of a safety layer (05) requires an explicit "safety impact"

@@ -55,6 +55,12 @@ FROM ros:humble-ros-base@sha256:75dd3aba34a3838dadbb31a9f7bef769bdfa8713e6cec686
 #   ROS apt repo, not pip.
 # ros-humble-ament-cmake-gtest / ros-humble-ament-cmake-pytest: wires gtest
 #   (C++) and pytest (Python) into `colcon test` for ament_cmake packages.
+# gcovr: computes branch coverage for racer_safety's gate logic
+#   (claude-docs/12-testing.md: "racer_safety gate[s] at 100% branch on
+#   decision logic"), scoped to gate_logic.cpp/.hpp -- see
+#   .github/scripts/racer_safety_coverage.sh. gcc/g++ (pulled in transitively
+#   by build-essential) already produce the .gcno/.gcda files gcovr reads;
+#   this package is just the reporting/gating tool on top.
 # libgl1/libglib2.0-0/libsm6/libxext6/libxrender1/libxcb1/libx11-6/libgomp1:
 #   same reasoning as docker/sim-cpu/Dockerfile -- f1tenth_gym's env
 #   construction (roadmap task 0.5) eagerly builds a renderer even when
@@ -78,6 +84,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-launch-testing-ament-cmake \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
+        gcovr \
         libgl1 \
         libglib2.0-0 \
         libsm6 \

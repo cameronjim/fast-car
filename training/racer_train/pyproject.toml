@@ -45,15 +45,17 @@ dependencies = [
 # load an emitted contract back through the real S.5 loader, but nothing in the shipped
 # env/train code imports racer_policy at runtime.
 #
-# editable = true on racer-gym is not a style preference: racer_gym/params.py locates
-# config/vehicle_params.yaml and tools/gen_params.py by walking up from its own `__file__`
-# (`Path(__file__).resolve().parents[3]`), which only lands on the repo root when
-# `__file__` still points at sim/racer_gym's real source tree. A non-editable install
-# copies the package into this venv's site-packages, breaking that walk-up (proven by
-# hand: `load_vehicle_params()` raised FileNotFoundError for tools/gen_params.py under
-# site-packages before this was added). Editable keeps `__file__` pointing at
-# sim/racer_gym/racer_gym/params.py, exactly like running racer_gym's own tests in place.
-racer-gym = { path = "../../sim/racer_gym", editable = true }
+# racer-gym is a plain (non-editable) path dep: it used to require `editable = true` because
+# racer_gym/params.py located config/vehicle_params.yaml and tools/gen_params.py by walking
+# up from its own `__file__`, which only landed on the repo root when `__file__` still
+# pointed at sim/racer_gym's real source tree -- a non-editable install copies the package
+# into this venv's site-packages, breaking that walk-up. Milestone 1 PART A fixed the lookup
+# (racer_gym.params.discover_repo_root) to also fall back to walking up from the current
+# working directory, which resolves correctly here: claude-docs/12-testing.md's CI script
+# (.github/scripts/pytest_gate.sh) `cd`s into this package directory -- still inside the
+# repo checkout -- before running `uv sync` + `uv run pytest`. See
+# sim/racer_gym/tests/test_params_repo_discovery.py for the regression test.
+racer-gym = { path = "../../sim/racer_gym" }
 envelope = { path = "../envelope" }
 racer-policy = { path = "../../ros_ws/src/racer_policy" }
 

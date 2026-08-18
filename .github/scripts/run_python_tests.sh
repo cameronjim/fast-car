@@ -61,21 +61,24 @@ run "tests/bench" report
 # job instead (see .github/workflows/ci.yml).
 run "sim/bridge/racer_gym_bridge" report
 
-# Any other ros_ws Python package (racer_policy is handled above with its
-# explicit gate; C++-only packages like racer_safety are covered by the L3 + C++
-# (ros-dev) job instead, and pytest_gate.sh no-ops cleanly on a directory with no .py
-# source). racer_control (roadmap task S.2) IS excluded here despite having .py files
-# (launch/tracker.launch.py, test/test_tracker_node_launch.py): both need rclpy/launch_ros/
-# launch_testing to do anything (the launch file only makes sense under `ros2 launch`; the
-# L3 test needs the real tracker_node executable colcon builds), so a bare `uv run pytest`
-# here has nothing meaningful to run -- unlike sim/bridge/racer_gym_bridge, it has no
-# ROS-free pure-Python logic of its own to test this way (its ROS-free logic is the C++
-# core, gtest-covered instead). It is exercised for real by the l3-and-cpp CI job (colcon
-# build + colcon test, including the L3 launch test) via ros_build_test.sh.
+# Any other ros_ws Python package (racer_policy is handled above with its explicit gate;
+# racer_tools has its own standalone pyproject.toml -- see that package's comment on why --
+# so it runs through this generic loop). racer_control and racer_safety (milestone 1) are
+# BOTH excluded here despite having .py files (launch/*.launch.py, test/test_*_launch.py):
+# both need rclpy/launch_ros/launch_testing to do anything (the launch file only makes sense
+# under `ros2 launch`; the L3 test needs the real tracker_node/safety_node executable colcon
+# builds), so a bare `uv run pytest` here has nothing meaningful to run -- unlike
+# sim/bridge/racer_gym_bridge or racer_tools, they have no ROS-free pure-Python logic of
+# their own to test this way (their ROS-free logic is the C++ core, gtest-covered instead).
+# racer_bringup is excluded for the same reason: it is launch-files-only, no pyproject.toml,
+# nothing a bare `uv run pytest` could exercise. All three are exercised for real by the
+# l3-and-cpp CI job (colcon build + colcon test, including their L3 launch tests) via
+# ros_build_test.sh.
 if [ -d ros_ws/src ]; then
   for pkg_dir in ros_ws/src/*/; do
     pkg_name="$(basename "$pkg_dir")"
-    if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_control" ]; then
+    if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_control" ] ||
+       [ "$pkg_name" = "racer_safety" ] || [ "$pkg_name" = "racer_bringup" ]; then
       continue
     fi
     run "$pkg_dir" report

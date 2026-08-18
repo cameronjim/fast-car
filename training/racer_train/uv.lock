@@ -776,7 +776,7 @@ wheels = [
 [[package]]
 name = "racer-gym"
 version = "0.1.0"
-source = { editable = "../../sim/racer_gym" }
+source = { directory = "../../sim/racer_gym" }
 dependencies = [
     { name = "f1tenth-gym" },
     { name = "gymnasium" },
@@ -856,7 +856,7 @@ requires-dist = [
     { name = "gymnasium", specifier = ">=0.29" },
     { name = "numpy" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "racer-gym", editable = "../../sim/racer_gym" },
+    { name = "racer-gym", directory = "../../sim/racer_gym" },
 ]
 
 [package.metadata.requires-dev]

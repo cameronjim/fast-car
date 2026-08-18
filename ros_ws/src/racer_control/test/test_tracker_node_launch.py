@@ -8,6 +8,17 @@ by test_raceline.cpp's C++ gtest -- same file, two languages independently parsi
 
 from __future__ import annotations
 
+import os
+
+# Pinned BEFORE rclpy is imported (milestone 1 fix): racer_safety/test/test_safety_node_launch.py
+# also publishes/subscribes `/drive_raw`, and `colcon test` runs different packages' launch_testing
+# suites as CONCURRENT processes in the same container/DDS domain -- without per-file domain
+# isolation, this test's tracker_node and that one's safety_node cross-contaminate each other's
+# `/drive_raw` traffic (confirmed empirically: this suite started failing with garbage
+# steering/speed values the moment racer_safety's test existed alongside it). setdefault, not a
+# plain assignment, so an operator-set ROS_DOMAIN_ID (e.g. on real hardware) is never clobbered.
+os.environ.setdefault("ROS_DOMAIN_ID", "77")
+
 import math
 import signal
 import time

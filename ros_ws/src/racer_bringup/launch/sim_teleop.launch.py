@@ -17,6 +17,12 @@ docs/notes/milestone-1-sim-teleop.md for the exact commands). The `start_teleop`
 argument (default false) can also start keyboard_teleop_node in this same launch for
 convenience in an environment where that stdio caveat happens not to matter, but that is not
 the supported path.
+
+Milestone 2 adds the `viz` launch argument (default true): starts `foxglove_bridge` on port
+8765 alongside bridge_node/safety_node, so the owner can watch the simulated car (map, TF,
+/scan, pose) live in the Foxglove app instead of driving headless -- see
+docs/notes/milestone-2-sim-viz.md for the exact end-to-end demo procedure, including the
+`docker run -p 8765:8765` port publish this needs.
 """
 
 from launch import LaunchDescription
@@ -24,6 +30,8 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+_FOXGLOVE_BRIDGE_PORT = 8765
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -35,6 +43,16 @@ def generate_launch_description() -> LaunchDescription:
             "path (teleop needs a real interactive TTY a ros2-launch-managed subprocess does "
             "not reliably provide) -- run it in a separate terminal instead, see "
             "docs/notes/milestone-1-sim-teleop.md. Default false."
+        ),
+    )
+    viz_arg = DeclareLaunchArgument(
+        "viz",
+        default_value="true",
+        description=(
+            "Start foxglove_bridge (ros-humble-foxglove-bridge, docker/ros-dev/Dockerfile) "
+            f"on port {_FOXGLOVE_BRIDGE_PORT} so the Foxglove app can connect and show the "
+            "sim live (map, TF, /scan, pose). Default true; see "
+            "docs/notes/milestone-2-sim-viz.md for the demo procedure."
         ),
     )
 
@@ -57,5 +75,15 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         condition=IfCondition(LaunchConfiguration("start_teleop")),
     )
+    foxglove_bridge_node = Node(
+        package="foxglove_bridge",
+        executable="foxglove_bridge",
+        name="foxglove_bridge",
+        output="screen",
+        parameters=[{"port": _FOXGLOVE_BRIDGE_PORT}],
+        condition=IfCondition(LaunchConfiguration("viz")),
+    )
 
-    return LaunchDescription([start_teleop_arg, bridge_node, safety_node, teleop_node])
+    return LaunchDescription(
+        [start_teleop_arg, viz_arg, bridge_node, safety_node, teleop_node, foxglove_bridge_node]
+    )

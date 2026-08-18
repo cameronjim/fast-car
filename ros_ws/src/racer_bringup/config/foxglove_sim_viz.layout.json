@@ -1,0 +1,97 @@
+{
+  "configById": {
+    "3D!simviz": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 20,
+        "phi": 55,
+        "thetaOffset": 45,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "fovy": 45,
+        "near": 0.1,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": { "enableStats": false },
+      "transforms": {
+        "frame:map": { "visible": true },
+        "frame:base_link": { "visible": true },
+        "frame:laser": { "visible": true }
+      },
+      "topics": {
+        "/sim/map": { "visible": true },
+        "/scan": {
+          "visible": true,
+          "pointSize": 4,
+          "pointShape": "circle",
+          "colorMode": "flat",
+          "colorField": "range"
+        },
+        "/sim/ground_truth_odom": {
+          "visible": true,
+          "type": "poses",
+          "axisScale": 1,
+          "arrowScale": [0.5, 0.15, 0.15]
+        }
+      },
+      "layers": {
+        "grid": {
+          "layerId": "foxglove.Grid",
+          "visible": true,
+          "frameId": "map",
+          "size": 50,
+          "divisions": 50
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {}
+    },
+    "Plot!drivespeed": {
+      "paths": [
+        {
+          "value": "/drive.drive.speed",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "commanded speed (m/s), post-safety-gate"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "RawMessages!safetyevents": {
+      "topicPath": "/safety/events",
+      "fontSize": 12,
+      "expansion": "auto"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+  "layout": {
+    "first": "3D!simviz",
+    "second": {
+      "first": "Plot!drivespeed",
+      "second": "RawMessages!safetyevents",
+      "direction": "column"
+    },
+    "direction": "row",
+    "splitPercentage": 65
+  }
+}

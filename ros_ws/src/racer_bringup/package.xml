@@ -8,7 +8,9 @@
     conventions.md: "Launch files in racer_bringup only"). Milestone 1 adds
     sim_teleop.launch.py: bridge_node + safety_node (the real /drive_raw -&gt; safety_node
     -&gt; /drive -&gt; bridge_node command path), plus bridge.launch.py (moved from
-    sim/bridge/racer_gym_bridge).
+    sim/bridge/racer_gym_bridge). Milestone 2 adds the `viz` argument to
+    sim_teleop.launch.py, starting foxglove_bridge for a live Foxglove view; see
+    config/foxglove_sim_viz.layout.json and docs/notes/milestone-2-sim-viz.md.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -19,6 +21,7 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>racer_safety</exec_depend>
   <exec_depend>racer_tools</exec_depend>
+  <exec_depend>foxglove_bridge</exec_depend>
   <!-- racer_gym_bridge (referenced by package name in launch/*.launch.py, resolved by
        ros2 launch at runtime from whatever workspace is sourced) is intentionally NOT
        declared here: it lives in sim/bridge, a separate colcon workspace from ros_ws, and

@@ -29,6 +29,7 @@ import pytest
 pytest.importorskip("rclpy")
 pytest.importorskip("launch_testing")
 pytest.importorskip("f1tenth_gym")
+pytest.importorskip("tf2_msgs")
 
 import launch
 import launch_testing
@@ -37,11 +38,12 @@ import launch_testing.asserts
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry
 from racer_gym_bridge.bridge_node import build_track_from_raceline
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
 
 # Fast, deterministic parameters for the test run: a higher step rate than
 # the gym default (100 Hz) would give keeps the test itself quick without
@@ -107,6 +109,15 @@ def _best_effort_qos() -> QoSProfile:
         reliability=ReliabilityPolicy.BEST_EFFORT,
         history=HistoryPolicy.KEEP_LAST,
         depth=10,
+    )
+
+
+def _transient_local_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=1,
     )
 
 
@@ -228,6 +239,106 @@ class TestBridgeNode(unittest.TestCase):
             0.1,
             "car did not respond to a forward /drive speed command",
         )
+
+    def test_map_is_latched_and_a_late_joining_subscriber_receives_it(self):
+        """Milestone 2: /sim/map is published once at startup on a transient_local publisher.
+        A subscriber that joins well AFTER that (this test's setUp always runs after
+        setUpClass's _wait_for_bridge_up barrier, i.e. long after bridge_node's one-shot
+        publish) must still receive it from the publisher's latched history -- that is what
+        "latched" means for a ROS 2 transient_local QoS pairing, not a live re-publish."""
+        received = []
+        self.node.create_subscription(
+            OccupancyGrid, "/sim/map", received.append, _transient_local_qos()
+        )
+        # No further publishing happens for /sim/map after node startup -- a short spin is
+        # enough to let discovery + the latched delivery happen; it is not waiting for a
+        # live publish tick the way the /scan and /sim/ground_truth_odom tests above do.
+        self._spin_for(3.0)
+
+        self.assertEqual(
+            len(received),
+            1,
+            "expected exactly one latched /sim/map message to a late-joining subscriber",
+        )
+        msg = received[0]
+        self.assertEqual(msg.header.frame_id, "map")
+        self.assertGreater(msg.info.width, 0)
+        self.assertGreater(msg.info.height, 0)
+        self.assertEqual(len(msg.data), msg.info.width * msg.info.height)
+        # The default synthetic track (build_synthetic_track) is entirely open (no walls),
+        # so every cell must decode to ROS "free" (0), never "occupied" (100) or garbage.
+        self.assertTrue(all(v == 0 for v in msg.data))
+
+    def test_map_is_not_delivered_to_a_volatile_subscriber(self):
+        """QoS check (claude-docs/12-testing.md L3: "correct QoS ... a reliable subscriber
+        actually rejects a best_effort mock", applied here to durability instead of
+        reliability): a VOLATILE (the rclpy default) subscriber must NOT receive a message
+        published before it existed -- proving /sim/map is genuinely transient_local, not
+        accidentally left at a default volatile durability."""
+        volatile_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        received = []
+        self.node.create_subscription(OccupancyGrid, "/sim/map", received.append, volatile_qos)
+        self._spin_for(3.0)
+        self.assertEqual(
+            len(received),
+            0,
+            "a volatile subscriber received the already-published /sim/map message; "
+            "the publisher's durability is not transient_local",
+        )
+
+    def test_tf_map_to_base_link_is_broadcast_continuously(self):
+        """Milestone 2: map -> base_link on /tf, published every step from sim ground
+        truth (not once, unlike the static laser transform below)."""
+        received = []
+        self.node.create_subscription(TFMessage, "/tf", received.append, _reliable_qos())
+        self._spin_for(2.0)
+
+        map_to_base_link = [
+            t
+            for msg in received
+            for t in msg.transforms
+            if t.header.frame_id == "map" and t.child_frame_id == "base_link"
+        ]
+        self.assertGreater(
+            len(map_to_base_link), 1, "map -> base_link was not broadcast continuously on /tf"
+        )
+        # "Continuously" also means the stamps actually advance, not one message repeated.
+        stamps = {(t.header.stamp.sec, t.header.stamp.nanosec) for t in map_to_base_link}
+        self.assertGreater(len(stamps), 1, "every map -> base_link transform had the same stamp")
+
+    def test_static_laser_tf_matches_scan_frame_id(self):
+        """Milestone 2: a static base_link -> laser transform exists on /tf_static, and its
+        child_frame_id matches /scan's own header.frame_id -- the chain a 3D viewer needs to
+        render /scan aligned with the vehicle."""
+        scans = []
+        self.node.create_subscription(LaserScan, "/scan", scans.append, _best_effort_qos())
+        static_transforms = []
+        self.node.create_subscription(
+            TFMessage, "/tf_static", static_transforms.append, _transient_local_qos()
+        )
+        self._spin_for(3.0)
+
+        self.assertGreater(len(scans), 0, "no /scan messages received")
+        self.assertGreater(len(static_transforms), 0, "no /tf_static messages received")
+
+        laser_transforms = [
+            t
+            for msg in static_transforms
+            for t in msg.transforms
+            if t.child_frame_id == scans[-1].header.frame_id
+        ]
+        self.assertEqual(
+            len(laser_transforms),
+            1,
+            f"expected exactly one static transform whose child frame matches /scan's "
+            f"frame_id ({scans[-1].header.frame_id!r})",
+        )
+        self.assertEqual(laser_transforms[0].header.frame_id, "base_link")
 
     def test_reset_service(self):
         client = self.node.create_client(Trigger, "/sim/reset")

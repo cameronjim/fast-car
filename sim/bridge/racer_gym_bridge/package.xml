@@ -8,7 +8,9 @@
     racer topics (roadmap task 0.5, claude-docs/04-architecture.md):
     publishes /scan and /sim/ground_truth_odom, subscribes to /drive, and
     steps the sim at a fixed rate. See sim/README.md and
-    claude-docs/07-sim-and-sysid.md.
+    claude-docs/07-sim-and-sysid.md. Milestone 2 adds /sim/map (latched
+    OccupancyGrid from the env's own track) and TF (map -&gt; base_link from
+    sim ground truth, static base_link -&gt; laser) for live visualization.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -21,12 +23,15 @@
   <depend>nav_msgs</depend>
   <depend>ackermann_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
 
   <test_depend>python3-pytest</test_depend>
   <test_depend>launch</test_depend>
   <test_depend>launch_ros</test_depend>
   <test_depend>launch_testing</test_depend>
   <test_depend>launch_testing_ros</test_depend>
+  <test_depend>tf2_msgs</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

@@ -20,6 +20,8 @@ find_package(ackermann_msgs REQUIRED)
 add_library(racer_control_core
   src/raceline.cpp
   src/pure_pursuit.cpp
+  src/speed_rate_limiter.cpp
+  src/float32_wire_margin.cpp
 )
 target_include_directories(racer_control_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -90,6 +92,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_racer_control_core
     test/test_pure_pursuit.cpp
     test/test_raceline.cpp
+    test/test_speed_rate_limiter.cpp
+    test/test_float32_wire_margin.cpp
   )
   target_link_libraries(test_racer_control_core racer_control_core)
   target_compile_definitions(test_racer_control_core PRIVATE

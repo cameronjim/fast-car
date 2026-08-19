@@ -7,7 +7,10 @@
     Teleop, bag utilities, timing-gate reader (claude-docs/02-repo-layout.md). Milestone 1
     adds keyboard_teleop_node: terminal keyboard teleop publishing /drive_raw (claude-docs/04-
     architecture.md). Keymap/step/clamp logic (racer_tools/keymap.py) is pure Python,
-    unit-tested without a TTY per claude-docs/12-testing.md L1.
+    unit-tested without a TTY per claude-docs/12-testing.md L1. Milestone 3 adds
+    raceline_publisher_node: publishes the committed raceline once as a latched nav_msgs/Path
+    on /sim/raceline for Foxglove (racer_tools/raceline_loader.py + raceline_path_builder.py
+    are the pure, L1-tested logic; the node itself is thin ROS plumbing).
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -17,6 +20,8 @@
   <depend>rclpy</depend>
   <depend>rcl_interfaces</depend>
   <depend>ackermann_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
   <!-- tools/gen_params.py's own dependencies (racer_tools/vehicle_params_loader.py loads it
        in-process on the system python3 ament_python nodes run under; see that module's
        docstring for why this differs from sim/racer_gym's approach). -->
@@ -24,6 +29,10 @@
   <depend>python3-jsonschema</depend>
 
   <test_depend>python3-pytest</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

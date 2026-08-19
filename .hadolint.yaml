@@ -1,0 +1,15 @@
+# hadolint config for the docker-car-lint CI job (.github/workflows/ci.yml, roadmap task 1.4).
+# Only docker/car/Dockerfile is linted this way (see that job's comment for why: no arm64/L4T
+# build is attempted in CI, so static lint is all CI can honestly do).
+ignored:
+  # Pin apt package versions: this repo already made and documented this tradeoff in
+  # docker/ros-dev/Dockerfile ("apt packages ... are NOT individually version-pinned ...
+  # full apt pinning ... is impractical to maintain by hand"). docker/car applies the same
+  # reasoning -- the base image is pinned by digest, and Python deps go through uv.lock's
+  # hash-pinned lockfile; unpinned apt packages are the same accepted, documented gap.
+  - DL3008
+  # Pin pip install versions: the one unversioned `pip3 install` in docker/car/Dockerfile is
+  # the Jetson torch wheel, installed from an explicit build-arg URL (not a floating package
+  # name) precisely because it cannot be resolved through a normal index -- see that
+  # Dockerfile's own comment. Every other Python dependency goes through uv.lock instead.
+  - DL3013

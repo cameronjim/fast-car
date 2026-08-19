@@ -53,11 +53,17 @@ steering:
       angle_rad: 0.0
     - pwm_us: 2000.0
       angle_rad: -0.4189
+  pwm_min_us: 1000.0
+  pwm_max_us: 2000.0
+  pwm_neutral_us: 1500.0
 
 actuation:
   command_to_torque_delay_s: 0.02
   throttle_time_constant_s: 0.1
   max_acceleration_mps2: 9.51
+  throttle_pwm_min_us: 1000.0
+  throttle_pwm_max_us: 2000.0
+  throttle_pwm_neutral_us: 1500.0
 
 sensors:
   imu:
@@ -80,8 +86,10 @@ limits:
   ttc_brake_s: 0.5
   envelope_fraction_speed: 0.3
   envelope_fraction_lateral_accel: 0.3
+  mux_watchdog_timeout_s: 0.5
+  mux_kill_switch_threshold_us: 1500.0
 
 meta:
-  schema_version: "0.1.0"
+  schema_version: "0.2.0"
   sysid_session_id: "test-fixture-session"
   fit_date: "2026-01-01"

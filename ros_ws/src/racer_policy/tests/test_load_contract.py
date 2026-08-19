@@ -37,7 +37,7 @@ def test_happy_path_loads_a_fully_valid_contract(valid_contract_dir: Path) -> No
     ]
     assert contract.observation_schema.lidar.beam_count == 108
     assert contract.action_space.scaling == "linear"
-    assert contract.vehicle_params.schema_version == "0.1.0"
+    assert contract.vehicle_params.schema_version == "0.2.0"
     assert contract.policy_path == valid_contract_dir / "policy.pt"
 
 

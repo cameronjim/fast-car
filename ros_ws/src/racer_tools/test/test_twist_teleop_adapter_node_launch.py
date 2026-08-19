@@ -95,24 +95,31 @@ class TestTwistTeleopAdapterNode(unittest.TestCase):
         while time.time() < end:
             rclpy.spin_once(self.node, timeout_sec=0.05)
 
-    def _spin_until(self, predicate, timeout_s: float) -> bool:
-        """Spin until `predicate()` is true or `timeout_s` elapses; returns whether it was
-        satisfied. Used instead of a single fixed `_spin_for` wherever a test needs "this
-        specific thing happened" rather than "some fixed amount of wall time passed" -- a
-        fixed short sleep proved flaky on a more loaded CI runner (message delivery/scheduling
-        latency, not a node bug)."""
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            rclpy.spin_once(self.node, timeout_sec=0.02)
-            if predicate():
-                return True
-        return predicate()
-
     def _publish_twist(self, linear_x: float, angular_z: float) -> None:
         msg = Twist()
         msg.linear.x = linear_x
         msg.angular.z = angular_z
         self._twist_pub.publish(msg)
+
+    def _publish_twist_until_received(
+        self, linear_x: float, angular_z: float, predicate, timeout_s: float
+    ) -> bool:
+        """Publish the given Twist REPEATEDLY (not once) until `predicate()` is true or
+        `timeout_s` elapses. A single one-shot publish() can be silently dropped if DDS
+        discovery between this test's freshly-created Twist publisher and the node's
+        already-running subscriber has not finished matching yet at that exact instant
+        (reliable QoS does not retroactively deliver a message published before a match) --
+        this was observed as a genuine intermittent CI failure (a fixed short wait after a
+        single publish, even a generous one). Republishing on every poll iteration means the
+        first attempt AFTER discovery completes gets through, at negligible cost (well under
+        50 Hz)."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            self._publish_twist(linear_x, angular_z)
+            rclpy.spin_once(self.node, timeout_sec=0.02)
+            if predicate():
+                return True
+        return predicate()
 
     def test_no_twist_ever_published_still_publishes_drive_raw_and_it_is_zero(self):
         received = []
@@ -135,12 +142,14 @@ class TestTwistTeleopAdapterNode(unittest.TestCase):
         self._spin_for(0.3)  # let the subscription connect
         received.clear()
 
-        self._publish_twist(linear_x=2.0, angular_z=1.0)
-        # Poll for the conversion to show up, comfortably under _TEST_TIMEOUT_S -- this test
-        # is about nominal conversion, not the timeout boundary (see the dedicated timeout
-        # test below for that).
-        arrived = self._spin_until(
-            lambda: bool(received) and received[-1].drive.speed > 0.0,
+        # Republish (not a single one-shot publish) until the conversion shows up, comfortably
+        # under _TEST_TIMEOUT_S -- see _publish_twist_until_received's docstring for why a
+        # single publish can be silently dropped by DDS discovery timing. This test is about
+        # nominal conversion, not the timeout boundary (see the dedicated timeout test below).
+        arrived = self._publish_twist_until_received(
+            linear_x=2.0,
+            angular_z=1.0,
+            predicate=lambda: bool(received) and received[-1].drive.speed > 0.0,
             timeout_s=_TEST_TIMEOUT_S / 2,
         )
         self.assertTrue(arrived, "expected the Twist to be converted onto /drive_raw")
@@ -157,9 +166,10 @@ class TestTwistTeleopAdapterNode(unittest.TestCase):
             AckermannDriveStamped, "/drive_raw", received.append, _reliable_qos()
         )
         self._spin_for(0.2)
-        self._publish_twist(linear_x=1.5, angular_z=0.0)
-        arrived = self._spin_until(
-            lambda: bool(received) and received[-1].drive.speed > 0.0,
+        arrived = self._publish_twist_until_received(
+            linear_x=1.5,
+            angular_z=0.0,
+            predicate=lambda: bool(received) and received[-1].drive.speed > 0.0,
             timeout_s=_TEST_TIMEOUT_S / 2,
         )
         self.assertTrue(arrived, "expected the Twist to be converted onto /drive_raw")
@@ -183,13 +193,14 @@ class TestTwistTeleopAdapterNode(unittest.TestCase):
             AckermannDriveStamped, "/drive_raw", received.append, _reliable_qos()
         )
         self._spin_for(0.2)  # let the subscription connect
-        self._publish_twist(linear_x=3.0, angular_z=0.5)
 
-        # Poll (rather than a single fixed sleep) for the command to go nonzero, comfortably
-        # under _TEST_TIMEOUT_S so this precondition check itself never races the
+        # Republish (not a single one-shot publish) until the command goes nonzero,
+        # comfortably under _TEST_TIMEOUT_S so this precondition check itself never races the
         # timeout-to-zero behavior under test below.
-        arrived = self._spin_until(
-            lambda: bool(received) and received[-1].drive.speed > 0.0,
+        arrived = self._publish_twist_until_received(
+            linear_x=3.0,
+            angular_z=0.5,
+            predicate=lambda: bool(received) and received[-1].drive.speed > 0.0,
             timeout_s=_TEST_TIMEOUT_S / 2,
         )
         self.assertTrue(arrived, "precondition: command went nonzero")

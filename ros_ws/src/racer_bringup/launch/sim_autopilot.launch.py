@@ -34,6 +34,14 @@ procedure in this repo, which builds/sources ros_ws and runs `ros2 launch` from 
 (docs/notes/milestone-1-sim-teleop.md, milestone-2-sim-viz.md, milestone-3-sim-autopilot.md)
 -- NOT from the repo root itself.
 
+Milestone 5 adds the `track` launch argument (default `gym_oval`, UNCHANGED default
+behavior): `raceline_path`'s own default is now derived from it
+(`../config/tracks/<track>/raceline.csv`), so a second committed track (e.g.
+`track:=oschersleben`, roadmap milestone 5's twistier second track, see
+docs/notes/milestone-5-browser-teleop.md) can be selected with one argument instead of
+spelling out the whole path. Passing `raceline_path` directly still works and overrides
+`track` entirely (it always did; `track` only changes what `raceline_path` DEFAULTS to).
+
 `raceline_publisher_node` (racer_tools) publishes that same raceline once as a latched
 nav_msgs/Path on /sim/raceline so Foxglove can show the line the tracker is following,
 alongside everything milestone 2 already shows -- see
@@ -49,20 +57,34 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 _FOXGLOVE_BRIDGE_PORT = 8765
-_DEFAULT_RACELINE_PATH = "../config/tracks/gym_oval/raceline.csv"
+_DEFAULT_TRACK = "gym_oval"
 
 
 def generate_launch_description() -> LaunchDescription:
+    track_arg = DeclareLaunchArgument(
+        "track",
+        default_value=_DEFAULT_TRACK,
+        description=(
+            "Track id under config/tracks/<track>/ (claude-docs/02-repo-layout.md) whose "
+            "raceline.csv both bridge_node and tracker_node track by default -- only used to "
+            "compute raceline_path's own default (below); passing raceline_path directly "
+            f"overrides this entirely. Default '{_DEFAULT_TRACK}' (unchanged from milestones "
+            "3-4). See docs/notes/milestone-5-browser-teleop.md for the committed tracks and "
+            "how to add another."
+        ),
+    )
     raceline_path_arg = DeclareLaunchArgument(
         "raceline_path",
-        default_value=_DEFAULT_RACELINE_PATH,
+        default_value=["../config/tracks/", LaunchConfiguration("track"), "/raceline.csv"],
         description=(
             "Path to the tools/raceline-generated raceline CSV both bridge_node and "
             "tracker_node track (claude-docs/02-repo-layout.md: "
             "config/tracks/<venue>_<layout>/raceline.csv). Relative paths resolve against "
             "the launching process's cwd -- the default assumes `ros2 launch` is run from "
             "inside `ros_ws` (see docs/notes/milestone-3-sim-autopilot.md's demo procedure); "
-            "pass an absolute path if running from somewhere else."
+            "pass an absolute path if running from somewhere else. Defaults to "
+            "`../config/tracks/<track>/raceline.csv` from the `track` argument above; passing "
+            "this directly overrides `track` entirely."
         ),
     )
     viz_arg = DeclareLaunchArgument(
@@ -118,6 +140,7 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription(
         [
+            track_arg,
             raceline_path_arg,
             viz_arg,
             bridge_node,

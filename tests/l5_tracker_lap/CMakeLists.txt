@@ -9,6 +9,10 @@ if(BUILD_TESTING)
     TARGET test_tracker_lap_canary
     TIMEOUT 120
   )
+  add_launch_test(test_tracker_lap_canary_oschersleben.py
+    TARGET test_tracker_lap_canary_oschersleben
+    TIMEOUT 180
+  )
 endif()
 
 ament_package()

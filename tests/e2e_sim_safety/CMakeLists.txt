@@ -13,6 +13,10 @@ if(BUILD_TESTING)
     TARGET test_sim_autopilot_e2e
     TIMEOUT 120
   )
+  add_launch_test(test_sim_autopilot_e2e_oschersleben.py
+    TARGET test_sim_autopilot_e2e_oschersleben
+    TIMEOUT 120
+  )
 endif()
 
 ament_package()

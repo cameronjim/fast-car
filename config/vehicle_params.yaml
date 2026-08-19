@@ -23,6 +23,14 @@
 # nothing here is a silently-missing key.
 #
 # meta.sysid_session_id = "none-preliminary" flags that this is NOT a fitted result.
+#
+# schema_version bumped 0.1.0 -> 0.2.0 for milestone 4 (hardware-arrival prep, roadmap task
+# 1.3): added steering.pwm_{min,max,neutral}_us, actuation.throttle_pwm_{min,max,neutral}_us,
+# and limits.mux_watchdog_timeout_s / mux_kill_switch_threshold_us -- the layer-1 safety mux
+# firmware's (firmware/safety_mux/) physical constants. All new fields are null (genuinely
+# unmeasured; see each field's comment below) -- per claude-docs/06-vehicle-params.md rule 5,
+# this still bumps schema_version because it changes the schema's required-field set,
+# consumers must refuse on mismatch either way.
 
 chassis:
   mass_kg: 3.74                    # gym: m
@@ -60,11 +68,17 @@ steering:
   max_rate_rad_per_s: 3.2           # gym: sv_max
   time_constant_s: null             # needs Phase 2/3 measurement
   pwm_to_angle_table: null          # not assumed linear; needs Phase 2/3 calibration
+  pwm_min_us: null                  # firmware/safety_mux input validity bound; needs Phase 1 bench measurement (roadmap 1.3)
+  pwm_max_us: null                  # firmware/safety_mux input validity bound; needs Phase 1 bench measurement (roadmap 1.3)
+  pwm_neutral_us: null              # firmware/safety_mux cut-state output; needs Phase 1 bench measurement (roadmap 1.3)
 
 actuation:
   command_to_torque_delay_s: null   # needs Phase 2/3 measurement
   throttle_time_constant_s: null    # needs Phase 2/3 measurement
   max_acceleration_mps2: 9.51       # gym: a_max
+  throttle_pwm_min_us: null         # firmware/safety_mux input validity bound; needs Phase 1 bench measurement (roadmap 1.3)
+  throttle_pwm_max_us: null         # firmware/safety_mux input validity bound; needs Phase 1 bench measurement (roadmap 1.3)
+  throttle_pwm_neutral_us: null     # firmware/safety_mux cut-state output; needs Phase 1 bench measurement (roadmap 1.3)
 
 sensors:
   imu:
@@ -88,8 +102,10 @@ limits:
   ttc_brake_s: null                 # needs Phase 1/2 tuning
   envelope_fraction_speed: null     # needs Phase 5 tuning (claude-docs/08-learning.md)
   envelope_fraction_lateral_accel: null  # needs Phase 5 tuning (claude-docs/08-learning.md)
+  mux_watchdog_timeout_s: null      # firmware/safety_mux heartbeat timeout; needs Phase 1 bench tuning (roadmap 1.3)
+  mux_kill_switch_threshold_us: null  # firmware/safety_mux RC kill-switch threshold; needs Phase 1 bench measurement (roadmap 1.3)
 
 meta:
-  schema_version: "0.1.0"
+  schema_version: "0.2.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

@@ -225,7 +225,8 @@
       "additionalProperties": false,
       "required": [
         "min_angle_rad", "max_angle_rad", "min_rate_rad_per_s", "max_rate_rad_per_s",
-        "time_constant_s", "pwm_to_angle_table"
+        "time_constant_s", "pwm_to_angle_table",
+        "pwm_min_us", "pwm_max_us", "pwm_neutral_us"
       ],
       "properties": {
         "min_angle_rad": {
@@ -262,13 +263,31 @@
           "maxItems": 32,
           "items": {"$ref": "#/$defs/pwm_angle_point"},
           "description": "Calibrated servo PWM <-> road-wheel-angle table (claude-docs/06-vehicle-params.md). Null (not assumed linear) until measured."
+        },
+        "pwm_min_us": {
+          "type": ["number", "null"], "minimum": 500, "maximum": 2500,
+          "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "Minimum valid steering-servo PWM pulse width, used by firmware/safety_mux (roadmap task 1.3) to reject an out-of-range/glitched Jetson-side steering signal before passing it to the servo. Added for milestone 4 (hardware-arrival prep); null until Phase 1 bench measurement against the actual servo/receiver pair."
+        },
+        "pwm_max_us": {
+          "type": ["number", "null"], "minimum": 500, "maximum": 2500,
+          "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "Maximum valid steering-servo PWM pulse width, used by firmware/safety_mux (roadmap task 1.3) to reject an out-of-range/glitched Jetson-side steering signal before passing it to the servo. Added for milestone 4 (hardware-arrival prep); null until Phase 1 bench measurement against the actual servo/receiver pair."
+        },
+        "pwm_neutral_us": {
+          "type": ["number", "null"], "minimum": 500, "maximum": 2500,
+          "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "Steering-servo PWM pulse width firmware/safety_mux (roadmap task 1.3) outputs when cutting (kill switch, watchdog timeout, or invalid input) -- centered/straight, not merely 'no signal', so the failsafe does not depend on the servo's own signal-loss behavior. Added for milestone 4; null until Phase 1 bench measurement."
         }
       }
     },
     "actuation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["command_to_torque_delay_s", "throttle_time_constant_s", "max_acceleration_mps2"],
+      "required": [
+        "command_to_torque_delay_s", "throttle_time_constant_s", "max_acceleration_mps2",
+        "throttle_pwm_min_us", "throttle_pwm_max_us", "throttle_pwm_neutral_us"
+      ],
       "properties": {
         "command_to_torque_delay_s": {
           "type": ["number", "null"], "minimum": 0, "maximum": 2,
@@ -285,6 +304,21 @@
           "units": "m/s^2",
           "sign_convention": "positive = forward acceleration",
           "description": "Maximum achievable longitudinal acceleration."
+        },
+        "throttle_pwm_min_us": {
+          "type": ["number", "null"], "minimum": 500, "maximum": 2500,
+          "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "Minimum valid ESC/throttle PWM pulse width, used by firmware/safety_mux (roadmap task 1.3) to reject an out-of-range/glitched Jetson-side throttle signal before passing it to the ESC. Added for milestone 4 (hardware-arrival prep); null until Phase 1 bench measurement against the actual ESC/receiver pair."
+        },
+        "throttle_pwm_max_us": {
+          "type": ["number", "null"], "minimum": 500, "maximum": 2500,
+          "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "Maximum valid ESC/throttle PWM pulse width, used by firmware/safety_mux (roadmap task 1.3) to reject an out-of-range/glitched Jetson-side throttle signal before passing it to the ESC. Added for milestone 4 (hardware-arrival prep); null until Phase 1 bench measurement against the actual ESC/receiver pair."
+        },
+        "throttle_pwm_neutral_us": {
+          "type": ["number", "null"], "minimum": 500, "maximum": 2500,
+          "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "ESC PWM pulse width firmware/safety_mux (roadmap task 1.3) outputs when cutting (kill switch, watchdog timeout, or invalid input) -- the ESC's documented zero-throttle/brake-neutral value, not merely 'no signal'. Added for milestone 4; null until Phase 1 bench measurement."
         }
       }
     },
@@ -302,7 +336,8 @@
       "additionalProperties": false,
       "required": [
         "global_speed_cap_mps", "min_velocity_mps", "ttc_warning_s", "ttc_brake_s",
-        "envelope_fraction_speed", "envelope_fraction_lateral_accel"
+        "envelope_fraction_speed", "envelope_fraction_lateral_accel",
+        "mux_watchdog_timeout_s", "mux_kill_switch_threshold_us"
       ],
       "properties": {
         "global_speed_cap_mps": {
@@ -336,6 +371,16 @@
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1,
           "units": "dimensionless (fraction of friction-limited lateral accel)",
           "description": "Envelope fraction of the friction-limited lateral acceleration the residual policy may command. Null until tuned (claude-docs/08-learning.md)."
+        },
+        "mux_watchdog_timeout_s": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 5,
+          "units": "s",
+          "description": "Layer-1 safety mux (firmware/safety_mux, roadmap task 1.3, claude-docs/05-safety.md): how long the mux MCU waits with no Jetson-side heartbeat before cutting drive/steering PWM and asserting the power cutoff. This is a LAYER-1 constant read only by that firmware's C binding -- it must never be confused with racer_safety's layer-3 /drive_raw watchdog (watchdog_missed_cycles * control_period_s in gate_logic.hpp), which is a separate mechanism on a separate MCU by design. Added for milestone 4 (hardware-arrival prep); null until Phase 1 bench tuning."
+        },
+        "mux_kill_switch_threshold_us": {
+          "type": ["number", "null"], "minimum": 500, "maximum": 2500,
+          "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "Layer-1 safety mux (firmware/safety_mux, roadmap task 1.3): PWM pulse width read from the RC receiver's kill-switch channel at or above which the switch reads as ARMED (drive enabled); below this, or outside the receiver's valid PWM range, reads as KILL (fail-safe default). Added for milestone 4; null until the RC receiver/transmitter pair is bench-measured."
         }
       }
     },

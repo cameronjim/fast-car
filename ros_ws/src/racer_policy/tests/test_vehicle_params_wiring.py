@@ -23,9 +23,10 @@ from racer_policy.verify import verify_against_environment
 def test_accepts_when_contract_matches_the_real_committed_params(
     tmp_path: Path, valid_manifest: dict[str, Any], real_vehicle_params: Any
 ) -> None:
-    # config/vehicle_params.yaml currently has meta.schema_version = "0.1.0" and
-    # meta.sysid_session_id = "none-preliminary" -- the same values `_TEMPLATE` in
-    # conftest.py records under `vehicle_params`, by construction.
+    # config/vehicle_params.yaml currently has meta.schema_version = "0.2.0" (bumped from
+    # "0.1.0" for milestone 4, roadmap task 1.3) and meta.sysid_session_id =
+    # "none-preliminary" -- the same values `_TEMPLATE` in conftest.py records under
+    # `vehicle_params`, by construction.
     assert (
         valid_manifest["vehicle_params"]["schema_version"]
         == real_vehicle_params.meta.schema_version

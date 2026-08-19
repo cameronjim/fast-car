@@ -12,6 +12,7 @@ import math
 import numpy as np
 import pytest
 from racer_gym_bridge.conversions import (
+    build_occupancy_grid_fields,
     build_odom_fields,
     build_scan_fields,
     drive_cmd_to_action,
@@ -100,6 +101,97 @@ class TestBuildScanFields:
     def test_empty_beams_raises(self):
         with pytest.raises(ValueError):
             build_scan_fields([], fov_rad=4.7, range_min=0.0, range_max=30.0)
+
+
+class TestBuildOccupancyGridFields:
+    def test_all_free_map_is_a_synthetic_track_like_uniform_255(self):
+        # f1tenth_gym's Track.from_refline (this bridge's default synthetic track, and its
+        # closed-loop raceline tracks) builds a uniform all-free occupancy_map of 255.0.
+        occupancy_map = np.full((4, 6), 255.0, dtype=np.float32)
+        fields = build_occupancy_grid_fields(
+            occupancy_map=occupancy_map,
+            resolution=0.05,
+            origin=(1.0, -2.0, 0.0),
+            negate=False,
+            occupied_thresh=0.65,
+            free_thresh=0.196,
+        )
+        assert fields.height == 4
+        assert fields.width == 6
+        assert fields.resolution == pytest.approx(0.05)
+        assert fields.origin_position == (1.0, -2.0, 0.0)
+        assert fields.origin_orientation == yaw_to_quaternion(0.0)
+        assert len(fields.data) == 4 * 6
+        assert all(v == 0 for v in fields.data), "an all-255 (free) map must decode to all-0"
+
+    def test_black_pixels_are_occupied_white_pixels_are_free(self):
+        # Same binarization Track.from_track_name itself applies (pixel > 128 -> 255 free,
+        # <= 128 -> 0 occupied) -- 0 must map to ROS "occupied" (100), 255 to "free" (0).
+        occupancy_map = np.array([[0.0, 255.0], [255.0, 0.0]], dtype=np.float32)
+        fields = build_occupancy_grid_fields(
+            occupancy_map=occupancy_map,
+            resolution=0.05,
+            origin=(0.0, 0.0, 0.0),
+            negate=False,
+            occupied_thresh=0.65,
+            free_thresh=0.196,
+        )
+        assert fields.data == [100, 0, 0, 100]
+
+    def test_negate_flips_the_interpretation(self):
+        occupancy_map = np.array([[0.0, 255.0]], dtype=np.float32)
+        fields = build_occupancy_grid_fields(
+            occupancy_map=occupancy_map,
+            resolution=0.05,
+            origin=(0.0, 0.0, 0.0),
+            negate=True,
+            occupied_thresh=0.65,
+            free_thresh=0.196,
+        )
+        # negate=True: raw pixel/255 IS the occupied probability, so 0 -> free, 255 -> occupied.
+        assert fields.data == [0, 100]
+
+    def test_mid_gray_between_thresholds_is_unknown(self):
+        # 128/255 ~= 0.502 occupied-probability (negate=False -> (255-128)/255 = 0.498),
+        # strictly between free_thresh=0.196 and occupied_thresh=0.65 -> unknown (-1).
+        occupancy_map = np.array([[128.0]], dtype=np.float32)
+        fields = build_occupancy_grid_fields(
+            occupancy_map=occupancy_map,
+            resolution=0.05,
+            origin=(0.0, 0.0, 0.0),
+            negate=False,
+            occupied_thresh=0.65,
+            free_thresh=0.196,
+        )
+        assert fields.data == [-1]
+
+    def test_data_is_row_major_matching_occupancy_grid_convention(self):
+        # Row 0 (y=origin) must come first, each row left-to-right (x increasing) -- this is
+        # nav_msgs/OccupancyGrid's required data[row * width + col] layout.
+        occupancy_map = np.array([[0.0, 255.0, 255.0], [255.0, 255.0, 0.0]], dtype=np.float32)
+        fields = build_occupancy_grid_fields(
+            occupancy_map=occupancy_map,
+            resolution=0.05,
+            origin=(0.0, 0.0, 0.0),
+            negate=False,
+            occupied_thresh=0.65,
+            free_thresh=0.196,
+        )
+        assert fields.width == 3
+        assert fields.height == 2
+        assert fields.data == [100, 0, 0, 0, 0, 100]
+
+    def test_origin_orientation_matches_yaw_to_quaternion(self):
+        occupancy_map = np.full((2, 2), 255.0, dtype=np.float32)
+        fields = build_occupancy_grid_fields(
+            occupancy_map=occupancy_map,
+            resolution=0.05,
+            origin=(0.0, 0.0, 1.2),
+            negate=False,
+            occupied_thresh=0.65,
+            free_thresh=0.196,
+        )
+        assert fields.origin_orientation == yaw_to_quaternion(1.2)
 
 
 class TestBuildOdomFields:

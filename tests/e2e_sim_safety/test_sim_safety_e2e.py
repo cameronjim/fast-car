@@ -27,8 +27,8 @@ import launch_testing.asserts
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
-from nav_msgs.msg import Odometry
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 _TEST_SEED = 21
 _BRIDGE_STEP_RATE_HZ = 50.0
@@ -44,6 +44,15 @@ _MIN_PROGRESS_M = 0.5  # generous: at ~3 m/s for 3s minus rate-limit ramp-up, ex
 def _reliable_qos() -> QoSProfile:
     return QoSProfile(
         reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10
+    )
+
+
+def _transient_local_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=1,
     )
 
 
@@ -180,6 +189,23 @@ class TestSimSafetyE2e(unittest.TestCase):
             "simulated vehicle did not slow down after the watchdog zeroed /drive -- the "
             "brake command does not appear to be reaching the sim",
         )
+
+    def test_sim_map_is_latched_in_the_real_command_path_graph(self):
+        """Milestone 2 (cheap extension, per claude-docs/12-testing.md): bridge_node is
+        already launched in this real command-path graph, so a single latched-/sim/map
+        assertion here is nearly free and proves the map publisher works alongside
+        safety_node in the exact graph shape this e2e test exists to exercise -- the
+        dedicated latch/QoS/TF coverage lives in
+        sim/bridge/racer_gym_bridge/test/test_bridge_node.py."""
+        received = []
+        self.node.create_subscription(
+            OccupancyGrid, "/sim/map", received.append, _transient_local_qos()
+        )
+        self._spin_for(2.0)
+        self.assertEqual(len(received), 1, "expected exactly one latched /sim/map message")
+        self.assertEqual(received[0].header.frame_id, "map")
+        self.assertGreater(received[0].info.width, 0)
+        self.assertGreater(received[0].info.height, 0)
 
 
 @launch_testing.post_shutdown_test()

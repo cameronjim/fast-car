@@ -33,6 +33,11 @@ ros_ws/log/
 sim/bridge/build/
 sim/bridge/install/
 sim/bridge/log/
+# .github/scripts/e2e_sim_safety_test.sh (and similarly-shaped combined-workspace scripts)
+# run `colcon test` from the repo root with no --log-base override, so colcon's own default
+# ./log lands at the repo root when that script is run locally (bind-mounted, unlike CI's
+# ephemeral runner workspace) -- found while verifying milestone 3 locally.
+/log/
 
 # macOS
 .DS_Store

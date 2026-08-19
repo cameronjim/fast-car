@@ -1,9 +1,11 @@
 """L3 node tests for tracker_node (claude-docs/12-testing.md).
 
-Checklist covered: correct behavior on nominal input; correct behavior on silence (the
-watchdog path); correct QoS (a genuinely `reliable` subscription rejects a `best_effort`
-publisher); clean shutdown. Uses the `test/fixtures/tiny_raceline.csv` fixture already used
-by test_raceline.cpp's C++ gtest -- same file, two languages independently parsing it.
+Checklist covered: correct behavior on nominal input, including that the commanded speed
+genuinely ramps (racer_control::SpeedRateLimiter, roadmap milestone 3) rather than jumping
+straight to the raceline's raw target; correct behavior on silence (the watchdog path);
+correct QoS (a genuinely `reliable` subscription rejects a `best_effort` publisher); clean
+shutdown. Uses the `test/fixtures/tiny_raceline.csv` fixture already used by
+test_raceline.cpp's C++ gtest -- same file, two languages independently parsing it.
 """
 
 from __future__ import annotations
@@ -107,6 +109,17 @@ class TestTrackerNode(unittest.TestCase):
             rclpy.spin_once(self.node, timeout_sec=0.05)
 
     def test_drive_raw_is_plausible_on_nominal_odom(self):
+        """Also the node-level proof that tracker_node actually wires
+        racer_control::SpeedRateLimiter in with real elapsed time (not just that class's own
+        gtest suite in isolation): checked EARLY (well before the ~0.32s ramp time to the
+        raceline's raw 3.0 m/s target completes) and then LATE (once it has). This relies on
+        this test method running against a genuinely fresh tracker_node process with no
+        commanded speed history yet -- true here because unittest runs a TestCase's methods
+        in alphabetical-by-name order and this is alphabetically first in this class, so it
+        is the first to ever publish /odom to this launch's one long-lived tracker_node
+        process; a LATER test method in this class must not rely on the same assumption,
+        since by then the rate limiter's internal "previous commanded speed" state has
+        already been driven up by this test."""
         received = []
         self.node.create_subscription(
             AckermannDriveStamped, "/drive_raw", received.append, _reliable_qos()
@@ -115,12 +128,28 @@ class TestTrackerNode(unittest.TestCase):
 
         self._spin_for(0.5)  # let discovery settle
         odom_msg = _make_odom(x=0.3, y=0.0)
-        end = time.time() + 3.0
+
+        early_end = time.time() + 0.1  # well inside the ~0.32s ramp time to 3.0 m/s
+        while time.time() < early_end:
+            odom_pub.publish(odom_msg)
+            rclpy.spin_once(self.node, timeout_sec=0.02)
+        self.assertGreater(len(received), 0, "no early /drive_raw messages received")
+        self.assertLess(
+            received[-1].drive.speed,
+            2.0,
+            "tracker_node's commanded speed reached near-target too quickly -- the "
+            "acceleration rate limit does not appear to be applied",
+        )
+
+        # Milestone 3: tracker_node rate-limits its own commanded speed to
+        # vehicle_params.actuation.max_acceleration_mps2 (racer_control::SpeedRateLimiter,
+        # see tracker_node.cpp's header comment) rather than jumping straight to the
+        # raceline's raw target speed -- publish/spin for comfortably longer than the ~0.32s
+        # ramp time before checking the LAST received message for eventual convergence.
+        end = time.time() + 2.0
         while time.time() < end:
             odom_pub.publish(odom_msg)
             rclpy.spin_once(self.node, timeout_sec=0.05)
-            if len(received) >= 3:
-                break
 
         self.assertGreater(len(received), 0, "tracker_node published no /drive_raw on nominal odom")
         msg = received[-1]
@@ -128,7 +157,7 @@ class TestTrackerNode(unittest.TestCase):
         self.assertTrue(math.isfinite(msg.drive.speed))
         self.assertLessEqual(abs(msg.drive.steering_angle), 0.4189 + 1e-3)
         # The fixture raceline's nearest point to (0.3, 0) is (0, 0), speed 3.0 m/s
-        # (see tiny_raceline.csv).
+        # (see tiny_raceline.csv) -- by now the rate-limited ramp has had time to converge.
         self.assertAlmostEqual(msg.drive.speed, 3.0, places=3)
 
     def test_drive_raw_stops_when_odom_goes_silent(self):

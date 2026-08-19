@@ -60,6 +60,19 @@ jobs:
       - name: pytest + coverage gates per package
         run: .github/scripts/run_python_tests.sh
 
+  safety-mux-host-tests:
+    name: firmware/safety_mux host-logic tests (gcc, no Pico SDK)
+    runs-on: ubuntu-latest
+    # Roadmap task 1.3 DRAFT (claude-docs/05-safety.md layer 1). Bare ubuntu-latest + system
+    # gcc -- no Docker image, no ROS, no Pico SDK/arm-none-eabi cross-compiler. See
+    # .github/scripts/safety_mux_host_tests.sh's header comment for why the Pico SDK glue
+    # (firmware/safety_mux/pico/) is deliberately NOT built here.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compile + run firmware/safety_mux host-logic tests
+        run: .github/scripts/safety_mux_host_tests.sh
+
   l3-and-cpp:
     name: L3 node tests + C++ build (ros-dev)
     runs-on: ubuntu-latest
@@ -228,6 +241,31 @@ jobs:
         run: |
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/e2e_sim_safety_test.sh"
+
+  docker-car-lint:
+    name: docker/car Dockerfile lint (hadolint, no build)
+    runs-on: ubuntu-latest
+    # Roadmap task 1.4: docker/car builds ON the Jetson (arm64, JetPack 6/L4T), which no
+    # GitHub-hosted runner can do -- there is no arm64 L4T base image support and no
+    # trustworthy way to emulate JetPack/CUDA well enough for "does this build" to mean
+    # anything (see docker/car/README.md's "What is and isn't verified" table). The only
+    # thing CI does for this image is a Dockerfile STATIC lint with hadolint (a single pinned
+    # binary, no `docker build` attempted, no image produced). `.hadolint.yaml` at the repo
+    # root documents the two warning classes intentionally silenced (apt/pip version pinning
+    # -- see that file's comments for why, mirroring docker/ros-dev/Dockerfile's already-
+    # documented tradeoff on the same point).
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install hadolint (pinned static binary)
+        run: |
+          curl -sSL -o /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+          hadolint --version
+
+      - name: hadolint docker/car/Dockerfile
+        run: hadolint docker/car/Dockerfile
 
   changes:
     name: Detect changed paths

@@ -75,9 +75,31 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
 
 - [ ] 1.1 Assemble chassis, motor, ESC (VESC), servo; bench-test with wheels off ground
 - [ ] 1.2 Power tree per `11-hardware.md`; rail-voltage logging proven on bench
-- [ ] 1.3 Layer-1 safety: RC mux + power cutoff on independent MCU; kill tested with Jetson
+- [~] 1.3 Layer-1 safety: RC mux + power cutoff on independent MCU; kill tested with Jetson
       frozen (actually freeze it and prove the cut)
-- [ ] 1.4 `car` image on Jetson (JetPack 6 base); SSH workflow from Mac documented
+      2026-08-23: firmware/safety_mux/ drafted (milestone 4) -- mux state machine, watchdog
+      timing, RC switch interpretation, and PWM validity checks are pure C
+      (firmware/safety_mux/logic/), table-driven and host-tested (gcc -Wall -Wextra -Werror
+      -Wpedantic, every branch, CI job safety-mux-host-tests). The Pico SDK glue
+      (firmware/safety_mux/pico/) and CMakeLists.txt are written but UNVERIFIED: no Pico SDK/
+      arm-none-eabi-gcc toolchain exists in this repo's containers or in CI, so none of it has
+      ever compiled for or run on a real RP2040. New vehicle_params fields this firmware needs
+      (steering.pwm_{min,max,neutral}_us, actuation.throttle_pwm_{min,max,neutral}_us,
+      limits.mux_watchdog_timeout_s, limits.mux_kill_switch_threshold_us) are added to the
+      schema, all `null` pending Phase 1 bench measurement (schema_version bumped 0.1.0 ->
+      0.2.0). The roadmap 1.3 kill test (Jetson actually frozen, cut proven, human present)
+      remains the only thing that makes this real -- see firmware/safety_mux/README.md and
+      docs/notes/hardware-arrival-checklist.md section 3. Still `[~]`, not `[x]`.
+- [~] 1.4 `car` image on Jetson (JetPack 6 base); SSH workflow from Mac documented
+      2026-08-23: docker/car/ (milestone 4) authored -- Dockerfile (JetPack 6.1 / L4T
+      r36.4.0 base pinned by tag + digest, ROS 2 Humble via the ROS apt repo, Jetson torch via
+      an explicit build-arg wheel URL the build refuses to guess, racer runtime Python deps
+      via a uv-locked linux/aarch64 lockfile) plus build_on_jetson.md's owner procedure. Never
+      built or run anywhere -- no arm64/L4T hardware or trustworthy emulation exists in this
+      repo's dev containers or in CI; CI runs a hadolint static-lint pass only (job
+      docker-car-lint), no `docker build`. See docker/car/README.md's "What is and isn't
+      verified" table. SSH build-and-launch workflow is documented in build_on_jetson.md but,
+      per the same table, unexecuted. Still `[~]`, not `[x]`.
 - [ ] 1.5 VESC driver node up; current-mode teleop via RC through the mux
 - [ ] 1.6 rosbag logging of every drive, including rail voltage — verified before gate
 

@@ -15,13 +15,15 @@ setup(
     maintainer="cameronjim",
     maintainer_email="64621038+cameronjim@users.noreply.github.com",
     description=(
-        "Teleop, bag utilities, timing-gate reader (roadmap milestone 1: keyboard_teleop_node)."
+        "Teleop, bag utilities, timing-gate reader (roadmap milestone 1: keyboard_teleop_node; "
+        "milestone 3: raceline_publisher_node)."
     ),
     license="TODO: License declaration",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "keyboard_teleop_node = racer_tools.keyboard_teleop_node:main",
+            "raceline_publisher_node = racer_tools.raceline_publisher_node:main",
         ],
     },
 )

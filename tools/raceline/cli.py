@@ -1,13 +1,29 @@
 """CLI entry point: generate a committed raceline file for a track.
 
 Run by a person (or a one-off CI regeneration step), never imported by anything on the
-control path. Currently only knows the ``stadium`` synthetic track generator
-(``synthetic_tracks.stadium_centerline``) -- the network-free reference track this task
-commits one raceline for. A real venue map / occupancy-grid input would be a separate
-``--track-mask <path>`` mode built on ``occupancy.py`` when a real map exists.
+control path. Two ways to get an input centerline (the OPTIMIZER pipeline itself --
+resample, smooth, geometry, friction/accel-limited speed profile, all of
+``raceline.build_raceline_from_centerline`` -- is identical either way, never duplicated or
+rewritten):
+
+  - the default ``stadium`` synthetic track generator (``synthetic_tracks.stadium_centerline``
+    -- the network-free reference track roadmap task S.2 committed one raceline for, e.g.
+    ``gym_oval``); or
+  - ``--centerline-csv <path>`` (roadmap milestone 5): an externally-sourced centerline CSV
+    (``raceline.io.read_external_centerline_csv`` -- e.g. a real f1tenth_gym-shipped map's own
+    centerline, vendored once as ``config/tracks/<track_id>/source_centerline.csv`` for
+    network-free reproducibility, see that file's own header comment for why it is not fetched
+    at runtime/CI time).
+
+A real venue map / occupancy-grid input would be a separate ``--track-mask <path>`` mode
+built on ``occupancy.py`` when a real map exists.
 
 Usage:
     python -m raceline.cli --track-id gym_oval --straight-length-m 8.0 --turn-radius-m 3.0 \
+        --out-dir <repo_root>/config/tracks
+
+    python -m raceline.cli --track-id oschersleben \
+        --centerline-csv <repo_root>/config/tracks/oschersleben/source_centerline.csv \
         --out-dir <repo_root>/config/tracks
 """
 
@@ -17,7 +33,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from raceline.io import write_raceline_csv
+from raceline.io import read_external_centerline_csv, write_raceline_csv
 from raceline.params_loader import load_vehicle_params
 from raceline.raceline import build_raceline_from_centerline
 from raceline.synthetic_tracks import stadium_centerline
@@ -28,6 +44,17 @@ DEFAULT_OUT_DIR = Path("config/tracks")
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--track-id", required=True, help="e.g. gym_oval (venue_layout)")
+    parser.add_argument(
+        "--centerline-csv",
+        type=Path,
+        default=None,
+        help=(
+            "Load the input centerline from this CSV (raceline.io."
+            "read_external_centerline_csv) instead of generating the synthetic stadium shape. "
+            "Mutually exclusive with --straight-length-m/--turn-radius-m/--points-per-meter, "
+            "which only apply to the synthetic generator."
+        ),
+    )
     parser.add_argument("--straight-length-m", type=float, default=8.0)
     parser.add_argument("--turn-radius-m", type=float, default=3.0)
     parser.add_argument("--points-per-meter", type=float, default=10.0)
@@ -49,9 +76,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    x, y = stadium_centerline(
-        args.straight_length_m, args.turn_radius_m, points_per_meter=args.points_per_meter
-    )
+    if args.centerline_csv is not None:
+        x, y = read_external_centerline_csv(args.centerline_csv)
+        track_shape = "external_centerline"
+        shape_generation_params = {"source_centerline_csv": str(args.centerline_csv)}
+    else:
+        x, y = stadium_centerline(
+            args.straight_length_m, args.turn_radius_m, points_per_meter=args.points_per_meter
+        )
+        track_shape = "stadium"
+        shape_generation_params = {
+            "straight_length_m": args.straight_length_m,
+            "turn_radius_m": args.turn_radius_m,
+            "points_per_meter": args.points_per_meter,
+        }
+
     result = build_raceline_from_centerline(
         x,
         y,
@@ -70,10 +109,8 @@ def main(argv: list[str] | None = None) -> int:
         vehicle_params_schema_version=vehicle_params.meta.schema_version,
         vehicle_params_sysid_session_id=vehicle_params.meta.sysid_session_id,
         generation_params={
-            "track_shape": "stadium",
-            "straight_length_m": args.straight_length_m,
-            "turn_radius_m": args.turn_radius_m,
-            "points_per_meter": args.points_per_meter,
+            "track_shape": track_shape,
+            **shape_generation_params,
             "resample_ds_m": args.resample_ds_m,
             "smooth_window": args.smooth_window,
             "a_lat_max_mps2": a_max,

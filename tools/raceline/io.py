@@ -117,6 +117,47 @@ def _parse_provenance(header_lines: list[str]) -> Provenance:
     )
 
 
+def read_external_centerline_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read an externally-sourced closed-loop centerline CSV and return its ``(x_m, y_m)``
+    arrays -- the raw input `raceline.build_raceline_from_centerline` (the EXISTING S.2
+    optimizer pipeline, unmodified) needs, same as `synthetic_tracks.stadium_centerline`
+    already provides for the synthetic case.
+
+    Format (matches f1tenth_racetracks' own centerline export, e.g. `config/tracks/
+    oschersleben/source_centerline.csv`): an optional leading ``#``-commented provenance
+    block (skipped), then a header line whose first field is non-numeric (also skipped, so
+    this tolerates a plain ``x_m, y_m, ...`` header OR no header at all), then one row per
+    point with ``x_m`` and ``y_m`` as the FIRST TWO comma-separated fields -- any further
+    columns (e.g. f1tenth_racetracks' track-width columns) are ignored, since this repo's
+    bridge has no real occupancy-map/wall model to use them with yet (see
+    `config/tracks/oschersleben/source_centerline.csv`'s own header comment).
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError(f"centerline file not found: {path}")
+
+    xs: list[float] = []
+    ys: list[float] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            fields = next(csv.reader([line]))
+            if len(fields) < 2:
+                continue
+            try:
+                x = float(fields[0])
+                y = float(fields[1])
+            except ValueError:
+                continue  # a non-numeric header row -- skip, not an error (see docstring)
+            xs.append(x)
+            ys.append(y)
+
+    if not xs:
+        raise ValueError(f"{path}: no numeric (x_m, y_m) rows found")
+    return np.array(xs), np.array(ys)
+
+
 def read_raceline_csv(path: Path) -> tuple[Raceline, Provenance]:
     path = Path(path)
     header_lines: list[str] = []

@@ -229,3 +229,11 @@ Rebuilt `ros-dev:local` from the changed Dockerfile, then inside it:
   for "a demo tool's websocket server starts," and adding one felt like scope creep for a
   visualization-only milestone. If that judgment is wrong, easy to add a path-filtered job
   mirroring the `curl` check above.
+
+## Milestone 5 addendum (2026-08-23)
+
+`foxglove_sim_viz.layout.json`'s panel layout tree changed shape: the right-hand column now
+nests a Teleop panel below the existing speed-plot/safety-events pair (three panels stacked in
+that column instead of two side by side). See docs/notes/milestone-5-browser-teleop.md for
+the new panel and the demo procedure that uses it; everything else this note describes about
+the 3D panel, `/sim/map`, TF, and `/scan` is unchanged.

@@ -79,6 +79,14 @@
       "topicPath": "/safety/events",
       "fontSize": 12,
       "expansion": "auto"
+    },
+    "Teleop!browserteleop": {
+      "topic": "/teleop/cmd_vel",
+      "publishRate": 5,
+      "upButton": { "field": "linear-x", "value": 2 },
+      "downButton": { "field": "linear-x", "value": -1.5 },
+      "leftButton": { "field": "angular-z", "value": 1.5 },
+      "rightButton": { "field": "angular-z", "value": -1.5 }
     }
   },
   "globalVariables": {},
@@ -87,9 +95,14 @@
   "layout": {
     "first": "3D!simviz",
     "second": {
-      "first": "Plot!drivespeed",
-      "second": "RawMessages!safetyevents",
-      "direction": "column"
+      "first": {
+        "first": "Plot!drivespeed",
+        "second": "RawMessages!safetyevents",
+        "direction": "column"
+      },
+      "second": "Teleop!browserteleop",
+      "direction": "column",
+      "splitPercentage": 70
     },
     "direction": "row",
     "splitPercentage": 65

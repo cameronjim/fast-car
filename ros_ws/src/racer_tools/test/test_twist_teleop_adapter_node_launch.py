@@ -39,7 +39,11 @@ from launch_ros.actions import Node as LaunchNode
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 _TEST_INPUT_TOPIC = "/test/teleop/cmd_vel"
-_TEST_TIMEOUT_S = 0.3
+# Generous relative to a 50 Hz control period so every "assert this arrived before the
+# timeout" check below has real margin against CI-runner scheduling/message-delivery latency
+# (a much shorter value here was observed flaky on a loaded CI runner: a published Twist
+# occasionally had not yet been converted and republished within a 0.15s window).
+_TEST_TIMEOUT_S = 1.0
 
 
 def _reliable_qos() -> QoSProfile:
@@ -91,6 +95,19 @@ class TestTwistTeleopAdapterNode(unittest.TestCase):
         while time.time() < end:
             rclpy.spin_once(self.node, timeout_sec=0.05)
 
+    def _spin_until(self, predicate, timeout_s: float) -> bool:
+        """Spin until `predicate()` is true or `timeout_s` elapses; returns whether it was
+        satisfied. Used instead of a single fixed `_spin_for` wherever a test needs "this
+        specific thing happened" rather than "some fixed amount of wall time passed" -- a
+        fixed short sleep proved flaky on a more loaded CI runner (message delivery/scheduling
+        latency, not a node bug)."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            rclpy.spin_once(self.node, timeout_sec=0.02)
+            if predicate():
+                return True
+        return predicate()
+
     def _publish_twist(self, linear_x: float, angular_z: float) -> None:
         msg = Twist()
         msg.linear.x = linear_x
@@ -119,33 +136,38 @@ class TestTwistTeleopAdapterNode(unittest.TestCase):
         received.clear()
 
         self._publish_twist(linear_x=2.0, angular_z=1.0)
-        # Comfortably under _TEST_TIMEOUT_S (0.3s) -- this test is about nominal conversion,
-        # not the timeout boundary (see the dedicated timeout test below for that).
-        self._spin_for(0.15)
-
-        self.assertGreater(len(received), 0)
+        # Poll for the conversion to show up, comfortably under _TEST_TIMEOUT_S -- this test
+        # is about nominal conversion, not the timeout boundary (see the dedicated timeout
+        # test below for that).
+        arrived = self._spin_until(
+            lambda: bool(received) and received[-1].drive.speed > 0.0,
+            timeout_s=_TEST_TIMEOUT_S / 2,
+        )
+        self.assertTrue(arrived, "expected the Twist to be converted onto /drive_raw")
         last = received[-1]
         self.assertAlmostEqual(last.drive.speed, 2.0, places=3)
         self.assertGreater(last.drive.steering_angle, 0.0)
 
     def test_republishes_the_latest_command_continuously_without_a_new_twist(self):
-        # Both spins below must together stay comfortably under _TEST_TIMEOUT_S (0.3s) --
-        # this test is specifically about the republish-latest behavior WHILE the command is
-        # still fresh, not the timeout-to-zero behavior (see the dedicated timeout test below
-        # for that).
+        # This test is specifically about the republish-latest behavior WHILE the command is
+        # still fresh, not the timeout-to-zero behavior (see the dedicated timeout test
+        # below) -- every wait here stays comfortably under _TEST_TIMEOUT_S.
         received = []
         self.node.create_subscription(
             AckermannDriveStamped, "/drive_raw", received.append, _reliable_qos()
         )
         self._spin_for(0.2)
         self._publish_twist(linear_x=1.5, angular_z=0.0)
-        self._spin_for(0.05)
+        arrived = self._spin_until(
+            lambda: bool(received) and received[-1].drive.speed > 0.0,
+            timeout_s=_TEST_TIMEOUT_S / 2,
+        )
+        self.assertTrue(arrived, "expected the Twist to be converted onto /drive_raw")
         count_after_one_twist = len(received)
 
         # Long enough at 50 Hz to have republished several more times with no further Twist,
-        # short enough (0.05 + 0.15 = 0.2s since the one Twist) to stay well under
-        # _TEST_TIMEOUT_S.
-        self._spin_for(0.15)
+        # short enough to stay well under the remainder of _TEST_TIMEOUT_S.
+        self._spin_for(_TEST_TIMEOUT_S / 4)
         self.assertGreater(
             len(received),
             count_after_one_twist + 3,
@@ -160,10 +182,17 @@ class TestTwistTeleopAdapterNode(unittest.TestCase):
         self.node.create_subscription(
             AckermannDriveStamped, "/drive_raw", received.append, _reliable_qos()
         )
-        self._spin_for(0.2)
+        self._spin_for(0.2)  # let the subscription connect
         self._publish_twist(linear_x=3.0, angular_z=0.5)
-        self._spin_for(0.15)
-        self.assertGreater(received[-1].drive.speed, 0.0, "precondition: command went nonzero")
+
+        # Poll (rather than a single fixed sleep) for the command to go nonzero, comfortably
+        # under _TEST_TIMEOUT_S so this precondition check itself never races the
+        # timeout-to-zero behavior under test below.
+        arrived = self._spin_until(
+            lambda: bool(received) and received[-1].drive.speed > 0.0,
+            timeout_s=_TEST_TIMEOUT_S / 2,
+        )
+        self.assertTrue(arrived, "precondition: command went nonzero")
 
         # Wait well past _TEST_TIMEOUT_S with no further Twist.
         self._spin_for(_TEST_TIMEOUT_S + 0.5)

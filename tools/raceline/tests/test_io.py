@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
-from raceline.io import read_raceline_csv, write_raceline_csv
+import pytest
+from raceline.io import read_external_centerline_csv, read_raceline_csv, write_raceline_csv
 from raceline.raceline import Raceline
 
 
@@ -97,3 +98,54 @@ def test_written_file_uses_lf_line_endings_only(tmp_path):
     )
     raw = path.read_bytes()
     assert b"\r" not in raw, "written raceline CSV must use LF-only line endings, found a CR byte"
+
+
+# --------------------------------------------------------------------------------------
+# read_external_centerline_csv (roadmap milestone 5: real f1tenth_gym-map centerline input)
+# --------------------------------------------------------------------------------------
+
+
+def test_read_external_centerline_csv_parses_f1tenth_racetracks_format(tmp_path):
+    """Same shape as config/tracks/oschersleben/source_centerline.csv: a '#'-commented
+    provenance block, a non-numeric header row, then comma-space-separated
+    x_m, y_m, w_tr_right_m, w_tr_left_m rows -- only the first two columns are used."""
+    path = tmp_path / "source_centerline.csv"
+    path.write_text(
+        "# provenance line one\n"
+        "# provenance line two\n"
+        "# x_m, y_m, w_tr_right_m, w_tr_left_m\n"
+        "0.0, 0.0, 1.1, 1.1\n"
+        "1.0, 0.5, 1.1, 1.1\n"
+        "2.0, 0.0, 1.1, 1.1\n"
+    )
+    x, y = read_external_centerline_csv(path)
+    np.testing.assert_allclose(x, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(y, [0.0, 0.5, 0.0])
+
+
+def test_read_external_centerline_csv_tolerates_no_header_row(tmp_path):
+    path = tmp_path / "centerline.csv"
+    path.write_text("0.0,0.0\n1.0,1.0\n2.0,0.0\n")
+    x, y = read_external_centerline_csv(path)
+    np.testing.assert_allclose(x, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(y, [0.0, 1.0, 0.0])
+
+
+def test_read_external_centerline_csv_ignores_blank_lines(tmp_path):
+    path = tmp_path / "centerline.csv"
+    path.write_text("# header\nx,y\n0.0,0.0\n\n1.0,1.0\n")
+    x, _y = read_external_centerline_csv(path)
+    assert len(x) == 2
+    np.testing.assert_allclose(x, [0.0, 1.0])
+
+
+def test_read_external_centerline_csv_missing_file_raises(tmp_path):
+    with pytest.raises(ValueError):
+        read_external_centerline_csv(tmp_path / "does_not_exist.csv")
+
+
+def test_read_external_centerline_csv_no_numeric_rows_raises(tmp_path):
+    path = tmp_path / "centerline.csv"
+    path.write_text("# only comments\nx_m,y_m\n")
+    with pytest.raises(ValueError):
+        read_external_centerline_csv(path)

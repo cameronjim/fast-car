@@ -1,0 +1,12 @@
+# Repo-wide ruff config for CI lint (claude-docs/10-conventions.md: "ruff for
+# lint + format (line length 100)"). This is deliberately the only shared
+# Python config file in the repo - it configures the lint tool itself, not
+# package dependencies, so it does not conflict with claude-docs/03-
+# environments.md's "never create a shared requirements file" rule (that
+# rule is about per-image dependency lockfiles, not lint style config).
+#
+# Each Python package still gets its own pyproject.toml with its own
+# dependencies per claude-docs/02-repo-layout.md; ruff picks up this root
+# config for all of them unless a package later opts to override it.
+line-length = 100
+target-version = "py310"

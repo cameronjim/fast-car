@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "racer_gym_version": "0.1.0",
+    "repo_commit": "6b22c46d85a7c3139244d7dff10d5f7e15763599",
+    "seed": 1234,
+    "vehicle_params_fallback_flags": {
+      "command_to_torque_delay": true,
+      "pacejka_front": true,
+      "pacejka_rear": true,
+      "steer_time_constant": true,
+      "throttle_time_constant": true,
+      "track_width": true
+    },
+    "vehicle_params_meta": {
+      "fit_date": "2026-08-22",
+      "schema_version": "0.1.0",
+      "sysid_session_id": "none-preliminary"
+    }
+  },
+  "records": [
+    {
+      "speed_target_mps": 1.5,
+      "steady_state_lateral_accel_mps2": 0.6226880533889928,
+      "steady_state_slip_angle_rad": -0.15901169278875643,
+      "steady_state_speed_mps": 1.4999999999909874,
+      "steady_state_yaw_rate_radps": 0.41512536892848945
+    },
+    {
+      "speed_target_mps": 2.5,
+      "steady_state_lateral_accel_mps2": 1.0525095379933134,
+      "steady_state_slip_angle_rad": -0.3210087290302575,
+      "steady_state_speed_mps": 2.499999999984516,
+      "steady_state_yaw_rate_radps": 0.42100381519993285
+    },
+    {
+      "speed_target_mps": 3.5,
+      "steady_state_lateral_accel_mps2": 1.2916792999665838,
+      "steady_state_slip_angle_rad": -0.4120195187819583,
+      "steady_state_speed_mps": 3.499999999974274,
+      "steady_state_yaw_rate_radps": 0.3690512285645937
+    }
+  ]
+}

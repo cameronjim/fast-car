@@ -56,13 +56,20 @@ run "tests/bench" report
 run "sim/bridge/racer_gym_bridge" report
 
 # Any other ros_ws Python package (racer_policy is handled above with its
-# explicit gate; C++-only packages like racer_safety/racer_control are
-# covered by the L3 + C++ (ros-dev) job instead, and pytest_gate.sh no-ops
-# cleanly on a directory with no .py source).
+# explicit gate; C++-only packages like racer_safety are covered by the L3 + C++
+# (ros-dev) job instead, and pytest_gate.sh no-ops cleanly on a directory with no .py
+# source). racer_control (roadmap task S.2) IS excluded here despite having .py files
+# (launch/tracker.launch.py, test/test_tracker_node_launch.py): both need rclpy/launch_ros/
+# launch_testing to do anything (the launch file only makes sense under `ros2 launch`; the
+# L3 test needs the real tracker_node executable colcon builds), so a bare `uv run pytest`
+# here has nothing meaningful to run -- unlike sim/bridge/racer_gym_bridge, it has no
+# ROS-free pure-Python logic of its own to test this way (its ROS-free logic is the C++
+# core, gtest-covered instead). It is exercised for real by the l3-and-cpp CI job (colcon
+# build + colcon test, including the L3 launch test) via ros_build_test.sh.
 if [ -d ros_ws/src ]; then
   for pkg_dir in ros_ws/src/*/; do
     pkg_name="$(basename "$pkg_dir")"
-    if [ "$pkg_name" = "racer_policy" ]; then
+    if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_control" ]; then
       continue
     fi
     run "$pkg_dir" report

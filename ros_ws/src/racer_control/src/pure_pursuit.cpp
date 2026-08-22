@@ -12,7 +12,7 @@ double PurePursuitController::lookahead_distance_m(double curvature_1pm) const {
 }
 
 PurePursuitCommand PurePursuitController::compute_command(const Raceline& raceline, double x_m,
-                                                            double y_m, double yaw_rad) const {
+                                                          double y_m, double yaw_rad) const {
   const std::size_t nearest = raceline.nearest_index(x_m, y_m);
   const RacelinePoint& nearest_point = raceline.at(nearest);
 
@@ -40,7 +40,7 @@ PurePursuitCommand PurePursuitController::compute_command(const Raceline& raceli
 
   double steering_angle_rad = std::atan(commanded_curvature_1pm * config_.wheelbase_m);
   steering_angle_rad = std::clamp(steering_angle_rad, -config_.max_steering_angle_rad,
-                                   config_.max_steering_angle_rad);
+                                  config_.max_steering_angle_rad);
 
   return PurePursuitCommand{steering_angle_rad, nearest_point.target_speed_mps};
 }

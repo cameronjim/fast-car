@@ -30,7 +30,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <stdexcept>
 #include <string>
-
 #include <vehicle_params_generated.hpp>
 
 #include "racer_control/pure_pursuit.hpp"
@@ -50,11 +49,11 @@ class TrackerNode : public rclcpp::Node {
 
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
         "/odom", command_qos, std::bind(&TrackerNode::on_odom, this, std::placeholders::_1));
-    drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(
-        "/drive_raw", command_qos);
+    drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive_raw",
+                                                                                    command_qos);
 
-    const double control_rate_hz = declare_positive_double(
-        "control_rate_hz", 50.0, "Control loop / /drive_raw publish rate.");
+    const double control_rate_hz =
+        declare_positive_double("control_rate_hz", 50.0, "Control loop / /drive_raw publish rate.");
     odom_timeout_s_ = declare_positive_double(
         "odom_timeout_s", 0.3,
         "Watchdog: stop publishing /drive_raw if /odom has been silent this long. Default "
@@ -62,9 +61,8 @@ class TrackerNode : public rclcpp::Node {
         "erring toward not tripping on ordinary jitter.");
 
     const auto period = std::chrono::duration<double>(1.0 / control_rate_hz);
-    timer_ = this->create_wall_timer(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-        std::bind(&TrackerNode::on_timer, this));
+    timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+                                     std::bind(&TrackerNode::on_timer, this));
 
     RCLCPP_INFO(this->get_logger(), "tracker_node up: %zu raceline point(s), %.1f Hz control rate",
                 raceline_.size(), control_rate_hz);
@@ -72,7 +70,7 @@ class TrackerNode : public rclcpp::Node {
 
  private:
   double declare_positive_double(const std::string& name, double default_value,
-                                  const std::string& description) {
+                                 const std::string& description) {
     rcl_interfaces::msg::ParameterDescriptor descriptor;
     descriptor.description = description;
     rcl_interfaces::msg::FloatingPointRange range;
@@ -92,8 +90,8 @@ class TrackerNode : public rclcpp::Node {
         this->declare_parameter<std::string>("raceline_path", "", descriptor);
     if (raceline_path.empty()) {
       RCLCPP_FATAL(this->get_logger(),
-                    "tracker_node: 'raceline_path' parameter is required and was not set. "
-                    "Refusing to start with no raceline (claude-docs/05-safety.md: fail closed).");
+                   "tracker_node: 'raceline_path' parameter is required and was not set. "
+                   "Refusing to start with no raceline (claude-docs/05-safety.md: fail closed).");
       throw std::runtime_error("tracker_node: missing required 'raceline_path' parameter");
     }
     try {
@@ -146,8 +144,7 @@ class TrackerNode : public rclcpp::Node {
 
   void on_timer() {
     const rclcpp::Time now = this->now();
-    const bool odom_stale =
-        !has_odom_ || (now - last_odom_stamp_).seconds() > odom_timeout_s_;
+    const bool odom_stale = !has_odom_ || (now - last_odom_stamp_).seconds() > odom_timeout_s_;
     if (odom_stale) {
       if (!watchdog_active_) {
         RCLCPP_WARN(this->get_logger(),

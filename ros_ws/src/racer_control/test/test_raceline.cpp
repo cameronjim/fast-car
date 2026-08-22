@@ -1,6 +1,4 @@
 // L1 tests for racer_control::Raceline (claude-docs/12-testing.md).
-#include "racer_control/raceline.hpp"
-
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -8,6 +6,8 @@
 #include <fstream>
 #include <string>
 #include <vector>
+
+#include "racer_control/raceline.hpp"
 
 namespace racer_control {
 namespace {

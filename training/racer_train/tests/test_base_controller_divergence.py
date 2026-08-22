@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from generate_divergence_fixture import (
     EXPECTED_PATH,
     LOOKAHEAD_CURVATURE_REF_1PM,
@@ -25,6 +26,16 @@ from generate_divergence_fixture import (
     STATES_PATH,
 )
 from racer_train.raceline import PurePursuitConfig, PurePursuitController, Raceline
+
+# Same tolerance ros_ws/src/racer_control/test/divergence/compare_divergence.py uses against
+# the C++ core -- not exact equality. `divergence_expected.json` was generated on whatever
+# machine last ran generate_divergence_fixture.py, and transcendental-function results
+# (atan, sin, cos in PurePursuitController.compute_command) can differ in the last ULP or two
+# between platforms/architectures for byte-identical Python source and inputs (observed in
+# practice: arm64 macOS vs. x86_64 Linux CI disagreed by ~5e-17 on one state) -- that is
+# libm, not a logic bug. A tolerance this tight still catches any real regression in the
+# ported algorithm while tolerating that noise.
+TOLERANCE = 1e-9
 
 
 def _load_states(path: Path) -> list[tuple[float, float, float]]:
@@ -56,5 +67,9 @@ def test_python_controller_reproduces_committed_expected_commands(real_vehicle_p
 
     for i, ((x_m, y_m, yaw_rad), expected_cmd) in enumerate(zip(states, expected)):
         cmd = controller.compute_command(raceline, x_m, y_m, yaw_rad)
-        assert cmd.steering_angle_rad == expected_cmd["steering_angle_rad"], f"state {i}"
-        assert cmd.speed_mps == expected_cmd["speed_mps"], f"state {i}"
+        assert cmd.steering_angle_rad == pytest.approx(
+            expected_cmd["steering_angle_rad"], abs=TOLERANCE
+        ), f"state {i}"
+        assert cmd.speed_mps == pytest.approx(expected_cmd["speed_mps"], abs=TOLERANCE), (
+            f"state {i}"
+        )

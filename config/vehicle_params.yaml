@@ -1,0 +1,95 @@
+# vehicle_params.yaml -- single source of physical truth (claude-docs/06-vehicle-params.md).
+#
+# PROVISIONAL FILE: no hardware exists yet and no sysid session has run (roadmap Phase 3 is
+# not started). Every numeric value that is filled in below is copied, not invented, from the
+# f1tenth_gym default vehicle parameters at:
+#
+#   https://github.com/f1tenth/f1tenth_gym  (v1.0.0 branch)
+#   commit 5a301bd0ae1ceaf7dec653e7549c8d099db58a6b
+#   f1tenth_gym/envs/f110_env.py, F110Env.default_config()["params"]
+#
+# which is also the exact commit this repo's docker/sim-cpu and docker/train-cuda images pin
+# f1tenth_gym to (see docker/sim-cpu/pyproject.toml). That default dict is:
+#
+#   mu=1.0489, C_Sf=4.718, C_Sr=5.4562, lf=0.15875, lr=0.17145, h=0.074, m=3.74, I=0.04712,
+#   s_min=-0.4189, s_max=0.4189, sv_min=-3.2, sv_max=3.2, v_switch=7.319, a_max=9.51,
+#   v_min=-5.0, v_max=20.0, width=0.31, length=0.58
+#
+# Fields with no analogue in that dict (drivetrain electrical constants, tire Pacejka fit,
+# wheel radius, servo dynamics, sensor extrinsics, TTC/envelope tuning) are genuinely unknown
+# until Phase 1-3 hardware work; the schema permits `null` for those and every one is
+# commented below with what unblocks it. This file validates strictly against
+# config/vehicle_params.schema.json (additionalProperties: false, required keys enforced) --
+# nothing here is a silently-missing key.
+#
+# meta.sysid_session_id = "none-preliminary" flags that this is NOT a fitted result.
+
+chassis:
+  mass_kg: 3.74                    # gym: m
+  wheelbase_m: 0.3302              # gym: lf + lr = 0.15875 + 0.17145
+  cg_to_front_axle_m: 0.15875      # gym: lf
+  cg_to_rear_axle_m: 0.17145       # gym: lr
+  track_width_m: null              # not modeled by the gym single-track model; needs Phase 1 chassis measurement
+  cg_height_m: 0.074               # gym: h
+  yaw_inertia_kg_m2: 0.04712       # gym: I
+  length_m: 0.58                   # gym: length (bounding box)
+  width_m: 0.31                    # gym: width (bounding box)
+
+tires:
+  surface_friction_coefficient: 1.0489               # gym: mu
+  linear_cornering_stiffness_front_n_per_rad: 4.718   # gym: C_Sf (placeholder for a full Pacejka fit)
+  linear_cornering_stiffness_rear_n_per_rad: 5.4562   # gym: C_Sr (placeholder for a full Pacejka fit)
+  pacejka_front: null               # needs Phase 3 sysid (constant-radius sweeps, see 07-sim-and-sysid.md)
+  pacejka_rear: null                # needs Phase 3 sysid
+  nominal_radius_m: null            # MEASURED + drift-tracked value; needs Phase 1 wheel measurement
+  compound_id: "unknown-pending-phase3-tire-spec"
+  surface_id: "unknown-pending-venue-survey"
+  kinematic_dynamic_switch_velocity_mps: 7.319        # gym: v_switch
+
+drivetrain:
+  gear_ratio: null                  # needs Phase 1 drivetrain assembly
+  pole_pairs: null                  # needs motor spec/measurement
+  motor_kv_rad_per_s_per_v: null    # needs motor spec, converted to SI at the driver boundary (CLAUDE.md invariant 4)
+  current_limit_a: null             # mirrors VESC layer-2 config, which does not exist yet
+  brake_current_limit_a: null       # mirrors VESC layer-2 config, which does not exist yet
+
+steering:
+  min_angle_rad: -0.4189            # gym: s_min
+  max_angle_rad: 0.4189             # gym: s_max
+  min_rate_rad_per_s: -3.2          # gym: sv_min
+  max_rate_rad_per_s: 3.2           # gym: sv_max
+  time_constant_s: null             # needs Phase 2/3 measurement
+  pwm_to_angle_table: null          # not assumed linear; needs Phase 2/3 calibration
+
+actuation:
+  command_to_torque_delay_s: null   # needs Phase 2/3 measurement
+  throttle_time_constant_s: null    # needs Phase 2/3 measurement
+  max_acceleration_mps2: 9.51       # gym: a_max
+
+sensors:
+  imu:
+    mount_x_m: null                 # designed to mount at the CG; exact offset needs Phase 2 ingest-board measurement
+    mount_y_m: null
+    mount_z_m: null
+    mount_yaw_rad: null
+    timestamp_offset_s: null        # needs the sync design doc (roadmap 2.2)
+  lidar:
+    mount_x_m: null                 # needs Phase 2 mounting (roadmap 2.3)
+    mount_y_m: null
+    mount_z_m: null
+    mount_yaw_rad: null
+    timestamp_offset_s: null        # needs the sync design doc (roadmap 2.2)
+
+limits:
+  global_speed_cap_mps: 20.0        # gym: v_max -- a dynamics-model validity bound, NOT a validated safety cap; must be
+                                     # lowered before any Phase 1 bench/track session
+  min_velocity_mps: -5.0            # gym: v_min
+  ttc_warning_s: null               # needs Phase 1/2 tuning
+  ttc_brake_s: null                 # needs Phase 1/2 tuning
+  envelope_fraction_speed: null     # needs Phase 5 tuning (claude-docs/08-learning.md)
+  envelope_fraction_lateral_accel: null  # needs Phase 5 tuning (claude-docs/08-learning.md)
+
+meta:
+  schema_version: "0.1.0"
+  sysid_session_id: "none-preliminary"
+  fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

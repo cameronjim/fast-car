@@ -100,12 +100,24 @@ COPY pyproject.toml uv.lock ./
 # requires-python), not a separately-downloaded interpreter.
 RUN uv sync --locked --no-install-project --no-python-downloads
 
-# Put the uv-managed venv first on PATH so a bare `pytest`/`hypothesis`
-# call (including the one `colcon test` makes for ament_python/
-# ament_cmake_pytest packages) resolves to this pinned, hash-locked
-# version rather than any system-wide pytest apt might have pulled in as
-# a transitive dependency of the packages above.
-ENV PATH="/ros-dev/.venv/bin:${PATH}"
+# Deliberately NOT prepending the whole venv to PATH: /ros-dev/.venv/bin
+# also contains a `python3`/`python`, and putting that ahead of the
+# system interpreter breaks colcon/ament_cmake, which shell out to
+# `python3` internally (e.g. ament_cmake_core's package_xml_2_cmake.py)
+# expecting the SYSTEM python3.10 with catkin_pkg installed via apt --
+# our uv venv is a separate site-packages tree without catkin_pkg, so a
+# shadowed `python3` breaks every `colcon build`/`colcon test` call with
+# "ModuleNotFoundError: No module named 'catkin_pkg'". Instead, symlink
+# just the test-runner entry points this image promises (pytest,
+# coverage) into /usr/local/bin, which already precedes /usr/bin on
+# PATH -- this pins which `pytest` a bare invocation resolves to
+# (including the one `colcon test` makes for ament_python/
+# ament_cmake_pytest packages) without touching `python3` itself.
+RUN for tool in pytest coverage; do \
+        if [ -e "/ros-dev/.venv/bin/$tool" ]; then \
+            ln -sf "/ros-dev/.venv/bin/$tool" "/usr/local/bin/$tool"; \
+        fi; \
+    done
 
 COPY smoke_test.sh ./
 RUN chmod +x smoke_test.sh

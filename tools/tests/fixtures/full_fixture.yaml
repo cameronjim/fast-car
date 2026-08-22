@@ -1,0 +1,87 @@
+# Test fixture only -- NOT vehicle data. Every nullable field is populated with an
+# arbitrary-but-schema-valid value so the round-trip test exercises every codegen path
+# (nested objects, arrays, nullable scalars) in tools/gen_params.py, not just the null
+# branches that config/vehicle_params.yaml happens to take pre-hardware.
+
+chassis:
+  mass_kg: 3.74
+  wheelbase_m: 0.3302
+  cg_to_front_axle_m: 0.15875
+  cg_to_rear_axle_m: 0.17145
+  track_width_m: 0.25
+  cg_height_m: 0.074
+  yaw_inertia_kg_m2: 0.04712
+  length_m: 0.58
+  width_m: 0.31
+
+tires:
+  surface_friction_coefficient: 1.0489
+  linear_cornering_stiffness_front_n_per_rad: 4.718
+  linear_cornering_stiffness_rear_n_per_rad: 5.4562
+  pacejka_front:
+    b_stiffness: 10.0
+    c_shape: 1.9
+    d_peak_n: 15.0
+    e_curvature: 0.97
+  pacejka_rear:
+    b_stiffness: 11.0
+    c_shape: 1.8
+    d_peak_n: 16.0
+    e_curvature: 0.95
+  nominal_radius_m: 0.0508
+  compound_id: "test-compound-a"
+  surface_id: "test-surface-carpet"
+  kinematic_dynamic_switch_velocity_mps: 7.319
+
+drivetrain:
+  gear_ratio: 3.5
+  pole_pairs: 7
+  motor_kv_rad_per_s_per_v: 251.3
+  current_limit_a: 40.0
+  brake_current_limit_a: 20.0
+
+steering:
+  min_angle_rad: -0.4189
+  max_angle_rad: 0.4189
+  min_rate_rad_per_s: -3.2
+  max_rate_rad_per_s: 3.2
+  time_constant_s: 0.05
+  pwm_to_angle_table:
+    - pwm_us: 1000.0
+      angle_rad: 0.4189
+    - pwm_us: 1500.0
+      angle_rad: 0.0
+    - pwm_us: 2000.0
+      angle_rad: -0.4189
+
+actuation:
+  command_to_torque_delay_s: 0.02
+  throttle_time_constant_s: 0.1
+  max_acceleration_mps2: 9.51
+
+sensors:
+  imu:
+    mount_x_m: 0.0
+    mount_y_m: 0.0
+    mount_z_m: 0.05
+    mount_yaw_rad: 0.0
+    timestamp_offset_s: 0.001
+  lidar:
+    mount_x_m: 0.2
+    mount_y_m: 0.0
+    mount_z_m: 0.1
+    mount_yaw_rad: 0.0
+    timestamp_offset_s: 0.002
+
+limits:
+  global_speed_cap_mps: 8.0
+  min_velocity_mps: -2.0
+  ttc_warning_s: 1.5
+  ttc_brake_s: 0.5
+  envelope_fraction_speed: 0.3
+  envelope_fraction_lateral_accel: 0.3
+
+meta:
+  schema_version: "0.1.0"
+  sysid_session_id: "test-fixture-session"
+  fit_date: "2026-01-01"

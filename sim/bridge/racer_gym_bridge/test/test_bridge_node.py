@@ -83,10 +83,37 @@ class TestBridgeNode(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         rclpy.init()
+        cls._wait_for_bridge_up()
 
     @classmethod
     def tearDownClass(cls):
         rclpy.shutdown()
+
+    @staticmethod
+    def _wait_for_bridge_up() -> None:
+        """Block until bridge_node has published at least one /scan message.
+
+        f1tenth_gym numba-jits its scan/dynamics kernels on the first
+        env.reset()/step() call, which BridgeNode.__init__ triggers before
+        it ever starts its publish timer. On a cold CI runner that JIT
+        warm-up can take much longer than any individual test's own timing
+        budget -- without this barrier, whichever test happens to run
+        first (alphabetically, unittest's default order) eats that cost
+        and sees zero messages, while every later test passes because the
+        JIT is already warm. Waiting here, once, for the whole class
+        removes that order-dependent flakiness.
+        """
+        warmup_node = rclpy.create_node("test_bridge_node_warmup")
+        try:
+            received = []
+            warmup_node.create_subscription(LaserScan, "/scan", received.append, _best_effort_qos())
+            deadline = time.time() + 60.0
+            while not received and time.time() < deadline:
+                rclpy.spin_once(warmup_node, timeout_sec=0.2)
+            if not received:
+                raise RuntimeError("bridge_node did not publish /scan within 60s of launch")
+        finally:
+            warmup_node.destroy_node()
 
     def setUp(self):
         self.node = rclpy.create_node("test_bridge_node_client")

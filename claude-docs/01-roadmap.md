@@ -16,7 +16,16 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
       pinned to a commit SHA on its v1.0.0/gymnasium branch, CPU-only
       torch) built and its headless gym+torch smoke test run in CI on
       every push touching that image (job sim-cpu-image).
-- [ ] 0.3 `train-cuda` image + lockfile on Desktop A; torch sees the GPU
+- [~] 0.3 `train-cuda` image + lockfile on Desktop A; torch sees the GPU
+      2026-08-22: docker/train-cuda/ (Dockerfile + uv.lock, f1tenth_gym
+      pinned to the same commit SHA as sim-cpu, torch 2.13.0+cu126 via the
+      cu126 wheel index) built and CI-verified (job train-cuda-image: image
+      builds, CPU-safe sanity confirms a +cu126 torch build). `gpu_check.py`
+      ships in the image but has not run yet -- no GPU exists on this Mac or
+      on any GitHub-hosted runner. Still open: owner runs
+      `docker run --gpus all train-cuda:local` on Desktop A per
+      docker/train-cuda/README.md and confirms `torch.cuda.is_available()`
+      before this ticks to `[x]`.
 - [ ] 0.4 `ros-dev` image (ROS 2 Humble) + lockfile
 - [ ] 0.5 Port/replace the Foxy-era `f1tenth_gym_ros` bridge to Humble (known cost, scheduled)
 - [x] 0.6 CI per `12-testing.md`: lint, L1–L3 on every push, coverage gates (100% branch on

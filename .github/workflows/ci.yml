@@ -91,6 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sim_cpu: ${{ steps.filter.outputs.sim_cpu }}
+      train_cuda: ${{ steps.filter.outputs.train_cuda }}
     steps:
       - uses: actions/checkout@v7
 
@@ -100,6 +101,9 @@ jobs:
           filters: |
             sim_cpu:
               - 'docker/sim-cpu/**'
+              - '.github/workflows/ci.yml'
+            train_cuda:
+              - 'docker/train-cuda/**'
               - '.github/workflows/ci.yml'
 
   sim-cpu-image:
@@ -130,6 +134,73 @@ jobs:
 
       - name: Run headless gym + torch smoke test inside the built image
         run: docker run --rm sim-cpu:ci
+
+  train-cuda-image:
+    name: train-cuda image build + CPU-safe sanity (no GPU in CI)
+    needs: changes
+    if: needs.changes.outputs.train_cuda == 'true'
+    runs-on: ubuntu-latest
+    # Builds docker/train-cuda (roadmap task 0.3) and proves it BUILDS from
+    # the Dockerfile + uv.lock alone. This job intentionally does NOT run
+    # docker/train-cuda/gpu_check.py: ubuntu-latest runners have no NVIDIA
+    # GPU, so `torch.cuda.is_available()` would correctly be False here and
+    # the check would fail for a reason that has nothing to do with whether
+    # the image is correct. "torch sees the GPU" (the roadmap 0.3 done
+    # criterion) can only be verified on Desktop A -- see
+    # docker/train-cuda/README.md for the exact `docker run --gpus all`
+    # command the owner runs there, and claude-docs/01-roadmap.md for the
+    # [~] note tracking that this is still open.
+    #
+    # What this job runs instead is a CPU-safe sanity check inside the
+    # built image: import torch, print the CUDA build torch was compiled
+    # against, and assert it is a +cu126 wheel (i.e. the cu126 index was
+    # actually used and torch did not silently fall back to a CPU-only or
+    # different-CUDA-version build). That's everything that can honestly be
+    # proven without a GPU.
+    steps:
+      - uses: actions/checkout@v7
+
+      # cu126 torch + cuDNN/cuBLAS/cuSPARSE/NCCL/triton is a large
+      # dependency set (~3.8 GB of wheels per docker/train-cuda/uv.lock).
+      # ubuntu-latest runners ship with several large preinstalled
+      # toolchains this job never uses (Android SDK, .NET, GHC, CodeQL);
+      # clear them first so the docker build + layer cache don't hit disk
+      # pressure. This is a disk-cleanup step, not a dependency-locking
+      # shortcut -- uv.lock is still the sole source of what gets installed.
+      - name: Free disk space (unused preinstalled toolchains)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+              /usr/local/.ghcup /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
+              /opt/hostedtoolcache/CodeQL || true
+          docker image prune -af || true
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build train-cuda image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/train-cuda
+          tags: train-cuda:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: CPU-safe sanity check inside the built image (no GPU available in CI)
+        run: |
+          docker run --rm --entrypoint python train-cuda:ci -c "
+          import torch
+          print(f'torch version: {torch.__version__}')
+          print(f'torch.version.cuda: {torch.version.cuda}')
+          assert '+cu126' in torch.__version__, (
+              f'expected a +cu126 torch build, got {torch.__version__!r}'
+          )
+          assert torch.version.cuda == '12.6', (
+              f'expected torch.version.cuda == \"12.6\", got {torch.version.cuda!r}'
+          )
+          print('train-cuda CPU-safe sanity check OK (cu126 wheel confirmed; '
+                'GPU availability is NOT checked here, see job comment)')
+          "
 
   l4-small-l5-short:
     name: L4-small replay + L5-short sim-in-loop (placeholder)

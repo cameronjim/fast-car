@@ -63,7 +63,11 @@ _TEMPLATE: dict[str, Any] = {
         "command_delay_s": 0.02,
     },
     "vehicle_params": {
-        "schema_version": "0.1.0",
+        # Must match config/vehicle_params.yaml's meta.schema_version exactly (see
+        # test_vehicle_params_wiring.py, which checks this fixture against the real,
+        # freshly-regenerated committed file). Bumped 0.1.0 -> 0.2.0 with that file for
+        # milestone 4 (hardware-arrival prep, roadmap task 1.3).
+        "schema_version": "0.2.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

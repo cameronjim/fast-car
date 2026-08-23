@@ -1,0 +1,32 @@
+[project]
+name = "car-runtime"
+version = "0.1.0"
+description = """
+Dependency manifest for the `car` image's non-ROS, non-torch Python runtime deps
+(claude-docs/02-repo-layout.md, claude-docs/03-environments.md, roadmap task 1.4). Currently
+just racer_policy's own runtime deps (pyyaml + jsonschema, mirroring
+ros_ws/src/racer_policy/pyproject.toml) -- racer_policy is the only package with a real
+on-vehicle deployment role established so far (roadmap phase 5). rclpy and every ROS package
+(racer_safety, racer_control, racer_drivers, racer_policy itself, ...) are installed via the
+ROS 2 Humble apt repo + colcon, not through this file -- see Dockerfile. torch is ALSO not
+here: Jetson's torch build is not on a standard Python index (it is a JetPack-specific NVIDIA
+wheel, installed by a separate Dockerfile RUN step, see that file's comment) and `uv lock`
+cannot resolve it.
+
+Locked for linux/aarch64 specifically (`[tool.uv] environments`, below) even though this
+lockfile is generated on whatever machine runs `uv lock` (developer laptop or CI), since this
+image only ever runs on the Jetson's actual linux/aarch64 target -- see
+claude-docs/03-environments.md: "Rebuilds must be reproducible from the Dockerfile + lockfile
+alone."
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+    "jsonschema>=4.20",
+]
+
+[tool.uv]
+package = false
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]

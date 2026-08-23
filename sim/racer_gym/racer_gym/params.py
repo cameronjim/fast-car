@@ -52,9 +52,11 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import logging
+import os
 import re
 import sys
 import types
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +64,108 @@ from .dynamics.tire import PacejkaParams
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+class RepoLayoutNotFoundError(RuntimeError):
+    """Raised when no anchor (env override, __file__, cwd) leads to a directory containing
+    both config/vehicle_params.yaml and tools/gen_params.py.
+
+    claude-docs/06-vehicle-params.md rule 2: "A consumer that cannot validate must refuse to
+    start." This is that refusal for the "where even IS the params file" step that has to
+    happen before validation can run at all.
+    """
+
+
+def _has_repo_layout(candidate: Path) -> bool:
+    return (candidate / "config" / "vehicle_params.yaml").is_file() and (
+        candidate / "tools" / "gen_params.py"
+    ).is_file()
+
+
+def _walk_up_for_repo_root(start: Path) -> Path | None:
+    for candidate in (start, *start.parents):
+        if _has_repo_layout(candidate):
+            return candidate
+    return None
+
+
+def discover_repo_root(
+    file_hint: Path | None = None,
+    cwd_hint: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> Path:
+    """Locate the fast-car repo root (a directory containing both
+    config/vehicle_params.yaml and tools/gen_params.py), robust to how racer_gym itself got
+    installed.
+
+    Bug this replaces (found during roadmap task S.3): the old implementation was
+    `Path(__file__).resolve().parents[3]` -- a fixed walk-up from this module's own file.
+    That only lands on the repo root when `__file__` still points at racer_gym's real
+    source tree (an editable install, or running straight out of the checkout). A
+    NON-editable install -- e.g. `uv sync`ing `racer-gym` as a plain (non-`editable`) path
+    dependency of a sibling package, which copies racer_gym's source into THAT package's own
+    venv site-packages -- puts `__file__` somewhere with no repo tree above it at all, and
+    `training/racer_train` worked around this by forcing `editable = true` on its
+    `racer-gym` path dependency (see that package's pyproject.toml, now reverted alongside
+    this fix).
+
+    This tries, in order, and returns the first that finds BOTH files:
+
+      1. The `RACER_REPO_ROOT` environment variable, if set -- an explicit override for a
+         install with no other anchor back to a checkout (e.g. racer_gym installed globally
+         and invoked from outside any fast-car checkout).
+      2. Walking up from this module's own `__file__` -- the editable-install / run-from-
+         source-tree case, identical to the old behavior.
+      3. Walking up from the current working directory -- the practical fix for the non-
+         editable case this project actually hits: claude-docs/12-testing.md's CI scripts
+         (.github/scripts/pytest_gate.sh) always `cd` into a package directory *inside the
+         repo checkout* before running `uv sync` + `uv run pytest` for that package, so even
+         though a non-editable `racer-gym` dependency's `__file__` lands in some other
+         package's site-packages, the process's cwd is still somewhere under the same
+         checkout.
+
+    Raises `RepoLayoutNotFoundError` (naming every path tried) if none of the three finds a
+    directory with both files -- e.g. racer_gym installed non-editably and invoked from
+    completely outside any fast-car checkout, with no override set. This is a hard failure
+    by design, not a guess.
+
+    `file_hint`/`cwd_hint`/`env` default to the real `Path(__file__)` / `Path.cwd()` /
+    `os.environ`; the parameters exist so this function can be unit-tested against synthetic
+    directory layouts without needing an actual editable/non-editable install of anything
+    (see tests/test_params_repo_discovery.py).
+    """
+    file_hint = Path(__file__).resolve() if file_hint is None else Path(file_hint).resolve()
+    cwd_hint = Path.cwd() if cwd_hint is None else Path(cwd_hint).resolve()
+    env = os.environ if env is None else env
+
+    tried: list[str] = []
+
+    override = env.get("RACER_REPO_ROOT")
+    if override:
+        candidate = Path(override).resolve()
+        tried.append(f"$RACER_REPO_ROOT={candidate}")
+        if _has_repo_layout(candidate):
+            return candidate
+
+    tried.append(f"walking up from __file__ ({file_hint.parent})")
+    found = _walk_up_for_repo_root(file_hint.parent)
+    if found is not None:
+        return found
+
+    tried.append(f"walking up from cwd ({cwd_hint})")
+    found = _walk_up_for_repo_root(cwd_hint)
+    if found is not None:
+        return found
+
+    raise RepoLayoutNotFoundError(
+        "racer_gym.params: could not locate the fast-car repo root (a directory containing "
+        "both config/vehicle_params.yaml and tools/gen_params.py). racer_gym appears to be "
+        "installed non-editably and invoked from outside any fast-car checkout, with no "
+        "anchor pointing back at one. Fix by either running from inside a fast-car checkout, "
+        "or setting RACER_REPO_ROOT=/path/to/fast-car. Tried: " + "; ".join(tried)
+    )
+
+
+REPO_ROOT = discover_repo_root()
 DEFAULT_PARAMS_PATH = REPO_ROOT / "config" / "vehicle_params.yaml"
 DEFAULT_SCHEMA_PATH = REPO_ROOT / "config" / "vehicle_params.schema.json"
 GEN_PARAMS_PATH = REPO_ROOT / "tools" / "gen_params.py"

@@ -38,10 +38,16 @@ jobs:
     name: L1 unit + L2 property (pytest)
     runs-on: ubuntu-latest
     # INTERIM: claude-docs/03-environments.md says Python tests run in the
-    # `sim-cpu` image. That image is roadmap task 0.2 and does not exist
-    # yet, so this job uses bare ubuntu-latest + uv for now.
-    # TODO(task 0.2): once docker/sim-cpu/ has a built, pinned image with a
-    # lockfile, run this job inside that image instead.
+    # `sim-cpu` image. That image now exists (docker/sim-cpu/: Dockerfile +
+    # uv.lock, built and headless-gym-smoke-tested by the sim-cpu-image job
+    # below - roadmap task 0.2) but this job still uses bare ubuntu-latest +
+    # uv, because none of the packages exercised here import racer_gym or
+    # torch yet; swapping this job onto the built image now would add
+    # container-build latency to every push for no behavioral gain.
+    # TODO(task 0.2 follow-up): once a Python package under test here
+    # actually imports racer_gym/torch (training/, sim/ code lands), run
+    # that package's tests inside the sim-cpu image instead of bare
+    # ubuntu-latest + uv.
     steps:
       - uses: actions/checkout@v7
 
@@ -79,6 +85,51 @@ jobs:
 
       - name: colcon build + colcon test
         run: .github/scripts/ros_build_test.sh
+
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      sim_cpu: ${{ steps.filter.outputs.sim_cpu }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            sim_cpu:
+              - 'docker/sim-cpu/**'
+              - '.github/workflows/ci.yml'
+
+  sim-cpu-image:
+    name: sim-cpu image build + headless gym smoke test
+    needs: changes
+    if: needs.changes.outputs.sim_cpu == 'true'
+    runs-on: ubuntu-latest
+    # Builds docker/sim-cpu (roadmap task 0.2) and runs the container's
+    # default CMD, docker/sim-cpu/smoke_test.py, inside it. That script is
+    # the "f1tenth_gym runs headless in it" proof: it builds an f1tenth_gym
+    # env with no display/render, steps it a few hundred times with a
+    # trivial controller asserting finite observations throughout, then
+    # imports torch and asserts a CPU tensor op works and that CUDA is not
+    # visible. A nonzero container exit fails this job.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build sim-cpu image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/sim-cpu
+          tags: sim-cpu:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run headless gym + torch smoke test inside the built image
+        run: docker run --rm sim-cpu:ci
 
   l4-small-l5-short:
     name: L4-small replay + L5-short sim-in-loop (placeholder)

@@ -37,6 +37,14 @@ run "evaluation/analysis" line90
 run "training/racer_train" report
 run "tools" report
 
+# sim/bridge/racer_gym_bridge (roadmap task 0.5): the pure, ROS-free logic
+# in conversions.py runs here with no ROS/gym install (its pyproject.toml
+# is a standalone test-only manifest); bridge_node.py and the L3
+# launch_testing node tests need rclpy + f1tenth_gym and skip cleanly here
+# via pytest.importorskip -- they run for real in the sim-bridge-test CI
+# job instead (see .github/workflows/ci.yml).
+run "sim/bridge/racer_gym_bridge" report
+
 # Any other ros_ws Python package (racer_policy is handled above with its
 # explicit gate; C++-only packages like racer_safety/racer_control are
 # covered by the L3 + C++ (ros-dev) job instead, and pytest_gate.sh no-ops

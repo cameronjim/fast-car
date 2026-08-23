@@ -106,8 +106,14 @@ Fail → lower speed target, or pivot to scope option C.**
 - [x] S.1 Model upgrades in gym fork: load transfer, Pacejka front/rear, first-order actuator
       dynamics, transport delay (see `07-sim-and-sysid.md`) -- 2026-08-22, sim/racer_gym,
       PR #9
-- [ ] S.2 Raceline optimizer + tracking controller running in sim; tracker lap test committed
-      as the CI regression canary (L5)
+- [x] S.2 Raceline optimizer + tracking controller running in sim; tracker lap test committed
+      as the CI regression canary (L5) -- 2026-08-22: tools/raceline (synthetic stadium
+      centerline + curvature/friction-limited speed profile), ros_ws/src/racer_control
+      (pure pursuit, curvature-adaptive lookahead), config/tracks/gym_oval/raceline.csv,
+      and the l5-tracker-lap CI job (2-lap canary; committed lap-time band widened from
+      two same-code CI runs' measured wall-clock variance, 11.6-18.8s -- see that test's
+      own comment; a real +-25% band was too tight given that spread), all green in CI,
+      PR #13.
 - [ ] S.3 Training pipeline: SAC/PPO residual on base controller, envelope enforced in env
 - [x] S.4 Envelope module (bounds, rate limits, OOD fallback) as a standalone library with
       100% branch coverage + the property test: any input, any state → output in bounds (L1/L2)

@@ -16,7 +16,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.hypothesis/
 .coverage
+.coverage.*
 
 # Bench session records written by racer_bench.engine.write_session_record
 # (roadmap task 0.9) are run output, not curated fixtures -- same rule as

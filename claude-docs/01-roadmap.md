@@ -49,9 +49,18 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked (s
       Done 2026-08-22: GitHub Actions CI is live with scaffold-aware coverage gates that
       bind automatically once a package gains source and tests; the sim-cpu/ros-dev image
       swap-in for the interim ubuntu-latest/ros:humble jobs happens with tasks 0.2/0.4.
-- [ ] 0.7 `vehicle_params.yaml` schema + binding generator + cross-language round-trip test
+- [x] 0.7 `vehicle_params.yaml` schema + binding generator + cross-language round-trip test
       (see `06-vehicle-params.md`, `12-testing.md` L1)
-- [ ] 0.8 `docs/conventions.md` seeded from `10-conventions.md`
+      Done 2026-08-22: config/vehicle_params.schema.json + an initial
+      config/vehicle_params.yaml sourced from the f1tenth_gym default vehicle
+      params (cited in the yaml, meta.sysid_session_id = "none-preliminary");
+      tools/gen_params.py validates against the schema and generates Python,
+      C++17, and C bindings, covered by tools/tests/ (schema refusal tests,
+      hypothesis property tests, and a compiled C++/C round-trip test),
+      100% coverage on gen_params.py, green in CI.
+- [x] 0.8 `docs/conventions.md` seeded from `10-conventions.md`
+      Done 2026-08-22: docs/conventions.md seeded, tooling preferences section included per
+      03-environments.md; claude-docs stay authoritative on conflict.
 - [x] 0.9 Test harnesses scaffolded: replay/golden framework + bag-mutation fault injectors
       (`12-testing.md` L4), sim-in-loop runner (L5), bench checklist runner (L6)
       Done 2026-08-22: tests/replay_harness (racer_replay), tests/sim_in_loop
@@ -94,14 +103,27 @@ Fail → lower speed target, or pivot to scope option C.**
 
 ## Sim track (parallel with Phases 1–2; needs no car)
 
-- [ ] S.1 Model upgrades in gym fork: load transfer, Pacejka front/rear, first-order actuator
-      dynamics, transport delay (see `07-sim-and-sysid.md`)
+- [x] S.1 Model upgrades in gym fork: load transfer, Pacejka front/rear, first-order actuator
+      dynamics, transport delay (see `07-sim-and-sysid.md`) -- 2026-08-22, sim/racer_gym,
+      PR #9
 - [ ] S.2 Raceline optimizer + tracking controller running in sim; tracker lap test committed
       as the CI regression canary (L5)
 - [ ] S.3 Training pipeline: SAC/PPO residual on base controller, envelope enforced in env
-- [ ] S.4 Envelope module (bounds, rate limits, OOD fallback) as a standalone library with
+- [x] S.4 Envelope module (bounds, rate limits, OOD fallback) as a standalone library with
       100% branch coverage + the property test: any input, any state → output in bounds (L1/L2)
-- [ ] S.5 Deployment contract implemented; one refusal test per mismatch class, all green (L1)
+      Done 2026-08-22: training/envelope/ (bounds, rate limits, OOD fallback trigger + a
+      reference distance scorer, speed cap, single apply() entry point), 100% branch
+      coverage and the hypothesis property test green in CI, mypy clean.
+- [x] S.5 Deployment contract implemented; one refusal test per mismatch class, all green (L1)
+      Done 2026-08-22: ros_ws/src/racer_policy/ (plain Python package, ROS-free):
+      contract.yaml + contract.schema.json, load_contract() (manifest validation,
+      contract_version major check, policy.pt checksum) and
+      verify_against_environment() (vehicle_params version, observation field
+      order/dtype/units/missing/extra, LiDAR beam_count/fov/downsample), each mismatch a
+      specific hard-refusal exception with no override. torch stays lazily imported inside
+      load_model() only. One test per mismatch class plus a hypothesis property test and a
+      real-vehicle_params integration test, 99.8% coverage (>=90% gate), mypy clean, green
+      in CI. policy_node (rclpy wiring) is task 5.2.
 - [ ] S.6 Sim dynamics regression battery: sysid maneuvers in sim vs. committed references,
       run on every `racer_gym` change (L5)
 

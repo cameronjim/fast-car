@@ -1,0 +1,367 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cameronjim/fast-car/config/vehicle_params.schema.json",
+  "title": "vehicle_params",
+  "description": "Single source of physical truth for the vehicle (claude-docs/06-vehicle-params.md). Every leaf field carries a machine-readable 'units' annotation and, where a sign convention applies, a 'sign_convention' annotation. Consumers (tools/gen_params.py and everything downstream) must validate against this schema and refuse to start on a mismatch (rule 06-2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["chassis", "tires", "drivetrain", "steering", "actuation", "sensors", "limits", "meta"],
+  "$defs": {
+    "pacejka_params": {
+      "type": ["object", "null"],
+      "description": "Magic Formula tire model coefficients. Null until a Phase 3 sysid fit exists (claude-docs/06-vehicle-params.md, claude-docs/07-sim-and-sysid.md).",
+      "additionalProperties": false,
+      "required": ["b_stiffness", "c_shape", "d_peak_n", "e_curvature"],
+      "properties": {
+        "b_stiffness": {"type": "number", "units": "dimensionless", "description": "Pacejka B (stiffness factor)."},
+        "c_shape": {"type": "number", "units": "dimensionless", "description": "Pacejka C (shape factor)."},
+        "d_peak_n": {"type": "number", "units": "N", "description": "Pacejka D (peak lateral force)."},
+        "e_curvature": {"type": "number", "units": "dimensionless", "description": "Pacejka E (curvature factor)."}
+      }
+    },
+    "pwm_angle_point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pwm_us", "angle_rad"],
+      "properties": {
+        "pwm_us": {
+          "type": "number",
+          "minimum": 500,
+          "maximum": 2500,
+          "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "Raw servo PWM pulse width for this calibration point."
+        },
+        "angle_rad": {
+          "type": "number",
+          "minimum": -1.5708,
+          "maximum": 1.5708,
+          "units": "rad",
+          "sign_convention": "road-wheel angle, LEFT positive (claude-docs/06-vehicle-params.md)",
+          "description": "Measured road-wheel angle produced by pwm_us."
+        }
+      }
+    },
+    "sensor_extrinsic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mount_x_m", "mount_y_m", "mount_z_m", "mount_yaw_rad", "timestamp_offset_s"],
+      "properties": {
+        "mount_x_m": {
+          "type": ["number", "null"],
+          "units": "m",
+          "sign_convention": "REP-103 base_link frame: x forward positive",
+          "description": "Sensor mounting offset from base_link origin along x. Null until Phase 2 ingest-board measurement (claude-docs/06-vehicle-params.md, roadmap 2.1/2.2)."
+        },
+        "mount_y_m": {
+          "type": ["number", "null"],
+          "units": "m",
+          "sign_convention": "REP-103 base_link frame: y left positive",
+          "description": "Sensor mounting offset from base_link origin along y. Null until Phase 2 measurement."
+        },
+        "mount_z_m": {
+          "type": ["number", "null"],
+          "units": "m",
+          "sign_convention": "REP-103 base_link frame: z up positive",
+          "description": "Sensor mounting offset from base_link origin along z. Null until Phase 2 measurement."
+        },
+        "mount_yaw_rad": {
+          "type": ["number", "null"],
+          "units": "rad",
+          "sign_convention": "REP-103: yaw counter-clockwise positive",
+          "description": "Sensor mounting yaw relative to base_link. Null until Phase 2 measurement."
+        },
+        "timestamp_offset_s": {
+          "type": ["number", "null"],
+          "units": "s",
+          "description": "Fixed timestamp offset from the ingest board's shared clock, per the sync design doc (roadmap 2.2). Null until that doc exists."
+        }
+      }
+    }
+  },
+  "properties": {
+    "chassis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mass_kg", "wheelbase_m", "cg_to_front_axle_m", "cg_to_rear_axle_m",
+        "track_width_m", "cg_height_m", "yaw_inertia_kg_m2", "length_m", "width_m"
+      ],
+      "properties": {
+        "mass_kg": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 100,
+          "units": "kg",
+          "description": "Total vehicle mass, including onboard compute."
+        },
+        "wheelbase_m": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 2,
+          "units": "m",
+          "description": "Distance between front and rear axles (cg_to_front_axle_m + cg_to_rear_axle_m)."
+        },
+        "cg_to_front_axle_m": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 2,
+          "units": "m",
+          "sign_convention": "distance measured forward from CG along +x (REP-103)",
+          "description": "Longitudinal distance from centre of gravity to the front axle."
+        },
+        "cg_to_rear_axle_m": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 2,
+          "units": "m",
+          "sign_convention": "distance measured aft from CG along -x (REP-103)",
+          "description": "Longitudinal distance from centre of gravity to the rear axle."
+        },
+        "track_width_m": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1,
+          "units": "m",
+          "description": "Distance between left/right wheel contact patches. Not modeled by the f1tenth_gym single-track model; null until Phase 1 chassis measurement."
+        },
+        "cg_height_m": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 1,
+          "units": "m",
+          "sign_convention": "REP-103: z up positive, measured from ground plane",
+          "description": "Height of the centre of gravity above the ground plane."
+        },
+        "yaw_inertia_kg_m2": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 5,
+          "units": "kg*m^2",
+          "description": "Yaw moment of inertia about the vertical axis through the CG."
+        },
+        "length_m": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 2,
+          "units": "m",
+          "description": "Overall vehicle bounding-box length."
+        },
+        "width_m": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 1,
+          "units": "m",
+          "description": "Overall vehicle bounding-box width."
+        }
+      }
+    },
+    "tires": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surface_friction_coefficient", "linear_cornering_stiffness_front_n_per_rad",
+        "linear_cornering_stiffness_rear_n_per_rad", "pacejka_front", "pacejka_rear",
+        "nominal_radius_m", "compound_id", "surface_id", "kinematic_dynamic_switch_velocity_mps"
+      ],
+      "properties": {
+        "surface_friction_coefficient": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 3,
+          "units": "dimensionless",
+          "description": "Nominal tire-surface friction coefficient (mu)."
+        },
+        "linear_cornering_stiffness_front_n_per_rad": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 50,
+          "units": "N/rad",
+          "description": "Linear tire model cornering stiffness, front axle. Placeholder pending a full Pacejka fit (see pacejka_front)."
+        },
+        "linear_cornering_stiffness_rear_n_per_rad": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 50,
+          "units": "N/rad",
+          "description": "Linear tire model cornering stiffness, rear axle. Placeholder pending a full Pacejka fit (see pacejka_rear)."
+        },
+        "pacejka_front": {"$ref": "#/$defs/pacejka_params"},
+        "pacejka_rear": {"$ref": "#/$defs/pacejka_params"},
+        "nominal_radius_m": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 0.5,
+          "units": "m",
+          "description": "Nominal wheel/tire radius. MEASURED and drift-tracked (tires wear); null until measured, see sysid/drift/."
+        },
+        "compound_id": {
+          "type": "string", "minLength": 1, "maxLength": 63,
+          "units": "n/a (identifier)",
+          "description": "Tire compound identifier. Placeholder string until Phase 3 tire spec is recorded."
+        },
+        "surface_id": {
+          "type": "string", "minLength": 1, "maxLength": 63,
+          "units": "n/a (identifier)",
+          "description": "Running-surface identifier. Placeholder string until the venue surface is surveyed."
+        },
+        "kinematic_dynamic_switch_velocity_mps": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 30,
+          "units": "m/s",
+          "sign_convention": "positive forward speed",
+          "description": "Speed below which the kinematic (rather than dynamic single-track) model is used, per the f1tenth_gym vehicle model."
+        }
+      }
+    },
+    "drivetrain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gear_ratio", "pole_pairs", "motor_kv_rad_per_s_per_v", "current_limit_a", "brake_current_limit_a"],
+      "properties": {
+        "gear_ratio": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 20,
+          "units": "dimensionless",
+          "description": "Motor-to-wheel gear ratio. Null until Phase 1 drivetrain assembly."
+        },
+        "pole_pairs": {
+          "type": ["integer", "null"], "minimum": 1, "maximum": 50,
+          "units": "dimensionless (count)",
+          "description": "Motor pole pair count, used for ERPM <-> wheel speed conversion. Null until the motor is specified/measured."
+        },
+        "motor_kv_rad_per_s_per_v": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1000,
+          "units": "rad/s/V",
+          "description": "Motor velocity constant. Manufacturer datasheets quote Kv in RPM/V; it must be converted to SI at the driver boundary before being written here (CLAUDE.md invariant 4). Null until measured."
+        },
+        "current_limit_a": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 200,
+          "units": "A",
+          "sign_convention": "positive = drive torque forward (claude-docs/06-vehicle-params.md)",
+          "description": "Drive current limit, mirrors the VESC layer-2 config. Null until that config exists."
+        },
+        "brake_current_limit_a": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 200,
+          "units": "A",
+          "sign_convention": "positive = drive torque forward (claude-docs/06-vehicle-params.md)",
+          "description": "Brake current limit, mirrors the VESC layer-2 config. Null until that config exists."
+        }
+      }
+    },
+    "steering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_angle_rad", "max_angle_rad", "min_rate_rad_per_s", "max_rate_rad_per_s",
+        "time_constant_s", "pwm_to_angle_table"
+      ],
+      "properties": {
+        "min_angle_rad": {
+          "type": "number", "minimum": -1.5708, "maximum": 0,
+          "units": "rad",
+          "sign_convention": "road-wheel angle, LEFT positive (claude-docs/06-vehicle-params.md)",
+          "description": "Minimum (rightmost) achievable road-wheel angle."
+        },
+        "max_angle_rad": {
+          "type": "number", "minimum": 0, "maximum": 1.5708,
+          "units": "rad",
+          "sign_convention": "road-wheel angle, LEFT positive (claude-docs/06-vehicle-params.md)",
+          "description": "Maximum (leftmost) achievable road-wheel angle."
+        },
+        "min_rate_rad_per_s": {
+          "type": "number", "minimum": -20, "maximum": 0,
+          "units": "rad/s",
+          "sign_convention": "left positive",
+          "description": "Minimum (fastest rightward) steering rate the servo can achieve."
+        },
+        "max_rate_rad_per_s": {
+          "type": "number", "minimum": 0, "maximum": 20,
+          "units": "rad/s",
+          "sign_convention": "left positive",
+          "description": "Maximum (fastest leftward) steering rate the servo can achieve."
+        },
+        "time_constant_s": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 5,
+          "units": "s",
+          "description": "First-order servo response time constant. Null until measured (Phase 2/3)."
+        },
+        "pwm_to_angle_table": {
+          "type": ["array", "null"],
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/pwm_angle_point"},
+          "description": "Calibrated servo PWM <-> road-wheel-angle table (claude-docs/06-vehicle-params.md). Null (not assumed linear) until measured."
+        }
+      }
+    },
+    "actuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_to_torque_delay_s", "throttle_time_constant_s", "max_acceleration_mps2"],
+      "properties": {
+        "command_to_torque_delay_s": {
+          "type": ["number", "null"], "minimum": 0, "maximum": 2,
+          "units": "s",
+          "description": "Measured command-to-torque transport delay. Null until measured."
+        },
+        "throttle_time_constant_s": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 5,
+          "units": "s",
+          "description": "First-order throttle response time constant. Null until measured."
+        },
+        "max_acceleration_mps2": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 50,
+          "units": "m/s^2",
+          "sign_convention": "positive = forward acceleration",
+          "description": "Maximum achievable longitudinal acceleration."
+        }
+      }
+    },
+    "sensors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["imu", "lidar"],
+      "properties": {
+        "imu": {"$ref": "#/$defs/sensor_extrinsic", "description": "IMU is designed to mount at the CG (claude-docs/06-vehicle-params.md); exact offsets are null until Phase 2 ingest-board measurement."},
+        "lidar": {"$ref": "#/$defs/sensor_extrinsic", "description": "LiDAR mounting pose; null until Phase 2 (roadmap 2.3)."}
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "global_speed_cap_mps", "min_velocity_mps", "ttc_warning_s", "ttc_brake_s",
+        "envelope_fraction_speed", "envelope_fraction_lateral_accel"
+      ],
+      "properties": {
+        "global_speed_cap_mps": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 50,
+          "units": "m/s",
+          "sign_convention": "positive forward",
+          "description": "Global forward speed cap enforced by layers 3-4. Sourced here from the f1tenth_gym dynamic-model validity bound (v_max), NOT a validated on-vehicle safety limit; must be re-set conservatively before Phase 1 bench testing."
+        },
+        "min_velocity_mps": {
+          "type": "number", "minimum": -50, "maximum": 0,
+          "units": "m/s",
+          "sign_convention": "negative = reverse",
+          "description": "Reverse speed cap enforced by layers 3-4."
+        },
+        "ttc_warning_s": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 10,
+          "units": "s",
+          "description": "Time-to-collision warning threshold. Null until tuned."
+        },
+        "ttc_brake_s": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 10,
+          "units": "s",
+          "description": "Time-to-collision hard-brake threshold. Null until tuned."
+        },
+        "envelope_fraction_speed": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1,
+          "units": "dimensionless (fraction of global_speed_cap_mps)",
+          "description": "Envelope fraction of the speed cap the residual policy may command. Null until tuned (claude-docs/08-learning.md)."
+        },
+        "envelope_fraction_lateral_accel": {
+          "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1,
+          "units": "dimensionless (fraction of friction-limited lateral accel)",
+          "description": "Envelope fraction of the friction-limited lateral acceleration the residual policy may command. Null until tuned (claude-docs/08-learning.md)."
+        }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "sysid_session_id", "fit_date"],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "units": "n/a (semver identifier)",
+          "description": "Semver of this params file's schema. Any change bumps this; consumers refuse on a major mismatch (claude-docs/06-vehicle-params.md rule 5)."
+        },
+        "sysid_session_id": {
+          "type": "string", "minLength": 1, "maxLength": 127,
+          "units": "n/a (identifier)",
+          "description": "The sysid/fitting/ session id that produced these fitted values, or a clearly-provisional placeholder such as 'none-preliminary' when no on-vehicle fit exists yet."
+        },
+        "fit_date": {
+          "type": "string",
+          "format": "date",
+          "units": "n/a (ISO 8601 date)",
+          "description": "Date this params file's values were fitted or, for a preliminary file, the date it was assembled from its cited provenance."
+        }
+      }
+    }
+  }
+}

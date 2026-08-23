@@ -12,6 +12,19 @@ Bridges the gym simulator to the standard racer topics
     reliable) and steps the sim from the latest received command.
   - offers ``/sim/reset`` (std_srvs/Trigger) so tests and tooling can reset
     the episode deterministically.
+  - (milestone 2) publishes ``/sim/map`` (nav_msgs/OccupancyGrid, latched
+    via transient_local) once, built from the env's own ``Track``
+    (``track.occupancy_map`` / ``track.spec``) -- see
+    ``racer_gym_bridge.conversions.build_occupancy_grid_fields`` -- and
+    broadcasts ``map`` -> ``base_link`` on ``/tf`` every step from the same
+    ground truth pose already used for ``/sim/ground_truth_odom``, plus a
+    static ``base_link`` -> ``laser`` transform so ``/scan`` renders
+    correctly aligned in Foxglove/RViz. REP-105 naming
+    (claude-docs/04-architecture.md): ``map`` and ``base_link`` are real
+    REP-105 frames; ``map`` -> ``base_link`` direct from sim ground truth is
+    a documented simplification for visualization only -- there is no
+    localization stack yet (roadmap Phase 2), so this is not standing in
+    for a real ``map`` -> ``odom`` -> ``base_link`` chain.
 
 Vehicle physical parameters (mass, wheelbase, friction, ...) are the
 f1tenth_gym env's own defaults. ``config/vehicle_params.yaml`` (roadmap
@@ -31,15 +44,26 @@ import numpy as np
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from f1tenth_gym.envs.track import Track
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped
+from nav_msgs.msg import OccupancyGrid, Odometry
 from rcl_interfaces.msg import FloatingPointRange, IntegerRange, ParameterDescriptor
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
+from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
-from racer_gym_bridge.conversions import build_odom_fields, build_scan_fields, drive_cmd_to_action
+from racer_gym_bridge.conversions import (
+    build_occupancy_grid_fields,
+    build_odom_fields,
+    build_scan_fields,
+    drive_cmd_to_action,
+)
 from racer_gym_bridge.track_loader import load_raceline_xy_speed
+
+_MAP_FRAME_ID = "map"
+_BASE_LINK_FRAME_ID = "base_link"
+_LASER_FRAME_ID = "laser"
 
 _GYM_ENV_ID = "f1tenth_gym:f1tenth-v0"
 _EGO_AGENT_ID = "agent_0"
@@ -170,19 +194,36 @@ class BridgeNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
+        # transient_local + explicit depth (claude-docs/10-conventions.md: "QoS: ... explicit
+        # depth -- never default"): the map is published once and never changes for the life
+        # of an episode, so a late-joining subscriber (e.g. Foxglove connecting after
+        # bridge_node has been running a while) must still receive it -- that is what
+        # "latched" means for a ROS 2 publisher.
+        map_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
 
         self._scan_pub = self.create_publisher(LaserScan, "/scan", scan_qos)
         self._odom_pub = self.create_publisher(Odometry, "/sim/ground_truth_odom", odom_qos)
+        self._map_pub = self.create_publisher(OccupancyGrid, "/sim/map", map_qos)
         self._drive_sub = self.create_subscription(
             AckermannDriveStamped, "/drive", self._on_drive, drive_qos
         )
         self._reset_srv = self.create_service(Trigger, "/sim/reset", self._on_reset)
+
+        self._tf_broadcaster = TransformBroadcaster(self)
+        self._static_tf_broadcaster = StaticTransformBroadcaster(self)
+        self._broadcast_static_laser_tf()
 
         self._latest_steering_angle = 0.0
         self._latest_speed = 0.0
         self._warned_terminated = False
 
         self._reset_env()
+        self._publish_map_once()
 
         self._timer = self.create_timer(1.0 / self._step_rate_hz, self._on_timer)
 
@@ -238,7 +279,7 @@ class BridgeNode(Node):
         )
         scan_msg = LaserScan()
         scan_msg.header.stamp = now
-        scan_msg.header.frame_id = "laser"
+        scan_msg.header.frame_id = _LASER_FRAME_ID
         scan_msg.angle_min = scan_fields.angle_min
         scan_msg.angle_max = scan_fields.angle_max
         scan_msg.angle_increment = scan_fields.angle_increment
@@ -259,8 +300,8 @@ class BridgeNode(Node):
         )
         odom_msg = Odometry()
         odom_msg.header.stamp = now
-        odom_msg.header.frame_id = "map"
-        odom_msg.child_frame_id = "base_link"
+        odom_msg.header.frame_id = _MAP_FRAME_ID
+        odom_msg.child_frame_id = _BASE_LINK_FRAME_ID
         position = odom_msg.pose.pose.position
         position.x, position.y, position.z = odom_fields.position
         orientation = odom_msg.pose.pose.orientation
@@ -270,6 +311,77 @@ class BridgeNode(Node):
         angular = odom_msg.twist.twist.angular
         angular.x, angular.y, angular.z = odom_fields.angular
         self._odom_pub.publish(odom_msg)
+
+        # Milestone 2: map -> base_link from the same ground-truth pose, every step (no
+        # localization stack exists yet -- see this module's docstring).
+        transform = TransformStamped()
+        transform.header.stamp = now
+        transform.header.frame_id = _MAP_FRAME_ID
+        transform.child_frame_id = _BASE_LINK_FRAME_ID
+        transform.transform.translation.x, transform.transform.translation.y, _ = (
+            odom_fields.position
+        )
+        (
+            transform.transform.rotation.x,
+            transform.transform.rotation.y,
+            transform.transform.rotation.z,
+            transform.transform.rotation.w,
+        ) = odom_fields.orientation
+        self._tf_broadcaster.sendTransform(transform)
+
+    def _publish_map_once(self) -> None:
+        """Publish ``/sim/map`` once (transient_local latches it for later subscribers).
+
+        Built from the env's own ``Track`` (``track.occupancy_map`` / ``track.spec``), never
+        hand-copied -- see ``racer_gym_bridge.conversions.build_occupancy_grid_fields``. The
+        map is fixed for the life of an episode (the track never changes underneath a running
+        bridge_node), so publishing once at startup is sufficient; a late-joining subscriber
+        gets it from the transient_local publisher history, not a live re-publish.
+        """
+        track: Track = self.env.unwrapped.track
+        fields = build_occupancy_grid_fields(
+            occupancy_map=track.occupancy_map,
+            resolution=track.spec.resolution,
+            origin=track.spec.origin,
+            negate=bool(track.spec.negate),
+            occupied_thresh=track.spec.occupied_thresh,
+            free_thresh=track.spec.free_thresh,
+        )
+        msg = OccupancyGrid()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = _MAP_FRAME_ID
+        msg.info.resolution = fields.resolution
+        msg.info.width = fields.width
+        msg.info.height = fields.height
+        origin_position = msg.info.origin.position
+        origin_position.x, origin_position.y, origin_position.z = fields.origin_position
+        origin_orientation = msg.info.origin.orientation
+        (
+            origin_orientation.x,
+            origin_orientation.y,
+            origin_orientation.z,
+            origin_orientation.w,
+        ) = fields.origin_orientation
+        msg.data = fields.data
+        self._map_pub.publish(msg)
+
+    def _broadcast_static_laser_tf(self) -> None:
+        """Static ``base_link`` -> ``laser`` transform so ``/scan`` renders aligned.
+
+        Identity, not an invented offset: f1tenth_gym's ``ScanSimulator2D`` has no separate
+        LiDAR extrinsic of its own (it raycasts directly from the car's pose), and
+        ``config/vehicle_params.yaml``'s ``sensors.lidar`` mount offsets are still ``null``
+        pending a real Phase 2 measurement (roadmap 2.3) -- CLAUDE.md hard invariant 2
+        forbids hand-writing a substitute number in their place, so identity is the only
+        transform that is both correct for the current sim model and not a fabricated
+        physical constant.
+        """
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = _BASE_LINK_FRAME_ID
+        transform.child_frame_id = _LASER_FRAME_ID
+        transform.transform.rotation.w = 1.0
+        self._static_tf_broadcaster.sendTransform(transform)
 
     def destroy_node(self) -> bool:
         self.env.close()

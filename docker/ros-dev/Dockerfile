@@ -71,6 +71,10 @@ FROM ros:humble-ros-base@sha256:75dd3aba34a3838dadbb31a9f7bef769bdfa8713e6cec686
 #   launch_testing subprocess that failure surfaces as a bare SIGABRT
 #   ("terminate called without an active exception", no Python traceback)
 #   rather than a clean ImportError, which is what first exposed this.
+# ros-humble-foxglove-bridge (milestone 2: live sim view via Foxglove): a websocket bridge
+#   exposing the ROS graph to the Foxglove browser/desktop app, avoiding the X11/GUI pain of
+#   running RViz in a container on macOS. Started from racer_bringup/sim_teleop.launch.py's
+#   `viz` argument (default true), not run standalone by this image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
@@ -84,6 +88,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-launch-testing-ament-cmake \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
+        ros-humble-foxglove-bridge \
         gcovr \
         libgl1 \
         libglib2.0-0 \

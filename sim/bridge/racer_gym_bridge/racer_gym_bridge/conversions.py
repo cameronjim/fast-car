@@ -93,6 +93,64 @@ def build_scan_fields(
 
 
 @dataclass(frozen=True)
+class OccupancyGridFields:
+    width: int
+    height: int
+    resolution: float
+    origin_position: tuple[float, float, float]
+    origin_orientation: tuple[float, float, float, float]
+    data: list[int]
+
+
+def build_occupancy_grid_fields(
+    occupancy_map: np.ndarray,
+    resolution: float,
+    origin: Sequence[float],
+    negate: bool,
+    occupied_thresh: float,
+    free_thresh: float,
+) -> OccupancyGridFields:
+    """Compute nav_msgs/OccupancyGrid field values from an f1tenth_gym ``Track``'s own
+    occupancy map (``track.occupancy_map`` / ``track.spec``), for milestone 2's ``/sim/map``.
+
+    This is the standard ROS map_server pixel -> occupancy-probability conversion (same
+    formula map_server itself uses for its ``.pgm``/``.png`` + ``.yaml`` map format, which is
+    exactly what ``Track.spec`` mirrors: ``resolution``, ``origin``, ``negate``,
+    ``occupied_thresh``, ``free_thresh``) -- not a hand-copied map. It works for both the
+    real image-backed tracks (``Track.from_track_name``, grayscale pixels) and this bridge's
+    synthetic/raceline-built tracks (``Track.from_refline``, a uniform all-free 255.0 array):
+    a grayscale pixel value is normalized to [0, 1], flipped by ``negate`` into an "occupied
+    probability", then classified against the two thresholds -- occupied (100), free (0), or
+    unknown (-1) for anything in between (matching map_server's own tri-state output).
+
+    ``occupancy_map``'s array axes already match nav_msgs/OccupancyGrid's row-major data
+    layout: axis 0 (rows) is the map's y-direction, increasing row = increasing y; axis 1
+    (columns) is x, increasing column = increasing x -- this is a direct consequence of how
+    ``Track.from_track_name`` builds the array (``Image.open(...).transpose(FLIP_TOP_BOTTOM)``
+    puts row 0 at the image's bottom, i.e. min y). ``numpy.ndarray.flatten()`` (default
+    C/row-major order) therefore already produces OccupancyGrid's required
+    ``data[row * width + col]`` ordering with no transpose needed.
+    """
+    height, width = occupancy_map.shape
+    pixel_fraction = occupancy_map.astype(np.float64) / 255.0
+    occupied_probability = pixel_fraction if negate else (1.0 - pixel_fraction)
+
+    data = np.full(occupied_probability.shape, -1, dtype=np.int8)
+    data[occupied_probability > occupied_thresh] = 100
+    data[occupied_probability < free_thresh] = 0
+
+    origin_x, origin_y, origin_yaw = (float(v) for v in origin)
+    return OccupancyGridFields(
+        width=int(width),
+        height=int(height),
+        resolution=float(resolution),
+        origin_position=(origin_x, origin_y, 0.0),
+        origin_orientation=yaw_to_quaternion(origin_yaw),
+        data=data.flatten(order="C").tolist(),
+    )
+
+
+@dataclass(frozen=True)
 class OdomFields:
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float]

@@ -1,0 +1,41 @@
+[project]
+name = "racer-sim-in-loop"
+version = "0.1.0"
+description = """
+L5 sim-in-loop test harness scaffold (roadmap task 0.9, claude-docs/12-testing.md
+L5): a runner that launches a scenario (an env + a controller callable)
+headless and seeded, records the trajectory, and exposes assertion helpers
+(lap completion, wall contact, lap-time band, trajectory-vs-reference
+tolerance) for later tasks (S.2's tracker lap test, S.6's regression
+battery) to build on.
+
+racer_sim_in_loop/runner.py is deliberately gym-free: it is written against
+a small EnvLike/ControllerLike protocol, not against f1tenth_gym directly,
+so the plumbing itself is testable with a trivial fake env and no gym
+install at all. tests/test_runner_gym.py additionally proves the plumbing
+against the REAL pinned f1tenth_gym
+(git+https://github.com/f1tenth/f1tenth_gym.git@5a301bd0ae1ceaf7dec653e7549c8d099db58a6b,
+same pin as docker/sim-cpu) with a trivial constant-command controller, but
+does so via `pytest.importorskip("f1tenth_gym")` -- f1tenth_gym is
+deliberately NOT a dependency of this pyproject.toml (same reasoning as
+sim/bridge/racer_gym_bridge/pyproject.toml: keep `uv sync` on a bare
+runner/CI job light and reliable; f1tenth_gym needs X11/GL runtime libs
+that a minimal image lacks, see docker/sim-cpu/Dockerfile). Install
+f1tenth_gym into this package's venv by hand (or into a separate throwaway
+venv) to actually exercise that test locally; otherwise it skips cleanly.
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+# Same pattern as sim/bridge/racer_gym_bridge/pyproject.toml: dependency
+# manifest only, not a wheel to build. `pythonpath` makes
+# racer_sim_in_loop/ importable from tests/ without an install step.
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

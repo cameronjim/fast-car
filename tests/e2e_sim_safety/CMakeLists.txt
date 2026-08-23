@@ -9,6 +9,10 @@ if(BUILD_TESTING)
     TARGET test_sim_safety_e2e
     TIMEOUT 120
   )
+  add_launch_test(test_sim_autopilot_e2e.py
+    TARGET test_sim_autopilot_e2e
+    TIMEOUT 120
+  )
 endif()
 
 ament_package()

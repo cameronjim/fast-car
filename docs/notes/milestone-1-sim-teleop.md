@@ -112,26 +112,47 @@ bind-mounted at `/repo` instead of `/workspace`.
 
 ### Drive the car (two terminals)
 
+**Bug found while writing milestone 2 (fixed here):** the terminal 1 command below used to
+build and source only `ros_ws`. That is not enough -- `bridge_node` lives in
+`sim/bridge/racer_gym_bridge`, a SEPARATE colcon workspace from `ros_ws` (following this
+procedure literally without building it first makes `ros2 launch` fail with `package
+'racer_gym_bridge' not found`), and even once that workspace is built, `bridge_node` needs
+the `gymnasium`/`f1tenth_gym` packages that live in the image's uv venv, not the system
+Python -- without `PYTHONPATH` pointing at that venv's site-packages, `bridge_node` dies
+immediately with `ModuleNotFoundError: No module named 'gymnasium'`. The corrected command
+below builds both workspaces and sets `PYTHONPATH`, the same two-workspace + `PYTHONPATH`
+shape `docs/notes/milestone-2-sim-viz.md` and `.github/scripts/sim_bridge_build_test.sh`
+already use. `viz` defaults to `true` (foxglove_bridge starts alongside bridge_node/
+safety_node even in this milestone's plain teleop demo), so terminal 1 also publishes port
+8765 -- pass `viz:=false` after `sim_teleop.launch.py` for a foxglove-free run, or see
+`docs/notes/milestone-2-sim-viz.md` to actually view it in Foxglove.
+
 Terminal 1, from inside the container, starts the sim + safety gate:
 
 ```bash
-docker run --rm -it --shm-size=1gb -v /Users/cameronjim/code/car:/repo -w /repo ros-dev:local bash -lc '
+docker run --rm -it --shm-size=1gb --name racer-sim -p 8765:8765 \
+  -v /Users/cameronjim/code/car:/repo -w /repo ros-dev:local bash -lc '
   source /opt/ros/humble/setup.bash
-  cd ros_ws
-  rosdep install --from-paths src --ignore-src -r -y
+  apt-get update
+  rosdep install --from-paths ros_ws/src sim/bridge --ignore-src -r -y
+  export PYTHONPATH="$(find /ros-dev/.venv/lib -maxdepth 1 -type d -name "python3.*")/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
+  cd sim/bridge
+  colcon build --symlink-install --base-paths .
+  source install/setup.bash
+  cd /repo/ros_ws
   colcon build --symlink-install
   source install/setup.bash
   ros2 launch racer_bringup sim_teleop.launch.py
 '
 ```
 
-Terminal 2, in a SEPARATE `docker exec` into the same running container (or a second
-`docker run` sharing the same install, e.g. via `docker exec -it <container> bash`), runs
+Terminal 2, in a SEPARATE `docker exec -it racer-sim bash` into the SAME running container
+(the `--name racer-sim` above is what makes this `docker exec` target unambiguous), runs
 teleop -- this needs its own real interactive TTY, which is why it is not started by the
 launch file above by default:
 
 ```bash
-docker exec -it <container-name-or-id> bash -lc '
+docker exec -it racer-sim bash -lc '
   source /opt/ros/humble/setup.bash
   source /repo/ros_ws/install/setup.bash
   ros2 run racer_tools keyboard_teleop_node

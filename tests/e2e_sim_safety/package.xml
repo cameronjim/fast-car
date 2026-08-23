@@ -4,15 +4,18 @@
   <name>e2e_sim_safety</name>
   <version>0.1.0</version>
   <description>
-    L5-flavored end-to-end test (claude-docs/12-testing.md, milestone 1): launches
-    racer_gym_bridge's bridge_node and racer_safety's safety_node together through the REAL
-    command path (/drive_raw -&gt; safety_node -&gt; /drive -&gt; bridge_node, no test-only
-    remaps -- unlike tests/l5_tracker_lap, which needed remaps because no safety_node existed
-    yet), feeds scripted /drive_raw, asserts the sim pose advances, then stops /drive_raw and
-    asserts the watchdog zeroes /drive. This package has no library code of its own -- it
-    exists only to host this integration test, which needs both racer_gym_bridge and
-    racer_safety built and installed together (see
-    .github/scripts/e2e_sim_safety_test.sh).
+    L5-flavored end-to-end tests (claude-docs/12-testing.md). Milestone 1's
+    test_sim_safety_e2e.py launches racer_gym_bridge's bridge_node and racer_safety's
+    safety_node together through the REAL command path (/drive_raw -&gt; safety_node -&gt;
+    /drive -&gt; bridge_node, no test-only remaps -- unlike tests/l5_tracker_lap, which needed
+    remaps because no safety_node existed yet), feeds scripted /drive_raw, asserts the sim
+    pose advances, then stops /drive_raw and asserts the watchdog zeroes /drive. Milestone 3's
+    test_sim_autopilot_e2e.py adds racer_control's tracker_node to that same real graph (the
+    classical stack drives the car itself, no scripted /drive_raw), with only a sim-only
+    pose-source adapter remap (tracker_node's own /odom -&gt; bridge_node's
+    /sim/ground_truth_odom). This package has no library code of its own -- it exists only to
+    host these integration tests, which need racer_gym_bridge, racer_safety, and (milestone 3)
+    racer_control built and installed together (see .github/scripts/e2e_sim_safety_test.sh).
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -21,6 +24,8 @@
 
   <test_depend>racer_gym_bridge</test_depend>
   <test_depend>racer_safety</test_depend>
+  <test_depend>racer_control</test_depend>
+  <test_depend>racer_msgs</test_depend>
   <test_depend>launch</test_depend>
   <test_depend>launch_ros</test_depend>
   <test_depend>launch_testing</test_depend>

@@ -1,0 +1,32 @@
+[project]
+name = "racer-tools-tests"
+version = "0.1.0"
+description = """
+Standalone L1 test dependency manifest for ros_ws/src/racer_tools (roadmap milestone 1,
+claude-docs/12-testing.md). This is NOT the ROS/colcon packaging for the node -- that is
+package.xml/setup.py/setup.cfg, built with colcon inside the ros-dev image via ament_python.
+This file exists only so a bare `uv run pytest` (claude-docs/02-repo-layout.md: "Python
+packages: racer_*, importable, pyproject.toml each, managed with uv") can exercise the pure,
+TTY-free/ROS-free keymap/step/clamp logic in racer_tools/keymap.py with no ROS installation
+at all (L1: "Pure logic, no ROS, no hardware"). keyboard_teleop_node.py and
+vehicle_params_loader.py (which need rclpy and, respectively, tools/gen_params.py's own
+dependencies available on the system python3 ament_python nodes run under) are not imported
+by test/test_keymap.py and are exercised for real only by manually running the node (this
+package's TTY-dependent plumbing has no automated L3 test, per this task's own instructions
+-- teleop needs a real interactive terminal, documented in docs/notes/milestone-1-sim-
+teleop.md's two-terminal procedure instead).
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# Makes `racer_tools` importable from test/ without a colcon install step: prepends this
+# pyproject.toml's own directory (which contains the racer_tools/ package dir) to sys.path
+# before collection.
+pythonpath = ["."]

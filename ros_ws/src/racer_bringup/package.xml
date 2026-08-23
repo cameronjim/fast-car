@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    Launch files, per-machine configs (claude-docs/02-repo-layout.md; claude-docs/10-
+    conventions.md: "Launch files in racer_bringup only"). Milestone 1 adds
+    sim_teleop.launch.py: bridge_node + safety_node (the real /drive_raw -&gt; safety_node
+    -&gt; /drive -&gt; bridge_node command path), plus bridge.launch.py (moved from
+    sim/bridge/racer_gym_bridge).
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>racer_safety</exec_depend>
+  <exec_depend>racer_tools</exec_depend>
+  <!-- racer_gym_bridge (referenced by package name in launch/*.launch.py, resolved by
+       ros2 launch at runtime from whatever workspace is sourced) is intentionally NOT
+       declared here: it lives in sim/bridge, a separate colcon workspace from ros_ws, and
+       ros_ws is built/rosdep-resolved standalone by .github/scripts/ros_build_test.sh (the
+       l3-and-cpp CI job) with no visibility into sim/bridge's package.xml. Declaring it
+       here would make that job's rosdep install fail to resolve it. -->
+
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

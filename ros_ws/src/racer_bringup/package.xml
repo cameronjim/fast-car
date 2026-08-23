@@ -10,7 +10,11 @@
     -&gt; /drive -&gt; bridge_node command path), plus bridge.launch.py (moved from
     sim/bridge/racer_gym_bridge). Milestone 2 adds the `viz` argument to
     sim_teleop.launch.py, starting foxglove_bridge for a live Foxglove view; see
-    config/foxglove_sim_viz.layout.json and docs/notes/milestone-2-sim-viz.md.
+    config/foxglove_sim_viz.layout.json and docs/notes/milestone-2-sim-viz.md. Milestone 3
+    adds sim_autopilot.launch.py: bridge_node + safety_node + tracker_node (+
+    raceline_publisher_node + foxglove_bridge) -- the classical stack drives the sim car
+    itself; see config/foxglove_sim_autopilot.layout.json and
+    docs/notes/milestone-3-sim-autopilot.md.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -20,6 +24,7 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>racer_safety</exec_depend>
+  <exec_depend>racer_control</exec_depend>
   <exec_depend>racer_tools</exec_depend>
   <exec_depend>foxglove_bridge</exec_depend>
   <!-- racer_gym_bridge (referenced by package name in launch/*.launch.py, resolved by

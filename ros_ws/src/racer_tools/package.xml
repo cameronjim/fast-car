@@ -10,7 +10,10 @@
     unit-tested without a TTY per claude-docs/12-testing.md L1. Milestone 3 adds
     raceline_publisher_node: publishes the committed raceline once as a latched nav_msgs/Path
     on /sim/raceline for Foxglove (racer_tools/raceline_loader.py + raceline_path_builder.py
-    are the pure, L1-tested logic; the node itself is thin ROS plumbing).
+    are the pure, L1-tested logic; the node itself is thin ROS plumbing). Milestone 5 adds
+    twist_teleop_adapter_node: converts geometry_msgs/Twist (Foxglove's Teleop panel) to
+    /drive_raw so the car can be driven from the browser, no terminal tty needed
+    (racer_tools/twist_teleop.py is the pure, L1-tested conversion/timeout logic).
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>

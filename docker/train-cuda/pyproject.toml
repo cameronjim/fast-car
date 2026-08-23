@@ -1,0 +1,49 @@
+[project]
+name = "train-cuda"
+version = "0.1.0"
+description = """
+Dependency manifest for the train-cuda image (claude-docs/03-environments.md,
+roadmap task 0.3). Runs on Desktop A (amd64, RTX 3060): CUDA-enabled torch
+(cu126 wheel index), racer_gym, and racer_train. racer_gym currently means
+upstream f1tenth_gym pinned to the same commit SHA used by sim-cpu, since
+the racer_gym fork (sim/racer_gym/, roadmap task S.1) does not exist yet.
+racer_train (training/racer_train/, roadmap task S.3) does not exist yet
+either -- add it as a path dependency once it does; do not hand-duplicate
+its own deps here in the meantime. This project is never built into a
+wheel; it exists only so uv can lock this image's dependencies. NEVER add
+ROS packages here (see claude-docs/03-environments.md: train-cuda never
+contains ROS).
+"""
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "f1tenth_gym",
+    "torch",
+    # racer_train: roadmap task S.3, training/racer_train/ does not exist
+    # yet. Once it lands, add it here (e.g. as a uv workspace/path source)
+    # so this image installs it from the shared source tree.
+]
+
+[tool.uv]
+package = false
+# Desktop A is the only machine this image runs on: amd64 Linux. The lock
+# only needs to resolve there, not on the arm64 Mac used to author it (same
+# approach as docker/sim-cpu/pyproject.toml).
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[tool.uv.sources]
+# Same pin as docker/sim-cpu: f1tenth/f1tenth_gym's v1.0.0 branch
+# (gymnasium-based) at a fixed commit SHA, since the branch itself moves.
+# racer_gym (task S.1) will fork from this commit.
+f1tenth_gym = { git = "https://github.com/f1tenth/f1tenth_gym.git", rev = "5a301bd0ae1ceaf7dec653e7549c8d099db58a6b" }
+# CUDA cu126 wheel index -- torch built against CUDA 12.6, which supports
+# the RTX 3060 (Ampere, compute capability 8.6) and is the current stable
+# cu12x index at time of writing. Never let this fall back to the default
+# CPU-only PyPI torch wheel.
+torch = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

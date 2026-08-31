@@ -41,3 +41,8 @@ sim/bridge/log/
 
 # macOS
 .DS_Store
+
+# other
+.claude
+/claude-docs
+CLAUDE.md

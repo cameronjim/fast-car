@@ -73,7 +73,17 @@ UNVERIFIED Pico SDK glue layer, and a proposed pinout. Read
 - [ ] Wire the RP2040 per `firmware/safety_mux/README.md`'s proposed pinout table. Confirm
       the mux MCU and RC receiver are powered from a rail a Jetson/compute-rail failure
       cannot take down (`claude-docs/11-hardware.md` wiring rules) -- this is a wiring
-      decision, nothing in firmware enforces it.
+      decision, nothing in firmware enforces it. The 2026-08 BOM audit adds specifics: the
+      mux Pico gets its own 5V UBEC off the traction pack (never the Jetson's supply), and
+      every 5V PWM line into the Pico (FS-iA6B receiver channels, and the Jetson-side PWM
+      if 5V) goes through the bidirectional level shifter, because RP2040 GPIO is 3.3V-only.
+      Bench-verify shifted signal integrity on a scope before the first wheels-off test.
+- [ ] Repin the motor sensor cable: Hobbywing sensored motors and VESC use different 6-pin
+      JST-PH sensor pinouts. Identify both pinouts (datasheet or probing), rewire, then
+      verify hall order in VESC Tool's motor detection before first spin.
+- [ ] Bench-sweep the 12V buck-boost on a lab supply from 9.0V to 12.6V and confirm the
+      output holds 12V across the whole range (a 3S pack crosses the output voltage as it
+      drains; a buck-only unit fails this test and cannot be used for the Jetson rail).
 - [ ] Get an arm-none-eabi-gcc + Pico SDK toolchain on Desktop B (`claude-docs/03-
       environments.md`) and build `firmware/safety_mux/` for real:
       `cmake -S firmware/safety_mux -B firmware/safety_mux/build && cmake --build

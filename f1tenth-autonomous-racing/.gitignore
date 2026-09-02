@@ -1,0 +1,15 @@
+build/
+f1tenth_gym_ros/
+install/
+log/
+.vscode/
+data/
+__pycache__/
+*.db3
+*.csv
+*.pkl
+.claude
+claude-docs/
+
+# run results are small and are the point of the artifacts dir, datasets are not
+!gym_training/artifacts/**/*.csv

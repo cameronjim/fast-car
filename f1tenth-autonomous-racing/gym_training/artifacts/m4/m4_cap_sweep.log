@@ -1,0 +1,15 @@
+=== cap 9.0 ===
+episode   9  progress    584.0m  steps  1674  laps 1  39.45s  collision
+progress mean 1062.8m std 365.3m, collision free 50.00%, laps completed 28 over 10 episodes
+lap time best 38.91s mean 39.13s
+flying lap best 38.91s mean 38.95s over 18 laps
+=== cap 9.5 ===
+episode   8  progress    134.1m  steps   372  laps 0  no lap  collision
+episode   9  progress    237.7m  steps   657  laps 0  no lap  collision
+progress mean 243.4m std 157.1m, collision free 0.00%, laps completed 2 over 10 episodes
+lap time best 37.59s mean 37.60s
+=== cap 10.0 ===
+episode   7  progress     56.9m  steps   159  laps 0  no lap  collision
+episode   8  progress    133.7m  steps   354  laps 0  no lap  collision
+episode   9  progress    237.2m  steps   627  laps 0  no lap  collision
+progress mean 144.5m std 60.8m, collision free 0.00%, laps completed 0 over 10 episodes

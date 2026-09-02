@@ -1,0 +1,23 @@
+hand-rolled sac from best.pth at 350000 training steps, 20 deterministic episodes at a 3.00 m/s cap
+episode   0  progress    477.1m  steps  4000  laps 1  115.17s  clean
+episode   1  progress    476.6m  steps  4000  laps 1  115.22s  clean
+episode   2  progress    477.1m  steps  4000  laps 1  115.23s  clean
+episode   3  progress    477.2m  steps  4000  laps 1  115.16s  clean
+episode   4  progress    477.4m  steps  4000  laps 1  115.20s  clean
+episode   5  progress    476.7m  steps  4000  laps 1  115.20s  clean
+episode   6  progress    476.8m  steps  4000  laps 1  115.17s  clean
+episode   7  progress    477.3m  steps  4000  laps 1  115.21s  clean
+episode   8  progress    477.3m  steps  4000  laps 1  115.19s  clean
+episode   9  progress    476.9m  steps  4000  laps 1  115.15s  clean
+episode  10  progress    477.1m  steps  4000  laps 1  115.21s  clean
+episode  11  progress    478.1m  steps  4000  laps 1  115.13s  clean
+episode  12  progress    476.3m  steps  4000  laps 1  115.23s  clean
+episode  13  progress    476.8m  steps  4000  laps 1  115.20s  clean
+episode  14  progress    477.8m  steps  4000  laps 1  115.24s  clean
+episode  15  progress    476.7m  steps  4000  laps 1  115.17s  clean
+episode  16  progress    476.1m  steps  4000  laps 1  115.33s  clean
+episode  17  progress    477.1m  steps  4000  laps 1  115.23s  clean
+episode  18  progress    476.9m  steps  4000  laps 1  115.18s  clean
+episode  19  progress    476.5m  steps  4000  laps 1  115.13s  clean
+progress mean 477.0m std 0.5m, collision rate 0.00%, laps completed 20/20
+lap time best 115.13s mean 115.20s

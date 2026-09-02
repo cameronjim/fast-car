@@ -1,0 +1,24 @@
+=== Spielberg ===
+episode  18  progress    785.6m  steps  4000  laps 2  69.97s 69.78s  clean
+episode  19  progress    786.1m  steps  4000  laps 2  70.06s 69.84s  clean
+progress mean 785.1m std 1.1m, collision free 100.00%, laps completed 40 over 20 episodes
+lap time best 69.72s mean 70.00s
+flying lap best 69.72s mean 69.83s over 20 laps
+=== Monza ===
+episode  17  progress    787.6m  steps  4000  laps 1  90.82s  clean
+episode  18  progress    787.6m  steps  4000  laps 1  90.84s  clean
+episode  19  progress    787.1m  steps  4000  laps 1  90.83s  clean
+progress mean 787.2m std 0.5m, collision free 100.00%, laps completed 20 over 20 episodes
+lap time best 90.76s mean 90.82s
+=== YasMarina ===
+episode  17  progress    775.4m  steps  4000  laps 1  82.11s  clean
+episode  18  progress    777.4m  steps  4000  laps 1  81.92s  clean
+episode  19  progress      0.0m  steps     1  laps 0  no lap  collision
+progress mean 660.8m std 277.6m, collision free 85.00%, laps completed 17 over 20 episodes
+lap time best 81.91s mean 82.04s
+=== Catalunya ===
+episode  17  progress    802.8m  steps  4000  laps 1  83.31s  clean
+episode  18  progress    802.6m  steps  4000  laps 1  83.14s  clean
+episode  19  progress    803.3m  steps  4000  laps 1  83.22s  clean
+progress mean 802.6m std 0.9m, collision free 100.00%, laps completed 20 over 20 episodes
+lap time best 83.10s mean 83.21s

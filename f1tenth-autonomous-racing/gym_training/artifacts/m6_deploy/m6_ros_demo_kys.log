@@ -1,0 +1,13 @@
+probe: injected kys True at 15.0s
+probe: injected kys False at 25.0s
+=== demo probe report ===
+scan: 11242 msgs, 249.82 hz
+drive_raw: 3379 msgs, 75.07 hz
+drive: 11239 msgs, 249.76 hz
+/drive_raw steering min -0.3976 max 0.1156 rad
+/drive_raw speed min 0.0000 max 7.9087 m/s
+/drive speed min 0.0000 max 7.9087 m/s
+kys transitions: [(15.02, True), (25.02, False)]
+/drive_raw while stopped: 2495 msgs, max speed 0.0000 m/s
+odom path length 189.6 m, max speed 7.90 m/s
+laps closed: 0 []

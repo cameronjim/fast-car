@@ -1,0 +1,24 @@
+Spielberg: 20 deterministic episodes at a 8.00 m/s cap
+episode   0  progress   1261.1m  steps  4000  laps 3  43.89s 43.45s 43.45s  clean
+episode   1  progress   1260.6m  steps  4000  laps 3  43.92s 43.45s 43.45s  clean
+episode   2  progress   1261.0m  steps  4000  laps 3  43.93s 43.43s 43.45s  clean
+episode   3  progress   1260.7m  steps  4000  laps 3  43.92s 43.45s 43.46s  clean
+episode   4  progress   1261.4m  steps  4000  laps 3  43.87s 43.45s 43.44s  clean
+episode   5  progress   1261.0m  steps  4000  laps 3  43.89s 43.45s 43.44s  clean
+episode   6  progress   1260.7m  steps  4000  laps 3  43.90s 43.46s 43.44s  clean
+episode   7  progress   1260.8m  steps  4000  laps 3  43.91s 43.45s 43.45s  clean
+episode   8  progress   1261.2m  steps  4000  laps 3  43.90s 43.44s 43.45s  clean
+episode   9  progress   1260.3m  steps  4000  laps 3  43.91s 43.45s 43.44s  clean
+episode  10  progress   1260.9m  steps  4000  laps 3  43.91s 43.45s 43.45s  clean
+episode  11  progress   1260.3m  steps  4000  laps 3  43.92s 43.45s 43.44s  clean
+episode  12  progress   1260.4m  steps  4000  laps 3  43.89s 43.45s 43.45s  clean
+episode  13  progress   1261.4m  steps  4000  laps 3  43.90s 43.44s 43.45s  clean
+episode  14  progress   1260.2m  steps  4000  laps 3  43.90s 43.47s 43.44s  clean
+episode  15  progress   1261.2m  steps  4000  laps 3  43.89s 43.45s 43.44s  clean
+episode  16  progress   1260.4m  steps  4000  laps 3  43.91s 43.45s 43.45s  clean
+episode  17  progress   1261.4m  steps  4000  laps 3  43.86s 43.45s 43.44s  clean
+episode  18  progress   1261.2m  steps  4000  laps 3  43.91s 43.45s 43.44s  clean
+episode  19  progress   1260.6m  steps  4000  laps 3  43.88s 43.44s 43.44s  clean
+progress mean 1260.8m std 0.4m, collision free 100.00%, laps completed 60 over 20 episodes
+lap time best 43.43s mean 43.60s
+flying lap best 43.43s mean 43.45s over 40 laps

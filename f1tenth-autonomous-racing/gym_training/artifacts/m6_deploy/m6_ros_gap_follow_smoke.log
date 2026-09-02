@@ -1,0 +1,9 @@
+=== demo probe report ===
+scan: 9882 msgs, 247.04 hz
+drive_raw: 0 msgs, 0.00 hz
+drive: 9797 msgs, 244.90 hz
+/drive speed min 0.0000 max 2.0000 m/s
+kys transitions: [(2.51, True), (2.78, False), (3.42, True), (3.78, False), (6.78, True), (6.78, False), (6.78, True), (7.28, False)]
+/drive_raw while stopped: no commands seen during a latched stop
+odom path length 78.6 m, max speed 2.00 m/s
+laps closed: 0 []

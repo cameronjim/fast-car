@@ -1,0 +1,28 @@
+gap_follow_node:
+  ros__parameters:
+    # PID gains
+    K_p: 3.0
+    K_i: 0.0
+    K_d: 0.02
+
+    # Speed
+    target_distance: 0.6
+    max_speed: 0.8
+    min_speed: 0.4
+    K_speed: 1.0
+
+    # Gap-following configuration
+    clip_max_range: 3.5
+    disparity_threshold: 1.0
+    vehicle_half_width: 0.5
+    free_space_threshold: 1.2
+    corner_min_clearance: 0.2
+    cone_left_fraction: 0.25
+    cone_right_fraction: 0.75
+
+    # Shutdown
+    shutdown_speed: 0.0
+    shutdown_duration: 2.0
+
+    # Kill switch latch
+    kys_latched: false

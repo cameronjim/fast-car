@@ -35,9 +35,11 @@ and the Jetson from Arrow. They will not land the same day; this stage repeats p
    Do not charge yet.
 4. Open the motor box last and only after xtremerc has answered whether a 3665-length can fits
    the Slash HD VX3 motor mount. If the answer is no, the sealed motor returns and Claude
-   sources a 3650-length sensored motor. If xtremerc never answered, measure instead: motor
-   can length (a 3665 is about 65 mm) versus the free length between the motor mount and the
-   nearest obstruction on the chassis, with the stock motor removed (see stage 3, step 3).
+   sources a shorter sensored motor (EZRun 3652SD G3). If xtremerc never answered, measure
+   instead: the 3665 can is 65.8 mm long; compare against the free length between the motor
+   mount face and the nearest obstruction on the chassis with the stock motor removed (stage
+   3, step 3). The shaft is not a concern on this variant: the stock V3200 motor and the 3665SD
+   both use 5 mm shafts, so the stock pinion transfers.
 5. Drive the stock truck as delivered, with its own transmitter, for ten minutes. This proves
    the chassis, servo, wheels, and drivetrain are healthy before anything is changed. Charge
    the Traxxas-supplied battery only if one was included; otherwise skip the drive until stage

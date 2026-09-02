@@ -1,0 +1,76 @@
+{
+  "env": {
+    "maps": [
+      "Spielberg"
+    ],
+    "num_beams": 108,
+    "features": [
+      "scan",
+      "linear_vel_x",
+      "ang_vel_z",
+      "delta"
+    ],
+    "scan_range_max_m": 30.0,
+    "lidar_noise_std": 0.01,
+    "lidar_dropout_prob": 0.0,
+    "lidar_range_bias_std": 0.0,
+    "reset_strategy": "RL_RANDOM_RANDOM",
+    "reference_line": "RACELINE",
+    "continuous_laps": true,
+    "action_repeat": 4,
+    "max_episode_steps": 4000,
+    "wrong_way_steps": 50,
+    "steer_max_rad": 0.4189,
+    "speed_min_mps": 0.5,
+    "speed_cap_mps": 4.5,
+    "obs_norm": {
+      "speed_mps": 12.0,
+      "yaw_rate_rps": 5.0,
+      "steer_rad": 0.4189,
+      "ey_m": 5.0
+    },
+    "reward": {
+      "w_prog": 1.0,
+      "w_rate": 0.05,
+      "collision_penalty": 10.0,
+      "lap_bonus": 50.0,
+      "target_lap_time_sec": 60.0
+    }
+  },
+  "curriculum": {
+    "start_cap_mps": 4.5,
+    "max_cap_mps": 8.0,
+    "step_mps": 0.5,
+    "promote_rate": 0.9,
+    "window_rounds": 2,
+    "cooldown_rounds": 2
+  },
+  "algo": {
+    "name": "sac",
+    "policy": "MlpPolicy",
+    "net_arch": [
+      256,
+      256
+    ],
+    "learning_rate": 0.0003,
+    "buffer_size": 400000,
+    "batch_size": 512,
+    "gamma": 0.99,
+    "tau": 0.005,
+    "train_freq": 64,
+    "gradient_steps": 64,
+    "learning_starts": 10000,
+    "ent_coef": "auto",
+    "device": "cuda"
+  },
+  "run": {
+    "total_steps": 1500000,
+    "n_envs": 8,
+    "eval_n_envs": 4,
+    "seed": 0,
+    "eval_freq": 50000,
+    "eval_episodes": 12,
+    "checkpoint_freq": 250000,
+    "log_dir": "runs"
+  }
+}

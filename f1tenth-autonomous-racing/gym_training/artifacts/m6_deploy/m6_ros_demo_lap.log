@@ -1,0 +1,11 @@
+=== demo probe report ===
+scan: 42427 msgs, 249.57 hz
+drive_raw: 4301 msgs, 25.30 hz
+drive: 42424 msgs, 249.55 hz
+/drive_raw steering min -0.4050 max 0.1470 rad
+/drive_raw speed min 6.4404 max 7.9136 m/s
+/drive speed min 2.0000 max 7.9136 m/s
+kys transitions: []
+/drive_raw while stopped: no commands seen during a latched stop
+odom path length 888.1 m, max speed 7.90 m/s
+laps closed: 2 [63.84, 64.3]

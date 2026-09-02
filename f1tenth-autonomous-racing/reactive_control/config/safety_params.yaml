@@ -1,0 +1,10 @@
+safety_node:
+  ros__parameters:
+    ttc_pb1 : 1.5
+    ttc_pb2 : 1.0
+    ttc_fb : 0.8
+    pb1_speed_mult : 0.3
+    pb1_min_speed : 0.6
+    pb2_speed_mult : 0.2
+    pb2_min_speed : 0.4
+    distance_threshold : 0.5

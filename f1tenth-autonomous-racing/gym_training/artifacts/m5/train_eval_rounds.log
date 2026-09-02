@@ -1,0 +1,34 @@
+eval at 50000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 37.62s
+new best racing policy at score 107.97, saved to runs/sac_residual/best/best_racing_model
+eval at 100000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 34.68s
+new best racing policy at score 108.65, saved to runs/sac_residual/best/best_racing_model
+eval at 150000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 36.45s
+eval at 200000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 34.82s
+eval at 250000 steps, cap 12.00 m/s: clean 92% over 12 episodes, 33 laps, best lap 34.28s
+eval at 300000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 34.15s
+new best racing policy at score 108.78, saved to runs/sac_residual/best/best_racing_model
+eval at 350000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.87s
+new best racing policy at score 108.86, saved to runs/sac_residual/best/best_racing_model
+eval at 400000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.95s
+eval at 450000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 34.22s
+eval at 500000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 34.34s
+eval at 550000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 34.18s
+eval at 600000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 34.12s
+eval at 650000 steps, cap 12.00 m/s: clean 92% over 12 episodes, 33 laps, best lap 33.89s
+eval at 700000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.90s
+eval at 750000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.80s
+new best racing policy at score 108.88, saved to runs/sac_residual/best/best_racing_model
+eval at 800000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 34.48s
+eval at 850000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.53s
+new best racing policy at score 108.95, saved to runs/sac_residual/best/best_racing_model
+eval at 900000 steps, cap 12.00 m/s: clean 0% over 12 episodes, 1 laps, best lap 34.92s
+eval at 950000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.66s
+eval at 1000000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.56s
+eval at 1050000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.40s
+new best racing policy at score 108.98, saved to runs/sac_residual/best/best_racing_model
+eval at 1100000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.60s
+eval at 1150000 steps, cap 12.00 m/s: clean 17% over 12 episodes, 13 laps, best lap 33.67s
+eval at 1200000 steps, cap 12.00 m/s: clean 58% over 12 episodes, 25 laps, best lap 33.47s
+eval at 1250000 steps, cap 12.00 m/s: clean 92% over 12 episodes, 33 laps, best lap 33.58s
+eval at 1300000 steps, cap 12.00 m/s: clean 100% over 12 episodes, 36 laps, best lap 33.78s
+eval at 1350000 steps, cap 12.00 m/s: clean 92% over 12 episodes, 33 laps, best lap 33.61s

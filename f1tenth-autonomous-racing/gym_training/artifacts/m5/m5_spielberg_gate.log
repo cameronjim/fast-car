@@ -1,0 +1,24 @@
+Spielberg: 20 deterministic episodes at a 12.00 m/s cap
+episode   0  progress   1229.6m  steps  6000  laps 3  34.03s 33.43s 33.42s  clean
+episode   1  progress   1225.9m  steps  6000  laps 3  34.03s 33.40s 33.41s  clean
+episode   2  progress   1229.5m  steps  6000  laps 3  34.05s 33.42s 33.42s  clean
+episode   3  progress   1230.2m  steps  6000  laps 3  34.00s 33.42s 33.41s  clean
+episode   4  progress   1233.9m  steps  6000  laps 3  34.00s 33.42s 33.45s  clean
+episode   5  progress   1234.6m  steps  6000  laps 3  33.95s 33.43s 33.42s  clean
+episode   6  progress   1226.0m  steps  6000  laps 3  34.01s 33.42s 33.41s  clean
+episode   7  progress   1227.5m  steps  6000  laps 3  34.01s 33.43s 33.43s  clean
+episode   8  progress   1234.7m  steps  6000  laps 3  33.95s 33.42s 33.41s  clean
+episode   9  progress   1225.6m  steps  6000  laps 3  34.01s 33.41s 33.44s  clean
+episode  10  progress   1229.8m  steps  6000  laps 3  34.02s 33.42s 33.44s  clean
+episode  11  progress   1220.9m  steps  6000  laps 3  34.06s 33.41s 33.42s  clean
+episode  12  progress   1232.8m  steps  6000  laps 3  34.02s 33.42s 33.42s  clean
+episode  13  progress   1230.1m  steps  6000  laps 3  33.95s 33.43s 33.43s  clean
+episode  14  progress   1220.1m  steps  6000  laps 3  34.03s 33.43s 33.42s  clean
+episode  15  progress   1228.1m  steps  6000  laps 3  34.05s 33.42s 33.41s  clean
+episode  16  progress   1232.0m  steps  6000  laps 3  33.89s 33.42s 33.43s  clean
+episode  17  progress   1233.0m  steps  6000  laps 3  33.97s 33.43s 33.41s  clean
+episode  18  progress   1230.5m  steps  6000  laps 3  33.99s 33.40s 33.41s  clean
+episode  19  progress   1232.4m  steps  6000  laps 3  34.04s 33.45s 33.43s  clean
+progress mean 1229.4m std 4.0m, collision free 100.00%, laps completed 60 over 20 episodes
+lap time best 33.40s mean 33.62s
+flying lap best 33.40s mean 33.42s over 40 laps

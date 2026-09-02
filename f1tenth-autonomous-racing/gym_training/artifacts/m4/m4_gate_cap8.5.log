@@ -1,0 +1,6 @@
+episode  17  progress   1334.0m  steps  4000  laps 3  41.56s 41.08s 41.07s  clean
+episode  18  progress   1332.6m  steps  4000  laps 3  41.55s 41.10s 41.11s  clean
+episode  19  progress   1332.4m  steps  4000  laps 3  41.61s 41.10s 41.09s  clean
+progress mean 1333.1m std 0.7m, collision free 100.00%, laps completed 60 over 20 episodes
+lap time best 41.07s mean 41.25s
+flying lap best 41.07s mean 41.09s over 40 laps

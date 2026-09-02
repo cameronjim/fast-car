@@ -9,10 +9,18 @@ Time: 3 to 5 hours. Owner: teammate, Cameron assisting. Wheels stay off the grou
    routes. This is the reference for putting the servo wiring back the same way.
 3. Remove the stock ESC and stock motor. Keep the stock pinion gear; note its tooth count in
    `docs/notes/build-log.md`. Keep the stock receiver in a bag (not used in the build).
-4. Fit the Hobbywing 3665SD motor. Transfer the pinion (3.175 mm shaft, 32 pitch on this
-   truck) or use the pinion supplied with the motor, and set the gear mesh: a strip of paper
-   between pinion and spur should leave a faint impression, not tear. Confirm the can clears
-   everything with the suspension at full travel. Tighten the motor mount screws.
+4. Fit the Hobbywing 3665SD motor. Shaft check first: the HD VX3's stock Velineon V3200 and
+   the EZRun 3665SD both have 5 mm shafts, so the stock 13T 32-pitch pinion transfers directly
+   (a smaller 11T or 12T 32P 5 mm-bore pinion, Robinson Racing RRP8611/RRP8612, is the later
+   upgrade if the 4000KV motor runs hot). Length check second: the 3665 can is 65.8 mm, longer
+   than older Velineon cans, and at least one owner report describes grinding the mount area
+   for rear clearance on a Slash 4x4. Measure the free length behind the mount with the stock
+   motor out before forcing anything; if it does not clear, the options are a small amount of
+   material removal (teammate's call, photograph before and after) or exchanging for the
+   shorter EZRun 3652SD G3, which then needs a 3.175 mm-bore pinion. Then set the gear mesh: a
+   strip of paper between pinion and spur should leave a faint impression, not tear. Confirm
+   the can and its wire exit clear everything with the suspension at full travel. Tighten the
+   motor mount screws.
 5. Mount the VESC where the stock ESC sat, on M3 standoffs if the surface is metal, with its
    heatsink getting airflow. Route the three motor phase wires to the VESC (order does not
    matter yet; VESC Tool detection sets it) and plug in the repinned sensor cable.

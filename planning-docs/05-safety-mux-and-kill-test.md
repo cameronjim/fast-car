@@ -42,11 +42,16 @@ then passthrough. It never talks to ROS and shares no power rail with the Jetson
 
 ### C. Wire it
 
-9. Wire per the pinout table in `firmware/safety_mux/README.md` (GPIO 2 kill channel in, 3
-   steering in, 4 throttle in, 5 heartbeat in, 6 servo out, 7 ESC out, 8 power cutoff). Every
-   5 V signal into the Pico goes through a level shifter channel; the Pico's 3.3 V outputs to
-   the servo and ESC go through shifter channels the other way. Scope the shifted signals: clean
-   edges, correct levels.
+9. Wire per the pinout table and the board connector map in `firmware/safety_mux/README.md`
+   (GPIO 2 kill channel in, 3 steering in, 4 throttle in, 5 heartbeat in, 6 servo out, 7 ESC
+   out, 8 power cutoff). On the perfboard the three Jetson inputs land on **one 4-pin header**
+   (STEER SIG, THROTTLE SIG, HEARTBEAT, GND) rather than three separate connectors: the three
+   signals share one return because they are all measured against the same ground, and the
+   Jetson supplies its own power, so there is no 5 V pin on that header. Mark pin 1 on the
+   board and key the plug; a reversed 4-pin cable swaps heartbeat and steering and the firmware
+   cannot detect that. Every 5 V signal into the Pico goes through a level shifter channel; the
+   Pico's 3.3 V outputs to the servo and ESC go through shifter channels the other way. Scope
+   the shifted signals: clean edges, correct levels.
 10. Power cutoff: the Pico's GPIO 8 drives a relay or a high-side MOSFET in the servo/ESC power
     path so that a dead Pico (pin low) means cut. Teammate designs this small circuit; Claude
     reviews the schematic photo. This is a bench decision the firmware README leaves open.
@@ -64,24 +69,29 @@ fill it in as you go; the `racer_bench` runner records a session record you comm
     direction (steering left positive, throttle drive positive).
 14. Stop the heartbeat toggle only: the mux cuts within the watchdog timeout (scope it).
 15. Feed an out-of-range pulse on steering or throttle: the mux cuts, does not pass it through.
-16. Brownout drill: sag the buck-boost input with a bench supply while the UBEC stays fed; the
+16. Unplug the Jetson cable with the board running and the kill switch ARMED: both outputs must
+    go to neutral within the watchdog timeout and the cutoff must open. The Pico's three Jetson
+    inputs are pull-down, so an unplugged cable reads as a steady low, which is no pulses and no
+    heartbeat toggle. That is the intended failure mode; observe it on the scope rather than
+    reasoning about it, and repeat it with only the heartbeat wire pulled.
+17. Brownout drill: sag the buck-boost input with a bench supply while the UBEC stays fed; the
     mux stays alive and keeps enforcing.
 
 ### E. The G1 kill test
 
-17. Full car assembled, wheels off the ground, Jetson booted and actively commanding (stage 7's
+18. Full car assembled, wheels off the ground, Jetson booted and actively commanding (stage 7's
     teleop or a simple PWM generator process on the Jetson with the heartbeat running), kill
     switch ARMED, two people present. Physically freeze the Jetson: stop every process
     (`sudo systemctl stop` or `kill -STOP` the heartbeat and command processes) and then, as a
     second test, hard power-cycle the Jetson while the mux stays powered. Observe directly: both
     outputs go neutral, the cutoff opens, the wheels stop. Photograph the scope and write down
     the observed cut latency.
-18. Repeat the kill test three times. Then tighten `limits.mux_watchdog_timeout_s` toward the
+19. Repeat the kill test three times. Then tighten `limits.mux_watchdog_timeout_s` toward the
     measured cut latency plus margin, rebuild, reflash, repeat once more.
 
 ## Done when
 
-All five bench procedures pass with committed session records and the kill test is observed
+All six bench procedures pass with committed session records and the kill test is observed
 three times. Tick roadmap 1.3 with a dated note describing exactly how the Jetson was frozen
 and what was seen. Gate G1 is not fully passed until stage 7 (teleop through the mux) also
 passes, but nothing may drive on the ground before this stage is complete.

@@ -21,7 +21,7 @@ UBEC, the level shifter boards, the Picos, the capacitors, the barrel pigtail, a
 1. Decide the connector standard. Recommendation: EC5 on everything that carries battery
    current (battery, VESC input, buck-boost input, UBEC input via a splitter or harness), so
    the packs plug in without adapters. Write the decision into `docs/notes/build-log.md`.
-2. VESC battery leads: solder an EC5 male onto the FSESC 6.7's bare battery wires (red to +,
+2. VESC battery leads: solder an EC5 male onto the FSESC 4.12's bare battery wires (red to +,
    black to -). Solder one or two 1000uF capacitors across those leads as close to the VESC as
    the leads allow, observing capacitor polarity (the stripe marks negative). Heat shrink.
 3. Power splitter harness: build a Y harness with one EC5 female (battery side) feeding three
@@ -30,7 +30,8 @@ UBEC, the level shifter boards, the Picos, the capacitors, the barrel pigtail, a
    has inline fuse holders (5 A for the buck-boost, 3 A for the UBEC); note it if not.
 4. Buck-boost output: solder the DC barrel pigtail to the converter's output terminals (center
    pin positive, verify with the multimeter on the plug). Heat shrink.
-5. Charger adapter: the SkyRC S65 ships with an XT60 charge lead. Build one XT60-male to
+5. Charger adapter: not needed if the B0G9MDKCW3 charger's included XT60-to-EC5 lead fits
+   the packs (verify on arrival). Otherwise build one XT60-male to
    EC5-female adapter so the packs can be charged.
 6. Level shifter boards: solder header pins onto two boards (one spare). Solder header pins
    onto both Picos if they arrived without them.

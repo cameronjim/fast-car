@@ -80,6 +80,32 @@ Pin numbers are RP2040 GPIO numbers, chosen for this draft and matched exactly i
 | Power cutoff | out | GPIO 8 | Active-HIGH = power enabled (fail-safe: a dead/reset RP2040 or a browned-out driver circuit defaults this LOW = cut). Drives a relay or high-side MOSFET gate in the motor/servo power path -- exact drive circuit is a bench decision, not fixed here. |
 | Fault LED | out | Pico's onboard LED (`PICO_DEFAULT_LED_PIN`) | Fast blink = refused to arm (missing `vehicle_params` field), see `pico/main.c`'s `fault_halt_missing_param()`. |
 
+### Board connector map (PLANNED, unverified on hardware)
+
+The pinout above is GPIO numbers. This is how those GPIOs reach the outside world on the
+perfboard the mux is being built on. It is a planned layout drawn ahead of the build: nothing
+here has been soldered, powered, or bench-checked, and the wiring session may change it.
+
+| Header | Pins | Carries | Notes |
+|---|---|---|---|
+| KILL | 3-pin (SIG, +5V, GND) | RC receiver's kill-switch channel | The board **powers the receiver** through this lead off the UBEC 5 V rail. SIG goes through the level shifter into GPIO 2. |
+| JETSON | 4-pin (STEER SIG, THROTTLE SIG, HEARTBEAT, GND) | all three Jetson-originated signals plus their shared return | Pin 1 (STEER SIG) is marked on the board and the plug is keyed, because a reversed plug swaps heartbeat and steering and nothing in firmware can see that. No 5 V pin: **the Jetson powers itself.** Steering and throttle go through the shifter into GPIO 3 and 4; the heartbeat is already 3.3 V and goes straight to GPIO 5. |
+| SERVO | 3-pin (SIG, +5V, GND) | steering servo | The board **powers the servo** from the same 5 V rail. SIG is GPIO 6's output. |
+| VESC | 3-pin, **+5V position left EMPTY** | ESC PPM input | The VESC has its own BEC; connecting its middle pin to the board's 5 V would tie two supplies together. Only SIG (GPIO 7) and GND are populated. |
+| CUTOFF | 2-pin (SIG, GND) | power-cutoff drive circuit (GPIO 8) | Reserved. The relay/MOSFET stage does not exist yet; the header is there so it does not need re-soldering later. |
+| 5V / GND | 2-pin screw terminal | UBEC 5 V in | The whole board's supply. This is the rail a Jetson or compute-rail failure cannot take down. |
+
+One ground net ties the screw terminal, both shifter ground pins, the Pico's grounds, and
+every header's ground together. The Jetson's fourth wire is that shared reference, not a
+second power wire: a voltage is a difference against a ground, so all three of its signals
+need the Jetson and the Pico to agree on where zero is.
+
+The three Jetson inputs are **pull-down** on the Pico side. An unplugged (or broken) Jetson
+cable therefore reads as a steady low: no PWM pulses and no heartbeat toggle, which the
+watchdog and the PWM validity check both treat as a cut. That is the intended failure mode,
+and it is the thing the bench test "unplug the Jetson cable mid-run" exists to prove, not
+assume.
+
 Per `claude-docs/11-hardware.md`'s wiring rules:
 
 - This MCU and the RC receiver are powered from a rail that a Jetson or compute-rail failure

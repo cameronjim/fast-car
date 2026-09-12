@@ -81,6 +81,10 @@ UNVERIFIED Pico SDK glue layer, and a proposed pinout. Read
 - [ ] Repin the motor sensor cable: Hobbywing sensored motors and VESC use different 6-pin
       JST-PH sensor pinouts. Identify both pinouts (datasheet or probing), rewire, then
       verify hall order in VESC Tool's motor detection before first spin.
+- [ ] VESC 3S bench test BEFORE it touches the car (Flipsky spec says 4S minimum, our pack
+      is 3S): lab supply at 9.5 / 11 / 12.6 V, VESC Tool over USB, confirm boot, stable link,
+      5.0 V on the PPM BEC pin, wheels-off motor spin at 9.5 V. Fail = return it and fit a
+      3S-rated VESC (Mini FSESC 4.12/4.20). See `claude-docs/11-hardware.md` audit notes.
 - [ ] Bench-sweep the 12V buck-boost on a lab supply from 9.0V to 12.6V and confirm the
       output holds 12V across the whole range (a 3S pack crosses the output voltage as it
       drains; a buck-only unit fails this test and cannot be used for the Jetson rail).

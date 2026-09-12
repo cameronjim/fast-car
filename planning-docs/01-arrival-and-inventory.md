@@ -4,7 +4,8 @@ Roadmap: preparation for 1.1. Time: 1 to 2 hours. Nothing gets powered in this s
 
 ## What arrives
 
-Three deliveries: the Amazon cart (electronics), the xtremerc order (truck, motor, charger),
+Three deliveries: the Amazon cart (electronics, plus the charger and the replacement VESC
+ ordered separately on 2026-09-11), the xtremerc order (truck, motor),
 and the Jetson from Arrow. They will not land the same day; this stage repeats per box.
 
 ## Steps
@@ -15,8 +16,10 @@ and the Jetson from Arrow. They will not land the same day; this stage repeats p
    - Traxxas Slash 4x4 HD VX3 RTR (green), with its own transmitter, stock motor, stock ESC,
      steering servo, and wheels
    - Hobbywing EZRun 3665SD G3 sensored motor, 4000KV
-   - SkyRC S65 balance charger
-   - Flipsky FSESC 6.7 (the VESC)
+   - 80 W / 6 A balance charger (amazon.ca B0G9MDKCW3, ships with an XT60-to-EC5 lead).
+     The SkyRC S65 was never on the xtremerc order; caught 2026-09-11
+   - Flipsky FSESC 4.12, 50 A (the VESC; 8 to 60 V, 3S-rated). Replaced the FSESC 6.7 on
+     2026-09-11: Flipsky specs the 6.7 at 14 to 60 V, 4S minimum, below our 3S pack
    - Zeee 3S 5200mAh EC5 batteries, two
    - LiPo fireproof bag
    - DROK 9-36V to 12V 5A buck-boost converter (confirm the label says 12V 5A)

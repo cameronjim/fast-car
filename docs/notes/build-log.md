@@ -5,6 +5,36 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-12 -- kill-switch board: the Pico was drawn mirrored, corrected
+
+**Change.** The first board drawing had the Pico mirrored: the GPIO row was drawn on the
+wrong side of the chip. Viewed from the top with the USB socket facing the board's left edge,
+pins 1 to 20 run along the lower row (pin 1 bottom-left) and pins 40 down to 21 along the
+upper row. The drawing had those two rows swapped, so every GPIO in the wiring plan was on
+the power row and VSYS, 3V3 OUT and the pin-38 ground were on the GPIO row.
+
+**How it was caught.** Cameron spotted it while reading the layout, before any soldering.
+Nothing physical was affected, because nothing physical exists yet.
+
+**What changed.** Only the row numbers. No hole column moved: VSYS is still column 6, 3V3 OUT
+still column 9, GP2 to GP8 still columns 8 to 15. The plan now reads VSYS (6,12), 3V3 OUT
+(9,12), GND pin 38 (7,12) on the upper row, and GP2 (8,19), GP3 (9,19), GP4 (10,19), GP5
+(11,19), GND pin 8 (12,19), GP6 (13,19), GP7 (14,19), GP8 (15,19) on the lower row. The
+continuity check before first power-up now probes the row-19 holes.
+
+**Consequence for the wiring.** The three level-shifted signals and the heartbeat now have to
+reach the far side of the Pico. They are routed on the underside and pass beneath the Pico's
+body. That is safe because components sit on the top face and every wire is soldered on the
+copper face, so there is nothing but bare board under the Pico. Noted on the build page.
+
+**Flip-mirror warning added.** Both figures are drawn from the top, and the columns mirror
+left-to-right the moment the board is turned over to solder: column 1 ends up on the right.
+Column 1 and row 1 get marked with a paint pen on both faces before any soldering, and every
+count starts from the marked corner.
+
+**Status.** Planned layout only. Still nothing soldered, nothing powered, nothing measured.
+The orientation above is from the Pico datasheet pinout, not from a board in hand.
+
 ## 2026-09-12 -- kill-switch board: one 4-pin Jetson header, and the command path
 
 **Change.** The three Jetson inputs on the layer-1 mux perfboard are consolidated into a

@@ -95,6 +95,19 @@ here has been soldered, powered, or bench-checked, and the wiring session may ch
 | CUTOFF | 2-pin (SIG, GND) | power-cutoff drive circuit (GPIO 8) | Reserved. The relay/MOSFET stage does not exist yet; the header is there so it does not need re-soldering later. |
 | 5V / GND | 2-pin screw terminal | UBEC 5 V in | The whole board's supply. This is the rail a Jetson or compute-rail failure cannot take down. |
 
+**Pico orientation on the board (planned, unverified on hardware).** The Pico sits with its
+USB socket facing the board's **left edge**. Seen from the top, component side up, that puts
+**pins 1 to 20 along the lower row** (pin 1 at the bottom-left) and **pins 40 down to 21 along
+the upper row**. Every GPIO this board uses, **GPIO 2 to 8, is on the lower row**; the upper
+row is the power side (VBUS, VSYS, 3V3 OUT, RUN). Get this backwards and the whole signal
+harness lands on the power pins.
+
+Wires run on the **underside**, the copper face: components sit on top, so a wire may pass
+straight under the Pico's body, which is how the level-shifted signals and the heartbeat reach
+the lower row. Related, and the easier mistake to make: **flipping the board to solder mirrors
+the columns left-to-right**, so column 1 ends up on the right. Mark column 1 and row 1 on both
+faces with a paint pen before soldering and count from the marked corner every time.
+
 One ground net ties the screw terminal, both shifter ground pins, the Pico's grounds, and
 every header's ground together. The Jetson's fourth wire is that shared reference, not a
 second power wire: a voltage is a difference against a ground, so all three of its signals

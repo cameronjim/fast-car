@@ -79,6 +79,7 @@ target_include_directories(safety_mux_logic PUBLIC logic/include)
 # --- Pico SDK glue (UNVERIFIED ON HARDWARE, see README.md) ------------------------------
 add_executable(safety_mux_firmware
   pico/main.c
+  pico/gpio_irq_dispatch.c
   pico/pwm_capture.c
   pico/pwm_output.c
   pico/heartbeat_input.c

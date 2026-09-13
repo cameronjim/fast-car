@@ -48,11 +48,15 @@ Output: `firmware/safety_mux/build/safety_mux_firmware.uf2`. The build tree and
 `CMakeLists.txt` pins pico-sdk to release tag 2.1.0 via `FetchContent` and runs
 `tools/gen_params.py` itself, so there is nothing to install or generate first.
 
-**Flashing this today gets a fault blink, and that is the correct result.** Every
-`vehicle_params` field the mux needs is still `null`, so the firmware refuses to arm, fast
-blinks the onboard LED, and never initializes any I/O. See
-`docs/notes/safety-mux-first-build.md` for exactly what to expect and what it does and does
-not prove.
+**As of 2026-09-12 this firmware ARMS: no fault blink.** The nine `vehicle_params` fields the
+mux needs were filled in with PROVISIONAL, UNMEASURED standard-RC values (1000/1500/2000 us,
+100 ms watchdog, 1500 us kill threshold) so a first bench test is possible. With nothing
+connected it sits in the CUT state driving 50 Hz / 1500 us neutral on GPIO 6 and 7 with the
+GPIO 8 cutoff low. **Wheels off the ground**: those numbers are convention, not measurement,
+and must be replaced per `docs/notes/hardware-arrival-checklist.md` section 3 before the car
+drives. The refuse-to-arm guard is untouched -- revert any of those fields to `null` and it
+fast-blinks again. See `docs/notes/safety-mux-first-build.md` for exactly what to expect on
+flashing and what it does and does not prove.
 
 CI (`safety-mux-host-tests` job in `.github/workflows/ci.yml`) builds and runs `logic/` +
 `tests/` with `gcc -Wall -Wextra -Werror -Wpedantic` on `ubuntu-latest`. It does **not**

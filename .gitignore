@@ -46,3 +46,8 @@ sim/bridge/log/
 .claude
 /claude-docs
 CLAUDE.md
+# firmware/safety_mux Pico SDK build tree and the flashable .uf2 it produces. Build output,
+# not source: regenerate with the command in firmware/safety_mux/README.md's "Building"
+# section. Same rule as data/ and the generated bindings above.
+firmware/safety_mux/build/
+firmware/safety_mux/build-artifacts/

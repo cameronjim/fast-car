@@ -1,11 +1,13 @@
-# firmware/safety_mux Pico SDK build. DRAFTED, NOT BUILT ANYWHERE YET (no arm-none-eabi-gcc
-# or Pico SDK toolchain is available in this repo's dev containers or in CI -- see README.md
-# and .github/scripts/safety_mux_host_tests.sh's header comment for why CI only builds and
-# runs logic/ + tests/ with plain host gcc, not this file). This is written from the Pico
-# SDK's documented CMake integration pattern, for a human with the toolchain installed
-# (Desktop B, claude-docs/03-environments.md) to build and correct once real hardware exists.
+# firmware/safety_mux Pico SDK build. This DOES build: it cross-compiles clean (no warnings)
+# to a flashable .uf2 with arm-none-eabi-gcc 12.2 + pico-sdk 2.1.0 -- see README.md's
+# "Building" section for the exact containerized command, and
+# docs/notes/safety-mux-first-build.md for the first-compile record. CI still only builds and
+# runs logic/ + tests/ with plain host gcc, not this file (see README.md and
+# .github/scripts/safety_mux_host_tests.sh's header comment for why).
 #
-# Usage (once arm-none-eabi-gcc + a Pico SDK checkout or this FetchContent are available):
+# Compiling is not testing: nothing built by this file has ever run on an RP2040.
+#
+# Usage (needs arm-none-eabi-gcc, cmake, git, python3; the SDK is fetched below):
 #   cmake -S firmware/safety_mux -B firmware/safety_mux/build
 #   cmake --build firmware/safety_mux/build
 #
@@ -21,7 +23,23 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/raspberrypi/pico-sdk.git
   GIT_TAG        2.1.0
 )
-FetchContent_MakeAvailable(pico_sdk)
+# DOWNLOAD ONLY, deliberately not FetchContent_MakeAvailable(). MakeAvailable() would
+# add_subdirectory() the SDK here, which runs the SDK's own project() and does its
+# `list(APPEND CMAKE_MODULE_PATH ${PICO_SDK_PATH}/cmake)` in the SDK's directory scope, not
+# ours. Our project() below then cannot find the SDK's cmake/Platform/PICO.cmake, so
+# CMAKE_EXECUTABLE_SUFFIX is never set to `.elf` and pico_add_extra_outputs()'s picotool step
+# fails on the extensionless ELF ("does not have a recognized file type (extension)"). The
+# populate-then-include-then-project()-then-pico_sdk_init() order below is the SDK's own
+# documented pattern (external/pico_sdk_import.cmake in the SDK tree).
+if(POLICY CMP0169)
+  # The single-argument FetchContent_Populate() is deprecated in CMake 3.30+, but it is what
+  # the SDK's own import script uses and the only way to populate without add_subdirectory().
+  cmake_policy(SET CMP0169 OLD)
+endif()
+FetchContent_GetProperties(pico_sdk)
+if(NOT pico_sdk_POPULATED)
+  FetchContent_Populate(pico_sdk)
+endif()
 set(PICO_SDK_PATH ${pico_sdk_SOURCE_DIR})
 include(${pico_sdk_SOURCE_DIR}/pico_sdk_init.cmake)
 

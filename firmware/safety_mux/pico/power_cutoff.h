@@ -14,6 +14,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "pico/types.h"  // Pico SDK's `uint` typedef, used in the signatures below
+
 // Configures `gpio` as the power-cutoff control output, initialized LOW (power cut) --
 // power is only ever enabled by an explicit power_cutoff_set_enabled(gpio, true) call, never
 // by GPIO reset-default state.

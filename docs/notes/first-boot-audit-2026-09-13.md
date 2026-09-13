@@ -31,6 +31,24 @@ is excluded from every build/test invocation below with `--packages-ignore racer
 | 8 | gap | `ros_ws/src/racer_state/` | Empty (`.gitkeep` only). No `/odom` publisher and no `/pose` publisher exists for the car. `tracker_node` therefore cannot run on the car at all yet, and safety_node's covariance gate stays a stub (`gate_logic.cpp:74-80`, `has_pose_input` hardcoded `false` at `safety_node.cpp:263`). | Recorded only; roadmap Phase 2. |
 | 9 | note | `ros_ws/src/racer_policy/` | Has no `package.xml`, so `colcon test` in `ros_ws` never runs its 5 test files. This is **not** a defect: `.github/scripts/run_python_tests.sh:32` runs it separately with an explicit >=90% line gate. Worth knowing when reading a local `colcon test` summary. | None. |
 
+### Status after PR #39 (2026-09-13)
+
+PR #39 (`feat/car-first-boot`) merged `racer_bringup/launch/car_teleop.launch.py` and
+`racer_drivers/pwm_output_node` into `main`. This does not change this audit's findings text
+(not rewritten, per policy); it changes which of the findings above are still open.
+
+- **Finding #7 (gap): closed.** A car launch file now exists
+  (`racer_bringup/launch/car_teleop.launch.py`) and does not start
+  `racer_gym_bridge/bridge_node`. `/drive` now has a real subscriber on the car via
+  `racer_drivers/pwm_output_node`.
+- **Finding #8 (gap): still open.** `ros_ws/src/racer_state/` is still empty. There is still
+  no `/odom` or `/pose` publisher for the car, `tracker_node` still cannot run on the car, and
+  safety_node's covariance gate is still a stub (`has_pose_input` hardcoded `false` at
+  `safety_node.cpp:263`). Unaffected by PR #39; still roadmap Phase 2 work.
+- Findings #1-#6 and #9 are unaffected by PR #39 and their status above still holds (#1-#3
+  fixed in this audit's own branch, #4-#5 filed as follow-up issues, #6 left alone until the
+  chore/first-boot-followups fix, #9 not a defect).
+
 ### Checked and found correct
 
 These were the things most likely to be wrong, and were not.

@@ -13,6 +13,15 @@
 // including the test-only `inject_fault` parameter below -- results in publishing a hard
 // brake and an `internal_fault` /safety/events record, never a silent crash or passthrough.
 //
+// EVENT STREAM SEMANTICS (GitHub issue #37). /safety/events carries gate TRANSITIONS, not a
+// per-cycle status dump: one record when a gate engages, one when that engagement releases
+// (carrying its duration), and nothing in between. This node does not decide that -- it
+// hands each cycle's engaged-gate set to `racer_safety::GateEventTracker` (gate_logic.hpp,
+// where the semantics and the reasoning live) and publishes whatever transitions come back.
+// claude-docs/05-safety.md's "an unlogged intervention is a bug" still holds: every
+// intervention still produces exactly one engage record. An intervention COUNT
+// (claude-docs/09-evaluation.md) is a count of PHASE_ENGAGE records.
+//
 // CLOCK POLICY (read before changing any time arithmetic below). This node uses TWO clocks,
 // deliberately, and they are not interchangeable:
 //
@@ -45,6 +54,7 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include <vehicle_params_generated.hpp>
 
 #include "racer_safety/gate_logic.hpp"
@@ -237,11 +247,10 @@ class SafetyNode : public rclcpp::Node {
     min_scan_range_m_ = compute_min_scan_range_m(*msg);
   }
 
-  void publish_event(GateSource source, EventSeverity severity, const std::string& detail,
-                     const rclcpp::Time& stamp) {
+  void publish_event(const SafetyEventRecord& record, const rclcpp::Time& stamp) {
     racer_msgs::msg::SafetyEvent event_msg;
     event_msg.stamp = stamp;
-    switch (severity) {
+    switch (record.severity) {
       case EventSeverity::kInfo:
         event_msg.severity = racer_msgs::msg::SafetyEvent::SEVERITY_INFO;
         break;
@@ -252,9 +261,30 @@ class SafetyNode : public rclcpp::Node {
         event_msg.severity = racer_msgs::msg::SafetyEvent::SEVERITY_BRAKE;
         break;
     }
-    event_msg.source = gate_source_to_string(source);
-    event_msg.detail = detail;
+    switch (record.phase) {
+      case EventPhase::kEngage:
+        event_msg.phase = racer_msgs::msg::SafetyEvent::PHASE_ENGAGE;
+        break;
+      case EventPhase::kRelease:
+        event_msg.phase = racer_msgs::msg::SafetyEvent::PHASE_RELEASE;
+        break;
+    }
+    event_msg.duration_s = record.duration_s;
+    event_msg.source = gate_source_to_string(record.source);
+    event_msg.detail = record.detail;
     events_pub_->publish(event_msg);
+  }
+
+  // Publishes the transition records (if any) that this cycle's engaged-gate set implies.
+  // EVERY /safety/events record leaves the node through here, fault path included, so the
+  // engage/release pairing can never get out of step between the two paths.
+  void publish_transitions(const std::vector<GateActivation>& activations,
+                           const rclcpp::Time& steady_now, const rclcpp::Time& stamp) {
+    // Steady clock, NOT `stamp` -- durations are elapsed time (CLOCK POLICY, top of file).
+    for (const SafetyEventRecord& record :
+         event_tracker_.update(activations, steady_now.seconds())) {
+      publish_event(record, stamp);
+    }
   }
 
   void publish_drive(const DriveCommand& cmd, const rclcpp::Time& stamp) {
@@ -293,9 +323,7 @@ class SafetyNode : public rclcpp::Node {
 
       const GateResult result = gate_->evaluate(input, previous_output_);
       publish_drive(result.output, now);
-      for (const SafetyEvent& event : result.events) {
-        publish_event(event.source, event.severity, event.detail, now);
-      }
+      publish_transitions(result.activations, steady_now, now);
       previous_output_ = result.output;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
@@ -303,8 +331,14 @@ class SafetyNode : public rclcpp::Node {
       RCLCPP_ERROR(this->get_logger(), "safety_node: internal fault, braking: %s", e.what());
       const DriveCommand brake{0.0, 0.0};
       publish_drive(brake, now);
-      publish_event(GateSource::kInternalFault, EventSeverity::kBrake,
-                    std::string("internal fault: ") + e.what(), now);
+      // Routed through the SAME tracker as the nominal path: a sustained fault is ONE
+      // internal_fault engagement (not one record per cycle, GitHub issue #37), and any gate
+      // that was engaged before the fault gets its release record here, because the fault
+      // short-circuits gate evaluation and those gates are no longer being reported.
+      const std::vector<GateActivation> fault_activations{
+          GateActivation{GateSource::kInternalFault, EventSeverity::kBrake,
+                         std::string("internal fault: ") + e.what()}};
+      publish_transitions(fault_activations, steady_now, now);
       previous_output_ = brake;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
@@ -312,6 +346,9 @@ class SafetyNode : public rclcpp::Node {
   }
 
   std::optional<SafetyGateLogic> gate_;
+  // Turns the gate's per-cycle engaged-gate set into engage/release records; owns the
+  // "which gates are currently engaged" state (racer_safety::GateEventTracker).
+  GateEventTracker event_tracker_;
   SafetyLimits gate_limits_;
   double control_period_s_{0.02};
 

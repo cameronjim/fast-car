@@ -7,8 +7,9 @@
 // all ROS plumbing (subscribing /drive_raw and /scan, publishing /drive and
 // /safety/events) and calls `SafetyGateLogic::evaluate` once per cycle; nothing here
 // allocates on the heap (claude-docs/10-conventions.md: "No heap allocation in the 50 Hz
-// control path after init") except for the (small, bounded) `events` vector returned per
-// cycle, which only grows when an intervention actually fires.
+// control path after init") except for the (small, bounded) `activations` vector returned
+// per cycle and the transition records GateEventTracker returns from it, both of which only
+// grow when an intervention actually fires.
 //
 // Design (see also this file's neighboring test/test_gate_logic.cpp for the full
 // table-driven pass/marginal/fail/garbage matrix):
@@ -42,6 +43,8 @@
 #ifndef RACER_SAFETY_GATE_LOGIC_HPP_
 #define RACER_SAFETY_GATE_LOGIC_HPP_
 
+#include <array>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -92,10 +95,40 @@ enum class EventSeverity {
   kBrake,
 };
 
-struct SafetyEvent {
+// Number of enumerators in GateSource / EventSeverity. Used to size GateEventTracker's
+// fixed engagement table (below), which indexes on static_cast<std::size_t>(the enumerator)
+// -- deliberately arithmetic rather than a switch, so the tracker adds no branches to the
+// 100%-branch-coverage gate and no heap allocation to the 50 Hz path. Keep these in step
+// with the enums above if an enumerator is ever added.
+inline constexpr std::size_t kGateSourceCount = 7;
+inline constexpr std::size_t kEventSeverityCount = 3;
+
+// One gate's state for ONE control cycle, as reported by SafetyGateLogic::evaluate(): "this
+// gate is engaged right now, at this severity, for this reason". NOT what gets published --
+// evaluate() reports this every cycle a gate stays engaged, and GateEventTracker (below)
+// turns the per-cycle stream into the transition records that reach /safety/events.
+struct GateActivation {
   GateSource source;
   EventSeverity severity;
   std::string detail;
+};
+
+// Which end of an engagement a published record marks (mirrors racer_msgs/SafetyEvent.msg's
+// PHASE_ENGAGE / PHASE_RELEASE one-to-one).
+enum class EventPhase {
+  kEngage,
+  kRelease,
+};
+
+// What safety_node actually publishes on /safety/events: one record when a gate engages and
+// one when that engagement releases. Mirrors racer_msgs/SafetyEvent.msg field-for-field
+// (minus the stamp, which is ROS plumbing and belongs to the node).
+struct SafetyEventRecord {
+  GateSource source;
+  EventSeverity severity;
+  EventPhase phase;
+  std::string detail;
+  double duration_s = 0.0;  // always 0.0 on kEngage; length of the engagement on kRelease
 };
 
 // Everything the gate needs to know about this cycle. All fields are read defensively:
@@ -117,7 +150,9 @@ struct GateInput {
 struct GateResult {
   DriveCommand output;
   bool brake = false;  // true iff output is a hard brake ({0, 0})
-  std::vector<SafetyEvent> events;
+  // Which gates are engaged THIS cycle (not what gets published -- see GateActivation and
+  // GateEventTracker). A gate that stays engaged appears here every cycle.
+  std::vector<GateActivation> activations;
 };
 
 // Covariance gate stub (roadmap task 2.6: no /pose source exists yet). Returns the speed-cap
@@ -150,6 +185,48 @@ class SafetyGateLogic {
                           double dt_s) const;
 
   SafetyLimits limits_;
+};
+
+// Turns SafetyGateLogic::evaluate()'s per-cycle activations into the transition records
+// that reach /safety/events (GitHub issue #37: safety_node used to publish one record per
+// engaged gate PER CYCLE, so a gate that stayed engaged for 14 s produced ~700 records at
+// 50 Hz and the intervention count claude-docs/09-evaluation.md reports measured DURATION,
+// not interventions).
+//
+// Semantics, deliberately simple:
+//
+//   * One intervention = one ENGAGEMENT of a (source, severity) pair, from the cycle it
+//     first appears in `activations` to the cycle it stops appearing. Exactly one kEngage
+//     record when it starts and exactly one kRelease record (carrying the duration) when it
+//     ends. Nothing at all while it stays engaged -- no periodic "still engaged" record; the
+//     interval between the two records IS the sustained state.
+//   * (source, severity) rather than source alone is the engagement identity so that an
+//     escalation is never silent: a TTC advisory (kTtc/kInfo) that becomes a TTC brake
+//     (kTtc/kBrake) releases the advisory engagement and opens a brake engagement, which is
+//     exactly what an evaluation counting BRAKE-severity interventions must see.
+//   * Gates are independent: several can be engaged at once, each with its own lifecycle.
+//   * A gate still engaged when the node exits never gets its release record. That is
+//     accepted (the node is gone; there is nobody to publish it) and a bag reader should
+//     treat a trailing engage as "engaged until end of bag".
+//
+// ROS-free and allocation-free apart from the returned vector: the engagement table is a
+// fixed array sized by the enum counts above, not a map.
+class GateEventTracker {
+ public:
+  // `now_s` is a monotonic-clock reading in seconds (safety_node passes its steady clock --
+  // see that file's CLOCK POLICY); it is only ever used as the two ends of a subtraction,
+  // and a non-finite or backwards interval is reported as a 0.0 duration rather than
+  // propagating garbage into an evaluation metric.
+  std::vector<SafetyEventRecord> update(const std::vector<GateActivation>& activations,
+                                        double now_s);
+
+ private:
+  struct Engagement {
+    bool engaged = false;
+    double engaged_at_s = 0.0;
+  };
+
+  std::array<Engagement, kGateSourceCount * kEventSeverityCount> engagements_{};
 };
 
 }  // namespace racer_safety

@@ -107,6 +107,21 @@ def _make_scan(range_m: float, num_beams: int = 100) -> LaserScan:
     return msg
 
 
+def _engages(events, source: str) -> list:
+    """PHASE_ENGAGE records for one gate source.
+
+    /safety/events carries gate TRANSITIONS, not a per-cycle status dump (GitHub issue #37):
+    one record when a gate engages, one when that engagement releases. An intervention COUNT
+    (claude-docs/09-evaluation.md) is a count of PHASE_ENGAGE records, so that is what these
+    tests count.
+    """
+    return [e for e in events if e.source == source and e.phase == SafetyEvent.PHASE_ENGAGE]
+
+
+def _releases(events, source: str) -> list:
+    return [e for e in events if e.source == source and e.phase == SafetyEvent.PHASE_RELEASE]
+
+
 @pytest.mark.launch_test
 def generate_test_description():
     safety_node = LaunchNode(
@@ -238,11 +253,24 @@ class TestSafetyNode(unittest.TestCase):
 
         self.assertGreater(len(drive_out), 0)
         self.assertLessEqual(abs(drive_out[-1].drive.steering_angle), _STEERING_MAX_RAD + 1e-3)
-        bounds_events = [e for e in events if e.source == "bounds_clamp"]
-        self.assertGreater(
-            len(bounds_events),
-            0,
-            "no bounds_clamp /safety/events published for an out-of-bounds command",
+        bounds_engages = _engages(events, "bounds_clamp")
+        self.assertGreaterEqual(
+            len(bounds_engages),
+            1,
+            "no bounds_clamp PHASE_ENGAGE /safety/events published for an out-of-bounds "
+            "command (claude-docs/05-safety.md: an unlogged intervention is a bug)",
+        )
+        # The command was out of bounds for EVERY cycle of that 1s window (10 cycles at this
+        # test's control rate), which the pre-fix node logged as ~10 separate interventions.
+        # A small ceiling rather than exactly 1 because a single-cycle watchdog blip on a
+        # loaded runner legitimately breaks one engagement into two (the watchdog
+        # short-circuits gate evaluation, so bounds_clamp releases and re-engages).
+        self.assertLessEqual(
+            len(bounds_engages),
+            3,
+            f"bounds_clamp logged {len(bounds_engages)} interventions for ONE sustained "
+            "out-of-bounds command -- /safety/events is counting cycles again, not "
+            "interventions (GitHub issue #37)",
         )
 
     def test_watchdog_brakes_on_drive_raw_silence(self):
@@ -274,11 +302,104 @@ class TestSafetyNode(unittest.TestCase):
         latest = drive_out[-1]
         self.assertEqual(latest.drive.steering_angle, 0.0)
         self.assertEqual(latest.drive.speed, 0.0)
-        watchdog_events = [e for e in events if e.source == "watchdog"]
-        self.assertGreater(
-            len(watchdog_events), 0, "no watchdog /safety/events published on silence"
+        # Exactly ONE engagement for one continuous stretch of silence, however long it
+        # lasts (GitHub issue #37: this used to be one record per cycle, so the count
+        # measured the operator's start-up latency rather than the car's behaviour).
+        watchdog_engages = _engages(events, "watchdog")
+        self.assertEqual(
+            len(watchdog_engages),
+            1,
+            f"expected exactly one watchdog PHASE_ENGAGE record for one continuous stretch "
+            f"of /drive_raw silence, got {len(watchdog_engages)}: "
+            f"{[(e.phase, round(e.duration_s, 3), e.detail) for e in events if e.source == 'watchdog']}",
         )
-        self.assertTrue(all(e.severity == SafetyEvent.SEVERITY_BRAKE for e in watchdog_events))
+        self.assertTrue(all(e.severity == SafetyEvent.SEVERITY_BRAKE for e in watchdog_engages))
+        self.assertEqual(
+            _releases(events, "watchdog"),
+            [],
+            "the watchdog released while /drive_raw was still silent",
+        )
+
+    def test_engaged_gate_does_not_re_emit_every_cycle(self):
+        """Regression test for GitHub issue #37.
+
+        A gate that stays engaged used to re-publish its /safety/events record on every
+        control cycle (measured: 248 watchdog records in 14s at 50 Hz), so counting records
+        measured how LONG the gate was engaged rather than how many times it engaged --
+        and claude-docs/09-evaluation.md reports that count as a metric. Here the watchdog
+        is already engaged before the measurement window opens, so a correct node emits
+        NOTHING at all for the whole window.
+        """
+        events = []
+        self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        # No /drive_raw publisher at all in this test: silence long enough that the watchdog
+        # is engaged and settled before the measurement window opens.
+        self._spin_for(0.3 + _WATCHDOG_TIMEOUT_S * 5.0)
+
+        events.clear()
+        measure_s = 3.0
+        self._spin_for(measure_s)
+
+        expected_cycles = int(measure_s * _TEST_CONTROL_RATE_HZ)
+        self.assertEqual(
+            len(events),
+            0,
+            f"safety_node emitted {len(events)} /safety/events records over {measure_s}s "
+            f"({expected_cycles} control cycles) during which NO gate changed state -- it is "
+            f"re-emitting per cycle again (GitHub issue #37): "
+            f"{[(e.source, e.phase, e.detail) for e in events[:5]]}",
+        )
+
+    def test_engage_and_release_bracket_one_intervention(self):
+        """One intervention produces one PHASE_ENGAGE record and, when it ends, one
+        PHASE_RELEASE record carrying how long it lasted."""
+        events = []
+        self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        drive_raw_pub = self.node.create_publisher(
+            AckermannDriveStamped, "/drive_raw", _reliable_qos()
+        )
+        self._spin_for(0.3)
+
+        # Fresh commands first, so any watchdog engagement left over from another test is
+        # released before the window that matters opens.
+        cmd = _make_drive(steering=0.0, speed=1.0)
+        self._publish_steadily(drive_raw_pub, cmd, seconds=1.0)
+
+        events.clear()
+        silence_s = _WATCHDOG_TIMEOUT_S * 5.0
+        self._spin_for(silence_s)  # the intervention: one continuous stretch of silence
+
+        engages = _engages(events, "watchdog")
+        self.assertEqual(
+            len(engages),
+            1,
+            f"expected one watchdog PHASE_ENGAGE record, got {len(engages)}",
+        )
+        self.assertEqual(engages[0].duration_s, 0.0)
+        self.assertEqual(_releases(events, "watchdog"), [], "released while still silent")
+
+        # End the intervention.
+        self._publish_steadily(drive_raw_pub, cmd, seconds=0.6)
+
+        releases = _releases(events, "watchdog")
+        self.assertEqual(
+            len(releases),
+            1,
+            f"expected one watchdog PHASE_RELEASE record once commands resumed, got "
+            f"{len(releases)}",
+        )
+        self.assertEqual(releases[0].severity, SafetyEvent.SEVERITY_BRAKE)
+        self.assertGreater(
+            releases[0].duration_s,
+            _WATCHDOG_TIMEOUT_S,
+            "the release record must report how long the engagement actually lasted",
+        )
+        self.assertLess(
+            releases[0].duration_s,
+            silence_s + 5.0,
+            f"implausible engagement duration {releases[0].duration_s}s reported for a "
+            f"~{silence_s}s intervention",
+        )
 
     def test_no_scan_leaves_the_ttc_gate_inert(self):
         """With the TTC thresholds now set in the committed config (issue #36), the gate is
@@ -350,10 +471,21 @@ class TestSafetyNode(unittest.TestCase):
         self.assertEqual(
             drive_out[-1].drive.speed, 0.0, "safety_node did not TTC-brake on a close obstacle"
         )
-        ttc_brake_events = [
-            e for e in events if e.source == "ttc" and e.severity == SafetyEvent.SEVERITY_BRAKE
+        ttc_brake_engages = [
+            e for e in _engages(events, "ttc") if e.severity == SafetyEvent.SEVERITY_BRAKE
         ]
-        self.assertGreater(len(ttc_brake_events), 0, "no TTC brake /safety/events published")
+        self.assertGreaterEqual(
+            len(ttc_brake_engages), 1, "no TTC brake PHASE_ENGAGE /safety/events published"
+        )
+        # One continuous close-obstacle condition is one intervention, not one per cycle
+        # (GitHub issue #37). Ceiling rather than exactly 1 for the same watchdog-blip reason
+        # as the bounds_clamp test above.
+        self.assertLessEqual(
+            len(ttc_brake_engages),
+            3,
+            f"TTC logged {len(ttc_brake_engages)} brake interventions for ONE continuous "
+            "close-obstacle condition -- /safety/events is counting cycles, not interventions",
+        )
 
     def test_drive_raw_subscription_is_reliable_not_best_effort(self):
         """A best_effort /drive_raw publisher must be QoS-incompatible with safety_node's
@@ -411,19 +543,29 @@ class TestSafetyNode(unittest.TestCase):
             self.assertIsNotNone(future.result(), "set_parameters call did not complete")
 
         try:
-            _set_inject_fault(True)
+            # Cleared BEFORE the parameter is set, not after: the fault engages on the very
+            # first cycle after the service call returns, and /safety/events now emits that
+            # engagement ONCE (GitHub issue #37) -- a clear() racing that single record would
+            # drop the only evidence the fail-closed path ran.
             events.clear()
+            _set_inject_fault(True)
             self._publish_steadily(drive_raw_pub, nominal_cmd, seconds=0.5)
 
             self.assertGreater(len(drive_out), 0)
             self.assertEqual(drive_out[-1].drive.steering_angle, 0.0)
             self.assertEqual(drive_out[-1].drive.speed, 0.0)
-            fault_events = [
-                e
-                for e in events
-                if e.source == "internal_fault" and e.severity == SafetyEvent.SEVERITY_BRAKE
-            ]
-            self.assertGreater(len(fault_events), 0, "no internal_fault /safety/events published")
+            # Fail-closed still logs -- exactly once for one continuous fault, like every
+            # other gate. The fault short-circuits gate evaluation entirely, so no watchdog
+            # blip can split this engagement: it is deterministically one record.
+            fault_engages = _engages(events, "internal_fault")
+            self.assertEqual(
+                len(fault_engages),
+                1,
+                "expected exactly one internal_fault PHASE_ENGAGE /safety/events record for "
+                f"one continuous injected fault, got {len(fault_engages)}: "
+                f"{[(e.source, e.phase) for e in events]}",
+            )
+            self.assertEqual(fault_engages[0].severity, SafetyEvent.SEVERITY_BRAKE)
         finally:
             _set_inject_fault(False)
 

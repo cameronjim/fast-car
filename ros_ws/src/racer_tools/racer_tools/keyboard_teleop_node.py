@@ -123,9 +123,15 @@ class KeyboardTeleopNode(Node):
 
 def main(args: list | None = None) -> None:
     rclpy.init(args=args)
-    node = KeyboardTeleopNode()
-    period_s = 1.0 / node.control_rate_hz
+    # `node` starts unbound-but-declared so that if KeyboardTeleopNode() itself raises (e.g.
+    # vehicle_params_loader can't find the repo root), the `finally` below has something
+    # well-defined to check instead of referencing a name that was never assigned -- that
+    # NameError used to mask the real constructor exception (docs/notes/
+    # first-boot-audit-2026-09-13.md finding #6).
+    node: KeyboardTeleopNode | None = None
     try:
+        node = KeyboardTeleopNode()
+        period_s = 1.0 / node.control_rate_hz
         with raw_terminal_mode(sys.stdin):
             while rclpy.ok() and not node.should_quit:
                 raw = _read_raw_key(sys.stdin, timeout_s=period_s)
@@ -137,7 +143,10 @@ def main(args: list | None = None) -> None:
                 # responsive rather than relying solely on the blocking select() above.
                 rclpy.spin_once(node, timeout_sec=0.0)
     finally:
-        node.destroy_node()
+        # Only touch `node` if construction actually succeeded -- cleanup must never itself
+        # raise on top of (and mask) whatever the `try` block raised.
+        if node is not None:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 

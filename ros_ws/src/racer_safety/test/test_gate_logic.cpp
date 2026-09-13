@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <limits>
+#include <vector>
 
 #include "racer_safety/gate_logic.hpp"
 
@@ -71,7 +72,7 @@ TEST(Watchdog, PassesWhenAgeWellBelowTimeout) {
   input.command = DriveCommand{0.1, 2.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_FALSE(result.brake);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kWatchdog);
   }
 }
@@ -84,9 +85,9 @@ TEST(Watchdog, MarginalAtExactlyTimeoutTrips) {
   EXPECT_TRUE(result.brake);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.0);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kWatchdog);
-  EXPECT_EQ(result.events[0].severity, EventSeverity::kBrake);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kWatchdog);
+  EXPECT_EQ(result.activations[0].severity, EventSeverity::kBrake);
 }
 
 TEST(Watchdog, JustBelowTimeoutDoesNotTrip) {
@@ -127,8 +128,8 @@ TEST(Watchdog, GarbageNegativeAgeTrips) {
   input.drive_raw_age_s = -1.0;
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_TRUE(result.brake);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kWatchdog);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kWatchdog);
 }
 
 TEST(Watchdog, TripDoesNotEvaluateOtherGates) {
@@ -139,8 +140,8 @@ TEST(Watchdog, TripDoesNotEvaluateOtherGates) {
   input.drive_raw_age_s = 5.0;
   input.command = DriveCommand{kNan, kNan};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kWatchdog);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kWatchdog);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -153,7 +154,7 @@ TEST(CommandSanity, PassesOnFiniteCommand) {
   input.command = DriveCommand{0.1, 3.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_FALSE(result.brake);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kCommandSanity);
   }
 }
@@ -166,9 +167,9 @@ TEST(CommandSanity, GarbageNanSteeringBrakes) {
   EXPECT_TRUE(result.brake);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.0);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kCommandSanity);
-  EXPECT_EQ(result.events[0].severity, EventSeverity::kBrake);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kCommandSanity);
+  EXPECT_EQ(result.activations[0].severity, EventSeverity::kBrake);
 }
 
 TEST(CommandSanity, GarbageNanSpeedWithFiniteSteeringBrakes) {
@@ -179,8 +180,8 @@ TEST(CommandSanity, GarbageNanSpeedWithFiniteSteeringBrakes) {
   input.command = DriveCommand{0.1, kNan};
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_TRUE(result.brake);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kCommandSanity);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kCommandSanity);
 }
 
 TEST(CommandSanity, GarbageInfSteeringBrakes) {
@@ -219,7 +220,7 @@ TEST(BoundsClamp, PassesWithinBoundsNoEvent) {
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.1);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 5.0);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kBoundsClamp);
   }
 }
@@ -230,7 +231,7 @@ TEST(BoundsClamp, MarginalExactlyAtSteeringMaxNoEvent) {
   input.command = DriveCommand{0.4189, 0.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.4189);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kBoundsClamp);
   }
 }
@@ -241,7 +242,7 @@ TEST(BoundsClamp, MarginalExactlyAtSpeedMaxNoEvent) {
   input.command = DriveCommand{0.0, 20.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 20.0);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kBoundsClamp);
   }
 }
@@ -252,9 +253,9 @@ TEST(BoundsClamp, FailsAboveSteeringMaxClampedWithEvent) {
   input.command = DriveCommand{0.5, 0.0};  // > 0.4189
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.4189);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kBoundsClamp);
-  EXPECT_EQ(result.events[0].severity, EventSeverity::kWarning);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kBoundsClamp);
+  EXPECT_EQ(result.activations[0].severity, EventSeverity::kWarning);
   EXPECT_FALSE(result.brake);
 }
 
@@ -264,8 +265,8 @@ TEST(BoundsClamp, FailsBelowSteeringMinClampedWithEvent) {
   input.command = DriveCommand{-0.5, 0.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, -0.4189);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kBoundsClamp);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kBoundsClamp);
 }
 
 TEST(BoundsClamp, FailsAboveSpeedMaxClampedWithEventOnlySpeedChanged) {
@@ -277,8 +278,8 @@ TEST(BoundsClamp, FailsAboveSpeedMaxClampedWithEventOnlySpeedChanged) {
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.1);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 20.0);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kBoundsClamp);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kBoundsClamp);
 }
 
 TEST(BoundsClamp, FailsBelowSpeedMinClampedWithEvent) {
@@ -287,8 +288,8 @@ TEST(BoundsClamp, FailsBelowSpeedMinClampedWithEvent) {
   input.command = DriveCommand{0.0, -10.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, -5.0);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kBoundsClamp);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kBoundsClamp);
 }
 
 TEST(BoundsClamp, BothSteeringAndSpeedClampedProducesOneEvent) {
@@ -301,7 +302,7 @@ TEST(BoundsClamp, BothSteeringAndSpeedClampedProducesOneEvent) {
   // One bounds_clamp event (not one per field) -- this gate reports "a clamp happened",
   // not per-field spam.
   int bounds_events = 0;
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     if (event.source == GateSource::kBoundsClamp) {
       ++bounds_events;
     }
@@ -322,7 +323,7 @@ TEST(RateLimit, SteeringWithinRatePassesNoEvent) {
   const DriveCommand prev{0.0, 0.0};
   const GateResult result = gate.evaluate(input, prev);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.05);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kRateLimit);
   }
 }
@@ -335,7 +336,7 @@ TEST(RateLimit, SteeringMarginalExactlyAtMaxRatePassesNoEvent) {
   const DriveCommand prev{0.0, 0.0};
   const GateResult result = gate.evaluate(input, prev);
   EXPECT_NEAR(result.output.steering_angle_rad, 0.064, 1e-12);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kRateLimit);
   }
 }
@@ -349,7 +350,7 @@ TEST(RateLimit, SteeringExceedsMaxRateClampedWithEvent) {
   const GateResult result = gate.evaluate(input, prev);
   EXPECT_NEAR(result.output.steering_angle_rad, 0.064, 1e-12);
   bool saw_rate_event = false;
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     if (event.source == GateSource::kRateLimit) saw_rate_event = true;
   }
   EXPECT_TRUE(saw_rate_event);
@@ -373,7 +374,7 @@ TEST(RateLimit, SpeedAccelerationWithinLimitPassesNoEvent) {
   const DriveCommand prev{0.0, 0.0};
   const GateResult result = gate.evaluate(input, prev);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.5);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kRateLimit);
   }
 }
@@ -386,7 +387,7 @@ TEST(RateLimit, SpeedAccelerationMarginalExactlyAtLimitPassesNoEvent) {
   const DriveCommand prev{0.0, 0.0};
   const GateResult result = gate.evaluate(input, prev);
   EXPECT_NEAR(result.output.speed_mps, 0.951, 1e-9);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kRateLimit);
   }
 }
@@ -400,7 +401,7 @@ TEST(RateLimit, SpeedAccelerationExceedsLimitClampedWithEvent) {
   const GateResult result = gate.evaluate(input, prev);
   EXPECT_NEAR(result.output.speed_mps, 0.951, 1e-9);
   bool saw_rate_event = false;
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     if (event.source == GateSource::kRateLimit) saw_rate_event = true;
   }
   EXPECT_TRUE(saw_rate_event);
@@ -473,7 +474,7 @@ TEST(Ttc, NotConfiguredNeverBrakesEvenAtZeroRange) {
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_FALSE(result.brake);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 10.0);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kTtc);
   }
 }
@@ -540,7 +541,7 @@ TEST(Ttc, PassesFarFromObstacleNoEvent) {
   input.min_scan_range_m = 100.0;  // ttc = 20s, far above both thresholds
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_FALSE(result.brake);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kTtc);
   }
 }
@@ -553,9 +554,9 @@ TEST(Ttc, MarginalExactlyAtWarningThresholdEmitsInfoNoCommandChange) {
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_FALSE(result.brake);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 5.0);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kTtc);
-  EXPECT_EQ(result.events[0].severity, EventSeverity::kInfo);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kTtc);
+  EXPECT_EQ(result.activations[0].severity, EventSeverity::kInfo);
 }
 
 TEST(Ttc, BetweenWarningAndBrakeEmitsInfoOnly) {
@@ -565,8 +566,8 @@ TEST(Ttc, BetweenWarningAndBrakeEmitsInfoOnly) {
   input.min_scan_range_m = 4.0;  // ttc = 0.8s, between 0.5 and 1.0
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_FALSE(result.brake);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].severity, EventSeverity::kInfo);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].severity, EventSeverity::kInfo);
 }
 
 TEST(Ttc, MarginalExactlyAtBrakeThresholdBrakes) {
@@ -577,9 +578,9 @@ TEST(Ttc, MarginalExactlyAtBrakeThresholdBrakes) {
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_TRUE(result.brake);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
-  ASSERT_EQ(result.events.size(), 1u);
-  EXPECT_EQ(result.events[0].source, GateSource::kTtc);
-  EXPECT_EQ(result.events[0].severity, EventSeverity::kBrake);
+  ASSERT_EQ(result.activations.size(), 1u);
+  EXPECT_EQ(result.activations[0].source, GateSource::kTtc);
+  EXPECT_EQ(result.activations[0].severity, EventSeverity::kBrake);
 }
 
 TEST(Ttc, FailsWellInsideBrakeThresholdBrakesAndZeroesSpeedOnlyKeepsSteering) {
@@ -602,7 +603,7 @@ TEST(Ttc, NoWarningThresholdConfiguredSkipsWarningZoneSilently) {
   input.min_scan_range_m = 4.0;  // ttc = 0.8s: would be "warning zone" if a threshold existed
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_FALSE(result.brake);
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kTtc);
   }
 }
@@ -633,7 +634,7 @@ TEST(CovarianceStub, AbsentPoseInputDoesNotDisableWatchdog) {
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_TRUE(result.brake);
   bool saw_watchdog = false;
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     if (event.source == GateSource::kWatchdog) saw_watchdog = true;
   }
   EXPECT_TRUE(saw_watchdog);
@@ -647,7 +648,7 @@ TEST(CovarianceStub, AbsentPoseInputDoesNotDisableCommandSanity) {
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_TRUE(result.brake);
   bool saw_sanity = false;
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     if (event.source == GateSource::kCommandSanity) saw_sanity = true;
   }
   EXPECT_TRUE(saw_sanity);
@@ -681,7 +682,7 @@ TEST(CovarianceStub, EngagedProducesEventButNoSpeedChangeGivenFixedFraction) {
   const GateResult result = gate.evaluate(input, kZeroPrev);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 5.0);  // fraction is 1.0 until roadmap 2.6
   bool saw_covariance = false;
-  for (const auto& event : result.events) {
+  for (const auto& event : result.activations) {
     if (event.source == GateSource::kCovariance) saw_covariance = true;
   }
   EXPECT_TRUE(saw_covariance);
@@ -729,6 +730,221 @@ TEST(BoundsClamp, PropertySweepOutputNeverExceedsBoundsForAnyFiniteInput) {
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// GateEventTracker: per-cycle activations -> engage/release TRANSITION records
+// (GitHub issue #37). Table-driven over every gate source and severity, plus sustained
+// engagement, simultaneous gates, flapping, escalation, and garbage clock input.
+// ---------------------------------------------------------------------------------------
+
+constexpr GateSource kAllSources[] = {
+    GateSource::kWatchdog,      GateSource::kCommandSanity, GateSource::kBoundsClamp,
+    GateSource::kRateLimit,     GateSource::kTtc,           GateSource::kCovariance,
+    GateSource::kInternalFault,
+};
+
+constexpr EventSeverity kAllSeverities[] = {
+    EventSeverity::kInfo,
+    EventSeverity::kWarning,
+    EventSeverity::kBrake,
+};
+
+GateActivation activation(GateSource source, EventSeverity severity) {
+  return GateActivation{source, severity, "detail"};
+}
+
+TEST(GateEventTracker, EveryGateAndSeverityEngagesOnceSustainsSilentlyAndReleasesOnce) {
+  for (const GateSource source : kAllSources) {
+    for (const EventSeverity severity : kAllSeverities) {
+      GateEventTracker tracker;
+      const std::vector<GateActivation> engaged{activation(source, severity)};
+
+      const std::vector<SafetyEventRecord> on_engage = tracker.update(engaged, 10.0);
+      ASSERT_EQ(on_engage.size(), 1u);
+      EXPECT_EQ(on_engage[0].source, source);
+      EXPECT_EQ(on_engage[0].severity, severity);
+      EXPECT_EQ(on_engage[0].phase, EventPhase::kEngage);
+      EXPECT_EQ(on_engage[0].detail, "detail");
+      EXPECT_DOUBLE_EQ(on_engage[0].duration_s, 0.0);
+
+      // The whole point of issue #37: 100 further cycles of the SAME engagement emit
+      // nothing at all, at any rate.
+      for (int cycle = 1; cycle <= 100; ++cycle) {
+        EXPECT_TRUE(tracker.update(engaged, 10.0 + 0.02 * cycle).empty())
+            << "sustained engagement re-emitted on cycle " << cycle;
+      }
+
+      const std::vector<SafetyEventRecord> on_release = tracker.update({}, 13.0);
+      ASSERT_EQ(on_release.size(), 1u);
+      EXPECT_EQ(on_release[0].source, source);
+      EXPECT_EQ(on_release[0].severity, severity);
+      EXPECT_EQ(on_release[0].phase, EventPhase::kRelease);
+      EXPECT_DOUBLE_EQ(on_release[0].duration_s, 3.0);
+
+      // Released for good: further idle cycles emit nothing.
+      EXPECT_TRUE(tracker.update({}, 14.0).empty());
+    }
+  }
+}
+
+TEST(GateEventTracker, IdleTrackerEmitsNothing) {
+  GateEventTracker tracker;
+  EXPECT_TRUE(tracker.update({}, 0.0).empty());
+  EXPECT_TRUE(tracker.update({}, 1.0).empty());
+}
+
+TEST(GateEventTracker, SimultaneousGatesHaveIndependentLifecycles) {
+  GateEventTracker tracker;
+
+  // Cycle 1: two gates engage together -> exactly two engage records.
+  const std::vector<SafetyEventRecord> cycle1 =
+      tracker.update({activation(GateSource::kBoundsClamp, EventSeverity::kWarning),
+                      activation(GateSource::kRateLimit, EventSeverity::kWarning)},
+                     100.0);
+  ASSERT_EQ(cycle1.size(), 2u);
+  EXPECT_EQ(cycle1[0].source, GateSource::kBoundsClamp);
+  EXPECT_EQ(cycle1[0].phase, EventPhase::kEngage);
+  EXPECT_EQ(cycle1[1].source, GateSource::kRateLimit);
+  EXPECT_EQ(cycle1[1].phase, EventPhase::kEngage);
+
+  // Cycle 2: one stays engaged, a third engages -> one engage record only.
+  const std::vector<SafetyEventRecord> cycle2 =
+      tracker.update({activation(GateSource::kBoundsClamp, EventSeverity::kWarning),
+                      activation(GateSource::kTtc, EventSeverity::kBrake)},
+                     101.0);
+  ASSERT_EQ(cycle2.size(), 2u);
+  EXPECT_EQ(cycle2[0].source, GateSource::kTtc);
+  EXPECT_EQ(cycle2[0].phase, EventPhase::kEngage);
+  EXPECT_EQ(cycle2[1].source, GateSource::kRateLimit);
+  EXPECT_EQ(cycle2[1].phase, EventPhase::kRelease);
+  EXPECT_DOUBLE_EQ(cycle2[1].duration_s, 1.0);
+
+  // Cycle 3: everything releases, each with its OWN duration.
+  const std::vector<SafetyEventRecord> cycle3 = tracker.update({}, 105.0);
+  ASSERT_EQ(cycle3.size(), 2u);
+  for (const SafetyEventRecord& record : cycle3) {
+    EXPECT_EQ(record.phase, EventPhase::kRelease);
+    if (record.source == GateSource::kBoundsClamp) {
+      EXPECT_DOUBLE_EQ(record.duration_s, 5.0);
+    } else {
+      EXPECT_EQ(record.source, GateSource::kTtc);
+      EXPECT_DOUBLE_EQ(record.duration_s, 4.0);
+    }
+  }
+}
+
+TEST(GateEventTracker, FlappingEngageReleaseEngageWithinThreeCyclesIsThreeRecords) {
+  GateEventTracker tracker;
+  const std::vector<GateActivation> engaged{
+      activation(GateSource::kRateLimit, EventSeverity::kWarning)};
+
+  const std::vector<SafetyEventRecord> cycle1 = tracker.update(engaged, 0.00);
+  ASSERT_EQ(cycle1.size(), 1u);
+  EXPECT_EQ(cycle1[0].phase, EventPhase::kEngage);
+
+  const std::vector<SafetyEventRecord> cycle2 = tracker.update({}, 0.02);
+  ASSERT_EQ(cycle2.size(), 1u);
+  EXPECT_EQ(cycle2[0].phase, EventPhase::kRelease);
+  EXPECT_NEAR(cycle2[0].duration_s, 0.02, 1e-12);
+
+  const std::vector<SafetyEventRecord> cycle3 = tracker.update(engaged, 0.04);
+  ASSERT_EQ(cycle3.size(), 1u);
+  EXPECT_EQ(cycle3[0].phase, EventPhase::kEngage);
+  EXPECT_DOUBLE_EQ(cycle3[0].duration_s, 0.0);
+
+  // Two separate interventions, so a counter of PHASE_ENGAGE records sees exactly two.
+  const std::vector<SafetyEventRecord> cycle4 = tracker.update({}, 0.06);
+  ASSERT_EQ(cycle4.size(), 1u);
+  EXPECT_EQ(cycle4[0].phase, EventPhase::kRelease);
+}
+
+TEST(GateEventTracker, SeverityEscalationOnTheSameSourceIsAReleaseAndANewEngage) {
+  GateEventTracker tracker;
+  ASSERT_EQ(tracker.update({activation(GateSource::kTtc, EventSeverity::kInfo)}, 0.0).size(), 1u);
+
+  // TTC advisory becomes a TTC brake: the brake MUST show up as its own engagement, or an
+  // evaluation counting BRAKE-severity interventions would never see it.
+  const std::vector<SafetyEventRecord> escalation =
+      tracker.update({activation(GateSource::kTtc, EventSeverity::kBrake)}, 0.5);
+  ASSERT_EQ(escalation.size(), 2u);
+  EXPECT_EQ(escalation[0].phase, EventPhase::kEngage);
+  EXPECT_EQ(escalation[0].severity, EventSeverity::kBrake);
+  EXPECT_EQ(escalation[1].phase, EventPhase::kRelease);
+  EXPECT_EQ(escalation[1].severity, EventSeverity::kInfo);
+  EXPECT_DOUBLE_EQ(escalation[1].duration_s, 0.5);
+}
+
+TEST(GateEventTracker, GarbageDuplicateActivationInOneCycleIsOneEngagement) {
+  GateEventTracker tracker;
+  const std::vector<SafetyEventRecord> records =
+      tracker.update({activation(GateSource::kWatchdog, EventSeverity::kBrake),
+                      activation(GateSource::kWatchdog, EventSeverity::kBrake)},
+                     0.0);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].phase, EventPhase::kEngage);
+  // And it is genuinely engaged exactly once: the next idle cycle releases it once.
+  ASSERT_EQ(tracker.update({}, 1.0).size(), 1u);
+}
+
+TEST(GateEventTracker, GarbageNonFiniteClockReportsZeroDuration) {
+  for (const double garbage_now_s : {kNan, kInf, -kInf}) {
+    GateEventTracker tracker;
+    ASSERT_EQ(tracker.update({activation(GateSource::kTtc, EventSeverity::kBrake)}, 0.0).size(),
+              1u);
+    const std::vector<SafetyEventRecord> released = tracker.update({}, garbage_now_s);
+    ASSERT_EQ(released.size(), 1u);
+    EXPECT_EQ(released[0].phase, EventPhase::kRelease);
+    EXPECT_DOUBLE_EQ(released[0].duration_s, 0.0);
+  }
+}
+
+TEST(GateEventTracker, GarbageBackwardsClockReportsZeroDurationNotANegativeOne) {
+  GateEventTracker tracker;
+  ASSERT_EQ(
+      tracker.update({activation(GateSource::kCovariance, EventSeverity::kWarning)}, 50.0).size(),
+      1u);
+  const std::vector<SafetyEventRecord> released = tracker.update({}, 20.0);
+  ASSERT_EQ(released.size(), 1u);
+  EXPECT_DOUBLE_EQ(released[0].duration_s, 0.0);
+}
+
+TEST(GateEventTracker, GarbageNonFiniteEngageClockStillProducesAWellFormedPair) {
+  GateEventTracker tracker;
+  ASSERT_EQ(tracker.update({activation(GateSource::kWatchdog, EventSeverity::kBrake)}, kNan).size(),
+            1u);
+  const std::vector<SafetyEventRecord> released = tracker.update({}, 1.0);
+  ASSERT_EQ(released.size(), 1u);
+  EXPECT_EQ(released[0].phase, EventPhase::kRelease);
+  EXPECT_DOUBLE_EQ(released[0].duration_s, 0.0);
+}
+
+// End-to-end over the real gate: a permanently silent /drive_raw (the exact reproducer in
+// issue #37, which measured 248 records in 14 s) must produce ONE watchdog record, not one
+// per cycle.
+TEST(GateEventTracker, SustainedWatchdogOverManyRealGateCyclesEmitsExactlyOneEngage) {
+  SafetyGateLogic gate(make_limits());
+  GateEventTracker tracker;
+  int engage_records = 0;
+  int total_records = 0;
+
+  for (int cycle = 0; cycle < 700; ++cycle) {  // 14 s at 50 Hz
+    GateInput input = neutral_input();
+    input.drive_raw_age_s = kInf;  // never received a command, exactly like a cold boot
+    input.dt_s = 0.02;
+    const GateResult result = gate.evaluate(input, kZeroPrev);
+    ASSERT_EQ(result.activations.size(), 1u);
+    for (const SafetyEventRecord& record : tracker.update(result.activations, 0.02 * cycle)) {
+      ++total_records;
+      if (record.phase == EventPhase::kEngage) {
+        ++engage_records;
+        EXPECT_EQ(record.source, GateSource::kWatchdog);
+      }
+    }
+  }
+
+  EXPECT_EQ(engage_records, 1);
+  EXPECT_EQ(total_records, 1);
 }
 
 }  // namespace

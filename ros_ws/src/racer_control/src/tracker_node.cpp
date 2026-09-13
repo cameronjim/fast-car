@@ -38,6 +38,23 @@
 // `PurePursuitController::compute_command` rather than built into it (that shared core is
 // cross-language-divergence-tested against training/racer_train's Python port).
 //
+// CLOCK POLICY (read before changing any time arithmetic below). Two clocks, deliberately:
+//
+//   * `steady_clock_` (RCL_STEADY_TIME, the OS monotonic clock) is the ONLY clock used to
+//     MEASURE ELAPSED TIME -- here, the /odom staleness watchdog.
+//   * `this->now()` (the node's ROS clock) is used ONLY to STAMP the outgoing /drive_raw
+//     header, where a bag-consistent ROS timestamp is what consumers want.
+//
+// Measuring staleness on the ROS clock is unsafe in both of its modes. With
+// `use_sim_time:=false` it is CLOCK_REALTIME, which NTP, a VM resync, or an operator
+// running `date` can step backwards -- making the elapsed time negative, hence never
+// greater than `odom_timeout_s_`, hence "fresh": this node would keep publishing commands
+// computed from a FROZEN, arbitrarily old pose for the whole duration of the step. With
+// `use_sim_time:=true` and no /clock publisher, the ROS clock is pinned at zero and the
+// measured age is permanently 0.0, disabling the watchdog outright. Same root cause as
+// GitHub issue #22 in racer_safety (see racer_safety/src/safety_node.cpp's CLOCK POLICY);
+// fixed the same way. See test/test_tracker_node_clock_launch.py.
+//
 // Float32 wire-precision margin (same milestone, same investigation): steering/speed are
 // published as float32 (ackermann_msgs/AckermannDriveStamped), but computed/checked in
 // double precision on both ends -- a value sitting exactly at a bound in double precision
@@ -199,13 +216,18 @@ class TrackerNode : public rclcpp::Node {
 
   void on_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
     last_odom_ = *msg;
-    last_odom_stamp_ = this->now();
+    // Steady clock, NOT this->now() -- see this file's CLOCK POLICY comment. Only ever the
+    // left operand of an elapsed-time subtraction, never a published stamp.
+    last_odom_steady_ = steady_clock_.now();
     has_odom_ = true;
   }
 
   void on_timer() {
+    // `now` stamps the outgoing /drive_raw header; `steady_now` measures /odom staleness.
     const rclcpp::Time now = this->now();
-    const bool odom_stale = !has_odom_ || (now - last_odom_stamp_).seconds() > odom_timeout_s_;
+    const rclcpp::Time steady_now = steady_clock_.now();
+    const bool odom_stale =
+        !has_odom_ || (steady_now - last_odom_steady_).seconds() > odom_timeout_s_;
     if (odom_stale) {
       if (!watchdog_active_) {
         RCLCPP_WARN(this->get_logger(),
@@ -277,7 +299,9 @@ class TrackerNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr timer_;
 
   nav_msgs::msg::Odometry last_odom_;
-  rclcpp::Time last_odom_stamp_;
+  // Monotonic clock for elapsed-time measurement only (CLOCK POLICY, top of file).
+  rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
+  rclcpp::Time last_odom_steady_{0, 0, RCL_STEADY_TIME};
   bool has_odom_;
   bool watchdog_active_;
   double odom_timeout_s_{0.3};

@@ -51,6 +51,8 @@ keyboard_teleop_node.py/keymap.py.
 
 from __future__ import annotations
 
+import time
+
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Twist
@@ -131,13 +133,24 @@ class TwistTeleopAdapterNode(Node):
 
     def _on_twist(self, msg: Twist) -> None:
         self._latest_command = convert_twist_to_command(self._config, msg.linear.x, msg.angular.z)
-        self._last_twist_monotonic = self.get_clock().now().nanoseconds / 1e9
+        self._last_twist_monotonic = time.monotonic()
 
     def _elapsed_since_last_twist_s(self) -> float | None:
+        """Seconds since the last Twist, measured on the OS monotonic clock.
+
+        `time.monotonic()`, NOT `self.get_clock().now()`. The member has always been named
+        `_last_twist_monotonic`, but the ROS clock it used to read is not monotonic: with
+        `use_sim_time:=false` it is CLOCK_REALTIME, which NTP or a VM resync can step
+        backwards (the root cause of GitHub issue #22 in racer_safety), and with
+        `use_sim_time:=true` and no /clock publisher it is pinned at zero, so every measured
+        elapsed time is 0.0 and this node's timeout NEVER fires -- a closed browser tab
+        would leave the last non-zero command republished at 50 Hz forever. The monotonic
+        clock has neither failure mode. This is a timeout measurement, never a stamp; the
+        published header stamp below still (correctly) uses the ROS clock.
+        """
         if self._last_twist_monotonic is None:
             return None
-        now_s = self.get_clock().now().nanoseconds / 1e9
-        return now_s - self._last_twist_monotonic
+        return time.monotonic() - self._last_twist_monotonic
 
     def _on_timer(self) -> None:
         elapsed = self._elapsed_since_last_twist_s()

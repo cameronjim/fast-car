@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "gpio_irq_dispatch.h"
 #include "hardware/gpio.h"
 #include "pico/stdlib.h"
 
@@ -17,7 +18,6 @@ typedef struct {
 } PwmCaptureChannel;
 
 static PwmCaptureChannel g_channels[PWM_CAPTURE_MAX_CHANNELS];
-static bool g_callback_installed = false;
 
 static PwmCaptureChannel* find_channel(uint gpio) {
   for (int i = 0; i < PWM_CAPTURE_MAX_CHANNELS; ++i) {
@@ -69,12 +69,17 @@ void pwm_capture_init_channel(uint gpio) {
   gpio_set_dir(gpio, GPIO_IN);
   gpio_pull_down(gpio);  // idle/disconnected reads low, not floating
 
-  if (!g_callback_installed) {
-    gpio_set_irq_callback(pwm_capture_irq_handler);
-    irq_set_enabled(IO_IRQ_BANK0, true);
-    g_callback_installed = true;
+  // Registered through gpio_irq_dispatch, NOT with gpio_set_irq_callback() /
+  // gpio_set_irq_enabled_with_callback() directly: the SDK keeps ONE GPIO callback per core,
+  // so installing one here would silently evict heartbeat_input.c's (and vice versa). See
+  // gpio_irq_dispatch.h for the full explanation -- that exact collision was a real bug in
+  // this file. If registration fails (handler table full), this channel simply never records
+  // an edge, so pwm_capture_read_us() keeps returning -1.0 and the mux treats it as invalid:
+  // the same fail-safe direction as a disconnected input, never a false "valid" reading.
+  if (!gpio_irq_dispatch_register(gpio, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL,
+                                  pwm_capture_irq_handler)) {
+    return;
   }
-  gpio_set_irq_enabled(gpio, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
 }
 
 double pwm_capture_read_us(uint gpio) {

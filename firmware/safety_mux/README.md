@@ -26,8 +26,37 @@ bench-test against instead of a blank firmware project.
 | Piece | Where | Tested how |
 |---|---|---|
 | Mux state machine, watchdog timing, PWM validity checks, RC switch interpretation, param null-checking | `logic/` | Host-compiled with plain `gcc` (no Pico SDK, no cross-compiler), table-driven, every branch exercised -- see `tests/`. Runs in CI on every push (`.github/scripts/safety_mux_host_tests.sh`). |
-| GPIO/PWM capture, PWM output, heartbeat input, power-cutoff GPIO, main loop | `pico/` | **Not tested anywhere.** Real hardware/interrupt access with no host equivalent. Written from the Pico SDK's documented API, never compiled with the actual Pico SDK toolchain (not available in this repo's containers or in CI -- see `CMakeLists.txt`'s header comment), never run on a chip. |
+| GPIO/PWM capture, PWM output, heartbeat input, power-cutoff GPIO, main loop | `pico/` | **Compiles, otherwise untested.** Cross-compiled clean (no warnings) against pico-sdk 2.1.0 and flashed to nothing -- see "Building" below and `docs/notes/safety-mux-first-build.md`. Compiling is not testing: this is real hardware/interrupt access with no host equivalent, it has never run on a chip, and that note records a known IRQ-handler collision between `pwm_capture.c` and `heartbeat_input.c` that a compiler cannot see. |
 | The whole thing, on a Jetson, RC receiver, servo, and ESC | (nothing yet) | Roadmap 1.3's kill test, `claude-docs/12-testing.md` L6/L7. Pending hardware. |
+
+## Building
+
+The Pico target cross-compiles inside a container so the toolchain is reproducible and does
+not depend on what happens to be installed on the build machine. From the repo root:
+
+```sh
+docker run --rm -v "$PWD":/repo -w /repo debian:bookworm bash -c '
+  apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
+    cmake build-essential git python3 python3-yaml python3-jsonschema &&
+  cmake -S firmware/safety_mux -B firmware/safety_mux/build &&
+  cmake --build firmware/safety_mux/build -j"$(nproc)"'
+```
+
+Output: `firmware/safety_mux/build/safety_mux_firmware.uf2`. The build tree and
+`build-artifacts/` are gitignored; the `.uf2` is build output and is never committed.
+`CMakeLists.txt` pins pico-sdk to release tag 2.1.0 via `FetchContent` and runs
+`tools/gen_params.py` itself, so there is nothing to install or generate first.
+
+**As of 2026-09-12 this firmware ARMS: no fault blink.** The nine `vehicle_params` fields the
+mux needs were filled in with PROVISIONAL, UNMEASURED standard-RC values (1000/1500/2000 us,
+100 ms watchdog, 1500 us kill threshold) so a first bench test is possible. With nothing
+connected it sits in the CUT state driving 50 Hz / 1500 us neutral on GPIO 6 and 7 with the
+GPIO 8 cutoff low. **Wheels off the ground**: those numbers are convention, not measurement,
+and must be replaced per `docs/notes/hardware-arrival-checklist.md` section 3 before the car
+drives. The refuse-to-arm guard is untouched -- revert any of those fields to `null` and it
+fast-blinks again. See `docs/notes/safety-mux-first-build.md` for exactly what to expect on
+flashing and what it does and does not prove.
 
 CI (`safety-mux-host-tests` job in `.github/workflows/ci.yml`) builds and runs `logic/` +
 `tests/` with `gcc -Wall -Wextra -Werror -Wpedantic` on `ubuntu-latest`. It does **not**
@@ -137,7 +166,7 @@ Per `claude-docs/11-hardware.md`'s wiring rules:
 ```
 firmware/safety_mux/
 ├── README.md              this file
-├── CMakeLists.txt         Pico SDK build (untested here, see "What is and isn't tested")
+├── CMakeLists.txt         Pico SDK build (cross-compiles clean, see "Building")
 ├── logic/                 pure C, zero Pico SDK dependency, host-buildable and host-tested
 │   ├── include/safety_mux/*.h
 │   └── src/*.c
@@ -158,7 +187,8 @@ Pico SDK, no `cmake`).
 1. Assemble the chassis/ESC/servo/RC receiver (roadmap 1.1).
 2. Bench-measure the PWM ranges, neutral values, kill-switch threshold, and pick a watchdog
    timeout; write them into `config/vehicle_params.yaml` (replacing the `null`s).
-3. Build `pico/` for real with a Pico SDK toolchain on Desktop B and flash an actual RP2040.
+3. ~~Build `pico/` for real with a Pico SDK toolchain~~ (done, see "Building" and
+   `docs/notes/safety-mux-first-build.md`) and flash an actual RP2040 (not done).
 4. Bench-test each I/O path individually (PWM capture reads sane values, PWM output drives
    the servo/ESC correctly, power cutoff actually cuts) -- `claude-docs/12-testing.md` L6.
 5. The kill test itself: freeze the Jetson for real, prove the cut, with a human present and

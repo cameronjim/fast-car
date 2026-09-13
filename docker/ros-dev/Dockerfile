@@ -75,6 +75,14 @@ FROM ros:humble-ros-base@sha256:75dd3aba34a3838dadbb31a9f7bef769bdfa8713e6cec686
 #   exposing the ROS graph to the Foxglove browser/desktop app, avoiding the X11/GUI pain of
 #   running RViz in a container on macOS. Started from racer_bringup/sim_teleop.launch.py's
 #   `viz` argument (default true), not run standalone by this image.
+# ros-humble-ackermann-msgs / python3-jsonschema: system dependencies of ros_ws/src packages
+#   (racer_tools, racer_control, racer_bringup depend on ackermann_msgs; racer_tools'
+#   vehicle_params_loader depends on jsonschema) that were missing from this list, so a
+#   fresh ros-dev container could not `colcon build` ros_ws until `rosdep install` had run
+#   first (docs/notes/first-boot-audit-2026-09-13.md's test-results note). Confirmed as the
+#   full remaining gap via `rosdep install --simulate --from-paths ros_ws/src --ignore-src`
+#   in this image; every other package.xml dependency is already covered above or by the
+#   base image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
@@ -89,6 +97,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
         ros-humble-foxglove-bridge \
+        ros-humble-ackermann-msgs \
+        python3-jsonschema \
         gcovr \
         libgl1 \
         libglib2.0-0 \

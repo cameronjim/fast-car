@@ -2,6 +2,13 @@
 
 Date: 2026-09-12. Roadmap task 1.3 (still `[~]`, see "Honest status" below).
 
+**Updated later the same day (2026-09-12)** with two follow-up fixes, both on this same
+branch: the GPIO interrupt collision found below is now FIXED, and the nine `null`
+safety-mux fields in `config/vehicle_params.yaml` have been filled in with PROVISIONAL,
+unmeasured values so the firmware arms for a first bench test. That changes what you see when
+you flash it -- read "What to expect when you flash it" below, which has been rewritten, not
+the old version of it.
+
 Until this session, `firmware/safety_mux/pico/` and `firmware/safety_mux/CMakeLists.txt` had
 never been through a Pico SDK toolchain by anyone. They were written from the SDK's
 documented API, and CI only ever built `logic/` + `tests/` with host `gcc`. This note records
@@ -70,9 +77,10 @@ was modified, and no safety logic was stubbed, weakened, or bypassed to get here
 emitted `vehicle_params_generated.h` into the build tree with no changes needed. It is never
 committed and was never hand-written, per `claude-docs/06-vehicle-params.md` rule 3.
 
-Every field the mux needs is confirmed `null` in `config/vehicle_params.yaml` and comes
-through the binding as `..._is_set = false`. That is correct and expected; see "What to expect
-when you flash it".
+At first compile, every field the mux needs was `null` in `config/vehicle_params.yaml` and
+came through the binding as `..._is_set = false`. As of the 2026-09-12 provisional-params fix
+below, all nine are set (`..._is_set = true`) with UNMEASURED placeholder values, and
+`meta.schema_version` is `0.2.1`. See "What to expect when you flash it".
 
 ## Warnings
 
@@ -80,7 +88,8 @@ Zero. The clean build produces no compiler warnings in `pico/` or `logic/`.
 
 ## Host logic tests
 
-Still pass, unchanged:
+Still pass, unchanged, on both the first compile and after the 2026-09-12 fixes below (`logic/`
+was never touched by either):
 
 ```
 $ .github/scripts/safety_mux_host_tests.sh
@@ -97,43 +106,175 @@ Expected, since `logic/` was not touched, but it was run rather than assumed.
 
 ## Output
 
-`firmware/safety_mux/build-artifacts/safety_mux.uf2`, 73,728 bytes,
-sha256 `2cfc8f9cdc90ad958686fa57fae7a2609e2f14d4d62de3cbb186310f59f09b45`.
+First compile (params all `null`, no IRQ fix): `firmware/safety_mux/build-artifacts/safety_mux.uf2`,
+73,728 bytes, sha256 `2cfc8f9cdc90ad958686fa57fae7a2609e2f14d4d62de3cbb186310f59f09b45`.
+
+**Current build (2026-09-12, both fixes below in, this is the one to flash):**
+`firmware/safety_mux/build-artifacts/safety_mux.uf2`, **74,752 bytes**,
+sha256 `92aabfa925a0f853b6e26d317ad050470733239a80c46bcedf892181e3165551`.
+Same container, same pinned SDK 2.1.0, clean tree (`rm -rf firmware/safety_mux/build` first),
+zero compiler warnings. (`gmake` prints "Clock skew detected" throughout, which is the
+container clock against the bind-mounted host filesystem's mtimes, not a compiler diagnostic;
+the build was from scratch, so nothing was skipped.)
+
 Gitignored, not committed: it is build output, regenerate it rather than trusting a copy.
 
 ## What to expect when you flash it
 
-**A refusal to arm is the PASS condition for this first flash.** Do not read it as a failure
-and do not "fix" it by inventing parameter values.
+This section was rewritten on 2026-09-12 after the provisional-params fix below. It now
+describes a firmware that **arms**. The old version of this section said a fault blink was
+the pass condition; that was true only while the params were `null`.
 
-Hold BOOTSEL, plug the Pico in, drop `safety_mux.uf2` on the `RPI-RP2` drive. It will reboot
-and:
+Hold BOOTSEL, plug the Pico in, drop `safety_mux.uf2` on the `RPI-RP2` drive. It reboots and:
 
-- **The onboard LED (GPIO 25) fast-blinks, on 100 ms / off 100 ms, forever.** That is
-  `fault_halt_missing_param()` in `pico/main.c`.
-- Over USB serial it repeats:
-  `FATAL: config/vehicle_params.yaml is missing a required safety_mux field: steering_pwm_min_us`
-  (`steering_pwm_min_us` is simply the first unset field `mux_params_from_raw()` checks; there
-  are eight more behind it).
-- **No PWM is generated on GPIO 6 or 7, and the power-cutoff GPIO 8 is never driven high.**
-  `main()` halts before it initializes any I/O, so the servo and ESC get nothing and the power
-  path stays cut. That is the intended fail-closed behaviour.
+### The LED
 
-This proves the binary boots, runs, reads the generated params binding, and correctly refuses.
-It proves nothing about PWM capture, PWM output, the watchdog, or the kill switch, none of
-which execute on this path.
+**The onboard LED (GPIO 25) stays OFF and never blinks.** That is the arm indication.
 
-To get past the fault blink you must bench-measure the real values and fill in
-`config/vehicle_params.yaml`: `steering.pwm_{min,max,neutral}_us`,
-`actuation.throttle_pwm_{min,max,neutral}_us`, `limits.mux_watchdog_timeout_s`,
-`limits.mux_kill_switch_threshold_us`. Then rebuild, because the params are baked into the
-binary at compile time.
+Be honest about what that means: `pico/main.c` only ever drives the LED in
+`fault_halt_missing_param()`. On the arming path the LED is never even initialized, so "off"
+is indistinguishable from "the board is dead, unpowered, or did not boot". A dark LED is a
+*necessary* sign of arming, not a sufficient one -- confirm with the PWM outputs below.
 
-## Finding NOT fixed here: the two GPIO IRQ handlers collide
+- **No LED at all** = armed (or dead; check the outputs).
+- **Fast blink, 100 ms on / 100 ms off, forever** = the refuse-to-arm path. It should NOT
+  happen with this build. If it does, something reverted a `vehicle_params` field to `null`,
+  or the binary on the board is an older one. Do not "fix" it by inventing values; read the
+  serial line, which names the exact missing field.
 
-Found while reading the SDK sources; reporting rather than changing it, because it is a
-behaviour change that cannot be validated without hardware and this task was scoped to
-compiling.
+Adding a real heartbeat/status blink on the arming path is worth doing and is deliberately
+not in this change: it would be new untested behaviour on a board about to be flashed.
+
+### The serial line
+
+**Over USB the firmware prints nothing at all once it arms.** The only `printf` in
+`pico/main.c` is in the fault-halt loop. So:
+
+- USB enumerating as a CDC serial device, with silence on it, is the expected armed state.
+- Any repeating `FATAL: config/vehicle_params.yaml is missing a required safety_mux field:
+  <name>` line means it refused to arm, and names which field.
+
+### The outputs -- this is the real check
+
+With the board powered and **nothing else connected** (no receiver, no Jetson):
+
+- **GPIO 6 (servo) and GPIO 7 (ESC/VESC PPM) each carry a 50 Hz PWM frame with a 1500 us
+  pulse.** That is the CUT state's neutral output, driven continuously, not an absence of
+  signal. Scope or servo-tester those two pins: seeing 50 Hz / 1500 us is the actual proof
+  the firmware booted, read its params, and is running the mux loop.
+- **GPIO 8 (power cutoff) is driven LOW**, i.e. cut. It is initialized low and only goes high
+  when `mux_decide()` returns `cut == false`.
+- **Wheels off the ground, always.** 1500 us is this ESC's *assumed* zero-throttle point, not
+  a measured one (see the provisional-params section). If the real neutral is elsewhere, a
+  cut state commands a creep.
+
+The cut reason with nothing connected is `MUX_REASON_RC_SIGNAL_INVALID`: GPIO 2 is pulled
+down, no pulses arrive, `pwm_capture_read_us()` returns -1.0, and `rc_switch_read()` treats an
+uninterpretable channel exactly like KILL. Nothing on the board reports that reason out loud
+yet -- it is a value inside `mux_decide()`, not a printed line.
+
+### Getting it to pass drive through (the bench sequence)
+
+`mux_decide()` cuts unless ALL of these hold, checked in this order:
+
+1. RC kill-switch channel on GPIO 2 has a valid pulse inside 1000-2000 us **and** reads at or
+   above 1500 us (ARMED). Below that, or unreadable, it cuts.
+2. The Jetson heartbeat on GPIO 5 has toggled within the last 100 ms
+   (`mux_watchdog_timeout_s`). Nothing toggling it means a permanent watchdog cut, which is
+   correct.
+3. The steering pulse on GPIO 3 is inside 1000-2000 us.
+4. The throttle pulse on GPIO 4 is inside 1000-2000 us.
+
+Only then do GPIO 6/7 mirror GPIO 3/4 and GPIO 8 go high. Which end of the kill-switch
+channel is ARMED has not been measured on this transmitter: if flipping the switch arms it
+backwards, that is the threshold/polarity assumption, not a firmware bug. Measure the channel
+before trusting it, and keep the wheels off the ground while you do.
+
+## Fix applied 2026-09-12 (1): one shared GPIO IRQ dispatcher
+
+The collision described below under "Finding NOT fixed here" is fixed.
+
+**What was wrong.** In SDK 2.1.0, `gpio_set_irq_callback()` (and
+`gpio_set_irq_enabled_with_callback()`, which calls it) stores ONE callback per core.
+`pwm_capture.c` installed one, `heartbeat_input.c` installed another, and since `main()` inits
+capture first and heartbeat second, heartbeat's won for the whole GPIO bank. All three PWM
+capture channels would have read -1.0 forever and the mux would have cut permanently: safe
+direction, but inert.
+
+**The approach.** A new module, `pico/gpio_irq_dispatch.{h,c}`, is the single owner of that
+per-core callback. It keeps a small fixed-size table of `{gpio, handler}` (8 slots, no
+allocation), installs `gpio_set_irq_callback()` exactly once on first registration, and its
+callback routes each edge to the handler registered for that GPIO number. `pwm_capture.c` and
+`heartbeat_input.c` now call `gpio_irq_dispatch_register(gpio, mask, handler)` instead of
+touching the SDK callback themselves.
+
+The dispatch callback is a linear scan over at most 8 slots and then a direct call: short,
+allocation-free, no printf, no blocking, same as a raw SDK callback.
+
+**What did NOT change.** Both public headers (`pwm_capture.h`, `heartbeat_input.h`) keep their
+exact APIs, so `pico/main.c` is untouched, and the two modules remain separately usable: each
+one works alone or alongside the other. Nothing in `firmware/safety_mux/logic/` was modified.
+
+**Fail-safe semantics are preserved.** A channel with no edges still reads -1.0 from
+`pwm_capture_read_us()` and is rejected by `pwm_is_valid_us()` / `rc_switch_read()`. A
+heartbeat with no edges still returns `+Inf` from `heartbeat_input_age_s()` and still trips
+`watchdog_timed_out()`. If registration ever fails (table full), the module simply never
+records an edge, which lands in the same stale/invalid state rather than a false "valid"
+reading -- that is why the failure path is a silent no-op rather than a fault.
+
+`gpio_irq_dispatch.h` carries a long comment naming the single-callback-per-core constraint
+and the bug it caused, so the next person does not reinstall a private callback.
+
+**Still unverified on hardware.** This is the correct SDK usage, but no RP2040 has run it. The
+bench test that actually proves it is the first one where a PWM capture channel reads a real
+pulse while the heartbeat is also toggling.
+
+## Fix applied 2026-09-12 (2): provisional PWM params so it can arm
+
+`config/vehicle_params.yaml`'s nine safety-mux fields were `null`, so the firmware refused to
+arm. They are now filled in:
+
+| Field | Value | Basis |
+|---|---|---|
+| `steering.pwm_min_us` | 1000 | standard hobby-RC servo convention |
+| `steering.pwm_neutral_us` | 1500 | standard hobby-RC servo convention |
+| `steering.pwm_max_us` | 2000 | standard hobby-RC servo convention |
+| `actuation.throttle_pwm_min_us` | 1000 | standard hobby-RC ESC convention |
+| `actuation.throttle_pwm_neutral_us` | 1500 | assumed ESC zero-throttle point |
+| `actuation.throttle_pwm_max_us` | 2000 | standard hobby-RC ESC convention |
+| `limits.mux_watchdog_timeout_s` | 0.1 | about 5 missed frames of a 50 Hz heartbeat; conservative starting point |
+| `limits.mux_kill_switch_threshold_us` | 1500 | midpoint of the 1000-2000 us range |
+
+**Every one of these is PROVISIONAL and NOT MEASURED.** Nobody has put a scope on this car's
+receiver, servo, or ESC. They are convention and conservative guesses, written down so the
+firmware arms for a bench test, and each is marked PROVISIONAL inline in the YAML with a
+pointer to the step that replaces it: `docs/notes/hardware-arrival-checklist.md` section 3
+(roadmap task 1.3). **They must be replaced by real measurement before the car drives on the
+floor.** The params are baked into the binary at compile time, so that means rebuild and
+reflash, not an edit on the car.
+
+`meta.schema_version` went 0.2.0 -> 0.2.1 (values changed, no schema field added or removed;
+`claude-docs/06-vehicle-params.md` rule 5 bumps on any change). `meta.sysid_session_id` stays
+`none-preliminary` deliberately: there is still no on-vehicle fit, and the sim-regression
+golden references and the policy-contract fixtures pin that string. Since `meta` is
+`additionalProperties: false` in the schema, the "these are provisional" record lives as a
+comment block in `meta` and in the file header rather than as a tenth `meta` key. The two
+`racer_policy` test literals that assert the committed schema version were updated to 0.2.1.
+
+The bindings were regenerated with `tools/gen_params.py` (never hand-written,
+`claude-docs/06-vehicle-params.md` rule 3) and the round-trip tests still pass.
+
+**The refuse-to-arm guard was not weakened.** `mux_params_from_raw()` still returns the first
+missing field and `main()` still halts and fast-blinks on any `null`. We supplied values; we
+did not disable the check. Its host test suite (`test_mux_params_suite`) is unchanged and
+passing.
+
+## The original finding, as first reported (now fixed, see above)
+
+Kept verbatim for the record. It was found while reading the SDK sources and reported rather
+than fixed at the time, because it was a behaviour change that could not be validated without
+hardware and that task was scoped to compiling. It was fixed later the same day; see "Fix
+applied 2026-09-12 (1)" above.
 
 `pwm_capture.c` installs its handler with `gpio_set_irq_callback(pwm_capture_irq_handler)`.
 `heartbeat_input.c` installs its own with
@@ -160,6 +301,10 @@ plumbing. Worth doing before roadmap 1.3 step 4.
 - **Run on an RP2040:** no.
 - **Connected to a receiver, servo, or ESC:** no.
 - **Roadmap 1.3 kill test:** not started.
+
+Unchanged by the 2026-09-12 fixes below. The IRQ fix is correct SDK usage but has not run on
+an RP2040, and the nine params it now arms with are unmeasured placeholders. Roadmap task 1.3
+stays `[~]`.
 
 Roadmap task 1.3 stays `[~]`. This moves exactly one item on
 `firmware/safety_mux/README.md`'s "What still has to happen" list (step 3's build half) and

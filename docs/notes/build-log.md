@@ -5,6 +5,105 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-13 -- the Jetson can now command the car: pwm_output_node, car_teleop launch, torch-optional car image
+
+The missing piece between `/drive` and the wires. Nothing in this entry has touched hardware:
+the Jetson was powered off all day, so everything on-device below is a written-ahead
+procedure, and everything proven was proven in the `ros-dev` container on the Mac against a
+FAKE sysfs tree.
+
+**`ros_ws/src/racer_drivers/pwm_output_node` (new, C++).** Subscribes `/drive` (reliable,
+depth 10) and nothing else on the command path -- never `/drive_raw`, which would route
+around `safety_node` (`CLAUDE.md` invariant 1); both L3 launch tests assert that against the
+live node graph rather than by reading the source. It maps `steering_angle` (rad, left
+positive) and `speed` (m/s) onto two 50 Hz servo pulses through the Linux sysfs PWM interface
+(`/sys/class/pwm/pwmchipN/pwmM`). This is the command path decided on 2026-09-12: PWM through
+the mux into the VESC's PPM input, USB to the VESC for telemetry and configuration only.
+
+Fail-closed in five places, all tested: neutral on both channels at startup before the
+subscription exists; neutral while no `/drive` has arrived; neutral when `/drive` goes silent
+for `drive_timeout_s` (default 0.1 s, a declared parameter -- deliberately NOT
+`limits.mux_watchdog_timeout_s`, which is the layer-1 MCU's own heartbeat window on a
+different device); neutral on any exception in the cycle; and neutral-then-disable on
+SIGINT/SIGTERM. There is no path that leaves a stale non-neutral pulse.
+
+Every pulse bound, angle limit and the speed reference comes from `config/vehicle_params.yaml`
+through the generated C++ binding, and the node refuses to start naming the field if one is
+null -- the same discipline as `firmware/safety_mux`'s `logic/mux_params.c`. None of the
+fields it needs is null today, so it starts. **That is not good news about the numbers**: the
+six PWM values are the same unmeasured 1000/1500/2000 convention placeholders filled in on
+2026-09-12, and `limits.global_speed_cap_mps` (20 m/s, a dynamics-model validity bound) is
+the throttle map's full-scale reference, which means a commanded 1 m/s is a pulse 25 us off
+neutral. Both must be measured and lowered before the car is on the floor.
+
+**The throttle map is open loop and provisional and says so everywhere.** PPM commands duty
+or current, not speed; there is no feedback in this node. It exists so first boot can happen
+and is replaced when `vesc_node` does.
+
+**Steering polarity is an unknown, not an assumption.** No project doc says which pulse end
+is full LEFT, so it is a declared parameter (`steering_left_is_pwm_max`, default true) marked
+bench-calibrated in the code, the README and the runbook. Step 12 of the runbook is where it
+gets settled.
+
+**`racer_bringup/launch/car_teleop.launch.py` (new).** `safety_node` + `pwm_output_node` +
+`foxglove_bridge` (8765), no sim bridge. Both teleop sources default OFF, unlike the sim
+launch: a launch file that moves a physical car comes up with no command source until an
+operator picks one.
+
+**Tests.** L1 gtest over the ROS-free mapping and the output sequencing (table-driven: at
+bound, epsilon over, NaN, inf, both steering polarities, in-memory fake sinks); L3
+launch_testing for the node alone and for the car launch, both against a temp-directory
+"sysfs" of ordinary files, asserting neutral-on-start, correct mapped pulses, neutral on
+silence, reliable-QoS incompatibility with a best_effort publisher, and neutral-plus-disabled
+after shutdown. `.github/scripts/ros_build_test.sh` (what the `l3-and-cpp` CI job runs) was
+executed verbatim in the container: **251 tests, 0 failures**. The new tests need no CI
+wiring because that job already builds and tests all of `ros_ws`.
+
+Also observed, headless in the container: `car_teleop.launch.py` up with a fake sysfs root,
+`/drive` steady at `steering_angle: 0.0, speed: 0.0`, both channels `period=20000000
+duty_cycle=1500000 enable=1`, and after SIGINT `duty_cycle=1500000 enable=0`.
+
+**`docker/car`: torch is now optional.** `INSTALL_TORCH=skip` (the new default) builds without
+torch and shouts about it -- a NOTICE block in the build log, `/etc/racer/torch-status`,
+an `/etc/racer/torch-absent` marker and `RACER_TORCH=absent` exported into every login shell
+-- so nothing can quietly assume torch is present. `INSTALL_TORCH=required` keeps the old
+refuse-if-`TORCH_WHEEL_URL`-unset behaviour exactly as it was. The reason is scope: torch is
+there for `racer_policy` inference in roadmap phase 5.x, the phase in front of us imports
+none of it, and the old Dockerfile blocked a first boot on a hand-resolved wheel URL that
+first boot does not use. The three branches were exercised as a shell script in a plain
+`ubuntu:22.04` container; the image itself still has never been built.
+
+**Base image stays r36.4.0, and that is a decision, not an oversight.** The device reports
+L4T R36.4.4 (JetPack 6.2.1) and the Dockerfile pins r36.4.0 (JetPack 6.1), so the obvious fix
+is a matching tag. There is not one: `nvcr.io/nvidia/l4t-jetpack`'s full tag list, queried
+against the registry API today, ends at `r36.4.0`, and `l4t-base` ends at `r36.2.0`. NVIDIA
+has not published a JetPack 6.2 image. An older L4T container on a newer host of the same
+major is the supported direction (the driver comes from the host), both are jammy, and the
+pinned digest re-resolved unchanged. Whether the 6.1 CUDA stack behaves on a 6.2.1 host is an
+on-device check; the control stack needs no CUDA, so it gates phase 5, not first boot.
+
+**Docs.** `docs/notes/first-boot-runbook.md` is the numbered procedure: power up, clone,
+build without torch, enable the PWM pinmux via `/opt/nvidia/jetson-io` and reboot, read the
+real `pwmchip` numbers off the device, scope one channel bare, cable four wires to the mux
+board, launch, verify `/drive` neutral, verify the pulses with a meter, then servo and ESC
+with wheels off the ground, then keyboard teleop with the kill switch armed and a second
+person present. `docker/car/build_on_jetson.md` was corrected against the device that now
+exists (Docker installed, NVIDIA runtime present, `racer` in the docker group, passwordless
+sudo, repo not yet cloned) -- the old draft was wrong on three of those.
+
+**Cabling, planned and unsoldered.** Jetson pin 15 -> steering, pin 33 -> throttle (the two
+hardware-PWM-capable pins on the 40-pin header), pin 7 -> heartbeat (already running), pin 9
+-> ground; into the mux board's JETSON header at row 1, columns 8, 9, 10 and 11 respectively.
+`firmware/safety_mux/README.md`'s connector map now names the two PWM pins alongside the
+heartbeat pin it already named.
+
+**What is unverified.** All of it, on-device: the pinmux change, the reboot, the resulting
+`pwmchip` numbering, whether a pulse leaves the pad at all, the container's write access to
+`/sys/class/pwm` (the runbook uses `--privileged`, which is a blunt instrument and should be
+narrowed once something works), the image build, every calibration value, the steering
+polarity, and the mux's response to any of these signals. The mux still has not been
+kill-tested. Nothing here changes roadmap 1.3's status.
+
 ## 2026-09-12 -- Jetson-side heartbeat installed and running on the bench Jetson
 
 Roadmap task 1.3 (`claude-docs/05-safety.md` layer 1). Built, installed, and verified the

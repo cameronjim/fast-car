@@ -65,6 +65,11 @@ std::string covariance_detail(double speed_fraction) {
   return "covariance gate engaged; speed fraction " + std::to_string(speed_fraction);
 }
 
+std::string release_detail(double duration_s) {
+  return "gate released after " + std::to_string(duration_s) +
+         "s engaged (see PHASE_ENGAGE record for what tripped it)";
+}
+
 }  // namespace formatting
 
 }  // namespace racer_safety

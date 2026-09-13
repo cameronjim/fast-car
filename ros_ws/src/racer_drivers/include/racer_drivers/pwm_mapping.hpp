@@ -45,9 +45,20 @@ struct MappingConfig {
   double steering_max_angle_rad{0.0};
 
   /// Full-scale speed reference for the provisional open-loop throttle map:
-  /// vehicle_params limits.global_speed_cap_mps. A command at +this maps to
-  /// throttle.max_us, at -this to throttle.min_us.
+  /// vehicle_params actuation.throttle_full_scale_mps. A command at +this maps to
+  /// throttle.max_us, at -this to throttle.min_us. Deliberately NOT
+  /// limits.global_speed_cap_mps, which is an f1tenth_gym model-validity bound (20 m/s) and
+  /// made a 1 m/s command only 25 us off neutral, likely inside the VESC's PPM deadband
+  /// (GitHub issue #40). This is an actuation scale; the safety clamp is speed_cap_mps below.
   double speed_full_scale_mps{0.0};
+
+  /// vehicle_params limits.global_speed_cap_mps. The command magnitude is clamped to this
+  /// BEFORE the map is applied, exactly as it was when the cap was also the full scale. With
+  /// a full scale below the cap, a command between the two saturates the pulse at the channel
+  /// end rather than exceeding it -- the pulse can never leave [throttle.min_us,
+  /// throttle.max_us] either way. Keeping the cap here means lowering it in vehicle_params
+  /// still tightens this node, not only safety_node.
+  double speed_cap_mps{0.0};
 
   /// Which end of the steering pulse range corresponds to a LEFT (positive) road-wheel
   /// angle. NOT defined by any project doc -- no one has yet put a scope on this servo and
@@ -76,9 +87,9 @@ struct RequiredField {
 std::optional<std::string> find_missing_fields(const std::vector<RequiredField>& fields);
 
 /// Structural sanity on an assembled config: finite values, min < neutral < max on both
-/// channels, a two-sided steering range (min < 0 < max), a positive speed full scale, and a
-/// positive timeout. Returns std::nullopt when the config is usable, else the reason.
-/// This is a refusal, not a repair: nothing here clamps a bad config into a good one.
+/// channels, a two-sided steering range (min < 0 < max), a positive speed full scale, a
+/// positive speed cap, and a positive timeout. Returns std::nullopt when the config is usable, else
+/// the reason. This is a refusal, not a repair: nothing here clamps a bad config into a good one.
 std::optional<std::string> validate_config(const MappingConfig& config);
 
 /// The /drive-side state the mapping decides from.
@@ -113,10 +124,13 @@ double steering_angle_to_pulse_us(const MappingConfig& config, double steering_a
 ///
 /// PROVISIONAL AND OPEN LOOP. The VESC is in PPM mode, where a pulse commands duty or
 /// current, NOT speed: there is no feedback here and no claim that commanding X m/s produces
-/// X m/s. This is a linear stand-in scaled by limits.global_speed_cap_mps so the car can be
-/// driven at all on a first boot, to be replaced by the real closed-loop VESC driver
+/// X m/s. This is a linear stand-in scaled by actuation.throttle_full_scale_mps so the car
+/// can be driven at all on a first boot, to be replaced by the real closed-loop VESC driver
 /// (claude-docs/04-architecture.md's vesc_node) when it exists. Non-finite input maps to
-/// neutral; finite input is clamped to +/- speed_full_scale_mps.
+/// neutral. Finite input is first clamped to +/- speed_cap_mps
+/// (limits.global_speed_cap_mps), then scaled by speed_full_scale_mps; a magnitude between
+/// the full scale and the cap saturates at the channel end, and the returned pulse is always
+/// inside [throttle.min_us, throttle.max_us].
 double speed_to_pulse_us(const MappingConfig& config, double speed_mps);
 
 /// The whole per-cycle decision: stale (or absent, or garbage) command -> neutral on both

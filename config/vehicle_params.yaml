@@ -46,6 +46,15 @@
 # "Bench-measure and fill in config/vehicle_params.yaml's ... fields the mux firmware needs"
 # step. The params are baked into the firmware at compile time, so rebuild and reflash after
 # measuring.
+#
+# schema_version bumped 0.2.1 -> 0.2.2 on 2026-09-13: added actuation.throttle_full_scale_mps
+# (a new schema field, filled in PROVISIONAL at 5.0 m/s) and filled in limits.ttc_warning_s /
+# limits.ttc_brake_s, which had been null. GitHub issues #40 and #36. Rule 5 bumps on any
+# change; consumers refuse on mismatch either way.
+#
+#   !! THOSE THREE VALUES ARE ALSO NOT MEASURED AND NOT TUNED. !!
+#
+# Each is marked PROVISIONAL inline below with what replaces it and when.
 
 chassis:
   mass_kg: 3.74                    # gym: m
@@ -106,6 +115,25 @@ actuation:
   throttle_pwm_min_us: 1000.0       # PROVISIONAL (standard RC convention, NOT measured) -- see above
   throttle_pwm_max_us: 2000.0       # PROVISIONAL (standard RC convention, NOT measured) -- see above
   throttle_pwm_neutral_us: 1500.0   # PROVISIONAL (standard RC convention, NOT measured) -- see above
+  # Full-scale speed reference for racer_drivers/pwm_output_node's OPEN-LOOP throttle map: a
+  # commanded +this maps to throttle_pwm_max_us, -this to throttle_pwm_min_us. It exists
+  # because that map needs a speed-to-pulse scale and the only number previously available was
+  # limits.global_speed_cap_mps (20.0 m/s), which is an f1tenth_gym model-validity bound and
+  # not an actuation scale: against it a 1 m/s command is 25 us off neutral, likely inside the
+  # VESC's PPM deadband, so a gentle first-boot teleop command would produce no motion at all
+  # (GitHub issue #40). This field is ONLY the throttle map's full scale. It is not a safety
+  # limit and it does not replace limits.global_speed_cap_mps, which still clamps the command.
+  #
+  # PROVISIONAL, NOT MEASURED: 5.0 m/s is a plausible full-scale speed for a 1/10 car, picked
+  # so 1 m/s lands 100 us off neutral, clear of any sane PPM deadband. Nobody has measured
+  # what speed this car actually reaches at throttle_pwm_max_us, and in PPM the pulse commands
+  # duty or current rather than speed, so this is a scale factor and not a promise. It goes
+  # away entirely when the closed-loop VESC driver (claude-docs/04-architecture.md's
+  # vesc_node) replaces the open-loop map. Until then it is replaced by bench measurement at
+  # docs/notes/first-boot-runbook.md's wheels-off-the-ground throttle step: sweep the
+  # commanded speed, record wheel speed against pulse width, and set this to the speed
+  # observed at throttle_pwm_max_us.
+  throttle_full_scale_mps: 5.0      # PROVISIONAL (unmeasured open-loop map scale) -- see above
 
 sensors:
   imu:
@@ -125,8 +153,25 @@ limits:
   global_speed_cap_mps: 20.0        # gym: v_max -- a dynamics-model validity bound, NOT a validated safety cap; must be
                                      # lowered before any Phase 1 bench/track session
   min_velocity_mps: -5.0            # gym: v_min
-  ttc_warning_s: null               # needs Phase 1/2 tuning
-  ttc_brake_s: null                 # needs Phase 1/2 tuning
+  # TTC gate thresholds, read by racer_safety/safety_node (claude-docs/05-safety.md layer 3).
+  # Both were null, which made the TTC gate a documented no-op: the moment a LiDAR is fitted
+  # and /scan starts arriving, no obstacle however close would have braked the car (GitHub
+  # issue #36).
+  #
+  # PROVISIONAL, NOT TUNED: 0.5 s to brake and 1.0 s to warn are the conventional
+  # F1TENTH-class starting points, the same pair this repo's L3 TTC test had been passing as
+  # an override since the gate was written. They are NOT derived from this car's braking
+  # distance, which nobody has measured. They are here so the gate is ARMED rather than inert
+  # on the first drive with a scan. Replace with tuned values from Phase 1/2 braking-distance
+  # data (roadmap phase 1/2, claude-docs/05-safety.md).
+  #
+  # KNOWN LIMITATION of the TTC estimate itself, separate from these numbers: safety_node has
+  # no /odom, so the forward speed it divides range by is its OWN COMMANDED speed, not a
+  # measured one. Slower-than-commanded means TTC is under-estimated (brakes early, the safe
+  # direction); coasting faster than commanded means it is over-estimated. That stands until
+  # /odom exists.
+  ttc_warning_s: 1.0                # PROVISIONAL (conventional starting point, NOT tuned) -- see above
+  ttc_brake_s: 0.5                  # PROVISIONAL (conventional starting point, NOT tuned) -- see above
   envelope_fraction_speed: null     # needs Phase 5 tuning (claude-docs/08-learning.md)
   envelope_fraction_lateral_accel: null  # needs Phase 5 tuning (claude-docs/08-learning.md)
   # PROVISIONAL, NOT measured or tuned: 100 ms is roughly five missed frames of a 50 Hz
@@ -142,12 +187,13 @@ limits:
   mux_kill_switch_threshold_us: 1500.0  # PROVISIONAL (range midpoint, NOT measured) -- see above
 
 meta:
-  # PROVISIONAL VALUES PRESENT: the nine firmware/safety_mux PWM/watchdog fields above are
-  # standard-RC-convention placeholders, NOT measured, NOT fitted (see the header block and
+  # PROVISIONAL VALUES PRESENT: the nine firmware/safety_mux PWM/watchdog fields above, plus
+  # actuation.throttle_full_scale_mps and the two limits.ttc_*_s thresholds added or filled in
+  # on 2026-09-13, are placeholders, NOT measured, NOT fitted (see the header block and
   # each field's inline comment). sysid_session_id stays "none-preliminary" -- there is still
   # no on-vehicle fit of any kind, and this file is less fitted than that name implies, not
   # more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.2.1"
+  schema_version: "0.2.2"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

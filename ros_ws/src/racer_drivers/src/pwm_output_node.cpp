@@ -127,13 +127,14 @@ class PwmOutputNode : public rclcpp::Node {
     RCLCPP_INFO(this->get_logger(),
                 "pwm_output_node up at %.1f Hz on %s: steering pwmchip%d/pwm%d "
                 "[%.0f/%.0f/%.0f us, left=%s], throttle pwmchip%d/pwm%d [%.0f/%.0f/%.0f us, "
-                "full scale %.2f m/s, OPEN LOOP PROVISIONAL], drive timeout %.3f s. Both "
-                "channels are at neutral until /drive arrives.",
+                "full scale %.2f m/s, cap %.2f m/s, OPEN LOOP PROVISIONAL], drive timeout "
+                "%.3f s. Both channels are at neutral until /drive arrives.",
                 output_rate_hz, sysfs_root.c_str(), steering_chip, steering_channel,
                 config_.steering.min_us, config_.steering.neutral_us, config_.steering.max_us,
                 config_.left_is_pwm_max ? "pwm_max_us" : "pwm_min_us", throttle_chip,
                 throttle_channel, config_.throttle.min_us, config_.throttle.neutral_us,
-                config_.throttle.max_us, config_.speed_full_scale_mps, config_.drive_timeout_s);
+                config_.throttle.max_us, config_.speed_full_scale_mps, config_.speed_cap_mps,
+                config_.drive_timeout_s);
   }
 
   ~PwmOutputNode() override { shutdown(); }
@@ -199,6 +200,9 @@ class PwmOutputNode : public rclcpp::Node {
         {"steering.max_angle_rad", std::optional<double>(VEHICLE_PARAMS.steering.max_angle_rad)},
         {"limits.global_speed_cap_mps",
          std::optional<double>(VEHICLE_PARAMS.limits.global_speed_cap_mps)},
+        // Nullable in the schema, so the generated binding types it as an optional and the
+        // refusal above is live: with this field null the node names it and does not start.
+        {"actuation.throttle_full_scale_mps", VEHICLE_PARAMS.actuation.throttle_full_scale_mps},
     };
     const std::optional<std::string> missing = find_missing_fields(required);
     if (missing.has_value()) {
@@ -214,7 +218,8 @@ class PwmOutputNode : public rclcpp::Node {
     config.throttle.max_us = *VEHICLE_PARAMS.actuation.throttle_pwm_max_us;
     config.steering_min_angle_rad = VEHICLE_PARAMS.steering.min_angle_rad;
     config.steering_max_angle_rad = VEHICLE_PARAMS.steering.max_angle_rad;
-    config.speed_full_scale_mps = VEHICLE_PARAMS.limits.global_speed_cap_mps;
+    config.speed_full_scale_mps = *VEHICLE_PARAMS.actuation.throttle_full_scale_mps;
+    config.speed_cap_mps = VEHICLE_PARAMS.limits.global_speed_cap_mps;
     config.left_is_pwm_max = left_is_pwm_max;
     config.drive_timeout_s = drive_timeout_s;
 

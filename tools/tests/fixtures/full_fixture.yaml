@@ -64,6 +64,7 @@ actuation:
   throttle_pwm_min_us: 1000.0
   throttle_pwm_max_us: 2000.0
   throttle_pwm_neutral_us: 1500.0
+  throttle_full_scale_mps: 5.0
 
 sensors:
   imu:

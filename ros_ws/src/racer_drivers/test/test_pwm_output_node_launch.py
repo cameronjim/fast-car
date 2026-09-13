@@ -68,7 +68,7 @@ _STEERING_MIN_US = _PARAMS["steering"]["pwm_min_us"]
 _STEERING_MAX_ANGLE_RAD = _PARAMS["steering"]["max_angle_rad"]
 _THROTTLE_NEUTRAL_US = _PARAMS["actuation"]["throttle_pwm_neutral_us"]
 _THROTTLE_MAX_US = _PARAMS["actuation"]["throttle_pwm_max_us"]
-_SPEED_FULL_SCALE_MPS = _PARAMS["limits"]["global_speed_cap_mps"]
+_SPEED_FULL_SCALE_MPS = _PARAMS["actuation"]["throttle_full_scale_mps"]
 
 # One temp fake sysfs tree for the whole file; the launch description and the tests both need
 # its path, and launch_testing gives no clean way to hand state from one to the other besides

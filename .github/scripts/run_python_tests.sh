@@ -70,15 +70,19 @@ run "sim/bridge/racer_gym_bridge" report
 # builds), so a bare `uv run pytest` here has nothing meaningful to run -- unlike
 # sim/bridge/racer_gym_bridge or racer_tools, they have no ROS-free pure-Python logic of
 # their own to test this way (their ROS-free logic is the C++ core, gtest-covered instead).
-# racer_bringup is excluded for the same reason: it is launch-files-only, no pyproject.toml,
-# nothing a bare `uv run pytest` could exercise. All three are exercised for real by the
+# racer_bringup is excluded for the same reason -- launch files plus an L3 launch test, no
+# pyproject.toml, nothing a bare `uv run pytest` could exercise -- and so is racer_drivers,
+# whose only .py file is test/test_pwm_output_node_launch.py: it launches the C++
+# pwm_output_node executable colcon builds and needs rclpy, exactly like racer_safety's, and
+# its ROS-free logic is C++ covered by gtest. All four are exercised for real by the
 # l3-and-cpp CI job (colcon build + colcon test, including their L3 launch tests) via
 # ros_build_test.sh.
 if [ -d ros_ws/src ]; then
   for pkg_dir in ros_ws/src/*/; do
     pkg_name="$(basename "$pkg_dir")"
     if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_control" ] ||
-       [ "$pkg_name" = "racer_safety" ] || [ "$pkg_name" = "racer_bringup" ]; then
+       [ "$pkg_name" = "racer_safety" ] || [ "$pkg_name" = "racer_bringup" ] ||
+       [ "$pkg_name" = "racer_drivers" ]; then
       continue
     fi
     run "$pkg_dir" report

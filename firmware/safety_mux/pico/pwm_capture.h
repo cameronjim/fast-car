@@ -12,6 +12,8 @@
 
 #include <stdint.h>
 
+#include "pico/types.h"  // Pico SDK's `uint` typedef, used in the signatures below
+
 // Registers a GPIO input to be pulse-width captured. Must be called once per channel before
 // the first pwm_capture_read_us() call for that GPIO. Sets the pin to input with a pull-down
 // (an idle/disconnected receiver line reads low, not floating) and enables a

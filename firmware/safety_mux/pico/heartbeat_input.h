@@ -14,6 +14,8 @@
 
 #include <stdint.h>
 
+#include "pico/types.h"  // Pico SDK's `uint` typedef, used in the signatures below
+
 // Configures `gpio` as the heartbeat input and arms edge detection. Call once at startup.
 void heartbeat_input_init(uint gpio);
 

@@ -5,6 +5,42 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-12 -- safety mux firmware: GPIO IRQ collision fixed, provisional PWM params filled in
+
+Two changes to `firmware/safety_mux/`, both aimed at the same thing: making tonight's first
+flash of the soldered kill-switch board actually exercise the mux instead of sitting in the
+fault blink. Neither has been run on an RP2040 yet. See
+`docs/notes/safety-mux-first-build.md` for the detail.
+
+**1. The two GPIO interrupt handlers were evicting each other (a real hardware bug).**
+`pico/pwm_capture.c` and `pico/heartbeat_input.c` each installed their own handler, and the
+Pico SDK keeps exactly ONE GPIO callback per core. `main()` inits capture first and heartbeat
+second, so the heartbeat handler silently won and all three PWM capture channels would have
+read -1.0 forever: the mux would have cut permanently. Fail-safe, but inert. Fixed by adding
+`pico/gpio_irq_dispatch.{h,c}`, the one owner of that shared callback; both modules now
+register per-GPIO handlers through it and it routes each edge by GPIO number. Public headers,
+`main.c`, and everything in `logic/` are unchanged. The header carries a long comment
+explaining the single-callback constraint so this does not get reintroduced.
+
+**2. The nine safety-mux fields in `config/vehicle_params.yaml` were filled in as
+PROVISIONAL.** They were all `null`, so the firmware refused to arm (correctly). They now
+carry the standard hobby-RC convention: 1000 / 1500 / 2000 us for both the steering and the
+throttle channels, `mux_watchdog_timeout_s` 0.1 (about five missed frames of a 50 Hz
+heartbeat), `mux_kill_switch_threshold_us` 1500 (the midpoint of that range). `schema_version`
+0.2.0 -> 0.2.1.
+
+**None of those nine numbers is measured.** They are convention and conservative guesses,
+written down so the firmware can arm on a bench with a scope on it. They must be replaced by
+real bench measurement -- `docs/notes/hardware-arrival-checklist.md` section 3, roadmap task
+1.3 -- **before the car drives on the floor**. The throttle neutral is the one that bites: if
+this ESC's real zero-throttle point is not 1500 us, the mux commands a creep in the CUT
+state, which is the opposite of what the cut state is for. Wheels stay off the ground until
+that is measured. The values are baked into the binary at compile time, so measuring means
+rebuild and reflash, not an edit on the car.
+
+The refuse-to-arm guard itself was not touched: a `null` in any of those fields still halts
+the firmware. We supplied values, we did not disable the check.
+
 ## 2026-09-12 -- kill-switch board: the Pico was drawn mirrored, corrected
 
 **Change.** The first board drawing had the Pico mirrored: the GPIO row was drawn on the

@@ -1,6 +1,8 @@
 #include "racer_safety/gate_logic.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstddef>
 
 #include "racer_safety/gate_logic_formatting.hpp"
 
@@ -44,6 +46,20 @@ double safe_dt(double dt_s) {
     return 0.0;
   }
   return dt_s;
+}
+
+// How long an engagement lasted, defensively: a non-finite or backwards interval (a clock
+// that did something impossible) is reported as 0.0 rather than propagating garbage into an
+// evaluation metric (claude-docs/09-evaluation.md counts interventions off this stream).
+double engagement_duration_s(double engaged_at_s, double now_s) {
+  const double duration_s = now_s - engaged_at_s;
+  if (!std::isfinite(duration_s)) {
+    return 0.0;
+  }
+  if (duration_s < 0.0) {
+    return 0.0;
+  }
+  return duration_s;
 }
 
 // A /scan return only counts for TTC if it is a finite, positive distance. Garbage
@@ -132,9 +148,9 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   if (watchdog_tripped) {
     result.output = DriveCommand{0.0, 0.0};
     result.brake = true;
-    result.events.push_back(
-        SafetyEvent{GateSource::kWatchdog, EventSeverity::kBrake,
-                    formatting::watchdog_detail(watchdog_timeout_s, input.drive_raw_age_s)});
+    result.activations.push_back(
+        GateActivation{GateSource::kWatchdog, EventSeverity::kBrake,
+                       formatting::watchdog_detail(watchdog_timeout_s, input.drive_raw_age_s)});
     return result;
   }
 
@@ -144,8 +160,8 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   if (!is_finite_command(input.command)) {
     result.output = DriveCommand{0.0, 0.0};
     result.brake = true;
-    result.events.push_back(SafetyEvent{GateSource::kCommandSanity, EventSeverity::kBrake,
-                                        formatting::command_sanity_detail()});
+    result.activations.push_back(GateActivation{GateSource::kCommandSanity, EventSeverity::kBrake,
+                                                formatting::command_sanity_detail()});
     return result;
   }
 
@@ -158,7 +174,7 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     bounds_clamped = true;
   }
   if (bounds_clamped) {
-    result.events.push_back(SafetyEvent{
+    result.activations.push_back(GateActivation{
         GateSource::kBoundsClamp, EventSeverity::kWarning,
         formatting::bounds_clamp_detail(limits_.steering_min_rad, limits_.steering_max_rad,
                                         limits_.speed_min_mps, limits_.speed_max_mps)});
@@ -176,8 +192,8 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     rate_clamped = true;
   }
   if (rate_clamped) {
-    result.events.push_back(SafetyEvent{GateSource::kRateLimit, EventSeverity::kWarning,
-                                        formatting::rate_limit_detail(dt_s)});
+    result.activations.push_back(GateActivation{GateSource::kRateLimit, EventSeverity::kWarning,
+                                                formatting::rate_limit_detail(dt_s)});
   }
   cmd = rate_limited;
 
@@ -202,9 +218,9 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     if (ttc_s <= *limits_.ttc_brake_s) {
       cmd.speed_mps = 0.0;
       result.brake = true;
-      result.events.push_back(
-          SafetyEvent{GateSource::kTtc, EventSeverity::kBrake,
-                      formatting::ttc_brake_detail(ttc_s, *limits_.ttc_brake_s)});
+      result.activations.push_back(
+          GateActivation{GateSource::kTtc, EventSeverity::kBrake,
+                         formatting::ttc_brake_detail(ttc_s, *limits_.ttc_brake_s)});
     } else {
       bool in_warning_zone = false;
       if (limits_.ttc_warning_s.has_value()) {
@@ -213,9 +229,9 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
         }
       }
       if (in_warning_zone) {
-        result.events.push_back(
-            SafetyEvent{GateSource::kTtc, EventSeverity::kInfo,
-                        formatting::ttc_warning_detail(ttc_s, *limits_.ttc_warning_s)});
+        result.activations.push_back(
+            GateActivation{GateSource::kTtc, EventSeverity::kInfo,
+                           formatting::ttc_warning_detail(ttc_s, *limits_.ttc_warning_s)});
       }
     }
   }
@@ -229,12 +245,63 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
       evaluate_covariance_gate(input.has_pose_input, input.pose_covariance_trace);
   cmd.speed_mps *= covariance.speed_fraction;
   if (covariance.engaged) {
-    result.events.push_back(SafetyEvent{GateSource::kCovariance, EventSeverity::kWarning,
-                                        formatting::covariance_detail(covariance.speed_fraction)});
+    result.activations.push_back(
+        GateActivation{GateSource::kCovariance, EventSeverity::kWarning,
+                       formatting::covariance_detail(covariance.speed_fraction)});
   }
 
   result.output = cmd;
   return result;
+}
+
+std::vector<SafetyEventRecord> GateEventTracker::update(
+    const std::vector<GateActivation>& activations, double now_s) {
+  std::vector<SafetyEventRecord> records;
+
+  // Index arithmetic, not a lookup or a switch: an engagement's identity is its
+  // (source, severity) pair (see GateEventTracker's doc comment for why severity is part of
+  // the identity), and both enums are contiguous from zero.
+  std::array<bool, kGateSourceCount * kEventSeverityCount> active_this_cycle{};
+
+  for (const GateActivation& activation : activations) {
+    const std::size_t slot = static_cast<std::size_t>(activation.source) * kEventSeverityCount +
+                             static_cast<std::size_t>(activation.severity);
+    if (active_this_cycle[slot]) {
+      // The same (source, severity) reported twice in one cycle is still ONE engagement.
+      // No gate does this today; treating it as one engagement rather than trusting the
+      // caller keeps the record stream's "one engage per engagement" promise unconditional.
+      continue;
+    }
+    active_this_cycle[slot] = true;
+    if (engagements_[slot].engaged) {
+      // Already engaged on a previous cycle: emit NOTHING. This one line is GitHub issue
+      // #37 -- the sustained state is the interval between the engage record and its
+      // release record, not a record per cycle.
+      continue;
+    }
+    engagements_[slot].engaged = true;
+    engagements_[slot].engaged_at_s = now_s;
+    records.push_back(SafetyEventRecord{activation.source, activation.severity, EventPhase::kEngage,
+                                        activation.detail,
+                                        /*duration_s=*/0.0});
+  }
+
+  for (std::size_t slot = 0; slot < engagements_.size(); ++slot) {
+    if (!engagements_[slot].engaged) {
+      continue;
+    }
+    if (active_this_cycle[slot]) {
+      continue;
+    }
+    const double duration_s = engagement_duration_s(engagements_[slot].engaged_at_s, now_s);
+    engagements_[slot].engaged = false;
+    records.push_back(SafetyEventRecord{static_cast<GateSource>(slot / kEventSeverityCount),
+                                        static_cast<EventSeverity>(slot % kEventSeverityCount),
+                                        EventPhase::kRelease,
+                                        formatting::release_detail(duration_s), duration_s});
+  }
+
+  return records;
 }
 
 }  // namespace racer_safety

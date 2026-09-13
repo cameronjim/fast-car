@@ -27,6 +27,7 @@ std::string rate_limit_detail(double dt_s);
 std::string ttc_brake_detail(double ttc_s, double brake_threshold_s);
 std::string ttc_warning_detail(double ttc_s, double warning_threshold_s);
 std::string covariance_detail(double speed_fraction);
+std::string release_detail(double duration_s);
 
 }  // namespace racer_safety::formatting
 

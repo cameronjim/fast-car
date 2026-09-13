@@ -127,6 +127,12 @@ _STALL_PROGRESS_EPSILON_M = 0.05
 # back to "the tracker does not ramp its own speed" is still caught by this ceiling. If CI
 # (a dedicated runner, not a shared dev machine) turns out noisier than this, widen the
 # margin with a comment citing the CI run, not to a value near the broken-baseline itself.
+#
+# The measured numbers above predate GitHub issue #37's fix, when /safety/events carried one
+# record per engaged gate PER CYCLE; they are now counts of PHASE_ENGAGE records
+# (interventions), which can only be lower for the same behaviour. The ceiling is left where
+# it is rather than re-tightened against a single post-fix sample: it still catches the
+# regression it was chosen to catch, and tightening it wants its own measured spread.
 _MAX_BENIGN_RATE_LIMIT_EVENTS = 300
 
 
@@ -335,9 +341,13 @@ class TestSimAutopilotE2e(unittest.TestCase):
         # count -- see module docstring point 2. Only a bounded count of benign, WARNING-
         # severity "rate_limit" events (cross-process clock jitter, not a real disagreement)
         # is tolerated.
+        # /safety/events carries gate TRANSITIONS, and an intervention COUNT is a count of
+        # PHASE_ENGAGE records (GitHub issue #37, racer_msgs/SafetyEvent.msg): a
+        # PHASE_RELEASE record just closes an engagement already counted here.
+        interventions = [e for e in safety_events if e.phase == SafetyEvent.PHASE_ENGAGE]
         non_benign_events = [
             e
-            for e in safety_events
+            for e in interventions
             if e.source != "rate_limit" or e.severity != SafetyEvent.SEVERITY_WARNING
         ]
         self.assertEqual(
@@ -349,9 +359,9 @@ class TestSimAutopilotE2e(unittest.TestCase):
             f"{[(e.source, e.severity, e.detail) for e in non_benign_events]}",
         )
         self.assertLessEqual(
-            len(safety_events),
+            len(interventions),
             _MAX_BENIGN_RATE_LIMIT_EVENTS,
-            f"safety_node emitted {len(safety_events)} rate_limit/WARNING /safety/events "
+            f"safety_node logged {len(interventions)} rate_limit/WARNING interventions "
             f"during the nominal (post-warm-up) autopilot run, above the "
             f"{_MAX_BENIGN_RATE_LIMIT_EVENTS}-event tolerance for cross-process clock jitter "
             "(module docstring point 2) -- this many suggests a real regression, not jitter",

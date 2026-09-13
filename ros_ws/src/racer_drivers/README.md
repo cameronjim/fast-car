@@ -56,19 +56,31 @@ these is `null` -- the same refuse-to-arm discipline as `firmware/safety_mux`'s
 | `steering.pwm_min_us` / `pwm_neutral_us` / `pwm_max_us` | steering pulse ends and neutral | 1000 / 1500 / 2000 (PROVISIONAL, unmeasured) |
 | `steering.min_angle_rad` / `max_angle_rad` | angle range the pulse ends correspond to | -0.4189 / +0.4189 (gym defaults) |
 | `actuation.throttle_pwm_min_us` / `throttle_pwm_neutral_us` / `throttle_pwm_max_us` | throttle pulse ends and neutral | 1000 / 1500 / 2000 (PROVISIONAL, unmeasured) |
-| `limits.global_speed_cap_mps` | full-scale reference for the open-loop speed map | 20.0 (a model-validity bound, NOT a safety cap) |
+| `actuation.throttle_full_scale_mps` | full-scale reference for the open-loop speed map | 5.0 (PROVISIONAL, unmeasured) |
+| `limits.global_speed_cap_mps` | clamp applied to the commanded speed before the map | 20.0 (a model-validity bound, NOT a safety cap) |
 
 None of these is null today, so the node starts. **Every one of the six PWM values is a
 standard-RC-convention placeholder, not a measurement** (see that file's header block and
-`docs/notes/hardware-arrival-checklist.md` section 3). `limits.global_speed_cap_mps` at 20 m/s
-is worse than provisional as a throttle reference: it means a commanded 1 m/s produces a
-pulse only 25 us off neutral. Lower it before driving.
+`docs/notes/hardware-arrival-checklist.md` section 3).
+
+The full scale and the cap are two different numbers and were split apart on 2026-09-13
+(GitHub issue #40). Before that the cap was also the full scale, and at 20 m/s that put a
+commanded 1 m/s only 25 us off neutral -- plausibly inside the VESC's default PPM deadband,
+so gentle keyboard teleop would have produced no motion at all and looked like a wiring
+fault. **With `throttle_full_scale_mps` at 5.0 and the 1000/1500/2000 us ends, a commanded
+1 m/s is now 100 us off neutral (1600 us forward, 1400 us reverse).** 5.0 is itself
+unmeasured; it is replaced by the wheels-off-the-ground throttle sweep in step 13 of
+`docs/notes/first-boot-runbook.md`.
+
+`limits.global_speed_cap_mps` is unchanged in role: a commanded speed is clamped to it before
+the map runs, exactly as before. A command above the full scale but below the cap is not
+rejected -- it saturates the pulse at the channel end. Lower the cap before driving.
 
 ### The throttle map is open loop and provisional
 
 The VESC is in PPM mode, where a pulse commands duty or current, **not speed**. There is no
 feedback in this node and no claim that commanding X m/s produces X m/s. The linear
-speed-to-pulse map scaled by `limits.global_speed_cap_mps` exists so the car can be driven at
+speed-to-pulse map scaled by `actuation.throttle_full_scale_mps` exists so the car can be driven at
 all at first boot; it is replaced by the real closed-loop VESC driver
 (`claude-docs/04-architecture.md`'s `vesc_node`) when that exists. USB to the VESC stays
 telemetry and configuration only (`docs/notes/build-log.md`, 2026-09-12 command-path

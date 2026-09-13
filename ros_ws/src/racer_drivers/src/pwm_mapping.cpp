@@ -72,7 +72,11 @@ std::optional<std::string> validate_config(const MappingConfig& config) {
         "steering.max_angle_rad); this mapping interpolates each side out from neutral");
   }
   if (!finite(config.speed_full_scale_mps) || config.speed_full_scale_mps <= 0.0) {
-    return std::string("speed full scale (limits.global_speed_cap_mps) must be finite and > 0");
+    return std::string(
+        "speed full scale (actuation.throttle_full_scale_mps) must be finite and > 0");
+  }
+  if (!finite(config.speed_cap_mps) || config.speed_cap_mps <= 0.0) {
+    return std::string("speed cap (limits.global_speed_cap_mps) must be finite and > 0");
   }
   if (!finite(config.drive_timeout_s) || config.drive_timeout_s <= 0.0) {
     return std::string("drive_timeout_s must be finite and > 0");
@@ -116,13 +120,19 @@ double speed_to_pulse_us(const MappingConfig& config, double speed_mps) {
   if (!std::isfinite(speed_mps)) {
     return config.throttle.neutral_us;
   }
+  // Clamp to the safety cap FIRST (limits.global_speed_cap_mps), then scale by the map's own
+  // full scale (actuation.throttle_full_scale_mps). The two are separate numbers: the full
+  // scale is normally the smaller of them, so a command between full scale and the cap
+  // saturates at the channel end. The final std::clamp guarantees that whatever the two
+  // values are, the pulse never leaves the calibrated channel range.
+  const double capped_mps = std::clamp(speed_mps, -config.speed_cap_mps, config.speed_cap_mps);
   double pulse_us = 0.0;
-  if (speed_mps >= 0.0) {
-    const double speed = std::min(speed_mps, config.speed_full_scale_mps);
+  if (capped_mps >= 0.0) {
+    const double speed = std::min(capped_mps, config.speed_full_scale_mps);
     pulse_us = interpolate(config.throttle.neutral_us, config.throttle.max_us, speed,
                            config.speed_full_scale_mps);
   } else {
-    const double speed = std::min(-speed_mps, config.speed_full_scale_mps);
+    const double speed = std::min(-capped_mps, config.speed_full_scale_mps);
     pulse_us = interpolate(config.throttle.neutral_us, config.throttle.min_us, speed,
                            config.speed_full_scale_mps);
   }

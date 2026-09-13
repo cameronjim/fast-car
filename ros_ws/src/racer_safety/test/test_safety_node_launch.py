@@ -29,6 +29,7 @@ import os
 # clobbered.
 os.environ.setdefault("ROS_DOMAIN_ID", "78")
 
+import pathlib
 import signal
 import time
 import unittest
@@ -39,6 +40,7 @@ import launch_testing.actions
 import launch_testing.asserts
 import pytest
 import rclpy
+import yaml
 from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
 from racer_msgs.msg import SafetyEvent
@@ -53,13 +55,24 @@ _TEST_CONTROL_RATE_HZ = 10.0
 _TEST_WATCHDOG_MISSED_CYCLES = 3
 _WATCHDOG_TIMEOUT_S = _TEST_WATCHDOG_MISSED_CYCLES / _TEST_CONTROL_RATE_HZ  # 0.3s
 
-# TTC thresholds are unset (null) in the committed config/vehicle_params.yaml pending Phase
-# 1/2 tuning (see racer_safety/src/safety_node.cpp's build_limits() comment) -- overridden
-# here via the ttc_warning_s/ttc_brake_s launch parameters (which default to whatever
-# vehicle_params holds) specifically so this test can exercise the TTC gate itself ahead of
-# real tuning data existing.
-_TTC_WARNING_S = 1.0
-_TTC_BRAKE_S = 0.5
+# TTC thresholds are read from the COMMITTED config/vehicle_params.yaml rather than
+# overridden here: since 2026-09-13 that file holds PROVISIONAL values (issue #36), so the
+# thresholds this test exercises are the ones the car will actually boot with. They are read
+# out of the yaml instead of being copied as literals so that a future tuning change cannot
+# leave this test proving a number nothing ships with. The node is launched with NO
+# ttc_warning_s/ttc_brake_s parameter at all, which is the launch-file-free default path.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+with open(_REPO_ROOT / "config" / "vehicle_params.yaml", "r", encoding="utf-8") as _handle:
+    _VEHICLE_PARAMS = yaml.safe_load(_handle)
+_TTC_WARNING_S = _VEHICLE_PARAMS["limits"]["ttc_warning_s"]
+_TTC_BRAKE_S = _VEHICLE_PARAMS["limits"]["ttc_brake_s"]
+assert _TTC_BRAKE_S is not None and _TTC_BRAKE_S > 0.0, (
+    "config/vehicle_params.yaml limits.ttc_brake_s is unset, so the layer-3 TTC gate is inert "
+    "on hardware (GitHub issue #36). This test refuses to pass silently in that state."
+)
+assert _TTC_WARNING_S is not None and _TTC_WARNING_S > 0.0, (
+    "config/vehicle_params.yaml limits.ttc_warning_s is unset (GitHub issue #36)."
+)
 
 _STEERING_MAX_RAD = 0.4189  # vehicle_params.yaml steering.max_angle_rad
 
@@ -104,8 +117,8 @@ def generate_test_description():
             {
                 "control_rate_hz": _TEST_CONTROL_RATE_HZ,
                 "watchdog_missed_cycles": _TEST_WATCHDOG_MISSED_CYCLES,
-                "ttc_warning_s": _TTC_WARNING_S,
-                "ttc_brake_s": _TTC_BRAKE_S,
+                # Deliberately no ttc_warning_s / ttc_brake_s here: the node must pick up the
+                # committed vehicle_params values on its own.
             }
         ],
     )
@@ -267,6 +280,36 @@ class TestSafetyNode(unittest.TestCase):
         )
         self.assertTrue(all(e.severity == SafetyEvent.SEVERITY_BRAKE for e in watchdog_events))
 
+    def test_no_scan_leaves_the_ttc_gate_inert(self):
+        """With the TTC thresholds now set in the committed config (issue #36), the gate is
+        armed -- but only when a scan exists. With no /scan publisher at all there is no range
+        to compute a TTC from, so a fast forward command must pass through untouched and no
+        `ttc` event may appear. This is the regression guard on "setting the thresholds did
+        not change behaviour on a car with no LiDAR fitted"."""
+        drive_out = []
+        self.node.create_subscription(
+            AckermannDriveStamped, "/drive", drive_out.append, _reliable_qos()
+        )
+        events = []
+        self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        drive_raw_pub = self.node.create_publisher(
+            AckermannDriveStamped, "/drive_raw", _reliable_qos()
+        )
+        self._spin_for(0.3)
+
+        events.clear()
+        self._publish_steadily(drive_raw_pub, _make_drive(steering=0.0, speed=5.0), seconds=1.0)
+
+        self.assertGreater(len(drive_out), 0)
+        self.assertGreater(
+            drive_out[-1].drive.speed, 1.0, "a forward command was braked with no /scan present"
+        )
+        self.assertEqual(
+            [e for e in events if e.source == "ttc"],
+            [],
+            "safety_node emitted a ttc event with no /scan publisher",
+        )
+
     def test_ttc_brakes_on_close_obstacle_scan(self):
         """Also the QoS proof that /scan is a genuinely best_effort subscription: this scan
         publisher is deliberately BEST_EFFORT, and the TTC brake below can only fire if
@@ -297,7 +340,9 @@ class TestSafetyNode(unittest.TestCase):
         )
 
         events.clear()
-        close_scan = _make_scan(range_m=0.05)  # ttc = 0.05 / ~5 m/s << 0.5s brake threshold
+        # ttc = 0.05 m / ~5 m/s = 0.01 s, far below the committed brake threshold.
+        self.assertLess(0.05 / 5.0, _TTC_BRAKE_S)
+        close_scan = _make_scan(range_m=0.05)
         self._publish_steadily(
             drive_raw_pub, forward_cmd, seconds=1.0, scan_pub=scan_pub, scan=close_scan
         )

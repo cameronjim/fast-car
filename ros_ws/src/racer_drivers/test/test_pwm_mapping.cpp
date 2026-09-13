@@ -43,7 +43,11 @@ MappingConfig nominal_config() {
   config.throttle.max_us = 1900.0;
   config.steering_min_angle_rad = -0.4;
   config.steering_max_angle_rad = 0.2;
+  // Full scale (the open-loop throttle map's actuation.throttle_full_scale_mps) is
+  // deliberately BELOW the cap (limits.global_speed_cap_mps), as it is in the committed
+  // config, so the tests below can tell the two apart.
   config.speed_full_scale_mps = 4.0;
+  config.speed_cap_mps = 10.0;
   config.left_is_pwm_max = true;
   config.drive_timeout_s = 0.1;
   return config;
@@ -164,6 +168,18 @@ TEST(ValidateConfig, RejectsBadSpeedFullScale) {
   EXPECT_TRUE(racer_drivers::validate_config(config).has_value());
 }
 
+TEST(ValidateConfig, RejectsBadSpeedCap) {
+  MappingConfig config = nominal_config();
+  config.speed_cap_mps = 0.0;
+  EXPECT_TRUE(racer_drivers::validate_config(config).has_value());
+  config = nominal_config();
+  config.speed_cap_mps = -1.0;
+  EXPECT_TRUE(racer_drivers::validate_config(config).has_value());
+  config = nominal_config();
+  config.speed_cap_mps = kNaN;
+  EXPECT_TRUE(racer_drivers::validate_config(config).has_value());
+}
+
 TEST(ValidateConfig, RejectsBadTimeout) {
   MappingConfig config = nominal_config();
   config.drive_timeout_s = 0.0;
@@ -268,17 +284,22 @@ struct SpeedCase {
 };
 
 TEST(SpeedToPulse, TableDriven) {
-  const MappingConfig config = nominal_config();  // full scale 4 m/s, 1100/1500/1900 us
+  // full scale 4 m/s, cap 10 m/s, 1100/1500/1900 us. Every boundary below is against the
+  // FULL SCALE, which is what sets the pulse; the cap only bounds the command first.
+  const MappingConfig config = nominal_config();
   const std::vector<SpeedCase> cases = {
       {"zero is exactly neutral", 0.0, 1500.0},
       {"full scale forward", 4.0, 1900.0},
       {"half scale forward", 2.0, 1700.0},
-      {"epsilon over full scale clamps", 4.0 + kEps, 1900.0},
-      {"far over clamps", 1000.0, 1900.0},
+      {"epsilon over full scale saturates", 4.0 + kEps, 1900.0},
+      {"between full scale and cap saturates", 7.0, 1900.0},
+      {"at the cap saturates", 10.0, 1900.0},
+      {"far over the cap is clamped then saturates", 1000.0, 1900.0},
       {"full scale reverse", -4.0, 1100.0},
       {"half scale reverse", -2.0, 1300.0},
-      {"epsilon over reverse clamps", -4.0 - kEps, 1100.0},
-      {"far under clamps", -1000.0, 1100.0},
+      {"epsilon over reverse saturates", -4.0 - kEps, 1100.0},
+      {"between full scale and cap reverse saturates", -7.0, 1100.0},
+      {"far under the cap is clamped then saturates", -1000.0, 1100.0},
       {"NaN is neutral", kNaN, 1500.0},
       {"+inf is neutral", kInf, 1500.0},
       {"-inf is neutral", -kInf, 1500.0},
@@ -287,6 +308,46 @@ TEST(SpeedToPulse, TableDriven) {
     EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, c.speed_mps), c.expected_us, 1e-6)
         << c.name;
   }
+}
+
+// The full scale, not the cap, is what a mid-range command is scaled against: with the
+// committed 5 m/s full scale over a 1000/1500/2000 us channel, 1 m/s is 100 us off neutral,
+// which is the whole point of GitHub issue #40. Against the old 20 m/s cap-as-full-scale it
+// was 25 us, plausibly inside the VESC's PPM deadband.
+TEST(SpeedToPulse, FullScaleNotTheCapSetsTheSlope) {
+  MappingConfig config = nominal_config();
+  config.throttle.min_us = 1000.0;
+  config.throttle.neutral_us = 1500.0;
+  config.throttle.max_us = 2000.0;
+  config.speed_full_scale_mps = 5.0;  // actuation.throttle_full_scale_mps, committed value
+  config.speed_cap_mps = 20.0;        // limits.global_speed_cap_mps, committed value
+  ASSERT_FALSE(racer_drivers::validate_config(config).has_value());
+  EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, 1.0), 1600.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, -1.0), 1400.0, 1e-6);
+}
+
+// A command ABOVE the full scale but BELOW the cap is not rejected and not zeroed: it
+// saturates the pulse at the channel end. Nothing about the cap changed -- it is still the
+// clamp it always was.
+TEST(SpeedToPulse, AboveFullScaleBelowCapSaturates) {
+  const MappingConfig config = nominal_config();  // full scale 4, cap 10
+  ASSERT_GT(config.speed_cap_mps, config.speed_full_scale_mps);
+  EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, 6.0), config.throttle.max_us, 1e-6);
+  EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, -6.0), config.throttle.min_us, 1e-6);
+}
+
+// A command above the CAP is clamped to the cap before anything else happens, exactly as
+// before this field was split out.
+TEST(SpeedToPulse, AboveCapIsClampedFirst) {
+  MappingConfig config = nominal_config();
+  // Full scale ABOVE the cap makes the clamp observable: without the cap clamp, 10 m/s would
+  // map to the channel end; with it, the command is first cut to 5 m/s, i.e. half scale.
+  config.speed_full_scale_mps = 10.0;
+  config.speed_cap_mps = 5.0;
+  ASSERT_FALSE(racer_drivers::validate_config(config).has_value());
+  EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, 10.0), 1700.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, 1000.0), 1700.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, -1000.0), 1300.0, 1e-6);
 }
 
 TEST(SpeedToPulse, NeverLeavesTheCalibratedRange) {

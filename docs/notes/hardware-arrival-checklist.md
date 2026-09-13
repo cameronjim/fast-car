@@ -106,6 +106,12 @@ UNVERIFIED Pico SDK glue layer, and a proposed pinout. Read
         `claude-docs/06-vehicle-params.md`'s conventions).
       - Stop the Jetson's heartbeat toggle (kill the process driving it, not the whole
         Jetson yet) -> confirm the mux cuts within `mux_watchdog_timeout_s`.
+      - Unplug the Jetson cable (the single 4-pin header carrying steering, throttle,
+        heartbeat and their shared ground -- see `firmware/safety_mux/README.md`'s board
+        connector map) with the board running and the kill switch ARMED -> confirm both
+        outputs go to neutral within `mux_watchdog_timeout_s` and the cutoff opens. The Pico's
+        Jetson inputs are pull-down, so an unplugged cable reads as a steady low: no pulses,
+        no heartbeat. Observe it on the scope, do not assume it.
       - Feed an out-of-range PWM value into the steering/throttle input (signal generator or
         a deliberately bad test harness) -> confirm the mux cuts rather than passing it
         through.

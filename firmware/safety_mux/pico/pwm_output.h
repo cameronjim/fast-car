@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+#include "pico/types.h"  // Pico SDK's `uint` typedef, used in the signatures below
+
 // Configures `gpio` as a 50 Hz PWM output (the standard hobby servo/ESC frame rate). Call
 // once per output channel before the first pwm_output_set_us() call.
 void pwm_output_init_channel(uint gpio);

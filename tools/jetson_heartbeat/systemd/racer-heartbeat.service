@@ -1,0 +1,35 @@
+[Unit]
+Description=Racer layer-1 safety mux heartbeat (Jetson-side GPIO toggle)
+Documentation=file:///opt/racer/jetson_heartbeat/README.md
+# Deliberately NOT After=network.target or any ROS/DDS unit: per
+# firmware/safety_mux/pico/heartbeat_input.h, this heartbeat's entire value is that it does
+# NOT depend on the network stack, ROS, or the desktop session being up. It should start as
+# early as the kernel has brought up the GPIO controller.
+DefaultDependencies=no
+After=sysinit.target
+Wants=sysinit.target
+
+[Service]
+Type=simple
+# Absolute path: this unit does not source a shell profile, so PATH is whatever systemd's
+# own default is -- do not rely on it finding the binary by name.
+ExecStart=/opt/racer/jetson_heartbeat/racer-heartbeat --chip gpiochip0 --line 144 --rate-hz 50
+Restart=always
+RestartSec=1
+# GPIO character-device access on this board's default udev rules requires root (or a gpio
+# group ACL this repo does not assume is set up); running as root also matches
+# firmware/safety_mux/README.md's stance that nothing about this heartbeat is meant to be
+# hardened against the Jetson's own root user -- the safety boundary is the separate MCU,
+# not this process's privilege level.
+User=root
+# No stdin, minimal surface. stdout/stderr go to the journal (journalctl -u racer-heartbeat)
+# per claude-docs/10-conventions.md's logging rules for tools/ scripts.
+StandardOutput=journal
+StandardError=journal
+# Watchdog note: this unit itself has no systemd watchdog (WatchdogSec) configured. Its
+# purpose IS the watchdog signal for the separate mux MCU; monitoring racer-heartbeat.service
+# itself (e.g. via `systemctl is-active`, or a future rosbag-adjacent health check) is a
+# separate concern from the GPIO-level signal the mux hardware actually watches.
+
+[Install]
+WantedBy=multi-user.target

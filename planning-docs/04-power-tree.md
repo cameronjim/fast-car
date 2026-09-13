@@ -15,7 +15,8 @@ or the buck-boost. A Jetson brownout cannot take the kill switch down.
 
 ## Steps
 
-1. Commission the batteries: charge both Zeee packs on the SkyRC S65 at 3S LiPo, 5.0 A,
+1. Commission the batteries: charge both Zeee packs on the balance charger at LiPo, 3S,
+   balance mode, 5.0 A (about 1C),
    balance mode, in the bag, attended. Record each pack's per-cell voltages after charge in
    `docs/notes/build-log.md` (the charger displays them). Label the packs A and B.
 2. Mount the buck-boost and UBEC on the chassis deck on standoffs, away from the motor and

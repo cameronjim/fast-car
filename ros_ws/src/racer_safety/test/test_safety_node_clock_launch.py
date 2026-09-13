@@ -165,18 +165,30 @@ class TestSafetyNodeWatchdogClock(unittest.TestCase):
             ),
         )
 
-        watchdog_events = [e for e in events if e.source == "watchdog"]
-        self.assertGreater(
-            len(watchdog_events),
-            0,
-            "safety_node braked but emitted no 'watchdog' /safety/events record "
-            "(claude-docs/05-safety.md: an unlogged intervention is a bug). Events seen: "
-            f"{sorted({e.source for e in events})}",
+        # Exactly one ENGAGE record for this one sustained watchdog intervention -- not one
+        # per cycle (GitHub issue #37). The single /drive_raw command above released whatever
+        # watchdog engagement the node booted into, so this window contains exactly one fresh
+        # engagement and no release (the silence never ends).
+        watchdog_engages = [
+            e for e in events if e.source == "watchdog" and e.phase == SafetyEvent.PHASE_ENGAGE
+        ]
+        self.assertEqual(
+            len(watchdog_engages),
+            1,
+            "safety_node braked but did not emit exactly one 'watchdog' PHASE_ENGAGE "
+            "/safety/events record (claude-docs/05-safety.md: an unlogged intervention is a "
+            f"bug; GitHub issue #37: a sustained one is not many). Events seen: "
+            f"{[(e.source, e.phase) for e in events]}",
         )
         self.assertEqual(
-            watchdog_events[-1].severity,
+            watchdog_engages[-1].severity,
             SafetyEvent.SEVERITY_BRAKE,
             "a watchdog intervention that brakes must be recorded at SEVERITY_BRAKE",
+        )
+        self.assertEqual(
+            watchdog_engages[-1].duration_s,
+            0.0,
+            "a PHASE_ENGAGE record must carry duration_s == 0.0 (the engagement has not ended yet)",
         )
 
     def test_watchdog_age_is_never_reported_as_negative(self):
@@ -190,6 +202,20 @@ class TestSafetyNodeWatchdogClock(unittest.TestCase):
         """
         events = []
         self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        drive_raw_pub = self.node.create_publisher(
+            AckermannDriveStamped, "/drive_raw", _reliable_qos()
+        )
+        self._spin_for(0.5)  # let discovery settle
+
+        # One command, then silence. The command is what makes this window produce records at
+        # all: /safety/events carries gate TRANSITIONS, so a watchdog that was already
+        # engaged (the node's boot state, or a previous test's silence) emits nothing until
+        # the command releases it and the silence engages it again (GitHub issue #37).
+        cmd = AckermannDriveStamped()
+        cmd.drive.steering_angle = 0.1
+        cmd.drive.speed = 3.0
+        drive_raw_pub.publish(cmd)
+        events.clear()
         self._spin_for(_WATCHDOG_TIMEOUT_S * 10)
 
         self.assertGreater(len(events), 0, "no /safety/events observed to check")

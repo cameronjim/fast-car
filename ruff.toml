@@ -10,3 +10,9 @@
 # config for all of them unless a package later opts to override it.
 line-length = 100
 target-version = "py310"
+
+# f1tenth-autonomous-racing/ is a separate project merged in with its own
+# history and its own style; it is reference material, not racer code, and
+# is not held to this repo's lint rules. Excluding it keeps the Lint job
+# meaningful for the code we actually maintain.
+extend-exclude = ["f1tenth-autonomous-racing"]

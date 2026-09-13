@@ -5,6 +5,65 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-12 -- Jetson-side heartbeat installed and running on the bench Jetson
+
+Roadmap task 1.3 (`claude-docs/05-safety.md` layer 1). Built, installed, and verified the
+Jetson-side half of the mux's heartbeat watchdog input on the bench Jetson (racer-car,
+10.0.0.226, JetPack 6.2 / L4T R36.4.4). Source, systemd unit, and full detail:
+`tools/jetson_heartbeat/` (its README has the reproduction steps for everything below).
+
+**What was installed.** `tools/jetson_heartbeat/racer-heartbeat`, a small C program (built
+against `libgpiod-dev` 1.6.3, installed via apt for this) that toggles one GPIO line at a
+fixed rate using `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, ...)` against an absolute
+deadline (no drift accumulation), independent of ROS and the network stack. Installed to
+`/opt/racer/jetson_heartbeat/racer-heartbeat` and run via a new systemd unit,
+`racer-heartbeat.service` (`DefaultDependencies=no`, `After=sysinit.target`, `Restart=always`),
+enabled and started. `systemctl status` shows `active (running)`; killing the process with
+`SIGKILL` and re-checking status shows a fresh PID within about a second, confirming the
+restart policy actually works and isn't just configured.
+
+**Pin mapping.** Jetson 40-pin header **physical pin 7 (signal) == `gpiochip0` line 144**
+(kernel name `PAC.06`, global gpio 492), **physical pin 9 == ground**. This was read off the
+live pinmux device tree of this specific board using NVIDIA's own `/opt/nvidia/jetson-io`
+tooling (`Jetson.board.Board` / `Jetson.header.Header`, which parse the running kernel's DT),
+not assumed from a generic pinout diagram -- the pinmux-node name it returned for pin 7
+(`soc_gpio59_pac6`) independently matches the line name `gpioinfo gpiochip0` prints for line
+144 (`PAC.06`), which is the cross-check that makes this a determination rather than a guess.
+`firmware/safety_mux/README.md`'s pinout table and connector map now name this concrete pin.
+
+**Verification method and result.** Software-only, no jumper wire yet (see "what remains
+unproven"):
+
+- `gpioinfo gpiochip0` shows line 144 move from `unused input` to `"racer-heartbeat" output
+  [used]` while the service runs, and back to `unused` when stopped -- proves the process
+  actually claims and drives the line, not just that it starts without erroring.
+- `/sys/kernel/debug/gpio`'s `gpio-492` entry (a kernel-internal readback path independent of
+  the character-device API the program itself calls) shows `out hi` / `out lo` tracking the
+  commanded value.
+- Toggle rate: a throwaway diagnostic (not committed) polled `/sys/kernel/debug/gpio` in a
+  tight loop for 2 seconds, timestamping every value transition on `gpio-492` with
+  `clock_gettime(CLOCK_MONOTONIC)`. Result: **200 transitions in 1.9901 s, average edge
+  interval 0.0100 s** -- 100 edges/second, exactly the 50 Hz square wave (edge every 10 ms)
+  the default `--rate-hz 50` is supposed to produce, against the current (PROVISIONAL) 0.1 s
+  `mux_watchdog_timeout_s`, i.e. about 10 edges per watchdog window.
+- Error paths: an out-of-range `--line` and a second instance racing for an already-claimed
+  line both exit 1 with a specific stderr message rather than hanging or exiting silently.
+  `SIGTERM` (what `systemctl stop` sends) produces a clean shutdown log line and exit 0.
+
+**What remains unproven.** That the signal measured above (the SoC's internal GPIO register)
+actually reaches the physical pin 7 pad on this board's connector -- the pinmux mapping comes
+from NVIDIA's own live device tree for this exact carrier, which is about as authoritative as
+software gets, but no multimeter or oscilloscope has touched pin 7 itself. Actual voltage
+levels and edge timing under load are also unmeasured. A loopback jumper from physical pin 7
+to physical pin 29 (`gpiochip0` line 105, `PQ.05`, confirmed free the same way as pin 7) plus
+`gpiomon` on the second line would close this gap with an interrupt-timed count on a
+genuinely separate, physically-wired pin -- that jumper has not been placed yet, since it
+needs a human at the bench. The heartbeat also has not been connected to the mux board at
+all: that board's JETSON connector doesn't exist yet (`firmware/safety_mux/README.md`'s own
+status), so nothing here demonstrates the mux MCU actually sees or reacts to this signal.
+Roadmap 1.3's real kill test (Jetson frozen for real, cut proven, human present, wheels off
+the ground) is still pending, unaffected by this entry.
+
 ## 2026-09-12 -- kill-switch board: the Pico was drawn mirrored, corrected
 
 **Change.** The first board drawing had the Pico mirrored: the GPIO row was drawn on the

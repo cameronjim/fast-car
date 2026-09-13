@@ -23,6 +23,29 @@
 # discipline as every other Dockerfile in docker/*/. This was resolved from this Mac's
 # network access to nvcr.io's public registry API; it was NOT pulled, built, or run here (no
 # arm64 hardware/emulation available) -- see README.md's "What is and isn't verified".
+#
+# BASE TAG vs. THE DEVICE, decided 2026-09-13. The bench Jetson reports L4T R36.4.4 =
+# JetPack 6.2.1 (docs/notes/build-log.md, 2026-09-12), while this line pins r36.4.0 =
+# JetPack 6.1. The obvious fix would be to bump to a matching r36.4.x tag. There is no such
+# tag: nvcr.io/nvidia/l4t-jetpack's full tag list (queried against the registry API on
+# 2026-09-13) is r35.1.0, r35.2.1, r35.3.1, r35.4.1, r36.2.0, r36.3.0, r36.4.0 and nothing
+# newer; l4t-base stops even earlier, at r36.2.0. NVIDIA has not published an l4t-jetpack
+# image for JetPack 6.2/6.2.1.
+#
+# So the decision is to KEEP r36.4.0 at the same digest (re-resolved 2026-09-13 and
+# unchanged: sha256:34ccf0f3...bb673), because:
+#   * an older L4T container on a newer L4T host of the SAME major is the supported
+#     direction for JetPack containers -- the driver comes from the host, not the image --
+#     whereas the reverse (newer container, older host) is not;
+#   * both are JetPack 6 / Ubuntu 22.04 jammy, which is what the ROS 2 Humble apt install
+#     below depends on;
+#   * pinning to a tag that does not exist, or floating the tag, would be worse than a
+#     documented one-minor-version gap.
+# This is a reasoned choice from registry data, NOT a tested one: whether CUDA/cuDNN/TensorRT
+# out of a 6.1 container behave correctly on a 6.2.1 host is an ON-DEVICE check (see
+# build_on_jetson.md step 3). If it misbehaves, the fallback is to install ROS on top of the
+# device's own JetPack rather than to chase a tag that is not published. Re-check the tag
+# list when phase 5 needs torch anyway.
 FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0@sha256:34ccf0f3b63c6da9eee45f2e79de9bf7fdf3beda9abfd72bbf285ae9d40bb673
 
 # --- ROS 2 Humble (claude-docs/03-environments.md: "JetPack 6 -> Humble") ---------------
@@ -67,29 +90,79 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rosdep update \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Jetson torch (JetPack-specific NVIDIA wheel, NOT on PyPI) --------------------------
+# --- Jetson torch: OPTIONAL for the control-stack phase ---------------------------------
 # NVIDIA publishes JetPack-version-matched torch wheels at
 # https://developer.download.nvidia.com/compute/redist/jp/ (one subdirectory per JetPack
-# minor version, e.g. v61/ for JetPack 6.1) and documents the current install command at
+# minor version) and documents the current install command at
 # https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html
 # -- THAT page, not this comment, is the source of truth for the exact wheel filename/URL,
 # because it changes with every JetPack/torch release and cannot be verified without the
-# actual Jetson (no arm64 hardware or L4T emulation is available in this repo's dev
-# containers or in CI). Rather than hardcode a URL this milestone could not verify resolves
-# to a real, JetPack-6.1-compatible wheel, the build REFUSES until the owner supplies one
-# explicitly -- the same "refuse on mismatch, don't guess" discipline CLAUDE.md invariant 3
-# applies to the deploy node applies here to the build itself. See build_on_jetson.md for the
-# exact lookup + build command.
-ARG TORCH_WHEEL_URL=REPLACE_ME_SEE_BUILD_ON_JETSON_MD
+# actual Jetson.
+#
+# WHY THIS IS NOW OPTIONAL (changed 2026-09-13, roadmap task 1.4 / milestone "car first
+# boot"). Torch exists in this image for ONE consumer: racer_policy's on-vehicle inference,
+# which is roadmap phase 5.x. The phase actually in front of us is the classical control
+# stack -- safety_node, pwm_output_node, teleop -- which imports no torch at all. Refusing
+# the whole build until someone hand-resolves a JetPack-matched torch wheel therefore blocked
+# a first boot on a dependency that first boot does not use.
+#
+#   INSTALL_TORCH=skip      (DEFAULT) build without torch. Loud notice in the build log, an
+#                           /etc/racer/torch-absent marker, and RACER_TORCH=absent exported
+#                           into every login shell, so nothing can silently assume torch.
+#   INSTALL_TORCH=required  install it, and REFUSE the build unless TORCH_WHEEL_URL is set to
+#                           a real URL -- the original "never guess a wheel URL" behaviour,
+#                           unchanged (CLAUDE.md invariant 3: refuse on mismatch, never a
+#                           warning). This is what the policy phase builds with.
+#
+# Any other value is a hard error rather than a silent fallthrough. Switching the default
+# back to `required` is a one-word change here when phase 5 starts.
+ARG INSTALL_TORCH=skip
+ARG TORCH_WHEEL_URL=""
+# The single-quoted lines at the end of the RUN below are the TEXT of the /etc/profile.d
+# script being generated; their `$RACER_TORCH` must reach that file UNEXPANDED, so
+# shellcheck's SC2016 ("expressions don't expand in single quotes") is exactly the behaviour
+# wanted here and is ignored for this one instruction only.
+# hadolint ignore=SC2016
 RUN set -eu; \
-    if [ "$TORCH_WHEEL_URL" = "REPLACE_ME_SEE_BUILD_ON_JETSON_MD" ]; then \
-        echo "ERROR: --build-arg TORCH_WHEEL_URL=<url> was not supplied." >&2; \
-        echo "Look up the JetPack-6.1-matched torch wheel URL per docker/car/build_on_jetson.md" >&2; \
-        echo "and pass it explicitly. Refusing to guess a wheel URL for a mismatch this build" >&2; \
-        echo "cannot verify (CLAUDE.md invariant 3: 'refuses on mismatch', never a warning)." >&2; \
+    mkdir -p /etc/racer; \
+    case "$INSTALL_TORCH" in \
+      required) \
+        if [ -z "$TORCH_WHEEL_URL" ]; then \
+            echo "ERROR: INSTALL_TORCH=required but --build-arg TORCH_WHEEL_URL=<url> was not supplied." >&2; \
+            echo "Look up the JetPack-matched torch wheel URL per docker/car/build_on_jetson.md" >&2; \
+            echo "and pass it explicitly. Refusing to guess a wheel URL for a mismatch this build" >&2; \
+            echo "cannot verify (CLAUDE.md invariant 3: 'refuses on mismatch', never a warning)." >&2; \
+            exit 1; \
+        fi; \
+        pip3 install --no-cache-dir "$TORCH_WHEEL_URL"; \
+        echo present > /etc/racer/torch-status; \
+        ;; \
+      skip) \
+        echo "################################################################" >&2; \
+        echo "# NOTICE: BUILDING WITHOUT TORCH (INSTALL_TORCH=skip).          #" >&2; \
+        echo "# This image CANNOT run racer_policy inference. It is the       #" >&2; \
+        echo "# control-stack image: safety_node, pwm_output_node, teleop.    #" >&2; \
+        echo "# Rebuild with --build-arg INSTALL_TORCH=required and a real    #" >&2; \
+        echo "# TORCH_WHEEL_URL before roadmap phase 5.x.                     #" >&2; \
+        echo "################################################################" >&2; \
+        echo absent > /etc/racer/torch-status; \
+        touch /etc/racer/torch-absent; \
+        ;; \
+      *) \
+        echo "ERROR: INSTALL_TORCH must be 'required' or 'skip', got '$INSTALL_TORCH'." >&2; \
         exit 1; \
-    fi; \
-    pip3 install --no-cache-dir "$TORCH_WHEEL_URL"
+        ;; \
+    esac; \
+    { \
+      echo '# Generated by docker/car/Dockerfile. Says whether this image has torch.'; \
+      echo 'RACER_TORCH="$(cat /etc/racer/torch-status 2>/dev/null || echo unknown)"'; \
+      echo 'export RACER_TORCH'; \
+      echo 'if [ "$RACER_TORCH" = absent ]; then'; \
+      echo '  echo "NOTICE: RACER_TORCH=absent -- this car image was built with INSTALL_TORCH=skip." >&2'; \
+      echo '  echo "NOTICE: torch is NOT installed; racer_policy inference will not run here." >&2'; \
+      echo 'fi'; \
+    } > /etc/profile.d/racer-torch.sh; \
+    chmod 0644 /etc/profile.d/racer-torch.sh
 
 # --- Racer runtime Python deps (uv lockfile, linux/aarch64) -----------------------------
 # Pin the uv binary itself, matching every other image (docker/sim-cpu, docker/train-cuda,

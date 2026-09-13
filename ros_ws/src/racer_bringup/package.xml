@@ -14,7 +14,9 @@
     adds sim_autopilot.launch.py: bridge_node + safety_node + tracker_node (+
     raceline_publisher_node + foxglove_bridge) -- the classical stack drives the sim car
     itself; see config/foxglove_sim_autopilot.layout.json and
-    docs/notes/milestone-3-sim-autopilot.md.
+    docs/notes/milestone-3-sim-autopilot.md. car_teleop.launch.py is the first launch file
+    for the REAL car: safety_node + racer_drivers/pwm_output_node + foxglove_bridge, no sim
+    bridge; see docs/notes/first-boot-runbook.md.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -26,6 +28,7 @@
   <exec_depend>racer_safety</exec_depend>
   <exec_depend>racer_control</exec_depend>
   <exec_depend>racer_tools</exec_depend>
+  <exec_depend>racer_drivers</exec_depend>
   <exec_depend>foxglove_bridge</exec_depend>
   <!-- racer_gym_bridge (referenced by package name in launch/*.launch.py, resolved by
        ros2 launch at runtime from whatever workspace is sourced) is intentionally NOT
@@ -34,6 +37,14 @@
        l3-and-cpp CI job) with no visibility into sim/bridge's package.xml. Declaring it
        here would make that job's rosdep install fail to resolve it. -->
 
+
+  <test_depend>ackermann_msgs</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>rclpy</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

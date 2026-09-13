@@ -116,7 +116,22 @@ def should_use_zero_command(elapsed_since_last_twist_s: float | None, timeout_s:
     thing there is to command). Otherwise true iff the elapsed time exceeds `timeout_s` --
     see twist_teleop_adapter_node.py's module docstring for why this is "publish zero and
     keep publishing zero" rather than "stop publishing".
+
+    Garbage elapsed values -- negative, NaN, or infinite -- are treated as STALE, not fresh,
+    the same fail-closed stance racer_safety's gate logic takes for a garbage
+    `drive_raw_age_s` (see gate_logic.cpp's watchdog step). A negative elapsed time means
+    the clock the caller measured with went backwards; with a plain `> timeout_s` test that
+    would read as "fresh", so a browser tab that closed during a backwards clock step would
+    leave this node happily republishing the driver's LAST non-zero command until the clock
+    caught up. `twist_teleop_adapter_node` now measures on `time.monotonic()`, which cannot
+    produce a negative elapsed time -- this branch is defence in depth against a future
+    caller that measures on a steppable clock, and it is what makes "no valid elapsed
+    measurement" mean "stop the car".
     """
     if elapsed_since_last_twist_s is None:
+        return True
+    if not math.isfinite(elapsed_since_last_twist_s):
+        return True
+    if elapsed_since_last_twist_s < 0.0:
         return True
     return elapsed_since_last_twist_s > timeout_s

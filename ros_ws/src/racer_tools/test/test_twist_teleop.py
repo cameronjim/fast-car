@@ -170,3 +170,39 @@ def test_marginally_past_timeout_uses_zero():
 
 def test_well_past_timeout_uses_zero():
     assert should_use_zero_command(5.0, timeout_s=0.5) is True
+
+
+# A garbage elapsed measurement means "we do not know how stale the driver's input is",
+# which must resolve to STOP, not GO (claude-docs/05-safety.md fail-closed; the same stance
+# racer_safety's gate logic takes for a garbage drive_raw_age_s). Before this was handled, a
+# plain `elapsed > timeout_s` test read a NEGATIVE elapsed time as "fresh", so a browser tab
+# closing during a backwards clock step left twist_teleop_adapter_node republishing the
+# driver's last non-zero command at 50 Hz until the clock caught up. The node now measures on
+# time.monotonic() so it cannot produce these values itself; these cases keep the pure
+# function honest for any future caller that does not.
+
+
+def test_negative_elapsed_time_uses_zero():
+    """A backwards clock step must read as STALE, never as fresh."""
+    assert should_use_zero_command(-0.001, timeout_s=0.5) is True
+
+
+def test_large_negative_elapsed_time_uses_zero():
+    assert should_use_zero_command(-5.0, timeout_s=0.5) is True
+
+
+def test_nan_elapsed_time_uses_zero():
+    assert should_use_zero_command(float("nan"), timeout_s=0.5) is True
+
+
+def test_positive_infinite_elapsed_time_uses_zero():
+    assert should_use_zero_command(float("inf"), timeout_s=0.5) is True
+
+
+def test_negative_infinite_elapsed_time_uses_zero():
+    assert should_use_zero_command(float("-inf"), timeout_s=0.5) is True
+
+
+def test_zero_elapsed_time_does_not_use_zero():
+    """The boundary on the safe side: a genuinely just-arrived Twist is fresh."""
+    assert should_use_zero_command(0.0, timeout_s=0.5) is False

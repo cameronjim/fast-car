@@ -12,6 +12,25 @@
 // passthrough"): the entire per-cycle body runs inside a try/catch, and ANY exception --
 // including the test-only `inject_fault` parameter below -- results in publishing a hard
 // brake and an `internal_fault` /safety/events record, never a silent crash or passthrough.
+//
+// CLOCK POLICY (read before changing any time arithmetic below). This node uses TWO clocks,
+// deliberately, and they are not interchangeable:
+//
+//   * `steady_clock_` (RCL_STEADY_TIME, the OS monotonic clock) is the ONLY clock used to
+//     MEASURE ELAPSED TIME: the /drive_raw watchdog age and the rate-limiter's dt. A
+//     monotonic clock cannot be stepped, cannot run backwards, and cannot be frozen by an
+//     absent /clock publisher.
+//   * `this->now()` (the node's ROS clock) is used ONLY to STAMP outgoing messages
+//     (/drive headers, /safety/events), where a bag-consistent, sim-consistent ROS
+//     timestamp is exactly what a consumer wants.
+//
+// Using the ROS clock to measure durations was the root cause of GitHub issue #22 (a
+// negative /drive_raw age observed under a stepped host clock). With `use_sim_time:=false`
+// the ROS clock is CLOCK_REALTIME, which NTP, a VM resync, or an operator running `date`
+// can step in either direction; with `use_sim_time:=true` and no /clock publisher yet, it
+// is frozen at zero, which makes every measured age exactly 0.0 -- i.e. the watchdog would
+// consider a permanently silent /drive_raw permanently FRESH. Both failure modes are
+// removed by measuring on the steady clock. See test/test_safety_node_clock_launch.py.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
 #include <chrono>
@@ -205,7 +224,9 @@ class SafetyNode : public rclcpp::Node {
   void on_drive_raw(const ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg) {
     last_command_.steering_angle_rad = static_cast<double>(msg->drive.steering_angle);
     last_command_.speed_mps = static_cast<double>(msg->drive.speed);
-    last_drive_raw_stamp_ = this->now();
+    // Steady clock, NOT this->now() -- see this file's CLOCK POLICY comment. This value is
+    // only ever used as the left operand of an elapsed-time subtraction, never as a stamp.
+    last_drive_raw_steady_ = steady_clock_.now();
     has_received_command_ = true;
   }
 
@@ -243,7 +264,9 @@ class SafetyNode : public rclcpp::Node {
   }
 
   void on_timer() {
+    // `now` stamps outgoing messages; `steady_now` measures elapsed time. See CLOCK POLICY.
     const rclcpp::Time now = this->now();
+    const rclcpp::Time steady_now = steady_clock_.now();
     try {
       // Read the LIVE parameter value every cycle, not a construction-time snapshot: a test
       // (or an operator) flips this at runtime via the standard ROS 2 set_parameters service,
@@ -256,9 +279,11 @@ class SafetyNode : public rclcpp::Node {
 
       GateInput input;
       input.command = has_received_command_ ? last_command_ : DriveCommand{0.0, 0.0};
-      input.drive_raw_age_s = has_received_command_ ? (now - last_drive_raw_stamp_).seconds()
-                                                    : std::numeric_limits<double>::infinity();
-      input.dt_s = has_evaluated_before_ ? (now - last_eval_time_).seconds() : control_period_s_;
+      input.drive_raw_age_s = has_received_command_
+                                  ? (steady_now - last_drive_raw_steady_).seconds()
+                                  : std::numeric_limits<double>::infinity();
+      input.dt_s =
+          has_evaluated_before_ ? (steady_now - last_eval_steady_).seconds() : control_period_s_;
       input.min_scan_range_m = min_scan_range_m_;
       input.has_pose_input = false;  // TODO(roadmap 2.6): wire from /pose once it exists.
       input.pose_covariance_trace = 0.0;
@@ -269,7 +294,7 @@ class SafetyNode : public rclcpp::Node {
         publish_event(event.source, event.severity, event.detail, now);
       }
       previous_output_ = result.output;
-      last_eval_time_ = now;
+      last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     } catch (const std::exception& e) {
       RCLCPP_ERROR(this->get_logger(), "safety_node: internal fault, braking: %s", e.what());
@@ -278,7 +303,7 @@ class SafetyNode : public rclcpp::Node {
       publish_event(GateSource::kInternalFault, EventSeverity::kBrake,
                     std::string("internal fault: ") + e.what(), now);
       previous_output_ = brake;
-      last_eval_time_ = now;
+      last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     }
   }
@@ -289,8 +314,12 @@ class SafetyNode : public rclcpp::Node {
 
   DriveCommand previous_output_;
   DriveCommand last_command_;
-  rclcpp::Time last_drive_raw_stamp_;
-  rclcpp::Time last_eval_time_;
+  // Monotonic-clock timestamps used ONLY for elapsed-time measurement (CLOCK POLICY, top of
+  // file). Both are default-constructed with the steady clock's own time source so a
+  // subtraction against `steady_clock_.now()` can never mix time sources.
+  rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
+  rclcpp::Time last_drive_raw_steady_{0, 0, RCL_STEADY_TIME};
+  rclcpp::Time last_eval_steady_{0, 0, RCL_STEADY_TIME};
   double min_scan_range_m_;
   bool has_received_command_;
   bool has_evaluated_before_;

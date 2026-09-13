@@ -104,6 +104,12 @@ if(BUILD_TESTING)
   add_launch_test(test/test_tracker_node_launch.py
     TARGET test_tracker_node_launch
   )
+  # /odom staleness clock-source regression (same root cause as racer_safety GitHub issue
+  # #22). Its own launch file because `use_sim_time` is set at node construction.
+  add_launch_test(test/test_tracker_node_clock_launch.py
+    TARGET test_tracker_node_clock_launch
+    TIMEOUT 120
+  )
 
   # -- S.3 cross-language base-controller divergence test ------------------------------
   # Runs the committed fixture (training/racer_train/tests/fixtures/divergence_states.csv +

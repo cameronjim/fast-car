@@ -90,6 +90,13 @@ if(BUILD_TESTING)
     TARGET test_safety_node_launch
     TIMEOUT 120
   )
+  # Watchdog clock-source regression (GitHub issue #22): staleness must be measured on a
+  # monotonic clock, not the node's ROS clock. Its own launch file because `use_sim_time`
+  # is set at node construction and cannot be toggled inside the suite above.
+  add_launch_test(test/test_safety_node_clock_launch.py
+    TARGET test_safety_node_clock_launch
+    TIMEOUT 120
+  )
 endif()
 
 ament_package()

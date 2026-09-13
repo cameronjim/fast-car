@@ -60,6 +60,31 @@ after, all green in `ros-dev:local`; the gate-logic branch-coverage gate stays a
 **Not done.** A gate still engaged when the node exits never gets its release record. That
 is accepted: the node is gone and there is nobody to publish it, so a bag reader should treat
 a trailing engage as "engaged until end of bag".
+## 2026-09-13 -- first-boot audit follow-ups: teleop cleanup, ros-dev deps, audit status
+
+Three small fixes out of `docs/notes/first-boot-audit-2026-09-13.md`, on
+`chore/first-boot-followups`. No hardware touched.
+
+- **`racer_tools/keyboard_teleop_node.py` finding #6 fixed.** `main`'s `finally` block used
+  to reference `node` even when `KeyboardTeleopNode()` itself raised before `node` was ever
+  assigned, so a real constructor failure (e.g. `vehicle_params_loader` not finding the repo
+  root) surfaced as a masking `NameError` instead. `node` now starts `None` and `finally`
+  only calls `destroy_node()` when construction actually succeeded. New unit test
+  (`test/test_keyboard_teleop_node_main.py`) simulates a constructor failure and asserts the
+  original exception type propagates.
+- **`docker/ros-dev/Dockerfile` apt gap closed.** The audit's test-results note flagged that
+  a fresh `ros-dev` container could not `colcon build` `ros_ws` until `rosdep install` had
+  run, because the image did not ship `ros-humble-ackermann-msgs`. Ran
+  `rosdep install --simulate --from-paths ros_ws/src --ignore-src` inside the image to find
+  the full gap: `ros-humble-ackermann-msgs` and `python3-jsonschema`, both now added to the
+  apt install list with a comment. Verified: built `ros-dev:test` from the changed
+  Dockerfile, then ran a clean `colcon build --symlink-install` of `ros_ws` in a fresh
+  container from it with no `rosdep install` step -- succeeds. Base image digest unchanged.
+- **`docs/notes/first-boot-audit-2026-09-13.md` status note added.** Findings #7 and #8 were
+  gaps as of the audit; PR #39 (merged to `main`) since added a car launch file and
+  `racer_drivers/pwm_output_node`. Added a dated "Status after PR #39" note under the
+  findings table: #7 is closed, #8 (`racer_state` still empty, covariance gate still a stub)
+  remains open. The audit text itself was not rewritten.
 
 ## 2026-09-13 -- the Jetson can now command the car: pwm_output_node, car_teleop launch, torch-optional car image
 

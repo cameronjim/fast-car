@@ -66,8 +66,10 @@ _TEMPLATE: dict[str, Any] = {
         # Must match config/vehicle_params.yaml's meta.schema_version exactly (see
         # test_vehicle_params_wiring.py, which checks this fixture against the real,
         # freshly-regenerated committed file). Bumped 0.1.0 -> 0.2.0 with that file for
-        # milestone 4 (hardware-arrival prep, roadmap task 1.3).
-        "schema_version": "0.2.0",
+        # milestone 4 (hardware-arrival prep, roadmap task 1.3), then 0.2.0 -> 0.2.1 on
+        # 2026-09-12 when that file's nine safety_mux PWM/watchdog fields were given
+        # PROVISIONAL (unmeasured) values so the mux firmware could arm on the bench.
+        "schema_version": "0.2.1",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

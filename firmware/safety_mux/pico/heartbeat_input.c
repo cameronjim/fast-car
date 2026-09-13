@@ -4,12 +4,15 @@
 #include <math.h>
 #include <stdbool.h>
 
+#include "gpio_irq_dispatch.h"
 #include "hardware/gpio.h"
 #include "pico/stdlib.h"
 
 static volatile uint64_t g_last_edge_us = 0;
 static volatile bool g_edge_seen = false;
 
+// Interrupt context: short and allocation-free. gpio_irq_dispatch only routes edges on the
+// GPIO this handler was registered for, so both arguments are known and unused here.
 static void heartbeat_irq_handler(uint gpio, uint32_t events) {
   (void)gpio;
   (void)events;
@@ -21,8 +24,14 @@ void heartbeat_input_init(uint gpio) {
   gpio_init(gpio);
   gpio_set_dir(gpio, GPIO_IN);
   gpio_pull_down(gpio);
-  gpio_set_irq_enabled_with_callback(gpio, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true,
-                                     &heartbeat_irq_handler);
+  // Registered through gpio_irq_dispatch, NOT with gpio_set_irq_enabled_with_callback():
+  // that SDK call installs THE single per-core GPIO callback and would silently evict
+  // pwm_capture.c's handler for the whole bank. It used to be called right here, and it did
+  // exactly that. See gpio_irq_dispatch.h. If registration fails (handler table full), no
+  // edge is ever recorded, heartbeat_input_age_s() keeps returning +Inf, and
+  // watchdog_timed_out() reads that as timed out: fail-closed, never a false "alive".
+  (void)gpio_irq_dispatch_register(gpio, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL,
+                                   &heartbeat_irq_handler);
 }
 
 double heartbeat_input_age_s(void) {

@@ -68,8 +68,10 @@ _TEMPLATE: dict[str, Any] = {
         # freshly-regenerated committed file). Bumped 0.1.0 -> 0.2.0 with that file for
         # milestone 4 (hardware-arrival prep, roadmap task 1.3), then 0.2.0 -> 0.2.1 on
         # 2026-09-12 when that file's nine safety_mux PWM/watchdog fields were given
-        # PROVISIONAL (unmeasured) values so the mux firmware could arm on the bench.
-        "schema_version": "0.2.1",
+        # PROVISIONAL (unmeasured) values so the mux firmware could arm on the bench, then
+        # 0.2.1 -> 0.2.2 on 2026-09-13 when actuation.throttle_full_scale_mps was added and
+        # the two limits.ttc_*_s thresholds were filled in, also PROVISIONAL (issues #40, #36).
+        "schema_version": "0.2.2",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

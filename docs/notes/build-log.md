@@ -5,6 +5,67 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-13 -- two provisional numbers written down: throttle full scale, and the TTC thresholds
+
+Two gaps found in this morning's first-boot sweep, both closed the same way the nine
+safety-mux PWM values were closed on 2026-09-12: supply a value, mark it PROVISIONAL, name
+the bench step that replaces it, and touch none of the refusal logic. Nothing here has been
+on hardware. GitHub issues #40 and #36.
+
+**`actuation.throttle_full_scale_mps`, new field, PROVISIONAL 5.0 m/s (issue #40).**
+`pwm_output_node`'s open-loop throttle map had no full-scale reference of its own, so it used
+`limits.global_speed_cap_mps` -- 20 m/s, the f1tenth_gym dynamic-model validity bound, which
+is not an actuation scale at all. At that scale a commanded 1 m/s is a pulse **25 us** off
+neutral, comfortably inside VESC Tool's default PPM deadband, so the first gentle keyboard
+teleop command would very likely have produced no motion and looked exactly like a wiring
+fault on a car nobody has driven yet. With 5.0 m/s and the 1000/1500/2000 us ends, **1 m/s is
+now 100 us off neutral: 1600 us forward, 1400 us reverse**. The 5.0 is a guess about a car
+that does not exist; the runbook's wheels-off-the-ground throttle step now says to sweep the
+command, record wheel speed against pulse width, and write down the speed observed at
+`throttle_pwm_max_us`. The field disappears when `vesc_node` closes the loop.
+
+`limits.global_speed_cap_mps` was NOT lowered and NOT repurposed -- it is still the clamp it
+was, applied to the command before the map runs, and lowering it still tightens both this
+node and `safety_node`. What changed is that the cap is no longer doing a second job it was
+never suited for. A command above the full scale but below the cap is not rejected: it
+saturates the pulse at the channel end, and there are now gtests for both that and the
+cap clamp, plus one pinning the 1 m/s -> 100 us slope against the committed numbers.
+
+**`limits.ttc_warning_s` 1.0 and `limits.ttc_brake_s` 0.5, PROVISIONAL (issue #36).** Both
+were `null`, which `safety_node` correctly maps to "gate disabled". That was honest but it
+meant the layer-3 TTC brake would have stayed inert the moment a LiDAR was fitted -- the
+safety gate most likely to be assumed present on a first drive. These are the conventional
+F1TENTH-class starting points, and they are literally the pair the L3 TTC test had been
+passing as a launch override since the gate was written; they are **not** tuned against this
+car's braking distance, which nobody has measured. Phase 1/2 replaces them.
+
+Two things stay true and are written into the config and the node comment. First, with no
+`/scan` publisher the gate is still a clean no-op regardless of these numbers, and there is
+now a launch test that asserts exactly that (a 5 m/s command passes through untouched, no
+`ttc` event) rather than leaving it inferred. Second, `safety_node` has no `/odom`, so the
+forward speed it divides range by is **its own commanded speed**. Slower than commanded means
+TTC is under-estimated and it brakes early, which is the safe direction; coasting faster than
+commanded means it is over-estimated. That is a documented limitation until `/odom` exists,
+not something these thresholds fix.
+
+**No gate was weakened.** The refuse-to-start-if-null path in `pwm_output_node` is untouched
+and now also covers the new field (it is nullable in the schema, so the generated binding
+types it as an optional and the refusal is live). `null` still disables the TTC gate. No
+tolerance, golden file or coverage gate moved.
+
+**Schema.** `meta.schema_version` 0.2.1 -> 0.2.2: one field added to `actuation` (nullable,
+with units and description, like the other unmeasured fields) and two values filled in. Rule
+5 bumps on any change. Bindings regenerated with `tools/gen_params.py`, never hand-edited.
+The three `racer_policy` tests that pin the version literal were updated, and
+`tools/tests/fixtures/full_fixture.yaml` gained the new required key.
+
+**Tests.** `.github/scripts/ros_build_test.sh` in the `ros-dev` container: **265 tests before,
+270 after, 0 failures** both times. `.github/scripts/run_python_tests.sh` green (all gated
+packages, `tools` at 92 including the gen_params round-trips). ruff and clang-format clean.
+Observed in the container: `safety_node up: ... ttc_brake_s=0.500000, ttc_warning_s=1.000000`
+with no launch override in sight, and `pwm_output_node up ... [1000/1500/2000 us, full scale
+5.00 m/s, cap 20.00 m/s, OPEN LOOP PROVISIONAL]`.
+
 ## 2026-09-13 -- the Jetson can now command the car: pwm_output_node, car_teleop launch, torch-optional car image
 
 The missing piece between `/drive` and the wires. Nothing in this entry has touched hardware:

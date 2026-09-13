@@ -169,16 +169,19 @@ class SafetyNode : public rclcpp::Node {
         this->declare_parameter<int>("watchdog_missed_cycles", 3, watchdog_descriptor));
 
     // ttc_warning_s / ttc_brake_s are vehicle_params.yaml's limits.ttc_warning_s/ttc_brake_s
-    // (CLAUDE.md invariant 2: this is their ONE source of truth) -- currently `null` in the
-    // committed file ("needs Phase 1/2 tuning", see that file's comments), which
-    // SafetyLimits/evaluate() treat as a documented no-op (the TTC gate does not brake).
+    // (CLAUDE.md invariant 2: this is their ONE source of truth). Since 2026-09-13 the
+    // committed file holds PROVISIONAL values (1.0 s warn / 0.5 s brake, conventional
+    // F1TENTH-class starting points, NOT tuned against this car's measured braking distance
+    // -- see that file's comments and GitHub issue #36), so the TTC gate is ARMED whenever a
+    // /scan is present rather than the documented no-op it used to be. `null` there still
+    // maps to std::nullopt, which SafetyLimits/evaluate() treat as a no-op (the TTC gate does
+    // not brake), and that path is unchanged. With no /scan publisher at all the gate stays a
+    // no-op regardless of these values, because there is no range to compute a TTC from.
     // These are declared as ROS parameters ANYWAY, defaulting to whatever vehicle_params
     // currently holds (a negative default when it is null, meaning "unconfigured"), so that:
-    // (a) once a real sysid-tuned value is committed to vehicle_params.yaml, this node picks
-    // it up automatically with no launch file needing to change, and (b) a launch file can
-    // override the default in the meantime -- test/test_safety_node_launch.py's TTC-brake
-    // case is the only thing in this repo that does, to prove the gate itself works ahead of
-    // real tuning data existing. A value <= 0 means "unconfigured" (TTC gate disabled).
+    // (a) once a real tuned value is committed to vehicle_params.yaml, this node picks it up
+    // automatically with no launch file needing to change, and (b) a launch file can still
+    // override it. A value <= 0 means "unconfigured" (TTC gate disabled).
     rcl_interfaces::msg::ParameterDescriptor ttc_warning_descriptor;
     ttc_warning_descriptor.description =
         "TTC warning threshold, seconds (<=0 means unconfigured/disabled). Defaults to "

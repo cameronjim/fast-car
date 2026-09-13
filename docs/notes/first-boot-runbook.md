@@ -43,6 +43,15 @@ channels). The one that bites is throttle neutral: if this ESC's real zero-throt
 not 1500 us, "neutral" is a creep. That is why step 11 puts a scope on the pulse before the
 ESC is ever powered.
 
+Also note the throttle map's scale. `actuation.throttle_full_scale_mps` is 5.0 m/s, and it is
+PROVISIONAL and unmeasured like the rest (added 2026-09-13, GitHub issue #40). With the
+1000/1500/2000 us ends, **a commanded 1 m/s is 100 us off neutral: 1600 us forward, 1400 us
+reverse**, and 5 m/s or anything above it saturates at 2000 us. It used to be scaled by
+`limits.global_speed_cap_mps` (20 m/s), which made 1 m/s only 25 us off neutral, probably
+inside the VESC's default PPM deadband -- so if you are working from an older printout and
+the motor does nothing at low speeds, that is why. `limits.global_speed_cap_mps` still clamps
+the command; it is no longer the map's full scale.
+
 ---
 
 ## 1. Power the Jetson and get a shell (UNVERIFIED on this exact sequence)
@@ -248,9 +257,18 @@ docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && sourc
 
 13.4 Smallest possible speed command first. Confirm: the motor spins the correct direction,
      releasing the key returns to neutral within the watchdog timeout, and the kill switch
-     stops it instantly at any point.
+     stops it instantly at any point. A 1 m/s command should be 1600 us on the throttle
+     channel; if the motor does not move at 1600 us, the VESC's PPM deadband is wider than
+     100 us and wants narrowing in VESC Tool (record the change in the committed VESC config),
+     not a bigger number in vehicle_params.
 
-13.5 Stop, power down in reverse order (drive battery, then servo/receiver rail, then the
+13.5 **This is where `actuation.throttle_full_scale_mps` gets measured.** With the wheels
+     still off the ground, sweep the commanded speed up to full scale, record wheel speed
+     against pulse width, and set that field to the speed observed at
+     `actuation.throttle_pwm_max_us`. Until that is done the 5.0 in the committed file is a
+     guess, and the open-loop map does not claim that commanding X m/s produces X m/s.
+
+13.6 Stop, power down in reverse order (drive battery, then servo/receiver rail, then the
      Jetson), and write the session up in `docs/notes/build-log.md` the same day.
 
 ## Afterwards

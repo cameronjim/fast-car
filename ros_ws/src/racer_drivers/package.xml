@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_drivers</name>
+  <version>0.1.0</version>
+  <description>
+    On-vehicle drivers (claude-docs/02-repo-layout.md). First node: pwm_output_node, the tail
+    of the command path (claude-docs/04-architecture.md). It subscribes to /drive ONLY -
+    never /drive_raw, which would bypass safety_node (CLAUDE.md invariant 1) - and converts
+    steering_angle (rad, left positive) and speed (m/s) into two 50 Hz servo pulses on the
+    Jetson's hardware PWM via the Linux sysfs PWM interface. Those pulses go into the layer-1
+    mux board (firmware/safety_mux/), which stays physically downstream. Fails closed to the
+    calibrated neutral on startup, on /drive silence, on any exception, and on shutdown. All
+    pulse bounds, angle limits and the speed reference come from config/vehicle_params.yaml
+    via the generated binding; the node refuses to start on a null field. Mapping and output
+    sequencing (include/racer_drivers/) are ROS-free and gtest-unit-tested per
+    claude-docs/12-testing.md L1.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>ackermann_msgs</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

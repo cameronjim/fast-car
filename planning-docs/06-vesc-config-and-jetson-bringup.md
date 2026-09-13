@@ -4,7 +4,7 @@ Time: 3 to 5 hours. Owner: Cameron. The VESC part can happen as early as stage 3
 
 ## Part A: VESC Tool, safety layer 2
 
-1. Install VESC Tool on the Mac. Connect the FSESC 6.7 by USB with the pack connected and
+1. Install VESC Tool on the Mac. Connect the FSESC 4.12 by USB with the pack connected and
    wheels off the ground. Update the VESC firmware if VESC Tool asks.
 2. Run motor setup: FOC, sensored (the hall sensor cable from stage 2). Run motor detection.
    If detection fails on the hall sensors, the sensor cable pinout is wrong; fix at the shop

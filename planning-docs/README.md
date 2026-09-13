@@ -35,7 +35,7 @@ and follow the calendar in `PLAN.md` (roughly 9 to 11 months total at about 12 h
 - Two-person rule: any step that can move the car has one person on the RC kill switch and a
   separate person operating. Never a powered test alone.
 - Wheels off the ground for the first test of any new wiring, firmware, or control code.
-- LiPo batteries: charge only with the SkyRC balance charger, only while present, on a hard
+- LiPo batteries: charge only with the LiPo balance charger, only while present, on a hard
   surface, stored in the fireproof bag. Never below 3.3 V per cell, never left on the charger.
 - Multimeter before power: every new connection gets a continuity check (no shorts between
   battery + and -) before a battery is plugged in.

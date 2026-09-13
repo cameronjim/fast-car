@@ -73,6 +73,19 @@ jobs:
       - name: Compile + run firmware/safety_mux host-logic tests
         run: .github/scripts/safety_mux_host_tests.sh
 
+  jetson-heartbeat-host-tests:
+    name: tools/jetson_heartbeat host-logic tests (gcc, no libgpiod)
+    runs-on: ubuntu-latest
+    # Roadmap task 1.3 (claude-docs/05-safety.md layer 1, the mux's heartbeat watchdog
+    # input). Bare ubuntu-latest + system gcc -- no libgpiod, no real GPIO device. See
+    # .github/scripts/jetson_heartbeat_host_tests.sh's header comment for why the GPIO
+    # toggle loop (tools/jetson_heartbeat/src/main.c) is deliberately NOT built here.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compile + run tools/jetson_heartbeat host-logic tests
+        run: .github/scripts/jetson_heartbeat_host_tests.sh
+
   l3-and-cpp:
     name: L3 node tests + C++ build (ros-dev)
     runs-on: ubuntu-latest

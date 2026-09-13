@@ -5,6 +5,61 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-13 -- /safety/events now records gate transitions, not every cycle
+
+Software only; the car was not powered. Fixes GitHub issue #37, which came out of the
+first-boot audit (`docs/notes/first-boot-audit-2026-09-13.md`, finding #5): `safety_node`
+published one `/safety/events` record per engaged gate **per control cycle**, so a gate that
+stayed engaged logged itself at 50 Hz. Measured on the bench-equivalent reproducer: 248
+`watchdog` records in 14 s from a node that had simply not been given a `/drive_raw`
+publisher yet. `claude-docs/09-evaluation.md` reports the intervention count as a metric, so
+as it stood that metric measured how long the operator took to bring the stack up, not how
+the car behaved. Comparing a learned policy against the baseline on that number would have
+been comparing start-up latency.
+
+**What changed.** One intervention is now one ENGAGEMENT of a gate: exactly one record when
+it engages, exactly one when it releases, nothing in between. No periodic "still engaged"
+record was added -- the interval between the two records is the sustained state, and one
+fewer record class is one fewer thing a counter has to know to ignore. The engagement's
+identity is the (source, severity) pair rather than source alone, so a TTC advisory
+escalating to a TTC brake is a release plus a new engage rather than a silent change of
+character inside one record; an evaluation counting BRAKE-severity interventions still sees
+the brake. Gates are independent: several can be engaged at once, each with its own
+lifecycle.
+
+**Gating behaviour is untouched.** What gets clamped, braked, or passed through is
+byte-for-byte the same decision it was: `SafetyGateLogic::evaluate` still reports every
+engaged gate every cycle, and the new `GateEventTracker` sits between that and the
+publisher. Fail-closed and the watchdog are unchanged, and the fault path publishes through
+the same tracker, so a sustained internal fault is one record and any gate engaged before
+the fault gets its release.
+
+**Interface change.** `racer_msgs/SafetyEvent.msg` gained `phase` (`PHASE_ENGAGE` /
+`PHASE_RELEASE`) and `duration_s`. `PHASE_ENGAGE` is the zero default deliberately, so an
+older bag with no `phase` field reads back as engagements, which is what those records meant.
+Bags recorded before today still deserialize; their counts still mean "cycles", not
+"interventions", and nothing in the repo has evaluation numbers derived from them yet.
+
+**Counting rule, written down in three places** (the message file, `gate_logic.hpp`, and the
+L3 tests): an intervention count is a count of `PHASE_ENGAGE` records. The two sim end-to-end
+tests that count `/safety/events` were updated to filter on that; their tolerance ceiling was
+left where it is rather than re-tightened against a single post-fix sample.
+
+**Tests.** The edge detection is pure and ROS-free, so it is table-driven gtest: every gate
+source x every severity through engage/sustain/release, 100 sustained cycles emitting
+nothing, simultaneous gates with independent durations, flapping (engage, release, engage
+within three cycles = three records), severity escalation, a duplicate activation in one
+cycle, and garbage clock input (NaN, +/-Inf, a clock that goes backwards -- all report a 0.0
+duration rather than a negative or non-finite one). The L3 launch tests now assert exactly
+one engage per intervention and one on release with a plausible duration, and a new
+regression test asserts ZERO records over a 3 s window in which a gate is engaged the whole
+time -- the direct inverse of the 248-records-in-14-s reproducer. 265 tests before, 277
+after, all green in `ros-dev:local`; the gate-logic branch-coverage gate stays at 100%
+(96 branches).
+
+**Not done.** A gate still engaged when the node exits never gets its release record. That
+is accepted: the node is gone and there is nobody to publish it, so a bag reader should treat
+a trailing engage as "engaged until end of bag".
 ## 2026-09-13 -- first-boot audit follow-ups: teleop cleanup, ros-dev deps, audit status
 
 Three small fixes out of `docs/notes/first-boot-audit-2026-09-13.md`, on

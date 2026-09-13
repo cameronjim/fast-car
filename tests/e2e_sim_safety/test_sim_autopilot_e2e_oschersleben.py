@@ -211,9 +211,13 @@ class TestSimAutopilotE2eOschersleben(unittest.TestCase):
             f"autopilot only traveled {distance_traveled_m:.2f}m in {_MEASURE_WINDOW_S}s "
             f"(wanted >= {_MIN_PROGRESS_M}m)",
         )
+        # /safety/events carries gate TRANSITIONS, and an intervention COUNT is a count of
+        # PHASE_ENGAGE records (GitHub issue #37, racer_msgs/SafetyEvent.msg): a
+        # PHASE_RELEASE record just closes an engagement already counted here.
+        interventions = [e for e in safety_events if e.phase == SafetyEvent.PHASE_ENGAGE]
         non_benign_events = [
             e
-            for e in safety_events
+            for e in interventions
             if e.source != "rate_limit" or e.severity != SafetyEvent.SEVERITY_WARNING
         ]
         self.assertEqual(
@@ -224,9 +228,9 @@ class TestSimAutopilotE2eOschersleben(unittest.TestCase):
             f"{[(e.source, e.severity, e.detail) for e in non_benign_events]}",
         )
         self.assertLessEqual(
-            len(safety_events),
+            len(interventions),
             _MAX_BENIGN_RATE_LIMIT_EVENTS,
-            f"safety_node emitted {len(safety_events)} rate_limit/WARNING /safety/events "
+            f"safety_node logged {len(interventions)} rate_limit/WARNING interventions "
             f"during the nominal (post-warm-up) autopilot run, above the "
             f"{_MAX_BENIGN_RATE_LIMIT_EVENTS}-event tolerance",
         )

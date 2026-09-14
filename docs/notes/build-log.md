@@ -5,6 +5,68 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-14 -- capacitors dropped, proceeding on the FSESC 6.7 knowingly, perfboard and motor soldering underway
+
+Reported by Cameron, no code touched. Several small physical decisions and a status snapshot
+of the shop work in progress.
+
+**Capacitors: decided not to fit.** The separate 1000 uF caps called out in the BOM and in
+`planning-docs/02-bench-prep-and-soldering.md` stay in the parts bin. The FSESC has three
+onboard bulk capacitors and the battery leads to it are short, so the extra capacitance buys
+nothing here. This closes the open item noted in `claude-docs/11-hardware.md`'s BOM audit
+("optional insurance, not a requirement, if battery leads are kept short") -- the leads are
+short, so they are skipped. `planning-docs/02-bench-prep-and-soldering.md` and
+`docs/notes/hardware-arrival-checklist.md` are corrected to stop instructing a fit.
+
+**ESC: proceeding on the FSESC 6.7 for the test build, eyes open.** The Flipsky FSESC 6.7 is
+going into the car now even though Flipsky specs it 14-60 V, 4S minimum, and the pack is 3S
+(9.6-12.6 V) -- see the 2026-09-11 entry below for how that mismatch was found and why the
+3S-rated FSESC 4.12 was ordered as the real fix. The 4.12 is still in transit, roughly
+Sep 22-29. This is a deliberate, informed decision, not a repeat of the same mistake: the
+known risk is that an ESC run below its rated minimum most likely boots and drives fine at
+light load, and the untested case is sustained load, where the ESC's own low-voltage
+assumptions (gate drive, BEC regulation headroom) may not hold. Nothing about the swap gets
+harder for having done this first: the connectors are the only shared work between the two
+ESCs, so replacing the 6.7 with the 4.12 when it arrives is still a small job. Wheels stay off
+the ground for every test run on the 6.7, same as everything else at this stage.
+
+**Perfboard / kill-switch board: soldering, not finished.** All terminal pins are soldered,
+and the Pico socket and both level-shifter sockets are soldered in. Currently soldering the
+wires between them. Not yet finished, not yet flashed, not yet bench tested. The pin mapping
+between the perfboard's holes and the Pico's GPIO row (`firmware/safety_mux/README.md`'s
+board connector map) is still not finalized -- Cameron has not yet confirmed the final holes.
+That confirmation is the one open blocker before flashing: once it lands, the firmware
+`#define`s and the README's pinout table get updated together, in the same change.
+
+**Motor: mounted, phase wires being soldered direct.** The Xerun 3652SD G3 is mounted with
+the stock pinion (see stage 3's shaft/pinion notes). The three VESC phase wires are being
+soldered directly to the motor rather than through bullet connectors: only one female bullet
+connector was on hand, so direct solder with individual heat shrink on each joint was chosen
+instead of a mismatched connector set. These joints are expected to be cut and redone when
+the FSESC 4.12 arrives and the ESC gets swapped.
+
+**Car: disassembled, laid out for the electronics.** Stock ESC and stock receiver are both
+out (receiver bagged, per stage 3). Parts are being laid out on the chassis ahead of the deck
+layout and mounting pass.
+
+**Jetson: set up and idle.** JetPack 6.2 flashed, on WiFi, SSH key auth plus passwordless
+sudo confirmed, and `racer-heartbeat.service` re-verified toggling header pin 7 at 50 Hz (see
+the 2026-09-12 entry below for how that pin mapping was determined). The Jetson itself is
+currently powered off; none of this needs the rest of the car assembled, so it can resume any
+time it is powered.
+
+**Forward plan, in order.** Finish soldering the perfboard wires; solder the VESC phase wires
+to the motor (direct, heat shrink each joint -- already started, above); lay out and mount the
+electronics on the car (deck layout, standoffs, routing). Then, before anything drives: EC5
+onto the VESC's battery leads; first LiPo charge once the charger arrives; finalize the Pico
+pin mapping and flash the firmware (blocked on Cameron confirming the holes, above);
+continuity checks before any battery is connected; bench power-up of both rails with a
+multimeter; the Jetson's PWM pinmux enable and `pwmchip` numbering confirmation
+(`docs/notes/first-boot-runbook.md` steps 4-5, needs only the Jetson powered); wiring the four
+Jetson lines to the mux board; the wheels-off bench test sequence; then the G1 kill test. A
+fuller breakdown with what blocks what is in
+`docs/notes/build-status-2026-09-14.md`.
+
 ## 2026-09-13 -- two provisional numbers written down: throttle full scale, and the TTC thresholds
 
 Two gaps found in this morning's first-boot sweep, both closed the same way the nine

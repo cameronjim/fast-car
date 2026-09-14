@@ -96,7 +96,9 @@ reasonable next step once this firmware is closer to bench-tested than drafted.
 ## Proposed pinout (UNVERIFIED, pending bench wiring)
 
 Pin numbers are RP2040 GPIO numbers, chosen for this draft and matched exactly in
-`pico/main.c`'s `#define`s -- change one, change both.
+`pico/main.c`'s `#define`s -- change one, change both. As of 2026-09-14 the perfboard is being
+soldered but the final hole assignments have not been confirmed against the physical board;
+this table and `pico/main.c`'s `#define`s get updated together once that confirmation happens.
 
 | Signal | Direction | RP2040 GPIO | Notes |
 |---|---|---|---|

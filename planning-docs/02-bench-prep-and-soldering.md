@@ -5,7 +5,9 @@ Cameron present for the connector-family decisions.
 
 This stage does all the soldering in one or two shop visits so the rest of the build is
 plugging keyed connectors together. Bring: the connector kit, the VESC, the buck-boost, the
-UBEC, the level shifter boards, the Picos, the capacitors, the barrel pigtail, and a phone.
+UBEC, the level shifter boards, the Picos, the barrel pigtail, and a phone. (No separate bulk
+capacitors: decided 2026-09-14 not to fit them, see `docs/notes/build-log.md` -- the FSESC's
+onboard bulk capacitors are enough with the battery leads kept short.)
 
 ## Soldering standards
 
@@ -21,9 +23,9 @@ UBEC, the level shifter boards, the Picos, the capacitors, the barrel pigtail, a
 1. Decide the connector standard. Recommendation: EC5 on everything that carries battery
    current (battery, VESC input, buck-boost input, UBEC input via a splitter or harness), so
    the packs plug in without adapters. Write the decision into `docs/notes/build-log.md`.
-2. VESC battery leads: solder an EC5 male onto the FSESC 4.12's bare battery wires (red to +,
-   black to -). Solder one or two 1000uF capacitors across those leads as close to the VESC as
-   the leads allow, observing capacitor polarity (the stripe marks negative). Heat shrink.
+2. VESC battery leads: solder an EC5 male onto the VESC's bare battery wires (red to +,
+   black to -). No separate capacitors: the FSESC's onboard bulk capacitors are sufficient
+   given short leads (decided 2026-09-14). Heat shrink.
 3. Power splitter harness: build a Y harness with one EC5 female (battery side) feeding three
    outputs: the VESC, the buck-boost input, and the UBEC input. Use 14 AWG for the VESC branch
    and 18 to 20 AWG for the two regulator branches. Fuse the two regulator branches if the shop

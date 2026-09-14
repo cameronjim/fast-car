@@ -43,8 +43,9 @@ driver on the RC kill switch and a separate operator. Do not run any powered ste
 ## 2. Power tree (roadmap task 1.2)
 
 - [ ] Wire the power tree per `claude-docs/11-hardware.md`'s wiring rules: star ground at the
-      buck, short ESC power leads with bulk capacitance at the VESC, every connector
-      polarized/keyed.
+      buck, short ESC power leads to the VESC, every connector polarized/keyed. No separate
+      bulk capacitors: decided 2026-09-14 not to fit them (see `docs/notes/build-log.md`) --
+      the FSESC's onboard bulk capacitors are sufficient given short leads.
 - [ ] Wire rail-voltage/current sensing on the compute rail. This is non-negotiable
       (`claude-docs/05-safety.md`: "Rail voltage logged on every run; a brownout must never be
       mistakable for a control failure") -- do not proceed to task 1.5 (rosbag logging)
@@ -81,10 +82,15 @@ UNVERIFIED Pico SDK glue layer, and a proposed pinout. Read
 - [ ] Repin the motor sensor cable: Hobbywing sensored motors and VESC use different 6-pin
       JST-PH sensor pinouts. Identify both pinouts (datasheet or probing), rewire, then
       verify hall order in VESC Tool's motor detection before first spin.
-- [ ] VESC is the Flipsky FSESC 4.12 (8-60 V, 3S-rated), swapped in for the 4S-minimum FSESC
-      6.7 on 2026-09-11 (see `docs/notes/build-log.md`). Bench-check it before it touches the
-      car: VESC Tool over USB on a pack, confirm boot and stable link, 5.0 V on the PPM BEC
-      pin, then a wheels-off motor spin. Set max ERPM under its 60,000 hardware cap.
+- [ ] VESC: the test build is proceeding on the FSESC 6.7 (2026-09-14, see
+      `docs/notes/build-log.md`), knowingly out of its 14-60 V / 4S-minimum spec on this 3S
+      pack -- most likely outcome is it boots and runs at light load, sustained load is the
+      untested case. The 3S-rated FSESC 4.12 ordered 2026-09-11 is still in transit (roughly
+      Sep 22-29) and is the intended controller for real driving; swapping it in is a small
+      job since the connectors are the only shared work. Bench-check whichever VESC is
+      installed before it touches the car: VESC Tool over USB on a pack, confirm boot and
+      stable link, 5.0 V on the PPM BEC pin, then a wheels-off motor spin. Set max ERPM under
+      its hardware cap.
 - [ ] Bench-sweep the 12V buck-boost on a lab supply from 9.0V to 12.6V and confirm the
       output holds 12V across the whole range (a 3S pack crosses the output voltage as it
       drains; a buck-only unit fails this test and cannot be used for the Jetson rail).

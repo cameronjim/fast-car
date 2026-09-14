@@ -79,9 +79,29 @@ UNVERIFIED Pico SDK glue layer, and a proposed pinout. Read
       every 5V PWM line into the Pico (FS-iA6B receiver channels, and the Jetson-side PWM
       if 5V) goes through the bidirectional level shifter, because RP2040 GPIO is 3.3V-only.
       Bench-verify shifted signal integrity on a scope before the first wheels-off test.
-- [ ] Repin the motor sensor cable: Hobbywing sensored motors and VESC use different 6-pin
-      JST-PH sensor pinouts. Identify both pinouts (datasheet or probing), rewire, then
-      verify hall order in VESC Tool's motor detection before first spin.
+- [ ] Motor sensor cable: an ADAPTER is required, not a repin. Researched 2026-09-14: the
+      Hobbywing motor uses JST ZH (1.5 mm pitch), the VESC SENSE port uses JST PH (2.0 mm
+      pitch), so the two housings do not mate and there is no way to plug it in wrong by
+      accident. Either buy a Hobbywing-to-VESC sensor adapter or build one. What matters when
+      building it: GROUND, +5V and TEMP must land correctly (5V onto a hall output can destroy
+      that hall IC; 5V shorted to ground stresses the VESC's sensor-supply regulator). HALL
+      ORDER DOES NOT MATTER: VESC Tool's hall detection rotates the motor and learns the table,
+      so any permutation of the three hall lines detects correctly.
+      No manufacturer pin table exists for the 3652SD G3 SKU specifically. The EFRA 2023
+      handbook App.4 s4.2 governs this motor class and gives black=GND, orange/white/green=
+      halls, blue=10k NTC thermistor, red=+5V; one forum source conflicts. So MEASURE, do not
+      trust a diagram. Procedure with a multimeter and a bench supply:
+        1. Continuity from each wire to the motor can: the one that beeps is probably GND.
+        2. Check resistance between suspected GND and suspected +5V: expect 1-10 kohm, never a
+           short. Apply 5 V with the supply current-limited to 20-50 mA; it should draw a few
+           mA. Sag or high current means the pair is wrong, disconnect immediately.
+        3. With 5 V applied, turn the shaft slowly by hand and measure each remaining wire
+           against GND: the three that toggle 0 V to 5 V are the halls.
+        4. The wire that does NOT change with rotation but reads about 10 kohm to GND, and
+           drops as the motor is warmed, is the thermistor.
+      FIRST SPIN CAN SKIP THIS ENTIRELY: running sensorless needs only the three phase wires,
+      risks nothing, and costs only low-speed smoothness and startup torque below roughly
+      walking pace. Do the adapter as its own calm session afterwards.
 - [ ] VESC: the test build is proceeding on the FSESC 6.7 (2026-09-14, see
       `docs/notes/build-log.md`), knowingly out of its 14-60 V / 4S-minimum spec on this 3S
       pack -- most likely outcome is it boots and runs at light load, sustained load is the

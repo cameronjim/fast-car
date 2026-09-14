@@ -5,6 +5,35 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-14 -- motor sensor cable: adapter required, not a repin
+
+Researched the Hobbywing-to-VESC sensor connection properly after it came up as a surprise
+item. Earlier notes called it a "repin", which was misleading. Findings:
+
+- The connectors are physically incompatible: Hobbywing motor side is JST ZH at 1.5 mm pitch,
+  the VESC SENSE port is JST PH at 2.0 mm pitch. They cannot mate, so there is no accidental
+  wrong-plug failure mode. Hobbywing sells a sensor adapter cable as a product, which
+  corroborates this. An adapter must be bought or built either way.
+- Hall signal ORDER is a non-issue. VESC Tool's hall detection rotates the rotor under FOC
+  current control and records the electrical angle for each hall state, learning the table.
+  Any permutation of the three hall lines detects correctly (vesc-project.com/node/1815,
+  /node/451).
+- Power, ground and temperature placement are the only dangerous part. Driving +5 V into a
+  hall output can destroy that hall IC's output transistor; shorting +5 V to ground stresses
+  the VESC's onboard sensor-supply regulator.
+- No manufacturer pin table was found for the Xerun 3652SD G3 (HW30401064) specifically. The
+  EFRA Members Handbook 2023 App.4 s4.2 governs this motor class and specifies black=GND,
+  orange=hall C, white=hall B, green=hall A, blue=10k NTC thermistor, red=+5 V. One pev.dev
+  forum post conflicts, possibly describing a Hobbywing ESC header rather than the motor
+  cable. Treat both as hypotheses: measure before wiring.
+- Sensorless operation is safe for the first bench spin and needs no sensor cable at all.
+  What is lost is low-speed smoothness and startup torque below roughly 2000 ERPM; above that
+  it is indistinguishable. No electrical risk to the motor, since the hall sensors are simply
+  unpowered. Use conservative current limits for the first run regardless.
+
+Decision: first spin runs SENSORLESS. The adapter is a separate, later session with a
+multimeter, using the measurement procedure now recorded in the arrival checklist.
+
 ## 2026-09-14 -- capacitors dropped, proceeding on the FSESC 6.7 knowingly, perfboard and motor soldering underway
 
 Reported by Cameron, no code touched. Several small physical decisions and a status snapshot

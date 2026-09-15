@@ -16,13 +16,39 @@
 //
 //   1. Watchdog: if `drive_raw_age_s` has exceeded `watchdog_missed_cycles *
 //      control_period_s` (claude-docs/04-architecture.md: "Watchdog: missing /drive_raw for
-//      3 cycles -> brake command"), the cycle short-circuits to a hard brake ({0, 0})
-//      immediately -- there is no valid fresh command to reason about further.
+//      3 cycles -> brake command"), the cycle short-circuits immediately to zero speed with
+//      the PREVIOUS cycle's steering angle held -- there is no valid fresh command to reason
+//      about further. See "STEERING ON A ZERO-THROTTLE GATE" below for why the steering is
+//      held rather than centred.
 //   2. Command sanity: a non-finite (NaN/Inf) steering angle or speed in the incoming
-//      command is garbage, not a bounds violation -- it short-circuits to a hard brake the
-//      same way (claude-docs/05-safety.md: "Fails CLOSED: any internal error -> brake
-//      command, not passthrough" -- garbage input is exactly the kind of thing that must not
-//      be clamped into something that LOOKS sane and get passed through).
+//      command is garbage, not a bounds violation -- it short-circuits the same way
+//      (claude-docs/05-safety.md: "Fails CLOSED: any internal error -> brake command, not
+//      passthrough" -- garbage input is exactly the kind of thing that must not be clamped
+//      into something that LOOKS sane and get passed through).
+//
+// STEERING ON A ZERO-THROTTLE GATE. Every gate in this file that forces the speed to zero
+// leaves the steering angle at the last value this logic actually COMMANDED
+// (`previous_output.steering_angle_rad`), rather than snapping it to centre. Three reasons,
+// in order of weight:
+//
+//   * Centring is a step input. The steering rate limiter in step 3b exists because the rack
+//     cannot be slewed arbitrarily fast and because a step in road-wheel angle at speed is a
+//     yaw disturbance. Writing 0.0 straight into the output bypasses that limiter and
+//     commands up to full lock of travel in one cycle -- from the one code path whose job is
+//     to make the car safer.
+//   * Mid-corner, centring straightens a cornering car. On a watchdog trip (the tracker died,
+//     the teleop tab closed) the car is still travelling along its current arc, and layer 3
+//     cannot stop it (the note on GateResult: zero speed is a coast on this hardware). Holding
+//     the arc while the drive current goes to zero keeps it on roughly the path it was on;
+//     straightening sends it to the outside of the corner.
+//   * Consistency. The TTC gate has always zeroed the speed and left the steering alone
+//     (test_gate_logic.cpp's "...BrakesAndZeroesSpeedOnlyKeepsSteering"). The watchdog and
+//     sanity paths used to do the opposite. One rule for all of them is one fewer thing to
+//     get wrong.
+//
+// At startup `previous_output` is {0, 0}, so a node that has never commanded anything still
+// emits exactly {0, 0} -- the runbook's "verify /drive is neutral with no input" step and its
+// L3 test are unaffected.
 //   3. Otherwise: absolute bounds clamp (steering angle, speed) against vehicle_params
 //      limits, then a rate-limit clamp against the PREVIOUS cycle's output (steering rate,
 //      and speed increase only -- braking/decelerating is never rate-limited), then the TTC
@@ -147,9 +173,27 @@ struct GateInput {
   double pose_covariance_trace = 0.0;
 };
 
+// What a "brake" from this layer physically is (read before trusting the word).
+//
+// This layer has exactly one actuator lever: the `speed` field of the /drive command. A
+// "brake" here is `speed = 0`, and nothing more. Downstream, racer_drivers/pwm_output_node
+// maps speed 0 to actuation.throttle_pwm_neutral_us, and a VESC in PPM mode reads a neutral
+// pulse as ZERO CURRENT -- which is a COAST, not a deceleration. A car that is moving when a
+// gate here engages keeps rolling and slows only by drag and drivetrain friction.
+//
+// So: layer 3 "brake" == "command zero drive current". Whether that becomes real
+// deceleration is a property of the VESC's configured PPM control type (layer 2, see
+// docs/notes/first-boot-runbook.md's VESC Tool step) or of a future closed-loop vesc_node,
+// NOT of this code. The field below is named `zero_throttle` rather than `brake` for exactly
+// that reason. `EventSeverity::kBrake` and racer_msgs' SEVERITY_BRAKE keep their names
+// because they are a published interface and an evaluation metric; they mean "this gate
+// commanded zero", with the same caveat.
 struct GateResult {
   DriveCommand output;
-  bool brake = false;  // true iff output is a hard brake ({0, 0})
+  // true iff this cycle's output was forced to zero speed by a gate (watchdog, command
+  // sanity, TTC) rather than being a passthrough/clamped command. See the note above: this
+  // is a zero-throttle command, not a claim about deceleration.
+  bool zero_throttle = false;
   // Which gates are engaged THIS cycle (not what gets published -- see GateActivation and
   // GateEventTracker). A gate that stays engaged appears here every cycle.
   std::vector<GateActivation> activations;
@@ -167,6 +211,13 @@ struct CovarianceGateResult {
 };
 
 CovarianceGateResult evaluate_covariance_gate(bool has_pose_input, double pose_covariance_trace);
+
+// The output a gate produces when it forces the throttle to zero: zero speed, with the
+// steering angle from `previous_output` held (see "STEERING ON A ZERO-THROTTLE GATE" above).
+// Exposed rather than kept private because safety_node's fail-closed exception path must
+// produce the SAME command as the gates do -- two spellings of "the safe output" is exactly
+// how the two paths drift apart.
+DriveCommand zero_throttle_command(const DriveCommand& previous_output);
 
 std::string gate_source_to_string(GateSource source);
 

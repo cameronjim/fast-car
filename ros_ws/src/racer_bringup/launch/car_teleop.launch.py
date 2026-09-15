@@ -85,6 +85,20 @@ def generate_launch_description() -> LaunchDescription:
             "commands (and keeps commanding) zero."
         ),
     )
+    allow_reverse_arg = DeclareLaunchArgument(
+        "allow_reverse",
+        default_value="false",
+        description=(
+            "Allow either teleop source to command NEGATIVE speed. Default false: the lower "
+            "speed clamp becomes 0.0 m/s instead of vehicle_params limits.min_velocity_mps "
+            "(-5.0), so no below-neutral throttle pulse is ever produced. What a "
+            "below-neutral pulse does is a VESC PPM control-type setting that has never been "
+            "applied to this ESC -- reverse current in 'Current', proportional braking in "
+            "'Current No Reverse With Brake' -- so the first drives do not emit one. Turn on "
+            "at the bench once that setting is known and recorded "
+            "(docs/notes/first-boot-runbook.md)."
+        ),
+    )
     viz_arg = DeclareLaunchArgument(
         "viz",
         default_value="true",
@@ -197,6 +211,13 @@ def generate_launch_description() -> LaunchDescription:
         executable="keyboard_teleop_node",
         name="keyboard_teleop",
         output="screen",
+        parameters=[
+            {
+                "allow_reverse": ParameterValue(
+                    LaunchConfiguration("allow_reverse"), value_type=bool
+                ),
+            }
+        ],
         condition=IfCondition(LaunchConfiguration("start_teleop")),
     )
     twist_teleop_adapter_node = Node(
@@ -209,6 +230,9 @@ def generate_launch_description() -> LaunchDescription:
                 "input_topic": LaunchConfiguration("teleop_cmd_vel_topic"),
                 "twist_timeout_s": ParameterValue(
                     LaunchConfiguration("twist_timeout_s"), value_type=float
+                ),
+                "allow_reverse": ParameterValue(
+                    LaunchConfiguration("allow_reverse"), value_type=bool
                 ),
             }
         ],
@@ -229,6 +253,7 @@ def generate_launch_description() -> LaunchDescription:
             browser_teleop_arg,
             teleop_cmd_vel_topic_arg,
             twist_timeout_s_arg,
+            allow_reverse_arg,
             viz_arg,
             sysfs_root_arg,
             steering_pwmchip_arg,

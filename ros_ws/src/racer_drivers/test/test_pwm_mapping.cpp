@@ -209,7 +209,13 @@ TEST(IsStale, TableDriven) {
       {"far over", true, 10.0, true},
       {"NaN age", true, kNaN, true},
       {"inf age", true, kInf, true},
-      {"negative age (clock went backwards) is not stale", true, -0.5, false},
+      // Fail closed on a backwards clock, like racer_safety's watchdog and racer_tools'
+      // should_use_zero_command. This case asserted `false` (fresh) before the 2026-09-14
+      // command-path review; with `age_s >= timeout_s` alone, a negative age read as fresh
+      // and left the last commanded pulse on the wire.
+      {"negative age (clock went backwards) is stale", true, -0.5, true},
+      {"large negative age is stale", true, -1e6, true},
+      {"negative epsilon is stale", true, -kEps, true},
   };
   for (const StaleCase& c : cases) {
     CommandState state;
@@ -514,6 +520,93 @@ TEST_F(DriverFixture, NoUpdateEverLeavesANonNeutralPulseAfterStop) {
   driver.stop();
   EXPECT_EQ(steering.duty_writes.back(), 1400000ULL);
   EXPECT_EQ(throttle.duty_writes.back(), 1500000ULL);
+}
+
+// -- validate_channel_assignment -------------------------------------------------------------
+//
+// Added by the 2026-09-14 command-path review. Every one of the four chip/channel parameters
+// used to default to 0, so `ros2 run racer_drivers pwm_output_node` with no arguments aimed
+// BOTH pulses at pwmchip0/pwm0 and the throttle write silently overwrote the steering write
+// 50 times a second.
+
+TEST(ValidateChannelAssignment, DistinctChannelsOnOneChipAreFine) {
+  EXPECT_FALSE(racer_drivers::validate_channel_assignment(0, 0, 0, 1).has_value());
+}
+
+TEST(ValidateChannelAssignment, DistinctChipsAreFineEvenWithTheSameChannelIndex) {
+  EXPECT_FALSE(racer_drivers::validate_channel_assignment(0, 0, 3, 0).has_value());
+}
+
+TEST(ValidateChannelAssignment, TheSameChipAndChannelIsRefusedAndNamed) {
+  const auto reason = racer_drivers::validate_channel_assignment(0, 0, 0, 0);
+  ASSERT_TRUE(reason.has_value());
+  EXPECT_NE(reason->find("pwmchip0/pwm0"), std::string::npos);
+}
+
+TEST(ValidateChannelAssignment, TheSameNonZeroChipAndChannelIsAlsoRefused) {
+  EXPECT_TRUE(racer_drivers::validate_channel_assignment(4, 2, 4, 2).has_value());
+}
+
+// -- steering sign convention, end of the chain -----------------------------------------------
+//
+// claude-docs/06-vehicle-params.md: road-wheel angle in radians, LEFT POSITIVE. This is the
+// last hop of that convention before the wire, and `left_is_pwm_max` is the one bench-
+// calibrated unknown in it (docs/notes/first-boot-runbook.md). The earlier hops are pinned in
+// racer_tools/test/test_keymap.py, test_twist_teleop.py and racer_safety/test/
+// test_gate_logic.cpp's SteeringSign group.
+
+TEST(SteeringSign, PositiveIsLeftAndGoesToThePwmEndTheFlagNames) {
+  MappingConfig config = nominal_config();
+  config.left_is_pwm_max = true;
+  EXPECT_GT(racer_drivers::steering_angle_to_pulse_us(config, 0.1), config.steering.neutral_us);
+  EXPECT_LT(racer_drivers::steering_angle_to_pulse_us(config, -0.1), config.steering.neutral_us);
+
+  config.left_is_pwm_max = false;
+  EXPECT_LT(racer_drivers::steering_angle_to_pulse_us(config, 0.1), config.steering.neutral_us);
+  EXPECT_GT(racer_drivers::steering_angle_to_pulse_us(config, -0.1), config.steering.neutral_us);
+}
+
+TEST(SteeringSign, FlippingTheFlagMirrorsThePulseAboutNeutralForBothPolarities) {
+  MappingConfig max_config = nominal_config();
+  MappingConfig min_config = nominal_config();
+  min_config.left_is_pwm_max = false;
+  // The calibration is deliberately asymmetric (1000/1400/2000 with -0.4..+0.2 rad), so this
+  // asserts the two polarities use the SAME two half-ranges, just swapped -- not that the
+  // pulse is a mirror image about neutral, which an asymmetric calibration is not.
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(max_config, 0.2),
+              max_config.steering.max_us, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(min_config, 0.2),
+              min_config.steering.min_us, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(max_config, -0.4),
+              max_config.steering.min_us, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(min_config, -0.4),
+              min_config.steering.max_us, 1e-6);
+}
+
+// -- reverse / below-neutral pulses ------------------------------------------------------------
+//
+// The mapping itself still maps a negative speed to a below-neutral pulse; whether a negative
+// speed ever REACHES it is now the teleop nodes' `allow_reverse` parameter (default false,
+// see racer_tools/keymap.py). This pins that the two ends of that decision stay separate: the
+// driver is not where reverse is disabled.
+
+TEST(SpeedToPulse, NegativeSpeedStillMapsBelowNeutralWhateverTheTeleopClampDoes) {
+  const MappingConfig config = nominal_config();
+  EXPECT_LT(racer_drivers::speed_to_pulse_us(config, -1.0), config.throttle.neutral_us);
+  EXPECT_GE(racer_drivers::speed_to_pulse_us(config, -1.0), config.throttle.min_us);
+  EXPECT_DOUBLE_EQ(racer_drivers::speed_to_pulse_us(config, 0.0), config.throttle.neutral_us);
+}
+
+TEST(SpeedToPulse, TheFullSpanStaysInsideTheMuxPwmValidityWindow) {
+  // firmware/safety_mux's pwm_is_valid_us accepts [min_us, max_us] INCLUSIVE, from the same
+  // config/vehicle_params.yaml fields this map's ends come from, so a saturated pulse at
+  // either end is still a valid pulse to the mux rather than something it cuts on.
+  const MappingConfig config = nominal_config();
+  for (double speed = -100.0; speed <= 100.0; speed += 0.5) {
+    const double pulse = racer_drivers::speed_to_pulse_us(config, speed);
+    EXPECT_GE(pulse, config.throttle.min_us);
+    EXPECT_LE(pulse, config.throttle.max_us);
+  }
 }
 
 }  // namespace

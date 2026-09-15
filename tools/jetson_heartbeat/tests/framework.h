@@ -7,9 +7,14 @@
 
 // Defined once in tests/main.c; every suite links against and increments this same global.
 extern int g_test_failures;
+// Every CHECK counts itself, so a run reports how many assertions actually executed rather
+// than only how many failed -- a suite that silently stopped running is otherwise
+// indistinguishable from a suite that passed.
+extern int g_test_assertions;
 
 #define CHECK(condition, description)                                                    \
   do {                                                                                   \
+    g_test_assertions++;                                                                 \
     if (!(condition)) {                                                                  \
       printf("  FAIL: %s (%s:%d): %s\n", (description), __FILE__, __LINE__, #condition); \
       g_test_failures++;                                                                 \

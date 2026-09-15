@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 #include "safety_mux/mux_params.h"
+#include "safety_mux/rc_switch.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,6 +33,12 @@ typedef struct {
   double jetson_heartbeat_age_s;
   double jetson_steering_pwm_us;
   double jetson_throttle_pwm_us;
+  // The kill switch's position as of the PREVIOUS cycle -- MuxOutput.switch_position from
+  // the last mux_decide() call, which pico/main.c carries forward in a local. It exists only
+  // so the kill switch's dead band can hold its position (rc_switch.h); mux_decide() stays a
+  // pure function of its arguments, which is what keeps the table-driven tests honest. Seed
+  // it with RC_SWITCH_SIGNAL_INVALID at power-on: that holds as KILL, never as ARMED.
+  RcSwitchPosition previous_switch_position;
 } MuxInput;
 
 typedef struct {
@@ -39,6 +46,9 @@ typedef struct {
   double steering_out_us;
   double throttle_out_us;
   MuxCutReason reason;
+  // This cycle's resolved kill-switch position. Feed it back as the next cycle's
+  // MuxInput.previous_switch_position; nothing else consumes it.
+  RcSwitchPosition switch_position;
 } MuxOutput;
 
 // The layer-1 decision (claude-docs/05-safety.md). Priority order, checked in this exact

@@ -19,6 +19,16 @@ static bool parse_uint(const char* text, unsigned int* out) {
   if (text == NULL || text[0] == '\0') {
     return false;
   }
+  // strtoul skips leading whitespace and ACCEPTS a leading '-', returning the negation
+  // modulo ULONG_MAX+1 with no error. "no sign" has to be enforced here or it is not
+  // enforced at all: on a 64-bit host a negative usually wraps above the 32-bit cap below
+  // and is rejected by accident, but "-18446744073709551615" wraps to exactly 1 and would
+  // have parsed as line 1, and on a 32-bit host "--line -1" would have parsed as line
+  // 4294967295. Requiring the first character to be a digit rejects the sign, the leading
+  // whitespace, and the empty string in one comparison.
+  if (text[0] < '0' || text[0] > '9') {
+    return false;
+  }
   errno = 0;
   char* end = NULL;
   unsigned long value = strtoul(text, &end, 10);
@@ -71,6 +81,10 @@ HeartbeatParseStatus heartbeat_parse_args(int argc, char* const* argv, Heartbeat
         return kHeartbeatParseError;
       }
       out->chip_name = argv[++i];
+      if (out->chip_name[0] == '\0') {
+        set_error(err_buf, err_buf_len, "--chip must not be empty, e.g. --chip gpiochip0");
+        return kHeartbeatParseError;
+      }
       continue;
     }
 
@@ -111,6 +125,19 @@ HeartbeatParseStatus heartbeat_parse_args(int argc, char* const* argv, Heartbeat
   if (!(out->rate_hz > 0.0) || !isfinite(out->rate_hz)) {
     char msg[128];
     snprintf(msg, sizeof(msg), "--rate-hz must be finite and > 0 (got %g)", out->rate_hz);
+    set_error(err_buf, err_buf_len, msg);
+    return kHeartbeatParseError;
+  }
+  // An upper bound, because there is no rate this fast that is a heartbeat and there IS a
+  // rate this fast that is a fault: at 1e9 Hz the half-period rounds to a single nanosecond
+  // and the toggle loop stops sleeping, pinning a core and flooding the GPIO chardev on a
+  // machine whose job is to run the control stack. The mux only needs edges comfortably
+  // inside its 0.1 s window (README.md "Requirements"); anything above a few kHz is a typo
+  // or a unit mistake, not a tuning choice.
+  if (out->rate_hz > JETSON_HEARTBEAT_MAX_RATE_HZ) {
+    char msg[128];
+    snprintf(msg, sizeof(msg), "--rate-hz must be <= %g (got %g)",
+             (double)JETSON_HEARTBEAT_MAX_RATE_HZ, out->rate_hz);
     set_error(err_buf, err_buf_len, msg);
     return kHeartbeatParseError;
   }

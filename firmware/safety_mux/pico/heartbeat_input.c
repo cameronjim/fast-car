@@ -6,10 +6,16 @@
 
 #include "gpio_irq_dispatch.h"
 #include "hardware/gpio.h"
+#include "hardware/sync.h"
 #include "pico/stdlib.h"
 
-static volatile uint64_t g_last_edge_us = 0;
-static volatile bool g_edge_seen = false;
+// Written only in interrupt context, read only under a disabled-interrupt section below.
+// `volatile` alone is NOT enough for the timestamp: a uint64_t is two 32-bit accesses on a
+// Cortex-M0+, so an edge landing between them can hand the reader a mix of the old high word
+// and the new low word -- a timestamp roughly 71 minutes in the past, i.e. a spurious
+// watchdog cut. Reading both under save_and_disable_interrupts() removes that window.
+static uint64_t g_last_edge_us = 0;
+static bool g_edge_seen = false;
 
 // Interrupt context: short and allocation-free. gpio_irq_dispatch only routes edges on the
 // GPIO this handler was registered for, so both arguments are known and unused here.
@@ -35,11 +41,15 @@ void heartbeat_input_init(uint gpio) {
 }
 
 double heartbeat_input_age_s(void) {
-  if (!g_edge_seen) {
+  uint32_t irq_state = save_and_disable_interrupts();
+  bool edge_seen = g_edge_seen;
+  uint64_t last_us = g_last_edge_us;
+  restore_interrupts(irq_state);
+
+  if (!edge_seen) {
     return INFINITY;
   }
   uint64_t now_us = time_us_64();
-  uint64_t last_us = g_last_edge_us;  // single volatile read; good enough for a coarse age
   if (now_us < last_us) {
     // time_us_64() wrapping is not reachable on any realistic session length (it wraps after
     // ~584,000 years), but treating it as "unknown, so timed out" is the fail-closed answer

@@ -28,6 +28,11 @@ extern "C" {
 #define JETSON_HEARTBEAT_DEFAULT_LINE 144u
 #define JETSON_HEARTBEAT_DEFAULT_RATE_HZ 50.0
 
+// Sanity ceiling on --rate-hz. Not a physical constant and not a tuning knob: anything above
+// this is a typo or a units mistake (see heartbeat_parse_args), and accepting it turns the
+// toggle loop into a spin that starves the rest of the Jetson.
+#define JETSON_HEARTBEAT_MAX_RATE_HZ 10000.0
+
 // mux_watchdog_timeout_s (config/vehicle_params.yaml, currently 0.1 s PROVISIONAL) is
 // deliberately NOT read here at runtime. Two reasons, both load-bearing:
 //   1. Reading it would mean parsing YAML/JSON on the critical path of a process whose only

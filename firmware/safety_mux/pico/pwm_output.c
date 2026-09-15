@@ -12,7 +12,7 @@
 // chosen so one PWM counter tick = 0.5 us gives convenient, exact microsecond-to-tick math
 // (level = pulse_us * 2) without a floating-point divide at runtime.
 #define PWM_OUTPUT_WRAP 39999
-#define PWM_OUTPUT_US_TO_LEVEL(us) ((uint16_t)((us) * 2.0))
+#define PWM_OUTPUT_US_TO_LEVEL(us) ((uint16_t)((us)*2.0))
 
 void pwm_output_init_safe(uint gpio) {
   // Called in the FIRST lines of main(), before params are even read. An RP2040 comes out of

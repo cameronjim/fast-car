@@ -31,50 +31,50 @@ static const RcSwitchCase kCases[] = {
      RC_SWITCH_ARMED, RC_SWITCH_KILL},
     {"no band: just above threshold -> ARMED", 1500.001, 1500.0, 0.0, 1000.0, 2000.0,
      RC_SWITCH_KILL, RC_SWITCH_ARMED},
-    {"no band: below the receiver's own valid range -> SIGNAL_INVALID, not KILL", 900.0,
-     1500.0, 0.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
-    {"no band: above the receiver's own valid range -> SIGNAL_INVALID, not ARMED", 2100.0,
-     1500.0, 0.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
-    {"no band: NaN reading -> SIGNAL_INVALID", NAN, 1500.0, 0.0, 1000.0, 2000.0,
-     RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
+    {"no band: below the receiver's own valid range -> SIGNAL_INVALID, not KILL", 900.0, 1500.0,
+     0.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
+    {"no band: above the receiver's own valid range -> SIGNAL_INVALID, not ARMED", 2100.0, 1500.0,
+     0.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
+    {"no band: NaN reading -> SIGNAL_INVALID", NAN, 1500.0, 0.0, 1000.0, 2000.0, RC_SWITCH_ARMED,
+     RC_SWITCH_SIGNAL_INVALID},
     {"no band: +Inf reading -> SIGNAL_INVALID", INFINITY, 1500.0, 0.0, 1000.0, 2000.0,
      RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
     {"no band: -Inf reading -> SIGNAL_INVALID", -INFINITY, 1500.0, 0.0, 1000.0, 2000.0,
      RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
     {"no band: disconnected receiver (0us idle) -> SIGNAL_INVALID", 0.0, 1500.0, 0.0, 1000.0,
      2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
-    {"no band: never-captured sentinel (-1us) -> SIGNAL_INVALID", -1.0, 1500.0, 0.0, 1000.0,
-     2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
+    {"no band: never-captured sentinel (-1us) -> SIGNAL_INVALID", -1.0, 1500.0, 0.0, 1000.0, 2000.0,
+     RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
 
     // --- 100 us band around a 1500 us threshold: ARM >= 1600, KILL < 1400, hold between ---
-    {"band: at the arm edge (1600) -> ARMED", 1600.0, 1500.0, 100.0, 1000.0, 2000.0,
-     RC_SWITCH_KILL, RC_SWITCH_ARMED},
+    {"band: at the arm edge (1600) -> ARMED", 1600.0, 1500.0, 100.0, 1000.0, 2000.0, RC_SWITCH_KILL,
+     RC_SWITCH_ARMED},
     {"band: just above the arm edge -> ARMED", 1600.001, 1500.0, 100.0, 1000.0, 2000.0,
      RC_SWITCH_KILL, RC_SWITCH_ARMED},
     {"band: just below the arm edge, previously KILL -> still KILL", 1599.999, 1500.0, 100.0,
      1000.0, 2000.0, RC_SWITCH_KILL, RC_SWITCH_KILL},
-    {"band: at the kill edge (1400) is inside the band, previously ARMED -> holds ARMED",
-     1400.0, 1500.0, 100.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_ARMED},
-    {"band: just below the kill edge -> KILL even if previously ARMED", 1399.999, 1500.0,
-     100.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_KILL},
-    {"band: exactly the threshold, previously ARMED -> holds ARMED", 1500.0, 1500.0, 100.0,
-     1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_ARMED},
-    {"band: exactly the threshold, previously KILL -> holds KILL (no silent arm)", 1500.0,
-     1500.0, 100.0, 1000.0, 2000.0, RC_SWITCH_KILL, RC_SWITCH_KILL},
-    {"band: in the band with previous SIGNAL_INVALID -> KILL, never ARMED", 1500.0, 1500.0,
-     100.0, 1000.0, 2000.0, RC_SWITCH_SIGNAL_INVALID, RC_SWITCH_KILL},
-    {"band: in the band but the channel is unreadable -> SIGNAL_INVALID wins over the hold",
-     NAN, 1500.0, 100.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
+    {"band: at the kill edge (1400) is inside the band, previously ARMED -> holds ARMED", 1400.0,
+     1500.0, 100.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_ARMED},
+    {"band: just below the kill edge -> KILL even if previously ARMED", 1399.999, 1500.0, 100.0,
+     1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_KILL},
+    {"band: exactly the threshold, previously ARMED -> holds ARMED", 1500.0, 1500.0, 100.0, 1000.0,
+     2000.0, RC_SWITCH_ARMED, RC_SWITCH_ARMED},
+    {"band: exactly the threshold, previously KILL -> holds KILL (no silent arm)", 1500.0, 1500.0,
+     100.0, 1000.0, 2000.0, RC_SWITCH_KILL, RC_SWITCH_KILL},
+    {"band: in the band with previous SIGNAL_INVALID -> KILL, never ARMED", 1500.0, 1500.0, 100.0,
+     1000.0, 2000.0, RC_SWITCH_SIGNAL_INVALID, RC_SWITCH_KILL},
+    {"band: in the band but the channel is unreadable -> SIGNAL_INVALID wins over the hold", NAN,
+     1500.0, 100.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
 
     // --- degenerate band values ----------------------------------------------------------
-    {"NaN band is treated as zero: at threshold -> ARMED", 1500.0, 1500.0, NAN, 1000.0,
-     2000.0, RC_SWITCH_KILL, RC_SWITCH_ARMED},
+    {"NaN band is treated as zero: at threshold -> ARMED", 1500.0, 1500.0, NAN, 1000.0, 2000.0,
+     RC_SWITCH_KILL, RC_SWITCH_ARMED},
     {"+Inf band is treated as zero: at threshold -> ARMED", 1500.0, 1500.0, INFINITY, 1000.0,
      2000.0, RC_SWITCH_KILL, RC_SWITCH_ARMED},
-    {"negative band is treated as zero: just below threshold -> KILL", 1499.999, 1500.0,
-     -50.0, 1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_KILL},
-    {"band wider than the whole range: everything holds, previous KILL -> KILL", 1900.0,
-     1500.0, 1000.0, 1000.0, 2000.0, RC_SWITCH_KILL, RC_SWITCH_KILL},
+    {"negative band is treated as zero: just below threshold -> KILL", 1499.999, 1500.0, -50.0,
+     1000.0, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_KILL},
+    {"band wider than the whole range: everything holds, previous KILL -> KILL", 1900.0, 1500.0,
+     1000.0, 1000.0, 2000.0, RC_SWITCH_KILL, RC_SWITCH_KILL},
 
     // --- degenerate threshold: must not fail open ---------------------------------------
     {"NaN threshold -> KILL, never a held ARMED", 1900.0, NAN, 100.0, 1000.0, 2000.0,
@@ -83,8 +83,8 @@ static const RcSwitchCase kCases[] = {
      RC_SWITCH_KILL},
     {"-Inf threshold -> KILL", 1900.0, -INFINITY, 100.0, 1000.0, 2000.0, RC_SWITCH_ARMED,
      RC_SWITCH_KILL},
-    {"NaN signal bounds -> SIGNAL_INVALID (the range check runs first)", 1900.0, 1500.0,
-     100.0, NAN, 2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
+    {"NaN signal bounds -> SIGNAL_INVALID (the range check runs first)", 1900.0, 1500.0, 100.0, NAN,
+     2000.0, RC_SWITCH_ARMED, RC_SWITCH_SIGNAL_INVALID},
 };
 
 // The property that actually matters at the bench: sweeping the channel back and forth
@@ -116,8 +116,7 @@ static void test_no_flapping_inside_the_band(void) {
 
 // Coming back from an unreadable channel must go through KILL, not straight to a held ARMED.
 static void test_invalid_channel_does_not_hold_armed(void) {
-  RcSwitchPosition position =
-      rc_switch_read(1700.0, 1500.0, 100.0, 1000.0, 2000.0, RC_SWITCH_KILL);
+  RcSwitchPosition position = rc_switch_read(1700.0, 1500.0, 100.0, 1000.0, 2000.0, RC_SWITCH_KILL);
   CHECK(position == RC_SWITCH_ARMED, "armed first");
 
   position = rc_switch_read(-1.0, 1500.0, 100.0, 1000.0, 2000.0, position);
@@ -132,8 +131,8 @@ void test_rc_switch_suite(void) {
   for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i) {
     const RcSwitchCase* c = &kCases[i];
     RcSwitchPosition actual =
-        rc_switch_read(c->switch_pwm_us, c->kill_threshold_us, c->hysteresis_us,
-                       c->signal_min_us, c->signal_max_us, c->previous);
+        rc_switch_read(c->switch_pwm_us, c->kill_threshold_us, c->hysteresis_us, c->signal_min_us,
+                       c->signal_max_us, c->previous);
     CHECK(actual == c->expected, c->name);
   }
   test_no_flapping_inside_the_band();

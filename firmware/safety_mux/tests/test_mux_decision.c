@@ -104,8 +104,8 @@ void test_mux_decision_suite(void) {
   // (the RC kill switch must always win), not just a side effect of test ordering above.
   {
     MuxInput in = nominal_input();
-    in.rc_kill_switch_pwm_us = 1000.0;  // KILL
-    in.jetson_heartbeat_age_s = 5.0;    // ALSO timed out
+    in.rc_kill_switch_pwm_us = 1000.0;   // KILL
+    in.jetson_heartbeat_age_s = 5.0;     // ALSO timed out
     in.jetson_steering_pwm_us = 9999.0;  // ALSO invalid
     MuxOutput out = mux_decide(in, params);
     CHECK(out.reason == MUX_REASON_RC_KILL_SWITCH,
@@ -135,7 +135,7 @@ void test_mux_decision_suite(void) {
   // first cycle must therefore be a cut, whatever else is true.
   {
     MuxInput in = nominal_input();
-    in.rc_kill_switch_pwm_us = -1.0;  // pwm_capture's "nothing captured yet" sentinel
+    in.rc_kill_switch_pwm_us = -1.0;       // pwm_capture's "nothing captured yet" sentinel
     in.jetson_heartbeat_age_s = INFINITY;  // heartbeat_input_age_s()'s "no edge ever" value
     in.jetson_steering_pwm_us = -1.0;
     in.jetson_throttle_pwm_us = -1.0;
@@ -159,9 +159,9 @@ void test_mux_decision_suite(void) {
   // validate next cycle" path in mux_decide() for a stale pulse to slip through.
   {
     MuxInput in = nominal_input();
-    in.rc_kill_switch_pwm_us = 1900.0;      // just moved to ARMED this cycle
+    in.rc_kill_switch_pwm_us = 1900.0;  // just moved to ARMED this cycle
     in.previous_switch_position = RC_SWITCH_KILL;
-    in.jetson_steering_pwm_us = -1.0;       // nothing captured on this channel yet
+    in.jetson_steering_pwm_us = -1.0;  // nothing captured on this channel yet
     MuxOutput out = mux_decide(in, params);
     CHECK(out.cut, "arming cycle with a never-captured steering channel -> still cut");
     CHECK(out.reason == MUX_REASON_STEERING_PWM_INVALID,

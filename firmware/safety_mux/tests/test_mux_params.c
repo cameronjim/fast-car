@@ -54,9 +54,7 @@ static RawMuxField* pick_throttle_neutral(RawMuxParamFields* r) {
 }
 static RawMuxField* pick_watchdog(RawMuxParamFields* r) { return &r->watchdog_timeout_s; }
 static RawMuxField* pick_threshold(RawMuxParamFields* r) { return &r->kill_switch_threshold_us; }
-static RawMuxField* pick_hysteresis(RawMuxParamFields* r) {
-  return &r->kill_switch_hysteresis_us;
-}
+static RawMuxField* pick_hysteresis(RawMuxParamFields* r) { return &r->kill_switch_hysteresis_us; }
 static RawMuxField* pick_rc_min(RawMuxParamFields* r) { return &r->rc_signal_min_us; }
 static RawMuxField* pick_rc_max(RawMuxParamFields* r) { return &r->rc_signal_max_us; }
 
@@ -88,16 +86,14 @@ typedef struct {
 } RangeCase;
 
 static const RangeCase kRangeCases[] = {
-    {"steering neutral below its own min", pick_steering_neutral, 900.0,
-     "steering_pwm_neutral_us"},
+    {"steering neutral below its own min", pick_steering_neutral, 900.0, "steering_pwm_neutral_us"},
     {"steering neutral above its own max", pick_steering_neutral, 2100.0,
      "steering_pwm_neutral_us"},
-    {"inverted steering range (min above max) is caught via the neutral check",
-     pick_steering_min, 2500.0, "steering_pwm_neutral_us"},
-    {"throttle neutral below its own min", pick_throttle_neutral, 900.0,
+    {"inverted steering range (min above max) is caught via the neutral check", pick_steering_min,
+     2500.0, "steering_pwm_neutral_us"},
+    {"throttle neutral below its own min", pick_throttle_neutral, 900.0, "throttle_pwm_neutral_us"},
+    {"throttle neutral above its own max -- the creep-on-cut config", pick_throttle_neutral, 2100.0,
      "throttle_pwm_neutral_us"},
-    {"throttle neutral above its own max -- the creep-on-cut config", pick_throttle_neutral,
-     2100.0, "throttle_pwm_neutral_us"},
     {"zero watchdog timeout", pick_watchdog, 0.0, "watchdog_timeout_s"},
     {"negative watchdog timeout", pick_watchdog, -0.5, "watchdog_timeout_s"},
     {"negative kill-switch hysteresis", pick_hysteresis, -1.0, "kill_switch_hysteresis_us"},

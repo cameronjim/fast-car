@@ -76,9 +76,8 @@ static void test_bad_line_values_error(void) {
   // to exactly 1, with no error and no overflow, so without an explicit sign rejection it
   // parsed as line 1. "-1" is the same class and happens to be caught by the 32-bit cap on a
   // 64-bit host, but not on a 32-bit one.
-  const char* bad_lines[] = {"abc",    "-1",   "3.5", "",
-                             "-18446744073709551615", "+7", " 7", "7x",
-                             "0x10",   "1e3",  "-0"};
+  const char* bad_lines[] = {"abc", "-1",   "3.5", "",  "-18446744073709551615", "+7", " 7",
+                             "7x",  "0x10", "1e3", "-0"};
   for (size_t i = 0; i < sizeof(bad_lines) / sizeof(bad_lines[0]); ++i) {
     char* argv[] = {(char*)"racer-heartbeat", (char*)"--line", (char*)bad_lines[i]};
     HeartbeatConfig cfg;
@@ -89,8 +88,7 @@ static void test_bad_line_values_error(void) {
 }
 
 static void test_bad_rate_values_error(void) {
-  const char* bad_rates[] = {"abc", "0",   "-5",  "-0.0001", "",
-                             "inf", "nan", "-inf", "50x",     "1e9"};
+  const char* bad_rates[] = {"abc", "0", "-5", "-0.0001", "", "inf", "nan", "-inf", "50x", "1e9"};
   for (size_t i = 0; i < sizeof(bad_rates) / sizeof(bad_rates[0]); ++i) {
     char* argv[] = {(char*)"racer-heartbeat", (char*)"--rate-hz", (char*)bad_rates[i]};
     HeartbeatConfig cfg;
@@ -151,9 +149,9 @@ static void test_empty_chip_errors(void) {
 // tools/jetson_heartbeat/README.md documents. If someone edits one without the other, this
 // fails rather than the Jetson quietly toggling a different line.
 static void test_installed_service_arguments(void) {
-  char* argv[] = {(char*)"racer-heartbeat", (char*)"--chip",    (char*)"gpiochip0",
-                  (char*)"--line",          (char*)"144",       (char*)"--rate-hz",
-                  (char*)"50"};
+  char* argv[] = {
+      (char*)"racer-heartbeat", (char*)"--chip", (char*)"gpiochip0", (char*)"--line", (char*)"144",
+      (char*)"--rate-hz",       (char*)"50"};
   HeartbeatConfig cfg;
   char err[256] = {0};
   CHECK(parse(7, argv, &cfg, err, sizeof(err)) == kHeartbeatParseOk,

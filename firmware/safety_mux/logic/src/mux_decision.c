@@ -19,10 +19,10 @@ MuxOutput mux_decide(MuxInput input, MuxParams params) {
   // 1. RC kill switch -- checked first, before anything Jetson-side. An unreadable channel
   // (RC_SWITCH_SIGNAL_INVALID) is treated exactly like RC_SWITCH_KILL: never assume ARMED
   // from a signal the MCU cannot actually interpret (claude-docs/05-safety.md fail-closed).
-  RcSwitchPosition switch_position = rc_switch_read(
-      input.rc_kill_switch_pwm_us, params.kill_switch_threshold_us,
-      params.kill_switch_hysteresis_us, params.rc_signal_min_us, params.rc_signal_max_us,
-      input.previous_switch_position);
+  RcSwitchPosition switch_position =
+      rc_switch_read(input.rc_kill_switch_pwm_us, params.kill_switch_threshold_us,
+                     params.kill_switch_hysteresis_us, params.rc_signal_min_us,
+                     params.rc_signal_max_us, input.previous_switch_position);
   if (switch_position == RC_SWITCH_KILL) {
     return cut_with_reason(params, MUX_REASON_RC_KILL_SWITCH, switch_position);
   }
@@ -39,11 +39,11 @@ MuxOutput mux_decide(MuxInput input, MuxParams params) {
   // 3. Per-channel Jetson PWM validity -- a glitched-but-alive command signal is not the
   // same failure as a frozen Jetson, but it is just as unsafe to forward.
   if (!pwm_is_valid_us(input.jetson_steering_pwm_us, params.steering_pwm_min_us,
-                        params.steering_pwm_max_us)) {
+                       params.steering_pwm_max_us)) {
     return cut_with_reason(params, MUX_REASON_STEERING_PWM_INVALID, switch_position);
   }
   if (!pwm_is_valid_us(input.jetson_throttle_pwm_us, params.throttle_pwm_min_us,
-                        params.throttle_pwm_max_us)) {
+                       params.throttle_pwm_max_us)) {
     return cut_with_reason(params, MUX_REASON_THROTTLE_PWM_INVALID, switch_position);
   }
 

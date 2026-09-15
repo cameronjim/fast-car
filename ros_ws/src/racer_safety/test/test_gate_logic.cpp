@@ -71,7 +71,7 @@ TEST(Watchdog, PassesWhenAgeWellBelowTimeout) {
   input.drive_raw_age_s = 0.01;  // timeout is 0.06s
   input.command = DriveCommand{0.1, 2.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
   for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kWatchdog);
   }
@@ -82,7 +82,7 @@ TEST(Watchdog, MarginalAtExactlyTimeoutTrips) {
   GateInput input = neutral_input();
   input.drive_raw_age_s = 0.06;  // == 3 * 0.02, the ">=" boundary
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.0);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
   ASSERT_EQ(result.activations.size(), 1u);
@@ -95,7 +95,7 @@ TEST(Watchdog, JustBelowTimeoutDoesNotTrip) {
   GateInput input = neutral_input();
   input.drive_raw_age_s = 0.0599;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
 }
 
 TEST(Watchdog, FailsWellPastTimeout) {
@@ -103,7 +103,7 @@ TEST(Watchdog, FailsWellPastTimeout) {
   GateInput input = neutral_input();
   input.drive_raw_age_s = 5.0;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
 }
 
 TEST(Watchdog, GarbageNanAgeTrips) {
@@ -111,7 +111,7 @@ TEST(Watchdog, GarbageNanAgeTrips) {
   GateInput input = neutral_input();
   input.drive_raw_age_s = kNan;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
 }
 
 TEST(Watchdog, GarbageInfAgeTrips) {
@@ -119,7 +119,7 @@ TEST(Watchdog, GarbageInfAgeTrips) {
   GateInput input = neutral_input();
   input.drive_raw_age_s = kInf;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
 }
 
 TEST(Watchdog, GarbageNegativeAgeTrips) {
@@ -127,7 +127,7 @@ TEST(Watchdog, GarbageNegativeAgeTrips) {
   GateInput input = neutral_input();
   input.drive_raw_age_s = -1.0;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
   ASSERT_EQ(result.activations.size(), 1u);
   EXPECT_EQ(result.activations[0].source, GateSource::kWatchdog);
 }
@@ -153,7 +153,7 @@ TEST(CommandSanity, PassesOnFiniteCommand) {
   GateInput input = neutral_input();
   input.command = DriveCommand{0.1, 3.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
   for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kCommandSanity);
   }
@@ -164,7 +164,7 @@ TEST(CommandSanity, GarbageNanSteeringBrakes) {
   GateInput input = neutral_input();
   input.command = DriveCommand{kNan, 2.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.0);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
   ASSERT_EQ(result.activations.size(), 1u);
@@ -179,7 +179,7 @@ TEST(CommandSanity, GarbageNanSpeedWithFiniteSteeringBrakes) {
   GateInput input = neutral_input();
   input.command = DriveCommand{0.1, kNan};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
   ASSERT_EQ(result.activations.size(), 1u);
   EXPECT_EQ(result.activations[0].source, GateSource::kCommandSanity);
 }
@@ -189,7 +189,7 @@ TEST(CommandSanity, GarbageInfSteeringBrakes) {
   GateInput input = neutral_input();
   input.command = DriveCommand{kInf, 2.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
 }
 
 TEST(CommandSanity, GarbageNegativeInfSpeedBrakes) {
@@ -197,7 +197,7 @@ TEST(CommandSanity, GarbageNegativeInfSpeedBrakes) {
   GateInput input = neutral_input();
   input.command = DriveCommand{0.0, -kInf};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
 }
 
 TEST(CommandSanity, GarbageBothNonFiniteBrakes) {
@@ -205,7 +205,7 @@ TEST(CommandSanity, GarbageBothNonFiniteBrakes) {
   GateInput input = neutral_input();
   input.command = DriveCommand{kNan, kInf};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -256,7 +256,7 @@ TEST(BoundsClamp, FailsAboveSteeringMaxClampedWithEvent) {
   ASSERT_EQ(result.activations.size(), 1u);
   EXPECT_EQ(result.activations[0].source, GateSource::kBoundsClamp);
   EXPECT_EQ(result.activations[0].severity, EventSeverity::kWarning);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
 }
 
 TEST(BoundsClamp, FailsBelowSteeringMinClampedWithEvent) {
@@ -472,7 +472,7 @@ TEST(Ttc, NotConfiguredNeverBrakesEvenAtZeroRange) {
   input.command = DriveCommand{0.0, 10.0};
   input.min_scan_range_m = 0.01;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 10.0);
   for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kTtc);
@@ -485,7 +485,7 @@ TEST(Ttc, GarbageNanRangeIgnored) {
   input.command = DriveCommand{0.0, 10.0};
   input.min_scan_range_m = kNan;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
 }
 
 TEST(Ttc, GarbageNegativeRangeIgnored) {
@@ -494,7 +494,7 @@ TEST(Ttc, GarbageNegativeRangeIgnored) {
   input.command = DriveCommand{0.0, 10.0};
   input.min_scan_range_m = -3.0;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
 }
 
 TEST(Ttc, GarbageZeroRangeIgnored) {
@@ -503,7 +503,7 @@ TEST(Ttc, GarbageZeroRangeIgnored) {
   input.command = DriveCommand{0.0, 10.0};
   input.min_scan_range_m = 0.0;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
 }
 
 TEST(Ttc, InfiniteRangeMeansNoObstacleNoBrake) {
@@ -512,7 +512,7 @@ TEST(Ttc, InfiniteRangeMeansNoObstacleNoBrake) {
   input.command = DriveCommand{0.0, 10.0};
   input.min_scan_range_m = kInf;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
 }
 
 TEST(Ttc, NotMovingForwardNeverBrakesEvenAtZeroRange) {
@@ -521,7 +521,7 @@ TEST(Ttc, NotMovingForwardNeverBrakesEvenAtZeroRange) {
   input.command = DriveCommand{0.0, 0.0};  // stopped
   input.min_scan_range_m = 0.001;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
 }
 
 TEST(Ttc, ReversingNeverBrakesEvenAtZeroRange) {
@@ -530,7 +530,7 @@ TEST(Ttc, ReversingNeverBrakesEvenAtZeroRange) {
   input.command = DriveCommand{0.0, -3.0};  // reversing
   input.min_scan_range_m = 0.001;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
   EXPECT_LT(result.output.speed_mps, 0.0);  // reverse command passed through untouched by TTC
 }
 
@@ -540,7 +540,7 @@ TEST(Ttc, PassesFarFromObstacleNoEvent) {
   input.command = DriveCommand{0.0, 5.0};
   input.min_scan_range_m = 100.0;  // ttc = 20s, far above both thresholds
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
   for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kTtc);
   }
@@ -552,7 +552,7 @@ TEST(Ttc, MarginalExactlyAtWarningThresholdEmitsInfoNoCommandChange) {
   input.command = DriveCommand{0.0, 5.0};
   input.min_scan_range_m = 5.0;  // ttc = 5/5 = 1.0s == warning threshold
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 5.0);
   ASSERT_EQ(result.activations.size(), 1u);
   EXPECT_EQ(result.activations[0].source, GateSource::kTtc);
@@ -565,7 +565,7 @@ TEST(Ttc, BetweenWarningAndBrakeEmitsInfoOnly) {
   input.command = DriveCommand{0.0, 5.0};
   input.min_scan_range_m = 4.0;  // ttc = 0.8s, between 0.5 and 1.0
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
   ASSERT_EQ(result.activations.size(), 1u);
   EXPECT_EQ(result.activations[0].severity, EventSeverity::kInfo);
 }
@@ -576,7 +576,7 @@ TEST(Ttc, MarginalExactlyAtBrakeThresholdBrakes) {
   input.command = DriveCommand{0.0, 5.0};
   input.min_scan_range_m = 2.5;  // ttc = 2.5/5 = 0.5s == brake threshold
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
   ASSERT_EQ(result.activations.size(), 1u);
   EXPECT_EQ(result.activations[0].source, GateSource::kTtc);
@@ -589,7 +589,7 @@ TEST(Ttc, FailsWellInsideBrakeThresholdBrakesAndZeroesSpeedOnlyKeepsSteering) {
   input.command = DriveCommand{0.2, 5.0};
   input.min_scan_range_m = 0.1;  // ttc = 0.02s, deep in brake zone
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
   EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
   EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.2);  // steering preserved
 }
@@ -602,7 +602,7 @@ TEST(Ttc, NoWarningThresholdConfiguredSkipsWarningZoneSilently) {
   input.command = DriveCommand{0.0, 5.0};
   input.min_scan_range_m = 4.0;  // ttc = 0.8s: would be "warning zone" if a threshold existed
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_FALSE(result.brake);
+  EXPECT_FALSE(result.zero_throttle);
   for (const auto& event : result.activations) {
     EXPECT_NE(event.source, GateSource::kTtc);
   }
@@ -632,7 +632,7 @@ TEST(CovarianceStub, AbsentPoseInputDoesNotDisableWatchdog) {
   input.has_pose_input = false;
   input.drive_raw_age_s = 5.0;  // would trip the watchdog regardless of covariance
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
   bool saw_watchdog = false;
   for (const auto& event : result.activations) {
     if (event.source == GateSource::kWatchdog) saw_watchdog = true;
@@ -646,7 +646,7 @@ TEST(CovarianceStub, AbsentPoseInputDoesNotDisableCommandSanity) {
   input.has_pose_input = false;
   input.command = DriveCommand{kNan, 0.0};
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
   bool saw_sanity = false;
   for (const auto& event : result.activations) {
     if (event.source == GateSource::kCommandSanity) saw_sanity = true;
@@ -670,7 +670,7 @@ TEST(CovarianceStub, AbsentPoseInputDoesNotDisableTtc) {
   input.command = DriveCommand{0.0, 5.0};
   input.min_scan_range_m = 0.1;
   const GateResult result = gate.evaluate(input, kZeroPrev);
-  EXPECT_TRUE(result.brake);
+  EXPECT_TRUE(result.zero_throttle);
 }
 
 TEST(CovarianceStub, EngagedProducesEventButNoSpeedChangeGivenFixedFraction) {
@@ -945,6 +945,102 @@ TEST(GateEventTracker, SustainedWatchdogOverManyRealGateCyclesEmitsExactlyOneEng
 
   EXPECT_EQ(engage_records, 1);
   EXPECT_EQ(total_records, 1);
+}
+
+// ---------------------------------------------------------------------------------------
+// Zero-throttle gates hold the previous steering angle rather than centring it
+// (gate_logic.hpp, "STEERING ON A ZERO-THROTTLE GATE"). Every one of these FAILS against the
+// pre-review sources, which wrote DriveCommand{0, 0} on the watchdog and sanity paths.
+// ---------------------------------------------------------------------------------------
+
+TEST(ZeroThrottleSteering, WatchdogHoldsPreviousSteeringAndZeroesSpeed) {
+  SafetyGateLogic gate(make_limits());
+  GateInput input = neutral_input();
+  input.drive_raw_age_s = 5.0;
+  const DriveCommand prev{0.3, 4.0};  // mid-corner at speed when the publisher died
+  const GateResult result = gate.evaluate(input, prev);
+  EXPECT_TRUE(result.zero_throttle);
+  EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
+  EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.3);
+}
+
+TEST(ZeroThrottleSteering, WatchdogHoldsANegativeRightHandSteeringAngleToo) {
+  SafetyGateLogic gate(make_limits());
+  GateInput input = neutral_input();
+  input.drive_raw_age_s = 5.0;
+  const GateResult result = gate.evaluate(input, DriveCommand{-0.25, 2.0});
+  EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, -0.25);
+  EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
+}
+
+TEST(ZeroThrottleSteering, CommandSanityHoldsPreviousSteeringAndZeroesSpeed) {
+  SafetyGateLogic gate(make_limits());
+  GateInput input = neutral_input();
+  input.command = DriveCommand{kNan, 3.0};
+  const GateResult result = gate.evaluate(input, DriveCommand{0.2, 3.0});
+  EXPECT_TRUE(result.zero_throttle);
+  EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
+  EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.2);
+}
+
+TEST(ZeroThrottleSteering, FromAZeroPreviousOutputTheOutputIsStillExactlyZeroZero) {
+  // The runbook's "verify /drive is neutral with no input" step and its L3 test depend on
+  // this: a node that has never commanded anything still emits {0, 0}.
+  SafetyGateLogic gate(make_limits());
+  GateInput input = neutral_input();
+  input.drive_raw_age_s = 5.0;
+  const GateResult result = gate.evaluate(input, kZeroPrev);
+  EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.0);
+  EXPECT_DOUBLE_EQ(result.output.speed_mps, 0.0);
+}
+
+TEST(ZeroThrottleCommand, HoldsAFiniteSteeringAngle) {
+  const DriveCommand out = zero_throttle_command(DriveCommand{0.31, 7.0});
+  EXPECT_DOUBLE_EQ(out.steering_angle_rad, 0.31);
+  EXPECT_DOUBLE_EQ(out.speed_mps, 0.0);
+}
+
+TEST(ZeroThrottleCommand, GarbageNonFinitePreviousSteeringCentresInsteadOfEmittingNaN) {
+  for (const double garbage : {kNan, kInf, -kInf}) {
+    const DriveCommand out = zero_throttle_command(DriveCommand{garbage, 1.0});
+    EXPECT_DOUBLE_EQ(out.steering_angle_rad, 0.0);
+    EXPECT_DOUBLE_EQ(out.speed_mps, 0.0);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Steering sign convention (claude-docs/06-vehicle-params.md: road-wheel angle, LEFT
+// POSITIVE). safety_node is a pass-through for the sign; these pin that it never inverts one.
+// The other hops are pinned in racer_tools/test/test_keymap.py (left key -> +angle),
+// test_twist_teleop.py (+angular.z, forward -> +angle) and racer_drivers/
+// test/test_pwm_mapping.cpp (+angle -> the pwm end steering_left_is_pwm_max names).
+// ---------------------------------------------------------------------------------------
+
+TEST(SteeringSign, LeftPositiveCommandPassesThroughStillPositive) {
+  SafetyGateLogic gate(make_limits());
+  GateInput input = neutral_input();
+  input.command = DriveCommand{0.2, 1.0};
+  const GateResult result = gate.evaluate(input, kZeroPrev);
+  EXPECT_GT(result.output.steering_angle_rad, 0.0);
+  EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.2);
+}
+
+TEST(SteeringSign, RightNegativeCommandPassesThroughStillNegative) {
+  SafetyGateLogic gate(make_limits());
+  GateInput input = neutral_input();
+  input.command = DriveCommand{-0.2, 1.0};
+  const GateResult result = gate.evaluate(input, kZeroPrev);
+  EXPECT_LT(result.output.steering_angle_rad, 0.0);
+  EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, -0.2);
+}
+
+TEST(SteeringSign, ClampingAtEitherLimitKeepsTheSideItWasOn) {
+  SafetyGateLogic gate(make_limits());
+  GateInput input = neutral_input();
+  input.command = DriveCommand{5.0, 0.0};
+  EXPECT_DOUBLE_EQ(gate.evaluate(input, kZeroPrev).output.steering_angle_rad, 0.4189);
+  input.command = DriveCommand{-5.0, 0.0};
+  EXPECT_DOUBLE_EQ(gate.evaluate(input, kZeroPrev).output.steering_angle_rad, -0.4189);
 }
 
 }  // namespace

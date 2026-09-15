@@ -8,6 +8,20 @@ Documentation=file:///opt/racer/jetson_heartbeat/README.md
 DefaultDependencies=no
 After=sysinit.target
 Wants=sysinit.target
+# DefaultDependencies=no also drops the implicit shutdown ordering every normal unit gets, so
+# it is put back explicitly. Without these two lines the heartbeat is not stopped as part of
+# the shutdown transition and is killed at an arbitrary later point, which looks from the mux
+# side exactly like a Jetson that died -- true, eventually, but it should be a clean stop.
+Conflicts=shutdown.target
+Before=shutdown.target
+# No start rate limiting. systemd's default (5 starts in 10 s, then the unit is left in a
+# failed state and STOPS being restarted) turns a persistent failure into a permanent one:
+# the line being held by another process, or a chip renumbered by a JetPack update, would
+# have the heartbeat give up after ~5 seconds and never try again. The mux fails safe either
+# way -- no edges is a cut -- but a watchdog signal that has permanently stopped retrying is
+# not something to discover at the bench. With RestartSec=1 this retries once a second for as
+# long as the machine is up, and `systemctl status` still shows every failure.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -16,6 +30,8 @@ Type=simple
 ExecStart=/opt/racer/jetson_heartbeat/racer-heartbeat --chip gpiochip0 --line 144 --rate-hz 50
 Restart=always
 RestartSec=1
+# A restart takes about a second, which is ten times the mux's 0.1 s watchdog window: a crash
+# of this process IS a cut, by design. RestartSec is not tuned to hide that and must not be.
 # GPIO character-device access on this board's default udev rules requires root (or a gpio
 # group ACL this repo does not assume is set up); running as root also matches
 # firmware/safety_mux/README.md's stance that nothing about this heartbeat is meant to be

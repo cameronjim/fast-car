@@ -25,8 +25,8 @@ bench-test against instead of a blank firmware project.
 
 | Piece | Where | Tested how |
 |---|---|---|
-| Mux state machine, watchdog timing, PWM validity checks, RC switch interpretation, param null-checking | `logic/` | Host-compiled with plain `gcc` (no Pico SDK, no cross-compiler), table-driven, every branch exercised -- see `tests/`. Runs in CI on every push (`.github/scripts/safety_mux_host_tests.sh`). |
-| GPIO/PWM capture, PWM output, heartbeat input, power-cutoff GPIO, main loop | `pico/` | **Compiles, otherwise untested.** Cross-compiled clean (no warnings) against pico-sdk 2.1.0 and flashed to nothing -- see "Building" below and `docs/notes/safety-mux-first-build.md`. Compiling is not testing: this is real hardware/interrupt access with no host equivalent, it has never run on a chip, and that note records a known IRQ-handler collision between `pwm_capture.c` and `heartbeat_input.c` that a compiler cannot see. |
+| Mux state machine, watchdog timing, PWM validity checks, RC switch interpretation (including the kill-switch hysteresis band), param null/finiteness/range checking | `logic/` | Host-compiled with plain `gcc` (no Pico SDK, no cross-compiler), table-driven, every branch exercised -- see `tests/`. Runs in CI on every push (`.github/scripts/safety_mux_host_tests.sh`). |
+| GPIO/PWM capture (including the staleness window and the plausibility band), PWM output, heartbeat input, power-cutoff GPIO, startup ordering, main loop | `pico/` | **Compiles, otherwise untested.** Cross-compiled clean (no warnings) against pico-sdk 2.1.0 and flashed to nothing -- see "Building" below and `docs/notes/safety-mux-first-build.md`. Compiling is not testing: this is real hardware/interrupt access with no host equivalent, it has never run on a chip, and that note records a known IRQ-handler collision between `pwm_capture.c` and `heartbeat_input.c` that a compiler cannot see (since fixed), and `docs/notes/firmware-review-2026-09-14.md` records eight more defects of the same kind -- floating output pins at boot, a captured pulse that never aged out, torn multi-word reads from interrupt context -- all fixed, none of them yet observed on a chip. |
 | The whole thing, on a Jetson, RC receiver, servo, and ESC | (nothing yet) | Roadmap 1.3's kill test, `claude-docs/12-testing.md` L6/L7. Pending hardware. |
 
 ## Building
@@ -48,7 +48,7 @@ Output: `firmware/safety_mux/build/safety_mux_firmware.uf2`. The build tree and
 `CMakeLists.txt` pins pico-sdk to release tag 2.1.0 via `FetchContent` and runs
 `tools/gen_params.py` itself, so there is nothing to install or generate first.
 
-**As of 2026-09-12 this firmware ARMS: no fault blink.** The nine `vehicle_params` fields the
+**As of 2026-09-14 this firmware ARMS: no fault blink.** The nine `vehicle_params` fields the
 mux needs were filled in with PROVISIONAL, UNMEASURED standard-RC values (1000/1500/2000 us,
 100 ms watchdog, 1500 us kill threshold) so a first bench test is possible. With nothing
 connected it sits in the CUT state driving 50 Hz / 1500 us neutral on GPIO 6 and 7 with the
@@ -78,18 +78,33 @@ reasonable next step once this firmware is closer to bench-tested than drafted.
   1. RC kill switch (or an unreadable kill-switch channel, treated identically) -- the only
      input a human directly holds.
   2. Jetson heartbeat watchdog -- catches a frozen/hung/crashed Jetson.
-  3. Per-channel Jetson PWM validity -- catches a glitched-but-alive command signal.
+  3. Per-channel Jetson PWM validity -- catches a glitched-but-alive command signal. A
+     channel is invalid if its pulse is out of range OR if no plausible pulse has arrived
+     recently: a stuck-high line produces no edges, and the last width captured before it
+     stuck is not a live command.
   4. Otherwise: passthrough.
+
+  The kill switch has a dead band around its threshold (`logic/rc_switch.c`,
+  `RC_SWITCH_DEFAULT_HYSTERESIS_US`, currently a compile-time 100 us): ARMED at or above
+  threshold + band, KILL below threshold - band, hold in between. Holding never holds ARMED
+  out of an unknown state, so a switch parked in the band at power-on reads KILL.
 - A cut is a cut: both PWM outputs go to a configured neutral value (not merely "no signal",
   which would depend on the servo/ESC's own undocumented failsafe behavior) and the power
   cutoff GPIO is asserted, together, every time. There is no partial-cut state.
+- Every output pin is driven to a defined safe state in the first statements of `main()`,
+  before `stdio_init_all()` and before any param is read: an RP2040's GPIOs come out of reset
+  as high-impedance inputs, a floating servo input can twitch the servo, and a floating ESC
+  input is what some ESCs arm on. A refusal to arm therefore holds the outputs inert rather
+  than floating.
 - Physical constants (PWM ranges, neutral values, the watchdog timeout, the kill-switch
   threshold) are never hand-typed here (`CLAUDE.md` invariant 2). They come from
   `config/vehicle_params.yaml` via `tools/gen_params.py`'s generated C binding
   (`pico/main.c`'s `raw_fields_from_generated_params()`), and `logic/mux_params.c` refuses to
-  produce a usable `MuxParams` if any required field is still `null` -- `pico/main.c` halts
-  forever (blinking a fault LED, printing over USB serial) rather than silently assuming a
-  default. All of these fields are `null` in the committed `config/vehicle_params.yaml` right
+  produce a usable `MuxParams` if any required field is still `null`, is NaN/infinite, or is
+  structurally unusable (a neutral outside its own channel range, a non-positive watchdog
+  timeout, a kill threshold outside the receiver's range) -- `pico/main.c` halts forever
+  (blinking a fault LED, printing which field and which of those three problems it has, over
+  USB serial) rather than silently assuming a default. All of these fields are `null` in the committed `config/vehicle_params.yaml` right
   now (see that file's comments): this firmware **cannot arm** until they are bench-measured
   and filled in.
 
@@ -99,6 +114,14 @@ Pin numbers are RP2040 GPIO numbers, chosen for this draft and matched exactly i
 `pico/main.c`'s `#define`s -- change one, change both. As of 2026-09-14 the perfboard is being
 soldered but the final hole assignments have not been confirmed against the physical board;
 this table and `pico/main.c`'s `#define`s get updated together once that confirmation happens.
+
+`pico/main.c`'s seven `#define`s are the ONLY place a GPIO number reaches the firmware: nothing
+in `logic/`, in `tests/`, or in the build depends on one, so a remap is a one-file code change.
+It is not a one-file CHANGE, though, because the numbers are also written down in prose in
+`docs/notes/safety-mux-first-build.md`, `docs/notes/build-log.md` (the 2026-09-11 and
+2026-09-12 entries), `planning-docs/05-safety-mux-and-kill-test.md`,
+`planning-docs/06-vesc-config-and-jetson-bringup.md`, `ros_ws/src/racer_drivers/README.md`'s
+cabling table, and this file's own connector map below. Update those in the same change.
 
 | Signal | Direction | RP2040 GPIO | Notes |
 |---|---|---|---|
@@ -193,6 +216,9 @@ Pico SDK, no `cmake`).
    `docs/notes/safety-mux-first-build.md`) and flash an actual RP2040 (not done).
 4. Bench-test each I/O path individually (PWM capture reads sane values, PWM output drives
    the servo/ESC correctly, power cutoff actually cuts) -- `claude-docs/12-testing.md` L6.
+   `docs/notes/firmware-review-2026-09-14.md` lists what the 2026-09-14 review changed and
+   what each change still needs a scope to confirm (the startup timeline, the capture
+   staleness window, the kill-switch dead band).
 5. The kill test itself: freeze the Jetson for real, prove the cut, with a human present and
    wheels off the ground (`claude-docs/12-testing.md` L7, roadmap Gate G1).
 

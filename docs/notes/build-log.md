@@ -5,6 +5,51 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-14 -- safety mux firmware and heartbeat reviewed before the first flash
+
+Read-and-fix pass over `firmware/safety_mux/` and `tools/jetson_heartbeat/` ahead of flashing
+the Pico for the first time. Full findings, the traced startup timeline, and the
+subject-to-change list: `docs/notes/firmware-review-2026-09-14.md`. No hardware involved;
+nothing here has run on a chip.
+
+Eight defects found and fixed, four of them fail-OPEN:
+
+- **Output pins floated at boot, and forever on a refusal.** `main()` initialized the servo,
+  ESC and cutoff pins after reading params, so they sat high-impedance from reset, and the
+  refuse-to-arm halt ran before any of them. A floating ESC signal line is what some ESCs arm
+  on. All three are now driven to their safe state in the first three statements of `main()`,
+  before anything else, and the configured neutral is applied the moment it is known.
+- **A captured PWM pulse never aged out.** A stuck-high input produces no further falling
+  edges, so the last width captured before the fault was reported as a live command forever.
+  There is now a 60 ms staleness window (three missed 50 Hz frames) on every capture channel.
+- **NaN PWM bounds made every pulse valid, and a NaN watchdog timeout never tripped.** Both
+  are broken-config paths rather than runtime events, but both were fail-open. Both now cut,
+  and `mux_params.c` additionally refuses to arm on a non-finite or structurally unusable
+  param set (a neutral outside its own channel range, for instance).
+- **Torn reads from interrupt context.** A `double` and a `uint64_t` are each two 32-bit
+  accesses on a Cortex-M0+, so the main loop could read half of one pulse and half of the
+  next, or a heartbeat timestamp 71 minutes in the past. Both reads are now taken with
+  interrupts briefly disabled.
+- **No kill-switch hysteresis.** A channel resting near the 1500 us threshold would flap
+  ARM/KILL at the 200 Hz loop rate. There is now a 100 us dead band (arm at 1600, kill below
+  1400, hold between), compile-time for now, flagged to become a `vehicle_params` field once
+  the channel has been scoped. Holding never holds ARMED out of an unknown state, so a switch
+  parked in the band at power-on reads KILL.
+- **The heartbeat service would have permanently given up.** systemd's default start rate
+  limit stops restarting a unit after 5 starts in 10 s, so a busy GPIO line or a renamed
+  gpiochip would have killed the heartbeat for good after about five seconds. Fixed with
+  `StartLimitIntervalSec=0`, plus the shutdown ordering that `DefaultDependencies=no` drops.
+
+Host tests: 91 to 320 assertions on the mux, 34 to 58 on the heartbeat, all table-driven,
+covering the NaN/inf and boundary cases each fix is about. The firmware cross-compiles clean
+in the same pinned container as the 2026-09-12 first build: 79,360 byte `.uf2`, sha256
+`696703811737e8acdcf3431f94ff1d0825d97829d6d0c9e59a5747485e12b41b`.
+
+None of this is bench-verified and none of it moves roadmap 1.3. It does mean the first flash
+exercises firmware whose startup sequence and fail-open paths have been read properly, rather
+than finding them with a servo attached. `config/vehicle_params.yaml` was deliberately not
+touched (another branch is editing it), so the two constants that want to live there stay
+compile-time and are listed as follow-ups.
 ## 2026-09-14 -- command-path review: "brake" is a coast, reverse is off, steering polarity is the first calibration
 
 Software and docs only; the car was not powered and nothing here has been on hardware. Full

@@ -21,10 +21,20 @@
 void pwm_capture_init_channel(uint gpio);
 
 // Returns the most recently completed pulse width on `gpio`, in microseconds. Returns -1.0
-// (not a valid PWM value under any vehicle_params bound, see pwm_is_valid_us()) if no
-// complete rising-then-falling edge pair has ever been observed on this channel -- e.g. at
-// power-on before the first pulse, or if the source is truly disconnected. This function
-// never blocks; it reads the most recent value an interrupt handler already recorded.
+// (not a valid PWM value under any vehicle_params bound, see pwm_is_valid_us()) when there
+// is no BELIEVABLE recent pulse, which covers three distinct failures with one value:
+//
+//   - no complete rising-then-falling edge pair has ever been observed (power-on before the
+//     first pulse, or a truly disconnected source);
+//   - the last such pulse is older than the capture's staleness window (a stuck-high or
+//     stuck-low line produces no further edges, so without this a width captured before the
+//     fault would be reported as current forever -- the input is dead, not steady);
+//   - every recent edge pair was too short or too long to be a real pulse (noise), so
+//     nothing refreshed the channel.
+//
+// This function never blocks; it reads the most recent value an interrupt handler already
+// recorded, with interrupts briefly disabled so the width and its timestamp cannot come from
+// two different pulses.
 double pwm_capture_read_us(uint gpio);
 
 #endif  // SAFETY_MUX_PICO_PWM_CAPTURE_H_

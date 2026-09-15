@@ -16,6 +16,8 @@ static MuxParams fixture_params(void) {
                                        // channel" cannot pass by accident
   p.watchdog_timeout_s = 0.5;
   p.kill_switch_threshold_us = 1500.0;
+  p.kill_switch_hysteresis_us = 0.0;  // most cases below are about the decision ORDER, not
+                                      // the dead band; the hysteresis block sets its own
   p.rc_signal_min_us = 1000.0;
   p.rc_signal_max_us = 2000.0;
   return p;
@@ -29,15 +31,9 @@ static MuxInput nominal_input(void) {
   in.jetson_heartbeat_age_s = 0.01;    // fresh
   in.jetson_steering_pwm_us = 1300.0;  // valid, not neutral
   in.jetson_throttle_pwm_us = 1700.0;  // valid, not neutral
+  in.previous_switch_position = RC_SWITCH_ARMED;
   return in;
 }
-
-typedef struct {
-  const char* name;
-  MuxInput input;
-  bool expected_cut;
-  MuxCutReason expected_reason;
-} MuxDecisionCase;
 
 void test_mux_decision_suite(void) {
   MuxParams params = fixture_params();
@@ -131,6 +127,118 @@ void test_mux_decision_suite(void) {
     MuxOutput out = mux_decide(in, params);
     CHECK(out.reason == MUX_REASON_STEERING_PWM_INVALID,
           "steering PWM fault is checked (and reported) before throttle PWM fault");
+  }
+
+  // --- Power-on: the seed value pico/main.c uses for previous_switch_position -----------
+  // At power-on nothing has been captured yet, so the kill channel reads the -1.0 sentinel
+  // (pwm_capture_read_us) and the previous position is seeded RC_SWITCH_SIGNAL_INVALID. The
+  // first cycle must therefore be a cut, whatever else is true.
+  {
+    MuxInput in = nominal_input();
+    in.rc_kill_switch_pwm_us = -1.0;  // pwm_capture's "nothing captured yet" sentinel
+    in.jetson_heartbeat_age_s = INFINITY;  // heartbeat_input_age_s()'s "no edge ever" value
+    in.jetson_steering_pwm_us = -1.0;
+    in.jetson_throttle_pwm_us = -1.0;
+    in.previous_switch_position = RC_SWITCH_SIGNAL_INVALID;
+    MuxOutput out = mux_decide(in, params);
+    CHECK(out.cut, "power-on state (nothing captured, no heartbeat) -> cut");
+    CHECK(out.reason == MUX_REASON_RC_SIGNAL_INVALID,
+          "power-on state -> the unreadable kill channel is the reason, checked first");
+    CHECK(out.steering_out_us == params.steering_pwm_neutral_us,
+          "power-on state -> steering neutral");
+    CHECK(out.throttle_out_us == params.throttle_pwm_neutral_us,
+          "power-on state -> throttle neutral");
+    CHECK(out.switch_position == RC_SWITCH_SIGNAL_INVALID,
+          "power-on state -> switch_position reported back for the next cycle");
+  }
+
+  // --- KILL -> ARMED transition: no single-cycle glitch of a stale captured pulse --------
+  // The cycle the switch arms on is decided from THAT cycle's captured steering/throttle
+  // values. If those are stale or invalid, the arming cycle still cuts; passthrough only
+  // happens on a cycle where every input is independently valid. There is no "arm now,
+  // validate next cycle" path in mux_decide() for a stale pulse to slip through.
+  {
+    MuxInput in = nominal_input();
+    in.rc_kill_switch_pwm_us = 1900.0;      // just moved to ARMED this cycle
+    in.previous_switch_position = RC_SWITCH_KILL;
+    in.jetson_steering_pwm_us = -1.0;       // nothing captured on this channel yet
+    MuxOutput out = mux_decide(in, params);
+    CHECK(out.cut, "arming cycle with a never-captured steering channel -> still cut");
+    CHECK(out.reason == MUX_REASON_STEERING_PWM_INVALID,
+          "arming cycle -> the stale channel is named, not passed through");
+  }
+  {
+    MuxInput in = nominal_input();
+    in.rc_kill_switch_pwm_us = 1900.0;
+    in.previous_switch_position = RC_SWITCH_KILL;
+    in.jetson_heartbeat_age_s = 5.0;  // Jetson not actually alive at the moment of arming
+    MuxOutput out = mux_decide(in, params);
+    CHECK(out.cut, "arming cycle with a stale heartbeat -> still cut");
+    CHECK(out.reason == MUX_REASON_WATCHDOG_TIMEOUT, "arming cycle -> watchdog still wins");
+  }
+  {
+    MuxInput in = nominal_input();
+    in.rc_kill_switch_pwm_us = 1900.0;
+    in.previous_switch_position = RC_SWITCH_KILL;
+    MuxOutput out = mux_decide(in, params);
+    CHECK(!out.cut, "arming cycle with every input valid -> passthrough on that same cycle");
+    CHECK(out.switch_position == RC_SWITCH_ARMED, "arming cycle -> ARMED reported back");
+  }
+
+  // --- Kill-switch hysteresis, through the whole decision -------------------------------
+  {
+    MuxParams hyst = fixture_params();
+    hyst.kill_switch_hysteresis_us = 100.0;  // ARM >= 1600, KILL < 1400, hold between
+
+    MuxInput in = nominal_input();
+    in.rc_kill_switch_pwm_us = 1500.0;  // parked exactly on the threshold
+    in.previous_switch_position = RC_SWITCH_KILL;
+    MuxOutput out = mux_decide(in, hyst);
+    CHECK(out.cut, "dead band while KILLed -> stays cut");
+    CHECK(out.reason == MUX_REASON_RC_KILL_SWITCH, "dead band while KILLed -> reason KILL");
+
+    in.rc_kill_switch_pwm_us = 1650.0;  // past the arm edge
+    in.previous_switch_position = out.switch_position;
+    out = mux_decide(in, hyst);
+    CHECK(!out.cut, "past the arm edge -> passthrough");
+
+    in.rc_kill_switch_pwm_us = 1500.0;  // back into the dead band, now while ARMED
+    in.previous_switch_position = out.switch_position;
+    out = mux_decide(in, hyst);
+    CHECK(!out.cut, "dead band while ARMED -> stays passthrough, no flap");
+
+    in.rc_kill_switch_pwm_us = 1350.0;  // past the kill edge
+    in.previous_switch_position = out.switch_position;
+    out = mux_decide(in, hyst);
+    CHECK(out.cut, "past the kill edge -> cut");
+    CHECK(out.reason == MUX_REASON_RC_KILL_SWITCH, "past the kill edge -> reason KILL");
+  }
+
+  // --- A broken timeout must not disable the watchdog -----------------------------------
+  {
+    MuxParams broken = fixture_params();
+    broken.watchdog_timeout_s = NAN;
+    MuxInput in = nominal_input();
+    MuxOutput out = mux_decide(in, broken);
+    CHECK(out.cut, "NaN watchdog timeout -> cut, not a watchdog that never trips");
+    CHECK(out.reason == MUX_REASON_WATCHDOG_TIMEOUT, "NaN watchdog timeout -> reason WATCHDOG");
+  }
+  // --- Broken PWM bounds must not make every command valid -------------------------------
+  {
+    MuxParams broken = fixture_params();
+    broken.steering_pwm_max_us = NAN;
+    MuxInput in = nominal_input();
+    MuxOutput out = mux_decide(in, broken);
+    CHECK(out.cut, "NaN steering bound -> cut, not everything-is-valid");
+    CHECK(out.reason == MUX_REASON_STEERING_PWM_INVALID, "NaN steering bound -> reason STEERING");
+  }
+  {
+    MuxParams broken = fixture_params();
+    broken.kill_switch_threshold_us = NAN;
+    MuxInput in = nominal_input();
+    MuxOutput out = mux_decide(in, broken);
+    CHECK(out.cut, "NaN kill threshold -> cut, never a held ARMED");
+    CHECK(out.reason == MUX_REASON_RC_KILL_SWITCH, "NaN kill threshold -> reason KILL");
   }
 
   // --- Boundary: commanding exactly the neutral value during normal operation is ordinary

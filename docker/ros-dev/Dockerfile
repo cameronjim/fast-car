@@ -14,6 +14,15 @@
 # never contains CUDA). Training happens in train-cuda; this image never
 # imports torch.
 #
+# DDS pinning (checked 2026-09-14, deployment review): this image deliberately does NOT set
+# ROS_DOMAIN_ID, unlike docker/car (which pins ROS_DOMAIN_ID=42 -- see that Dockerfile's
+# comment). ros_ws/src/*/test/*_launch.py already set a distinct ROS_DOMAIN_ID per launch
+# test file (77-82) via os.environ.setdefault(), for isolation between tests run inside this
+# image's containers. An ENV-set ROS_DOMAIN_ID here would win over every one of those
+# setdefault() calls and collapse that isolation back to one shared domain. RMW_IMPLEMENTATION
+# is left at Humble's own default (rmw_fastrtps_cpp) for the same reason: nothing here needs
+# it forced.
+#
 # --- Base image pin -------------------------------------------------------
 # FROM ros:humble-ros-base, pinned by digest rather than tag. This is a
 # manifest LIST digest (covers both linux/amd64 and linux/arm64v8), so

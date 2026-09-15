@@ -28,6 +28,17 @@ someone hand-resolves a JetPack-matched wheel blocked a first boot on a dependen
 does not use. Flipping the default back to `required` when phase 5 starts is a one-word
 change in the Dockerfile.
 
+## DDS pinning (added 2026-09-14)
+
+`RMW_IMPLEMENTATION=rmw_fastrtps_cpp` (Humble's default, pinned explicitly so it cannot drift)
+and `ROS_DOMAIN_ID=42` (off the crowded default domain 0, and clear of the 77-82 range the
+`ros_ws` launch tests already use for CI isolation) are baked into this image via `ENV`. This
+matters specifically because trackside operation puts the car and the Mac's `ros-dev`
+container on the same WiFi/subnet at the same time -- see `docker/car/Dockerfile`'s comment
+and `docs/notes/first-boot-runbook.md` for the full reasoning. `docker/ros-dev/Dockerfile`
+deliberately does NOT set `ROS_DOMAIN_ID`, so the launch tests' own per-file
+`os.environ.setdefault("ROS_DOMAIN_ID", ...)` calls keep working.
+
 ## Base image tag vs. the device (decided 2026-09-13)
 
 The bench Jetson runs L4T R36.4.4 (JetPack 6.2.1); this image pins r36.4.0 (JetPack 6.1).

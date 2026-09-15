@@ -59,16 +59,24 @@ class DriveCommand:
     speed_mps: float = 0.0
 
 
-def build_twist_teleop_config(vehicle_params) -> TwistTeleopConfig:
+def build_twist_teleop_config(vehicle_params, allow_reverse: bool = False) -> TwistTeleopConfig:
     """Build a TwistTeleopConfig from the generated vehicle_params binding (CLAUDE.md
     invariant 2: never hand-write a physical constant) -- the SAME fields
     `racer_tools.keymap.build_teleop_config` reads for keyboard_teleop_node's own clamps, plus
-    `chassis.wheelbase_m` for the bicycle-model conversion."""
+    `chassis.wheelbase_m` for the bicycle-model conversion.
+
+    `allow_reverse` (default False) has the same meaning and the same default as
+    `racer_tools.keymap.build_teleop_config`'s: with it False the lower speed clamp is 0.0 m/s
+    rather than `limits.min_velocity_mps`, so this adapter never emits a below-neutral throttle
+    command. The two teleop sources are deliberately identical here -- this is the one a car
+    launch file can actually start (`browser_teleop` in car_teleop.launch.py), so leaving
+    reverse enabled on it while disabling it on the keyboard would disable nothing.
+    """
     return TwistTeleopConfig(
         wheelbase_m=vehicle_params.chassis.wheelbase_m,
         steering_min_rad=vehicle_params.steering.min_angle_rad,
         steering_max_rad=vehicle_params.steering.max_angle_rad,
-        speed_min_mps=vehicle_params.limits.min_velocity_mps,
+        speed_min_mps=vehicle_params.limits.min_velocity_mps if allow_reverse else 0.0,
         speed_max_mps=vehicle_params.limits.global_speed_cap_mps,
     )
 

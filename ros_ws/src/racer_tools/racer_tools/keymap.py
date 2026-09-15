@@ -77,12 +77,28 @@ class TeleopState:
     quit_requested: bool = False
 
 
-def build_teleop_config(vehicle_params, control_rate_hz: float) -> TeleopConfig:
+def build_teleop_config(
+    vehicle_params, control_rate_hz: float, allow_reverse: bool = False
+) -> TeleopConfig:
     """Build a TeleopConfig from the generated vehicle_params binding
     (`racer_gym`/C++ pattern: `from vehicle_params_generated import VEHICLE_PARAMS`, see
     keyboard_teleop_node.py) and the node's own control-loop rate. Never hand-writes a
     physical constant (CLAUDE.md invariant 2) -- see this module's docstring for the step-size
-    derivation."""
+    derivation.
+
+    `allow_reverse` (default False) is the one place the reverse half of the speed range is
+    turned on. With it False the lower clamp is 0.0 m/s instead of
+    `vehicle_params.limits.min_velocity_mps` (-5.0), so the throttle-down key decelerates to a
+    stop and stops there.
+
+    Why False is the default, on a car nobody has driven: what a below-neutral pulse DOES is a
+    property of the VESC's configured PPM control type, not of this code. In "Current" it is
+    reverse drive current; in "Current No Reverse With Brake" it is proportional braking. That
+    setting has never been applied to this ESC, so the honest position for the first drives is
+    not to emit below-neutral pulses at all. It is a declared ROS parameter on the node
+    (`allow_reverse`), not a constant, so the bench can turn it on deliberately once the VESC
+    control type is known and recorded. See docs/notes/first-boot-runbook.md.
+    """
     if control_rate_hz <= 0.0:
         raise ValueError("control_rate_hz must be > 0")
     period_s = 1.0 / control_rate_hz
@@ -91,7 +107,7 @@ def build_teleop_config(vehicle_params, control_rate_hz: float) -> TeleopConfig:
         speed_step_mps=vehicle_params.actuation.max_acceleration_mps2 * period_s,
         steering_min_rad=vehicle_params.steering.min_angle_rad,
         steering_max_rad=vehicle_params.steering.max_angle_rad,
-        speed_min_mps=vehicle_params.limits.min_velocity_mps,
+        speed_min_mps=vehicle_params.limits.min_velocity_mps if allow_reverse else 0.0,
         speed_max_mps=vehicle_params.limits.global_speed_cap_mps,
     )
 

@@ -89,8 +89,26 @@ class KeyboardTeleopNode(Node):
             self.declare_parameter("control_rate_hz", 50.0, rate_descriptor).value
         )
 
+        reverse_descriptor = ParameterDescriptor(
+            description=(
+                "Allow commanding NEGATIVE speed (reverse). Default false: the lower speed "
+                "clamp becomes 0.0 m/s instead of vehicle_params limits.min_velocity_mps, so "
+                "the throttle-down key decelerates to a stop and stops there. What a "
+                "below-neutral throttle pulse physically does depends on the VESC's PPM "
+                "control type, which has never been set on this ESC (reverse current in "
+                "'Current', proportional braking in 'Current No Reverse With Brake'), so the "
+                "first drives do not emit one. Turn on deliberately at the bench once that "
+                "setting is known and recorded (docs/notes/first-boot-runbook.md)."
+            ),
+        )
+        self.allow_reverse = bool(
+            self.declare_parameter("allow_reverse", False, reverse_descriptor).value
+        )
+
         vehicle_params = load_vehicle_params()
-        self._config = build_teleop_config(vehicle_params, self.control_rate_hz)
+        self._config = build_teleop_config(
+            vehicle_params, self.control_rate_hz, allow_reverse=self.allow_reverse
+        )
         self._state = TeleopState()
 
         drive_qos = QoSProfile(
@@ -102,7 +120,9 @@ class KeyboardTeleopNode(Node):
             "keyboard_teleop up: WASD or arrows to steer/throttle, SPACE to stop, q to quit. "
             f"steering step {self._config.steering_step_rad:.4f} rad, speed step "
             f"{self._config.speed_step_mps:.4f} m/s, publishing /drive_raw at "
-            f"{self.control_rate_hz:.1f} Hz."
+            f"{self.control_rate_hz:.1f} Hz. Speed range "
+            f"[{self._config.speed_min_mps:.2f}, {self._config.speed_max_mps:.2f}] m/s "
+            f"(reverse {'ENABLED' if self.allow_reverse else 'disabled'})."
         )
 
     @property

@@ -121,6 +121,19 @@ Gitignored, not committed: it is build output, regenerate it rather than trustin
 
 ## What to expect when you flash it
 
+**Amended 2026-09-14** by the review in `docs/notes/firmware-review-2026-09-14.md`, which
+changed three things this section describes. Read this section with those in mind, and that
+note for why:
+
+1. GPIO 6, 7 and 8 are now driven LOW from the first statements of `main()` and stay that way
+   if the firmware refuses to arm. They used to float from reset, and float forever on a
+   refusal, which is what the fast-blink state actually looked like on the pins.
+2. The kill-switch channel now has a 100 us dead band around its threshold, so the arm point
+   in the bench sequence below is 1600 us, not 1500 us, and the kill point is below 1400 us.
+   A switch parked between the two holds its previous position and reads KILL at power-on.
+3. A capture channel with no pulse in the last 60 ms reads invalid regardless of the last
+   width it saw, so a stuck-high input cuts instead of repeating its last command.
+
 This section was rewritten on 2026-09-12 after the provisional-params fix below. It now
 describes a firmware that **arms**. The old version of this section said a fault blink was
 the pass condition; that was true only while the params were `null`.
@@ -177,13 +190,15 @@ yet -- it is a value inside `mux_decide()`, not a printed line.
 
 `mux_decide()` cuts unless ALL of these hold, checked in this order:
 
-1. RC kill-switch channel on GPIO 2 has a valid pulse inside 1000-2000 us **and** reads at or
-   above 1500 us (ARMED). Below that, or unreadable, it cuts.
+1. RC kill-switch channel on GPIO 2 has a valid pulse inside 1000-2000 us, arriving at least
+   every 60 ms, **and** reads at or above 1600 us (ARMED; 1500 us threshold plus the 100 us
+   dead band added 2026-09-14). Below 1400 us it is KILL, in between it holds its previous
+   position, and unreadable or stale cuts.
 2. The Jetson heartbeat on GPIO 5 has toggled within the last 100 ms
    (`mux_watchdog_timeout_s`). Nothing toggling it means a permanent watchdog cut, which is
    correct.
-3. The steering pulse on GPIO 3 is inside 1000-2000 us.
-4. The throttle pulse on GPIO 4 is inside 1000-2000 us.
+3. The steering pulse on GPIO 3 is inside 1000-2000 us and arrived in the last 60 ms.
+4. The throttle pulse on GPIO 4 is inside 1000-2000 us and arrived in the last 60 ms.
 
 Only then do GPIO 6/7 mirror GPIO 3/4 and GPIO 8 go high. Which end of the kill-switch
 channel is ARMED has not been measured on this transmitter: if flipping the switch arms it

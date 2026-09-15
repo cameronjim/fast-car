@@ -23,6 +23,14 @@ static const WatchdogCase kCases[] = {
     {"NaN age is timed out, fail-closed", NAN, 0.5, true},
     {"+Inf age is timed out", INFINITY, 0.5, true},
     {"-Inf age is timed out (still garbage, still fail-closed)", -INFINITY, 0.5, true},
+    // A non-finite or non-positive TIMEOUT used to make `age >= timeout` false forever: a
+    // watchdog that never trips, which is the fail-OPEN direction. These pin it shut.
+    {"NaN timeout is timed out, not a watchdog that never trips", 0.0, NAN, true},
+    {"+Inf timeout is timed out", 0.0, INFINITY, true},
+    {"-Inf timeout is timed out", 0.0, -INFINITY, true},
+    {"zero timeout is timed out (a zero-length window can never be met)", 0.0, 0.0, true},
+    {"negative timeout is timed out", 0.0, -0.5, true},
+    {"fresh age with a broken timeout is still timed out", 0.001, NAN, true},
 };
 
 void test_watchdog_suite(void) {

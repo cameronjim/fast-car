@@ -74,6 +74,15 @@ Ground (pin 9) was confirmed the same way: `b.header.pin_get_label(9)` -> `GND`.
 - No dependency on ROS, the network stack, or the desktop session: a single static-linked-
   against-only-libgpiod binary, launched by systemd directly (`DefaultDependencies=no`,
   `After=sysinit.target`), not by anything in `ros_ws/`.
+- **It must NOT refuse to start when ROS is not running, and must not stop when ROS stops.**
+  This is a requirement, not an omission. The heartbeat's claim is "this Jetson's kernel is
+  alive and servicing low-level I/O", nothing more. `claude-docs/05-safety.md` has layer 1
+  catching a "Jetson freeze, Linux hang, software crash, ROS deadlock" -- four different
+  failures that this one signal has to distinguish itself from, which it cannot do if its own
+  liveness is tied to any of them. The corollary matters as much: a running heartbeat is NOT
+  evidence that ROS, the control stack, or anything above the kernel is healthy. Nothing may
+  be built on top of it that assumes otherwise; `/drive_raw` staleness is layer 3's job
+  (`racer_safety`), not this signal's.
 - No heap allocation and no drift accumulation in the toggle loop: the loop tracks an
   absolute deadline (`clock_gettime` once at start, then `clock_nanosleep(CLOCK_MONOTONIC,
   TIMER_ABSTIME, ...)` advancing that same deadline by one half-period each iteration) instead
@@ -139,10 +148,21 @@ Performed on the bench Jetson (racer-car, 10.0.0.226, JetPack 6.2 / L4T R36.4.4)
    'gpiochip0' as output (already claimed by another process?): Device or resource busy`.
    `SIGTERM` (what `systemctl stop` sends) produces a clean `stopping on signal, releasing
    line 144` and exit 0; `SIGKILL` (simulating a crash) is caught by systemd's `Restart=always`
-   and the service comes back with a new PID within about a second.
+   and the service comes back with a new PID within about a second. Note that about a second
+   is ten times the mux's 0.1 s watchdog window: a crash of this process IS a cut, by design,
+   and `RestartSec` is not tuned to hide that.
 6. **The systemd service** is enabled, starts at boot (`multi-user.target`), and restarts on
    failure -- confirmed live with `systemctl status racer-heartbeat` (active, running) and by
    `systemctl kill -s SIGKILL` followed by `systemctl status` showing a fresh PID.
+
+**Reviewed 2026-09-14** (`docs/notes/firmware-review-2026-09-14.md`, question 4), which found
+and fixed: systemd's default start rate limit would have stopped restarting this unit after
+about five seconds of any persistent failure (a busy line, a renamed gpiochip), so
+`StartLimitIntervalSec=0` is now set; `DefaultDependencies=no` had dropped the shutdown
+ordering, so `Conflicts=`/`Before=shutdown.target` are now explicit; `--line` accepted signed
+input through `strtoul` (`-18446744073709551615` parsed as line 1); and `--rate-hz` had no
+upper bound, so a typo could turn the toggle loop into a spin. The verification above still
+stands: none of those touched the toggle loop or the pin mapping.
 
 **NOT proven, and not claimed:**
 
@@ -158,6 +178,12 @@ Performed on the bench Jetson (racer-car, 10.0.0.226, JetPack 6.2 / L4T R36.4.4)
 - That the mux MCU actually sees and interprets this signal -- the mux board and its JETSON
   connector do not exist yet (`firmware/safety_mux/README.md`'s own status), so this cannot be
   tested until they do.
+- That this keeps working across a JetPack update. `gpiochip0` is resolved by NAME and line
+  144 by offset; Orin's chip enumeration order between `tegra234-gpio` and
+  `tegra234-gpio-aon` is not a contract, so an update that renumbers them makes this exit 1
+  on every start. The mux fails safe (no edges is a cut) and systemd now retries forever, but
+  the robust fix is to resolve the line by its own name (`PAC.06`) via `gpiod_line_find()`
+  and fall back to chip+offset. Flagged, not done -- see that review note's follow-ups.
 
 **What a loopback jumper would additionally prove, and how:** connect a single jumper wire
 from **physical pin 7** (this heartbeat's signal) to **physical pin 29** (`gpiochip0` line

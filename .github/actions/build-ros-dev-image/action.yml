@@ -1,0 +1,23 @@
+name: Build ros-dev image
+description: >
+  Sets up buildx and builds docker/ros-dev (tagged ros-dev:ci, GHA cache), the shared
+  toolchain image used by six CI jobs (l3-and-cpp, racer-safety-coverage, sim-bridge-test,
+  l5-tracker-lap, e2e-sim-safety, ros-dev-image). Extracted 2026-09-14 (deployment review) --
+  those six jobs had copy-pasted the identical
+  docker/setup-buildx-action + docker/build-push-action steps, which is the kind of
+  duplication that silently drifts (one job's build-arg or cache setting getting fixed
+  without the other five). This action is the single place that changes.
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+
+    - name: Build ros-dev image
+      uses: docker/build-push-action@v6
+      with:
+        context: docker/ros-dev
+        tags: ros-dev:ci
+        load: true
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

@@ -61,8 +61,10 @@ driver on the RC kill switch and a separate operator. Do not run any powered ste
 UNVERIFIED Pico SDK glue layer, and a proposed pinout. Read
 `firmware/safety_mux/README.md` in full before wiring anything.
 
-- [ ] Bench-measure and fill in `config/vehicle_params.yaml`'s new (currently `null`) fields
-      the mux firmware needs, then regenerate bindings:
+- [ ] Bench-measure and fill in `config/vehicle_params.yaml`'s new fields the mux firmware
+      needs (currently PROVISIONAL placeholder values -- standard RC convention / conservative
+      guesses, not measurements -- filled in 2026-09-12/13; not `null` as an earlier draft of
+      this checklist said), then regenerate bindings:
       - `steering.pwm_min_us` / `pwm_max_us` / `pwm_neutral_us` (servo channel)
       - `actuation.throttle_pwm_min_us` / `throttle_pwm_max_us` / `throttle_pwm_neutral_us`
         (ESC channel)

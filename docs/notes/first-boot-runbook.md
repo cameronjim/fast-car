@@ -43,6 +43,15 @@ channels). The one that bites is throttle neutral: if this ESC's real zero-throt
 not 1500 us, "neutral" is a creep. That is why step 11 puts a scope on the pulse before the
 ESC is ever powered.
 
+Also note DDS discovery. `docker/car`'s image now pins `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`
+and `ROS_DOMAIN_ID=42` (added 2026-09-14; see that image's README). This matters on trackside
+WiFi specifically because the Mac's `ros-dev` container is very likely to be up on the same
+subnet at the same time, and Fast DDS's default multicast discovery on the default domain (0)
+would otherwise let the two unrelated ROS graphs see each other's nodes, or fail to discover
+each other's, unpredictably. `--network host` (used below) is what actually exposes the
+container to the LAN for discovery to happen at all -- confirm `echo $ROS_DOMAIN_ID` inside
+the running container prints `42` before trusting `ros2 topic list` output.
+
 Also note the throttle map's scale. `actuation.throttle_full_scale_mps` is 5.0 m/s, and it is
 PROVISIONAL and unmeasured like the rest (added 2026-09-13, GitHub issue #40). With the
 1000/1500/2000 us ends, **a commanded 1 m/s is 100 us off neutral: 1600 us forward, 1400 us
@@ -165,6 +174,70 @@ firmware check can see it, so check the mark, twice. Cross-reference
 
 ## 8. Start the car launch file with the servo and ESC still unpowered (verified in container, UNVERIFIED on the car)
 
+### Preferred: udev rule granting group write access (UNVERIFIED, try this first)
+
+Added 2026-09-14, written ahead of hardware -- **never applied or tested on the device**.
+`pwm_output_node` needs write access to `/sys/class/pwm/pwmchipN/{export,unexport}` and
+`/sys/class/pwm/pwmchipN/pwmM/{period,duty_cycle,enable,polarity}`. Those entries are symlinks
+into `/sys/devices/...`, so bind-mounting just `/sys/class/pwm` read-write does not help (the
+target is still the container's own read-only `/sys` copy) -- the fix is host-side
+permissions plus a narrow bind-mount of the real device path, not a container-side workaround.
+
+8.1 On the Jetson, once (after step 4's pinmux reboot, so the `pwmchip` nodes actually exist):
+
+```sh
+sudo groupadd -f racer-pwm
+sudo usermod -aG racer-pwm racer
+```
+
+8.2 Create `/etc/udev/rules.d/99-racer-pwm.rules`:
+
+```
+# racer-pwm: group write access to exported PWM channel attributes so pwm_output_node's
+# container never needs --privileged. UNVERIFIED (docs/notes/first-boot-runbook.md, step 8).
+SUBSYSTEM=="pwm", KERNEL=="pwmchip*", ACTION=="add", \
+  RUN+="/bin/chgrp -R racer-pwm /sys/class/pwm/%k", \
+  RUN+="/bin/chmod -R g+rwX /sys/class/pwm/%k"
+SUBSYSTEM=="pwm", KERNEL=="pwm[0-9]*", ACTION=="add", \
+  RUN+="/bin/sh -c 'chgrp racer-pwm /sys%p/period /sys%p/duty_cycle /sys%p/enable /sys%p/polarity 2>/dev/null; chmod g+rw /sys%p/period /sys%p/duty_cycle /sys%p/enable /sys%p/polarity 2>/dev/null'"
+```
+
+The first rule covers `pwmchipN/export` and `unexport` (present as soon as the chip appears);
+the second re-applies group ownership to each channel's attribute files the moment `export`
+creates them (they don't exist until then, so the first rule's `-R` cannot reach them).
+
+8.3 Reload and re-trigger: `sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=pwm`.
+Log out/in (or `newgrp racer-pwm`) so the `racer` shell picks up the new group.
+
+8.4 Find the real device-tree path udev is granting access to (needed for the narrow
+bind-mount below), and confirm the permissions actually landed:
+
+```sh
+readlink -f /sys/class/pwm/pwmchipN                 # e.g. /sys/devices/<soc-path>/pwmchipN
+ls -l /sys/class/pwm/pwmchipN/export                # expect group racer-pwm, g+w
+```
+
+8.5 Launch WITHOUT `--privileged`, bind-mounting only the real device path from 8.4 (read-write)
+instead of all of `/sys`, and joining the host's `racer-pwm` group:
+
+```sh
+docker run --rm -it --runtime nvidia --network host \
+  --group-add "$(getent group racer-pwm | cut -d: -f3)" \
+  -v /sys/devices/<soc-path-from-8.4>:/sys/devices/<soc-path-from-8.4> \
+  -v "$PWD":/workspace -w /workspace/ros_ws car:local bash -lc '
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    ros2 launch racer_bringup car_teleop.launch.py \
+      steering_pwmchip:=N steering_pwm_channel:=M \
+      throttle_pwmchip:=P throttle_pwm_channel:=Q'
+```
+
+If `pwm_output_node` still fails to open/export the channel (permission denied), the group
+membership or the udev rule's `RUN+=` ordering is the likely culprit -- check `journalctl -u
+systemd-udevd` for the rule actually firing, and fall back to 8-fallback below rather than
+guessing at more udev rules under time pressure during a bench session.
+
+### Fallback: `--privileged` (the previously-documented approach, kept as the known-working blunt instrument)
+
 ```sh
 docker run --rm -it --runtime nvidia --network host --privileged -v /sys:/sys \
   -v "$PWD":/workspace -w /workspace/ros_ws car:local bash -lc '
@@ -174,9 +247,15 @@ docker run --rm -it --runtime nvidia --network host --privileged -v /sys:/sys \
       throttle_pwmchip:=P throttle_pwm_channel:=Q'
 ```
 
-Expect two nodes and a startup line from `pwm_output_node` naming the calibration it read out
-of `vehicle_params`. If it refuses to start, read the message: it names the field it is
-missing, and the answer is to measure that field, never to edit the check.
+`--privileged` with a writable `/sys` certainly works but grants far more than PWM write
+access (every device, full capability set, no seccomp/apparmor confinement) to the container
+that drives the actuators, which is not a resting place -- use it only if 8.1-8.5 above do not
+pan out on the actual hardware, and note in `docs/notes/build-log.md` why the udev approach
+did not work if you fall back to this.
+
+Either way, expect two nodes and a startup line from `pwm_output_node` naming the calibration
+it read out of `vehicle_params`. If it refuses to start, read the message: it names the field
+it is missing, and the answer is to measure that field, never to edit the check.
 
 ## 9. Verify /drive is neutral with no input (verified in container, UNVERIFIED on the car)
 

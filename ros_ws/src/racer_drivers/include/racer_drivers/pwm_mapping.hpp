@@ -101,9 +101,26 @@ struct CommandState {
 };
 
 /// True when the command must be ignored in favour of neutral: no command yet, a
-/// non-finite age, or an age at-or-past the timeout. At exactly the timeout it is stale
-/// (fail closed on the boundary).
+/// non-finite age, a NEGATIVE age, or an age at-or-past the timeout. At exactly the timeout
+/// it is stale (fail closed on the boundary).
+///
+/// A negative age means the clock the caller measured with went backwards. The node measures
+/// on RCL_STEADY_TIME and so cannot produce one; this branch is defence in depth against a
+/// future caller that measures on a steppable clock, and it is the same fail-closed stance
+/// racer_safety's gate_logic takes for a negative `drive_raw_age_s` and racer_tools'
+/// `should_use_zero_command` takes for a negative elapsed time. Without it a backwards clock
+/// step reads as FRESH and leaves the last commanded pulse on the wire.
 bool is_stale(const CommandState& state, double timeout_s);
+
+/// Refuse a steering/throttle channel assignment that puts BOTH pulses on the SAME sysfs PWM
+/// channel. Every parameter here defaults to 0 on the node, so a `ros2 run` with no arguments
+/// (or a launch file that sets only some of them) silently aims both channels at
+/// pwmchip0/pwm0: the throttle write then overwrites the steering write 50 times a second,
+/// one output physically does not exist, and on the car that looks like a wiring fault rather
+/// than a configuration one. Returns std::nullopt when the assignment is usable, else the
+/// reason. Pure so it is L1-testable without sysfs.
+std::optional<std::string> validate_channel_assignment(int steering_chip, int steering_channel,
+                                                       int throttle_chip, int throttle_channel);
 
 /// Both channels' pulse widths for one cycle, microseconds.
 struct PulsePair {

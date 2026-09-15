@@ -33,8 +33,32 @@ def test_build_twist_teleop_config_reads_vehicle_params_fields():
     assert config.wheelbase_m == pytest.approx(0.3302)
     assert config.steering_min_rad == -0.4189
     assert config.steering_max_rad == 0.4189
-    assert config.speed_min_mps == -5.0
     assert config.speed_max_mps == 20.0
+
+
+def test_build_twist_teleop_config_disables_reverse_by_default():
+    """Same default, same reason as keymap.build_teleop_config's (2026-09-14 command-path
+    review): no below-neutral throttle pulse until the VESC's PPM control type is known."""
+    config = build_twist_teleop_config(_fake_vehicle_params())
+    assert config.speed_min_mps == 0.0
+
+
+def test_build_twist_teleop_config_allow_reverse_restores_the_vehicle_params_floor():
+    config = build_twist_teleop_config(_fake_vehicle_params(), allow_reverse=True)
+    assert config.speed_min_mps == -5.0
+
+
+def test_reverse_twist_is_a_zero_command_when_reverse_is_disabled():
+    """The behavioural half: a driver pushing the Foxglove Teleop panel backwards gets a stop,
+    not a reverse pulse."""
+    config = build_twist_teleop_config(_fake_vehicle_params())
+    assert convert_twist_to_command(config, linear_x=-2.0, angular_z=0.5) == DriveCommand(0.0, 0.0)
+
+
+def test_reverse_twist_is_honoured_when_reverse_is_enabled():
+    config = build_twist_teleop_config(_fake_vehicle_params(), allow_reverse=True)
+    result = convert_twist_to_command(config, linear_x=-2.0, angular_z=0.5)
+    assert result.speed_mps == pytest.approx(-2.0)
 
 
 # --------------------------------------------------------------------------------------

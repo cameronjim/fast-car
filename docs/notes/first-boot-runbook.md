@@ -43,6 +43,15 @@ channels). The one that bites is throttle neutral: if this ESC's real zero-throt
 not 1500 us, "neutral" is a creep. That is why step 11 puts a scope on the pulse before the
 ESC is ever powered.
 
+Also note DDS discovery. `docker/car`'s image now pins `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`
+and `ROS_DOMAIN_ID=42` (added 2026-09-14; see that image's README). This matters on trackside
+WiFi specifically because the Mac's `ros-dev` container is very likely to be up on the same
+subnet at the same time, and Fast DDS's default multicast discovery on the default domain (0)
+would otherwise let the two unrelated ROS graphs see each other's nodes, or fail to discover
+each other's, unpredictably. `--network host` (used below) is what actually exposes the
+container to the LAN for discovery to happen at all -- confirm `echo $ROS_DOMAIN_ID` inside
+the running container prints `42` before trusting `ros2 topic list` output.
+
 Also note the throttle map's scale. `actuation.throttle_full_scale_mps` is 5.0 m/s, and it is
 PROVISIONAL and unmeasured like the rest (added 2026-09-13, GitHub issue #40). With the
 1000/1500/2000 us ends, **a commanded 1 m/s is 100 us off neutral: 1600 us forward, 1400 us
@@ -165,6 +174,70 @@ firmware check can see it, so check the mark, twice. Cross-reference
 
 ## 8. Start the car launch file with the servo and ESC still unpowered (verified in container, UNVERIFIED on the car)
 
+### Preferred: udev rule granting group write access (UNVERIFIED, try this first)
+
+Added 2026-09-14, written ahead of hardware -- **never applied or tested on the device**.
+`pwm_output_node` needs write access to `/sys/class/pwm/pwmchipN/{export,unexport}` and
+`/sys/class/pwm/pwmchipN/pwmM/{period,duty_cycle,enable,polarity}`. Those entries are symlinks
+into `/sys/devices/...`, so bind-mounting just `/sys/class/pwm` read-write does not help (the
+target is still the container's own read-only `/sys` copy) -- the fix is host-side
+permissions plus a narrow bind-mount of the real device path, not a container-side workaround.
+
+8.1 On the Jetson, once (after step 4's pinmux reboot, so the `pwmchip` nodes actually exist):
+
+```sh
+sudo groupadd -f racer-pwm
+sudo usermod -aG racer-pwm racer
+```
+
+8.2 Create `/etc/udev/rules.d/99-racer-pwm.rules`:
+
+```
+# racer-pwm: group write access to exported PWM channel attributes so pwm_output_node's
+# container never needs --privileged. UNVERIFIED (docs/notes/first-boot-runbook.md, step 8).
+SUBSYSTEM=="pwm", KERNEL=="pwmchip*", ACTION=="add", \
+  RUN+="/bin/chgrp -R racer-pwm /sys/class/pwm/%k", \
+  RUN+="/bin/chmod -R g+rwX /sys/class/pwm/%k"
+SUBSYSTEM=="pwm", KERNEL=="pwm[0-9]*", ACTION=="add", \
+  RUN+="/bin/sh -c 'chgrp racer-pwm /sys%p/period /sys%p/duty_cycle /sys%p/enable /sys%p/polarity 2>/dev/null; chmod g+rw /sys%p/period /sys%p/duty_cycle /sys%p/enable /sys%p/polarity 2>/dev/null'"
+```
+
+The first rule covers `pwmchipN/export` and `unexport` (present as soon as the chip appears);
+the second re-applies group ownership to each channel's attribute files the moment `export`
+creates them (they don't exist until then, so the first rule's `-R` cannot reach them).
+
+8.3 Reload and re-trigger: `sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=pwm`.
+Log out/in (or `newgrp racer-pwm`) so the `racer` shell picks up the new group.
+
+8.4 Find the real device-tree path udev is granting access to (needed for the narrow
+bind-mount below), and confirm the permissions actually landed:
+
+```sh
+readlink -f /sys/class/pwm/pwmchipN                 # e.g. /sys/devices/<soc-path>/pwmchipN
+ls -l /sys/class/pwm/pwmchipN/export                # expect group racer-pwm, g+w
+```
+
+8.5 Launch WITHOUT `--privileged`, bind-mounting only the real device path from 8.4 (read-write)
+instead of all of `/sys`, and joining the host's `racer-pwm` group:
+
+```sh
+docker run --rm -it --runtime nvidia --network host \
+  --group-add "$(getent group racer-pwm | cut -d: -f3)" \
+  -v /sys/devices/<soc-path-from-8.4>:/sys/devices/<soc-path-from-8.4> \
+  -v "$PWD":/workspace -w /workspace/ros_ws car:local bash -lc '
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    ros2 launch racer_bringup car_teleop.launch.py \
+      steering_pwmchip:=N steering_pwm_channel:=M \
+      throttle_pwmchip:=P throttle_pwm_channel:=Q'
+```
+
+If `pwm_output_node` still fails to open/export the channel (permission denied), the group
+membership or the udev rule's `RUN+=` ordering is the likely culprit -- check `journalctl -u
+systemd-udevd` for the rule actually firing, and fall back to 8-fallback below rather than
+guessing at more udev rules under time pressure during a bench session.
+
+### Fallback: `--privileged` (the previously-documented approach, kept as the known-working blunt instrument)
+
 ```sh
 docker run --rm -it --runtime nvidia --network host --privileged -v /sys:/sys \
   -v "$PWD":/workspace -w /workspace/ros_ws car:local bash -lc '
@@ -174,9 +247,15 @@ docker run --rm -it --runtime nvidia --network host --privileged -v /sys:/sys \
       throttle_pwmchip:=P throttle_pwm_channel:=Q'
 ```
 
-Expect two nodes and a startup line from `pwm_output_node` naming the calibration it read out
-of `vehicle_params`. If it refuses to start, read the message: it names the field it is
-missing, and the answer is to measure that field, never to edit the check.
+`--privileged` with a writable `/sys` certainly works but grants far more than PWM write
+access (every device, full capability set, no seccomp/apparmor confinement) to the container
+that drives the actuators, which is not a resting place -- use it only if 8.1-8.5 above do not
+pan out on the actual hardware, and note in `docs/notes/build-log.md` why the udev approach
+did not work if you fall back to this.
+
+Either way, expect two nodes and a startup line from `pwm_output_node` naming the calibration
+it read out of `vehicle_params`. If it refuses to start, read the message: it names the field
+it is missing, and the answer is to measure that field, never to edit the check.
 
 ## 9. Verify /drive is neutral with no input (verified in container, UNVERIFIED on the car)
 
@@ -201,7 +280,10 @@ Then the measurement that actually counts, on the pins themselves, with a scope 
 duty-reading meter: **50 Hz, 1.5 ms high on both**. The sysfs file says what was asked for;
 the scope says what came out.
 
-## 11. Power the servo and the ESC, wheels off the ground, kill switch armed (UNVERIFIED)
+## 11. Power the servo ONLY, wheels off the ground, kill switch armed (UNVERIFIED)
+
+The ESC and the drive battery stay out of this step. The steering polarity (step 12) is the
+first bench calibration and there is no reason for the motor to be live while it happens.
 
 11.1 Second person on the RC transmitter, kill switch in the CUT position, hand on it.
 
@@ -210,18 +292,23 @@ the scope says what came out.
 
 11.3 Connect the servo. Nothing should move. If the wheels twitch or crawl to a lock, cut
      power: the neutral value or the polarity is wrong, and step 12 is where that gets sorted
-     out, not with the ESC live.
+     out -- with the ESC still in the box.
 
-11.4 Only then connect the drive battery / ESC. Expect silence and no motor motion. **A
-     creeping motor here means this ESC's real zero-throttle point is not 1500 us** -- cut
-     power, measure it, and put the measured value in `config/vehicle_params.yaml` before
-     going further. The mux firmware bakes these in at compile time, so that means rebuild
-     and reflash too.
+## 12. Calibrate the steering polarity -- THE FIRST BENCH CALIBRATION (UNVERIFIED)
 
-## 12. Calibrate the steering polarity (UNVERIFIED -- this is the bench calibration the code is waiting for)
+This is the one the code is explicitly waiting for, and it comes before the ESC is powered
+because it needs nothing but the servo and because getting it wrong is how the car steers into
+the thing it was avoiding.
 
-`steering_left_is_pwm_max` defaults to `true` and is a guess. With the wheels off the ground
-and the kill switch held:
+`steering_left_is_pwm_max` defaults to `true` **and that default is a GUESS**. No project doc
+defines which pulse end is full left; nobody has put a scope on this servo. The whole
+left-positive chain -- `a`/LEFT key increases `steering_angle_rad`, `angular.z > 0` with
+forward speed gives a positive angle, `safety_node` passes the sign through unchanged, and
+`pwm_output_node` sends a positive angle to `steering.pwm_max_us` when this flag is true -- is
+pinned by unit tests at every hop, so the ONLY unknown left in it is this flag. That makes
+this one measurement the difference between a correct chain and a mirrored one.
+
+With the wheels off the ground, the ESC unpowered, and the kill switch held:
 
 12.1 Publish a small LEFT command by hand (positive angle, zero speed):
 
@@ -240,40 +327,96 @@ Also check the ends: command `steering_angle: 0.4189` and `-0.4189` and confirm 
 not bind or buzz at either end. If it does, the pulse ends are past this servo's real travel
 and `steering.pwm_min_us` / `pwm_max_us` need measuring, not guessing.
 
-## 13. Keyboard teleop, wheels off the ground, second person on the kill switch (UNVERIFIED)
+## 13. Configure the VESC in VESC Tool over USB, before it is ever fed a pulse (UNVERIFIED)
 
-13.1 Confirm the rosbag is recording and rail voltage is being logged. A run without a bag is
+The VESC's USB link is configuration and telemetry only; the command path is the PWM pulse
+through the mux into the PPM input (`docs/notes/build-log.md`, 2026-09-12). This step is the
+layer-2 configuration (`claude-docs/05-safety.md`) and it decides what the pulses this repo
+sends actually mean.
+
+**Set the PPM app's Control Type to `Current No Reverse With Brake` for first boot.** Reasons,
+in order:
+
+- **`safety_node`'s "brake" is not a brake.** Layer 3's only lever is the `/drive` `speed`
+  field, and every gate that fires writes 0.0 into it. `pwm_output_node` maps speed 0 to
+  `actuation.throttle_pwm_neutral_us`, and a neutral PPM pulse is ZERO CURRENT -- a coast.
+  "Watchdog fired, braking" produces a car that keeps rolling. Nothing in software can change
+  that; the deceleration, if there is to be any, has to come from this setting or from a
+  future closed-loop `vesc_node`.
+- **It makes a below-neutral pulse the safe thing rather than the dangerous thing.** In
+  `Current`, below neutral is reverse drive current: a sign error or a stuck negative command
+  spins the motor backwards. In `Current No Reverse With Brake` the same pulse is proportional
+  braking. On a car nobody has driven, the direction a mistake should fail in is obvious.
+- **Reverse is not wanted for the first drives anyway** (see step 15 and the `allow_reverse`
+  parameter), so giving up reverse costs nothing right now.
+
+What this step does NOT do: pick numbers. Deadband width, current limits, ramping -- none of
+those have been measured on this car and none is written down anywhere in this repo, so none
+is prescribed here. Set the control type, leave the rest at whatever VESC Tool gives you,
+**export the configuration and commit it** (12-testing L6 has a "VESC config diff: exported
+config matches the committed layer-2 config" bench check that needs a committed baseline to
+diff against), and write what you chose into `docs/notes/build-log.md`.
+
+If you choose a different control type, write down that you did and why, because the words
+"brake" and "reverse" in this repo's code and docs are written against this one.
+
+## 14. Power the ESC, wheels off the ground (UNVERIFIED)
+
+14.1 Only now connect the drive battery / ESC. Expect silence and no motor motion. **A
+     creeping motor here means this ESC's real zero-throttle point is not 1500 us** -- cut
+     power, measure it, and put the measured value in `config/vehicle_params.yaml` before
+     going further. The mux firmware bakes these in at compile time, so that means rebuild
+     and reflash too.
+
+## 15. Keyboard teleop, wheels off the ground, second person on the kill switch (UNVERIFIED)
+
+**Reverse is OFF by default and that is deliberate.** Both teleop sources take an
+`allow_reverse` parameter, default `false`, which clamps the commanded speed floor at 0.0 m/s
+instead of `limits.min_velocity_mps` (-5.0). So the throttle-down key decelerates to a stop
+and stops there, and no below-neutral pulse is ever produced. Leave it off for these first
+drives. Turn it on -- `ros2 run racer_tools keyboard_teleop_node --ros-args -p
+allow_reverse:=true`, or `allow_reverse:=true` on `car_teleop.launch.py` -- only once step 13
+is done and recorded, because until then nobody knows whether a below-neutral pulse is reverse
+or braking on this ESC.
+
+15.1 Confirm the rosbag is recording and rail voltage is being logged. A run without a bag is
      a bug (`CLAUDE.md` invariant 5).
 
-13.2 Kill-switch person: cut, confirm the wheels and motor stop, restore. Do this before
+15.2 Kill-switch person: cut, confirm the wheels and motor stop, restore. Do this before
      driving, not after.
 
-13.3 In a second terminal (keyboard teleop needs a real TTY, which is why it is not started
+15.3 In a second terminal (keyboard teleop needs a real TTY, which is why it is not started
      by the launch file):
 
 ```sh
 docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node'
 ```
 
-13.4 Smallest possible speed command first. Confirm: the motor spins the correct direction,
+15.4 Smallest possible speed command first. Confirm: the motor spins the correct direction,
      releasing the key returns to neutral within the watchdog timeout, and the kill switch
      stops it instantly at any point. A 1 m/s command should be 1600 us on the throttle
      channel; if the motor does not move at 1600 us, the VESC's PPM deadband is wider than
      100 us and wants narrowing in VESC Tool (record the change in the committed VESC config),
      not a bigger number in vehicle_params.
 
-13.5 **This is where `actuation.throttle_full_scale_mps` gets measured.** With the wheels
+15.5 **Release the key and watch what actually happens.** Releasing does not brake: the
+     command goes to zero, the pulse goes to neutral, and on this ESC that is zero current.
+     With the wheels off the ground the motor will spin down slowly. That is the layer-3
+     "brake" behaving exactly as documented, not a fault. Time the spin-down and write it
+     down -- it is the first real evidence of what a watchdog trip does on this car.
+
+15.6 **This is where `actuation.throttle_full_scale_mps` gets measured.** With the wheels
      still off the ground, sweep the commanded speed up to full scale, record wheel speed
      against pulse width, and set that field to the speed observed at
      `actuation.throttle_pwm_max_us`. Until that is done the 5.0 in the committed file is a
      guess, and the open-loop map does not claim that commanding X m/s produces X m/s.
 
-13.6 Stop, power down in reverse order (drive battery, then servo/receiver rail, then the
+15.7 Stop, power down in reverse order (drive battery, then servo/receiver rail, then the
      Jetson), and write the session up in `docs/notes/build-log.md` the same day.
 
 ## Afterwards
 
-- Everything measured in steps 5, 10, 11 and 12 goes into `config/vehicle_params.yaml` or a
+- Everything measured in steps 5, 10, 11, 12, 13 and 15 goes into `config/vehicle_params.yaml` or a
   dated build-log entry. A measurement that lives only in a scrollback did not happen
   (`claude-docs/10-conventions.md`).
 - Roadmap 1.3's real kill test (Jetson genuinely frozen, cut observed) is still open and is

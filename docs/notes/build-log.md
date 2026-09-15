@@ -50,6 +50,91 @@ exercises firmware whose startup sequence and fail-open paths have been read pro
 than finding them with a servo attached. `config/vehicle_params.yaml` was deliberately not
 touched (another branch is editing it), so the two constants that want to live there stay
 compile-time and are listed as follow-ups.
+## 2026-09-14 -- command-path review: "brake" is a coast, reverse is off, steering polarity is the first calibration
+
+Software and docs only; the car was not powered and nothing here has been on hardware. Full
+write-up, findings table and the subject-to-change list:
+`docs/notes/command-path-review-2026-09-14.md`. Three decisions belong in this log because
+they are decisions about the car, not about code.
+
+**1. Layer 3's "brake" commands zero current, which on a PPM VESC is a COAST.** `safety_node`
+has exactly one lever, the `/drive` `speed` field, and every gate that fires writes 0.0 into
+it. `pwm_output_node` maps speed 0 to `actuation.throttle_pwm_neutral_us`, and a neutral PPM
+pulse is zero current. So "watchdog fired, braking" produces a car that keeps rolling and
+slows by drag. Nothing in the code said so, and a reader of `05-safety.md` would reasonably
+have assumed otherwise. This is now written at the top of `gate_logic.hpp` and
+`safety_node.cpp`, and `GateResult::brake` is renamed `GateResult::zero_throttle`.
+`EventSeverity::kBrake` and `racer_msgs`' `SEVERITY_BRAKE` keep their names deliberately --
+they are a published interface and the evaluation metric in `09-evaluation.md`, and renaming
+them would break bag compatibility to fix a comment.
+
+Real deceleration has to come from layer 2, so the runbook gained a numbered VESC Tool step
+(now step 13, before the ESC is ever fed a pulse): **set the PPM app's Control Type to
+`Current No Reverse With Brake` for first boot**, because it makes a below-neutral pulse
+proportional braking rather than reverse drive current, which is the direction a sign error
+should fail in on a car nobody has driven; because reverse is not wanted for the first drives
+anyway; and because neutral stays zero current either way. **No VESC numbers are prescribed**
+-- deadband, current limits and ramping are unmeasured and stay unmentioned. The step says to
+export the configuration and commit it, because `12-testing.md`'s L6 "VESC config diff" bench
+check needs a committed baseline to diff against, and there is none yet.
+
+**2. Reverse is off by default on both teleop sources.** Both clamped the speed floor at
+`limits.min_velocity_mps` (-5.0, an `f1tenth_gym` value), so the throttle-down key or a
+backwards Twist would have put a below-neutral pulse on an ESC whose PPM control type has
+never been set -- reverse current in one mode, braking in another, nobody knows which. New
+`allow_reverse` declared parameter on `keyboard_teleop_node` and `twist_teleop_adapter_node`,
+default `false`, clamping the floor at 0.0 m/s; launch argument on `car_teleop.launch.py`.
+Both nodes, not just the keyboard: `browser_teleop` is the one the car launch file can
+actually start. `limits.min_velocity_mps` itself was NOT changed (it is a vehicle parameter,
+not a teleop policy), `safety_node` still accepts negative speed (it is a gate, not a command
+source), and `pwm_mapping` still maps negative below neutral. The runbook says to leave
+reverse off until the VESC step is done and recorded.
+
+**3. Steering polarity is now the FIRST bench calibration, and it happens with the ESC in the
+box.** It used to be runbook step 12, after step 11.4 powered the drive battery. It needs
+nothing but the servo, and there is no reason for the motor to be live while the polarity is
+still unknown, so the ESC power-up is now its own later step (14). The whole left-positive
+chain was traced hop by hop -- key to angle, Twist to angle, gate pass-through, angle to pulse
+-- and every software hop now has a test that names the convention. The single remaining
+unknown in it is `steering_left_is_pwm_max`, whose `true` default is a **guess**: no project
+doc defines which pulse end is full left and nobody has put a scope on this servo. That is
+what step 12 settles, and its answer goes in this log and into the launch file's default.
+
+**Also fixed, and worth knowing before the first boot** (details in the review note):
+
+- `pwm_output_node` measured `/drive` staleness on the **ROS clock** -- the same defect the
+  2026-09-13 audit removed from three other nodes (issue #22), in the one node where it
+  matters most, because its timeout is the last thing that takes a driving pulse off the wire.
+  A backwards NTP step (likely on a Jetson with no RTC battery) made the age negative, which
+  read as FRESH; a frozen clock made it never fire at all. Now `RCL_STEADY_TIME`, with a new
+  L3 test that fails against the old source.
+- All four `pwmchip`/channel parameters defaulted to `0`, so a bare `ros2 run` put **both
+  pulses on `pwmchip0/pwm0`** and the throttle silently overwrote the steering 50 times a
+  second. On the car that would have looked exactly like a dead servo wire. The node now
+  refuses to start on a collision, and `throttle_pwm_channel` defaults to 1.
+- Every zero-throttle gate now **holds** the last commanded steering angle instead of snapping
+  the rack to centre in one cycle, which bypassed the node's own steering rate limiter and
+  straightened a car still travelling on its arc. The TTC gate already did it this way; the
+  watchdog and sanity paths did not. Now one rule, one shared function, and `safety_node`'s
+  fail-closed path uses it too.
+
+**Not fixed, filed:** `safety_node` latches `min_scan_range_m_` forever -- there is no `/scan`
+staleness watchdog, so a dead LiDAR either disables the TTC gate silently or brakes forever,
+depending on what the last return happened to be. Which way it should degrade is a human
+decision on a safety layer and there is no LiDAR fitted, so it is recorded rather than guessed
+at.
+
+**Tests.** 283 before, 313 after in `ros-dev` (arm64). No tolerance, golden file or coverage
+gate was weakened; `racer_safety`'s gate-logic branch-coverage gate stays at 100%. Two
+committed assertions were INVERTED rather than relaxed, both toward fail-closed, both with the
+reason written next to them: `is_stale`'s "negative age is not stale" case, and the QoS test's
+"watchdog centres the steering" assertion (which now asserts the angle is HELD, and adds a
+check that no angle from the incompatible publisher ever reached `/drive`). Separately, and
+**reproduced on unmodified `main` before any change here**, five of `test_safety_node_launch`'s
+timing-sensitive assertions fail when `colcon test` runs every package's launch tests
+concurrently on this 4-CPU colima VM (283 tests, 9 failures); they are green run on their own
+or with `--parallel-workers 1`. Domain IDs are already distinct per file, so it is CPU
+starvation, not cross-talk. Filed as a follow-up.
 
 ## 2026-09-14 -- motor sensor cable: adapter required, not a repin
 

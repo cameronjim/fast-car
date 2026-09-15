@@ -91,7 +91,27 @@ bool is_stale(const CommandState& state, double timeout_s) {
   if (!std::isfinite(state.age_s)) {
     return true;
   }
+  if (state.age_s < 0.0) {
+    return true;
+  }
   return state.age_s >= timeout_s;
+}
+
+std::optional<std::string> validate_channel_assignment(int steering_chip, int steering_channel,
+                                                       int throttle_chip, int throttle_channel) {
+  if (steering_chip == throttle_chip && steering_channel == throttle_channel) {
+    std::ostringstream message;
+    message << "steering and throttle are both configured on pwmchip" << steering_chip << "/pwm"
+            << steering_channel
+            << ". They must be two different PWM channels: one drives the steering servo "
+               "(Jetson header pin 15) and the other the VESC PPM input (pin 33). Both "
+               "steering_pwmchip/steering_pwm_channel and throttle_pwmchip/"
+               "throttle_pwm_channel default to 0, so this is what happens when they are "
+               "left unset -- read the real chip/channel numbers off the device after the "
+               "pinmux change and pass all four (docs/notes/first-boot-runbook.md step 4).";
+    return message.str();
+  }
+  return std::nullopt;
 }
 
 double steering_angle_to_pulse_us(const MappingConfig& config, double steering_angle_rad) {

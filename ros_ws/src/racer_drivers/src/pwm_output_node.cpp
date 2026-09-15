@@ -22,6 +22,18 @@
 // by PWM through the mux board into the VESC's PPM input. The VESC's USB link is telemetry
 // and configuration only. A USB current-control path would run around the mux entirely.
 //
+// CLOCK POLICY. The /drive staleness measurement -- the thing that decides whether both
+// channels fall back to neutral -- is taken on RCL_STEADY_TIME (the OS monotonic clock),
+// never on this->now(). This node originally used the node clock, which is the exact defect
+// docs/notes/first-boot-audit-2026-09-13.md findings #1-#3 removed from safety_node,
+// tracker_node and twist_teleop_adapter_node (GitHub issue #22). Two ways it bites here:
+// with use_sim_time:=false the node clock is CLOCK_REALTIME, and a backwards NTP/VM step
+// makes the measured age NEGATIVE, which `is_stale`'s `age_s >= timeout_s` reads as FRESH --
+// so a dead /drive publisher leaves the last commanded throttle pulse on the wire for the
+// length of the step; with use_sim_time:=true and no /clock the node clock is pinned at 0,
+// every age is exactly 0.0, and the timeout NEVER fires. A monotonic clock has neither
+// failure mode. This node publishes no messages, so it needs no ROS stamp at all.
+//
 // PHYSICAL CONSTANTS. Every pulse-width bound, angle limit and speed reference below comes
 // from the GENERATED vehicle_params binding and nowhere else (CLAUDE.md invariant 2). If a
 // required field is null the node refuses to start and names the field, exactly like
@@ -87,9 +99,13 @@ class PwmOutputNode : public rclcpp::Node {
         declare_int("throttle_pwmchip", 0, 0, 15,
                     "pwmchip index for the throttle channel. UNVERIFIED, see steering_pwmchip. "
                     "On the Jetson Orin Nano header pins 15 and 33 are usually different chips.");
-    const int throttle_channel =
-        declare_int("throttle_pwm_channel", 0, 0, 7,
-                    "Channel index within the throttle pwmchip. UNVERIFIED, see steering_pwmchip.");
+    const int throttle_channel = declare_int(
+        "throttle_pwm_channel", 1, 0, 7,
+        "Channel index within the throttle pwmchip. Defaults to 1, not 0, so that the "
+        "all-defaults configuration is at least two DIFFERENT channels rather than both "
+        "pulses on pwmchip0/pwm0 (which validate_channel_assignment now refuses). Matches "
+        "racer_bringup/launch/car_teleop.launch.py's default. UNVERIFIED, see "
+        "steering_pwmchip.");
 
     rcl_interfaces::msg::ParameterDescriptor left_descriptor;
     left_descriptor.description =
@@ -101,6 +117,14 @@ class PwmOutputNode : public rclcpp::Node {
         "it was avoiding.";
     const bool left_is_pwm_max =
         this->declare_parameter<bool>("steering_left_is_pwm_max", true, left_descriptor);
+
+    // Refuse before anything is exported: two pulses on one channel is not recoverable at
+    // runtime and looks like a wiring fault on the car (pwm_mapping.hpp).
+    const std::optional<std::string> bad_channels = validate_channel_assignment(
+        steering_chip, steering_channel, throttle_chip, throttle_channel);
+    if (bad_channels.has_value()) {
+      throw std::runtime_error(*bad_channels);
+    }
 
     config_ = build_config(drive_timeout_s, left_is_pwm_max);
 
@@ -231,21 +255,23 @@ class PwmOutputNode : public rclcpp::Node {
   }
 
   void on_drive(const ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg) {
-    // Deliberately timestamped with the node clock on ARRIVAL rather than trusting
-    // msg->header.stamp: the staleness decision here is "did a command reach me recently",
-    // which a stale-but-well-formed header would answer wrongly.
+    // Deliberately timestamped on ARRIVAL rather than trusting msg->header.stamp: the
+    // staleness decision here is "did a command reach me recently", which a
+    // stale-but-well-formed header would answer wrongly.
+    //
+    // And deliberately on the STEADY clock, not this->now() -- see this file's CLOCK POLICY.
     last_command_.steering_angle_rad = static_cast<double>(msg->drive.steering_angle);
     last_command_.speed_mps = static_cast<double>(msg->drive.speed);
-    last_command_stamp_ = this->now();
+    last_command_steady_ = steady_clock_.now();
     last_command_.has_command = true;
   }
 
   void on_timer() {
     try {
       CommandState state = last_command_;
-      state.age_s = state.has_command ? (this->now() - last_command_stamp_).seconds() : 0.0;
-      const PulsePair pulses = driver_->update(state);
-      static_cast<void>(pulses);
+      state.age_s =
+          state.has_command ? (steady_clock_.now() - last_command_steady_).seconds() : 0.0;
+      driver_->update(state);
     } catch (const std::exception& e) {
       // Fail closed, then keep running: the mux keeps seeing valid neutral pulses rather
       // than nothing, and an operator sees a throttled error instead of a silent stop.
@@ -259,7 +285,11 @@ class PwmOutputNode : public rclcpp::Node {
   MappingConfig config_;
   unsigned long long period_ns_{0};
   CommandState last_command_;
-  rclcpp::Time last_command_stamp_;
+  // Monotonic-clock receipt time, used ONLY as the left operand of an elapsed-time
+  // subtraction, never as a stamp (CLOCK POLICY, top of file). Default-constructed with the
+  // steady clock's own time source so the subtraction can never mix time sources.
+  rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
+  rclcpp::Time last_command_steady_{0, 0, RCL_STEADY_TIME};
 
   std::unique_ptr<SysfsPwmChannel> steering_sink_;
   std::unique_ptr<SysfsPwmChannel> throttle_sink_;

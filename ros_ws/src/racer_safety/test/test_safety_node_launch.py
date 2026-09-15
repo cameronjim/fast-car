@@ -500,14 +500,31 @@ class TestSafetyNode(unittest.TestCase):
         )
         self._spin_for(0.3)
 
+        self.assertGreater(len(drive_out), 0, "safety_node published no /drive before the test")
+        held_steering = drive_out[-1].drive.steering_angle
+        before_count = len(drive_out)
+
         cmd = _make_drive(steering=0.1, speed=3.0)
         self._publish_steadily(best_effort_pub, cmd, seconds=_WATCHDOG_TIMEOUT_S * 10.0)
 
         self.assertGreater(len(drive_out), 0, "safety_node stopped publishing /drive entirely")
         # A genuinely-incompatible publisher means safety_node never saw a fresh command, so
-        # it must still be watchdog-braking throughout.
-        self.assertEqual(drive_out[-1].drive.steering_angle, 0.0)
+        # it must still be watchdog-zeroing throughout.
+        #
+        # Speed is the evidence; steering is asserted as HELD, not as centred. Since the
+        # 2026-09-14 command-path review a zero-throttle gate holds the last commanded
+        # steering angle rather than snapping the rack to centre (gate_logic.hpp, "STEERING ON
+        # A ZERO-THROTTLE GATE"), and this method shares one long-lived safety_node with every
+        # other test in this file, so whatever angle a previous test left behind is what
+        # SHOULD still be on /drive. Asserting 0.0 here would have been asserting the old
+        # centring behaviour under a name that is about QoS.
         self.assertEqual(drive_out[-1].drive.speed, 0.0)
+        self.assertEqual(drive_out[-1].drive.steering_angle, held_steering)
+        self.assertFalse(
+            any(abs(m.drive.steering_angle - 0.1) < 1e-3 for m in drive_out[before_count:]),
+            "a steering angle from the best_effort publisher's command reached /drive: the "
+            "/drive_raw subscription is not genuinely reliable",
+        )
 
     def test_fail_closed_on_injected_fault_then_recovers(self):
         drive_out = []

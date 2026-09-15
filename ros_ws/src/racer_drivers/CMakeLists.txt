@@ -72,6 +72,10 @@ if(BUILD_TESTING)
     TARGET test_pwm_output_node_launch
     TIMEOUT 120
   )
+  add_launch_test(test/test_pwm_output_node_clock_launch.py
+    TARGET test_pwm_output_node_clock_launch
+    TIMEOUT 120
+  )
 endif()
 
 ament_package()

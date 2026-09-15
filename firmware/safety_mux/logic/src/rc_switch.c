@@ -5,8 +5,8 @@
 #include "safety_mux/pwm_validity.h"
 
 RcSwitchPosition rc_switch_read(double switch_pwm_us, double kill_threshold_us,
-                                double hysteresis_us, double signal_min_us,
-                                double signal_max_us, RcSwitchPosition previous) {
+                                double hysteresis_us, double signal_min_us, double signal_max_us,
+                                RcSwitchPosition previous) {
   if (!pwm_is_valid_us(switch_pwm_us, signal_min_us, signal_max_us)) {
     return RC_SWITCH_SIGNAL_INVALID;
   }

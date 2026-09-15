@@ -52,8 +52,8 @@ typedef enum {
 // band must not arm the car. A non-finite or negative `hysteresis_us` is treated as zero,
 // which degrades to the plain `>= threshold` comparison rather than to anything fail-open.
 RcSwitchPosition rc_switch_read(double switch_pwm_us, double kill_threshold_us,
-                                double hysteresis_us, double signal_min_us,
-                                double signal_max_us, RcSwitchPosition previous);
+                                double hysteresis_us, double signal_min_us, double signal_max_us,
+                                RcSwitchPosition previous);
 
 #ifdef __cplusplus
 }

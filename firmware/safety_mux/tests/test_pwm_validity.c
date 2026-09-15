@@ -24,18 +24,16 @@ static const PwmValidityCase kCases[] = {
     {"-Inf is invalid", -INFINITY, 1000.0, 2000.0, false},
     {"zero is invalid outside a realistic PWM range", 0.0, 1000.0, 2000.0, false},
     {"negative is invalid", -500.0, 1000.0, 2000.0, false},
-    {"inverted bounds (min > max) is always invalid, not a crash", 1500.0, 2000.0, 1000.0,
-     false},
+    {"inverted bounds (min > max) is always invalid, not a crash", 1500.0, 2000.0, 1000.0, false},
     {"degenerate equal bounds: value equals both is valid", 1500.0, 1500.0, 1500.0, true},
-    {"degenerate equal bounds: value off by epsilon is invalid", 1500.001, 1500.0, 1500.0,
-     false},
+    {"degenerate equal bounds: value off by epsilon is invalid", 1500.001, 1500.0, 1500.0, false},
     // A non-finite BOUND used to make every comparison false and every pulse "valid": the
     // one fail-OPEN path in this file. These pin it shut.
     {"NaN min bound is invalid, never valid-by-default", 1500.0, NAN, 2000.0, false},
     {"NaN max bound is invalid, never valid-by-default", 1500.0, 1000.0, NAN, false},
     {"both bounds NaN is invalid", 1500.0, NAN, NAN, false},
-    {"+Inf max bound is invalid (an unbounded channel is a broken calibration)", 1500.0,
-     1000.0, INFINITY, false},
+    {"+Inf max bound is invalid (an unbounded channel is a broken calibration)", 1500.0, 1000.0,
+     INFINITY, false},
     {"-Inf min bound is invalid", 1500.0, -INFINITY, 2000.0, false},
     {"NaN pulse AND NaN bounds is invalid", NAN, NAN, NAN, false},
 };

@@ -71,8 +71,42 @@ def test_build_teleop_config_derives_step_sizes_from_vehicle_params_and_rate():
     assert config.speed_step_mps == pytest.approx(9.51 / 50.0)
     assert config.steering_min_rad == -0.4189
     assert config.steering_max_rad == 0.4189
-    assert config.speed_min_mps == -5.0
     assert config.speed_max_mps == 20.0
+
+
+def test_build_teleop_config_disables_reverse_by_default():
+    """Default allow_reverse=False clamps the speed floor at 0.0, not
+    limits.min_velocity_mps. Added by the 2026-09-14 command-path review: what a below-neutral
+    throttle pulse does is a VESC PPM control-type setting that has never been applied to this
+    ESC, so the first drives do not emit one."""
+    config = build_teleop_config(_fake_vehicle_params(), control_rate_hz=50.0)
+    assert config.speed_min_mps == 0.0
+
+
+def test_build_teleop_config_allow_reverse_restores_the_vehicle_params_floor():
+    config = build_teleop_config(_fake_vehicle_params(), control_rate_hz=50.0, allow_reverse=True)
+    assert config.speed_min_mps == -5.0
+
+
+def test_throttle_down_from_rest_stays_at_zero_when_reverse_is_disabled():
+    """The behavioural half: with the default config the throttle-down key decelerates to a
+    stop and stops there, rather than spinning the motor backwards."""
+    config = build_teleop_config(_fake_vehicle_params(), control_rate_hz=50.0)
+    state = apply_key(config, TeleopState(), "s")
+    assert state.speed_mps == 0.0
+    state = apply_key(config, state, "DOWN")
+    assert state.speed_mps == 0.0
+
+
+def test_throttle_down_from_speed_decelerates_to_zero_and_stops_there():
+    config = build_teleop_config(_fake_vehicle_params(), control_rate_hz=50.0)
+    state = TeleopState(speed_mps=config.speed_step_mps * 1.5)
+    state = apply_key(config, state, "s")
+    assert state.speed_mps == pytest.approx(config.speed_step_mps * 0.5)
+    state = apply_key(config, state, "s")
+    assert state.speed_mps == 0.0
+    state = apply_key(config, state, "s")
+    assert state.speed_mps == 0.0
 
 
 def test_build_teleop_config_scales_with_rate():

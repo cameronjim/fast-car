@@ -189,6 +189,33 @@ RUN uv sync --locked --no-install-project --no-python-downloads
 # racer_policy process actually runs under, without touching which `python3` resolves.
 ENV PYTHONPATH="/car-runtime/.venv/lib/python3.10/site-packages:${PYTHONPATH}"
 
+# --- DDS pinning (added 2026-09-14, deployment review) ----------------------------------
+# Nothing in this repo pinned RMW_IMPLEMENTATION or ROS_DOMAIN_ID anywhere before this. On
+# trackside WiFi, with the Mac ALSO running a ros-dev container for the same repo, Fast DDS's
+# default multicast discovery on domain 0 is a well-known source of "nodes cannot see each
+# other" or, worse, "the car sees the Mac's nodes and vice versa" -- two unrelated ROS graphs
+# on the same domain, same subnet, both using the default RMW.
+#
+# RMW_IMPLEMENTATION=rmw_fastrtps_cpp: this is already Humble's default RMW, so this line
+# changes no behavior today -- it exists so the default can never silently drift out from
+# under this image if some future apt layer pulls in rmw_cyclonedds_cpp (see
+# f1tenth-autonomous-racing/README.md's own note about needing to force cyclonedds on Foxy;
+# pinning explicitly here means that class of surprise cannot recur without editing this
+# line).
+#
+# ROS_DOMAIN_ID=42: ROS domain 0 is the multicast default every out-of-the-box ROS
+# installation uses, which is exactly what a nearby Mac/desktop running ros-dev would also be
+# on -- 42 takes the car off the crowded default domain. Chosen to also avoid colliding with
+# the per-launch-test domain IDs (77-82) that ros_ws/src/*/test/*_launch.py already set via
+# os.environ.setdefault() for CI test isolation: those are setdefault, so if this image ever
+# ran that test suite, an ENV-set ROS_DOMAIN_ID would win and defeat that isolation -- which
+# is exactly why this pin lives ONLY in the car image (the on-vehicle runtime) and
+# deliberately NOT in docker/ros-dev (the image those tests actually run in). Document this
+# value everywhere DDS is discussed: docs/notes/first-boot-runbook.md and
+# docs/notes/jetson-compat-2026-09-14.md.
+ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ENV ROS_DOMAIN_ID=42
+
 # No CMD: this image is the toolchain a running container builds/launches ros_ws from (see
 # build_on_jetson.md), the same shape as docker/ros-dev -- not a fixed entrypoint baking in
 # one launch file, since which launch file to run is a per-session choice (teleop vs.

@@ -77,6 +77,19 @@ bool is_valid_range(double range_m) {
 
 }  // namespace
 
+// The output of a gate that forces zero speed: zero speed, and the steering angle this logic
+// last COMMANDED, held. See gate_logic.hpp's "STEERING ON A ZERO-THROTTLE GATE" for the
+// reasoning (centring is an unrate-limited step input and straightens a cornering car). The
+// held angle is defended against a non-finite previous output -- which no path in this file
+// can produce, since every output is clamped -- because centring is still better than
+// emitting a NaN steering angle onto /drive.
+DriveCommand zero_throttle_command(const DriveCommand& previous_output) {
+  if (!std::isfinite(previous_output.steering_angle_rad)) {
+    return DriveCommand{0.0, 0.0};
+  }
+  return DriveCommand{previous_output.steering_angle_rad, 0.0};
+}
+
 CovarianceGateResult evaluate_covariance_gate(bool has_pose_input, double pose_covariance_trace) {
   // TODO(roadmap task 2.6): once /pose (PoseWithCovarianceStamped) exists, derate
   // `speed_fraction` from `pose_covariance_trace` against a tuned threshold
@@ -146,8 +159,8 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     watchdog_tripped = true;
   }
   if (watchdog_tripped) {
-    result.output = DriveCommand{0.0, 0.0};
-    result.brake = true;
+    result.output = zero_throttle_command(previous_output);
+    result.zero_throttle = true;
     result.activations.push_back(
         GateActivation{GateSource::kWatchdog, EventSeverity::kBrake,
                        formatting::watchdog_detail(watchdog_timeout_s, input.drive_raw_age_s)});
@@ -158,8 +171,8 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   // also short-circuits to a hard brake rather than being clamped into something that looks
   // sane and passed through (claude-docs/05-safety.md fail-closed).
   if (!is_finite_command(input.command)) {
-    result.output = DriveCommand{0.0, 0.0};
-    result.brake = true;
+    result.output = zero_throttle_command(previous_output);
+    result.zero_throttle = true;
     result.activations.push_back(GateActivation{GateSource::kCommandSanity, EventSeverity::kBrake,
                                                 formatting::command_sanity_detail()});
     return result;
@@ -217,7 +230,7 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     const double ttc_s = input.min_scan_range_m / forward_speed_mps;
     if (ttc_s <= *limits_.ttc_brake_s) {
       cmd.speed_mps = 0.0;
-      result.brake = true;
+      result.zero_throttle = true;
       result.activations.push_back(
           GateActivation{GateSource::kTtc, EventSeverity::kBrake,
                          formatting::ttc_brake_detail(ttc_s, *limits_.ttc_brake_s)});

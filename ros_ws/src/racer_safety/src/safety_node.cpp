@@ -10,8 +10,17 @@
 //
 // Fail-closed (claude-docs/05-safety.md: "any internal error -> brake command, not
 // passthrough"): the entire per-cycle body runs inside a try/catch, and ANY exception --
-// including the test-only `inject_fault` parameter below -- results in publishing a hard
-// brake and an `internal_fault` /safety/events record, never a silent crash or passthrough.
+// including the test-only `inject_fault` parameter below -- results in publishing a
+// zero-throttle command and an `internal_fault` /safety/events record, never a silent crash
+// or passthrough.
+//
+// WHAT "BRAKE" MEANS HERE, PHYSICALLY. This node's only lever is the /drive `speed` field,
+// and "brake" means it writes 0.0 there. Downstream, racer_drivers/pwm_output_node maps speed
+// 0 to actuation.throttle_pwm_neutral_us, which a VESC in PPM mode reads as zero current --
+// a COAST, not a deceleration. A moving car whose gate engages here keeps rolling. Real
+// deceleration has to come from layer 2 (the VESC's configured PPM control type, see
+// docs/notes/first-boot-runbook.md's VESC Tool step) or from a future closed-loop vesc_node,
+// never from this file. gate_logic.hpp's GateResult note carries the full version.
 //
 // EVENT STREAM SEMANTICS (GitHub issue #37). /safety/events carries gate TRANSITIONS, not a
 // per-cycle status dump: one record when a gate engages, one when that engagement releases
@@ -328,9 +337,12 @@ class SafetyNode : public rclcpp::Node {
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     } catch (const std::exception& e) {
-      RCLCPP_ERROR(this->get_logger(), "safety_node: internal fault, braking: %s", e.what());
-      const DriveCommand brake{0.0, 0.0};
-      publish_drive(brake, now);
+      RCLCPP_ERROR(this->get_logger(), "safety_node: internal fault, commanding zero throttle: %s",
+                   e.what());
+      // Same helper the gates use, so the fail-closed path and the gate paths can never
+      // disagree about what "safe output" means (gate_logic.hpp).
+      const DriveCommand safe_output = zero_throttle_command(previous_output_);
+      publish_drive(safe_output, now);
       // Routed through the SAME tracker as the nominal path: a sustained fault is ONE
       // internal_fault engagement (not one record per cycle, GitHub issue #37), and any gate
       // that was engaged before the fault gets its release record here, because the fault
@@ -339,7 +351,7 @@ class SafetyNode : public rclcpp::Node {
           GateActivation{GateSource::kInternalFault, EventSeverity::kBrake,
                          std::string("internal fault: ") + e.what()}};
       publish_transitions(fault_activations, steady_now, now);
-      previous_output_ = brake;
+      previous_output_ = safe_output;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     }

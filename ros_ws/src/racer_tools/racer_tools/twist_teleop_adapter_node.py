@@ -105,8 +105,21 @@ class TwistTeleopAdapterNode(Node):
             self.declare_parameter("input_topic", "/teleop/cmd_vel", input_topic_descriptor).value
         )
 
+        reverse_descriptor = ParameterDescriptor(
+            description=(
+                "Allow commanding NEGATIVE speed (reverse). Default false: the lower speed "
+                "clamp becomes 0.0 m/s instead of vehicle_params limits.min_velocity_mps, so "
+                "a Twist with linear.x < 0 converts to a zero command rather than a "
+                "below-neutral throttle pulse. Same parameter, same default and same reason "
+                "as keyboard_teleop_node's -- see racer_tools/twist_teleop.py."
+            ),
+        )
+        self.allow_reverse = bool(
+            self.declare_parameter("allow_reverse", False, reverse_descriptor).value
+        )
+
         vehicle_params = load_vehicle_params()
-        self._config = build_twist_teleop_config(vehicle_params)
+        self._config = build_twist_teleop_config(vehicle_params, allow_reverse=self.allow_reverse)
 
         self._latest_command: DriveCommand = _ZERO_COMMAND
         self._last_twist_monotonic: float | None = None
@@ -128,7 +141,8 @@ class TwistTeleopAdapterNode(Node):
         self.get_logger().info(
             f"twist_teleop_adapter up: subscribing Twist on '{self.input_topic}', publishing "
             f"/drive_raw at {self.control_rate_hz:.1f} Hz, wheelbase "
-            f"{self._config.wheelbase_m:.4f} m, twist_timeout_s={self.twist_timeout_s:.2f}."
+            f"{self._config.wheelbase_m:.4f} m, twist_timeout_s={self.twist_timeout_s:.2f}, "
+            f"reverse {'ENABLED' if self.allow_reverse else 'disabled'}."
         )
 
     def _on_twist(self, msg: Twist) -> None:

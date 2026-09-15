@@ -39,6 +39,14 @@ sim/bridge/log/
 # ephemeral runner workspace) -- found while verifying milestone 3 locally.
 /log/
 
+# Core dumps. A 155 MB `core` file was once committed under ros_ws/src/racer_tools by an
+# agent running a crashing test locally (ulimit -c unlimited on that machine) and had to be
+# removed by hand -- this rule is so that mistake cannot recur silently. Matches a file or
+# directory named exactly `core`, or `core.<pid>`, anywhere in the tree; no directory named
+# `core` exists in this repo today, so this is not expected to hide anything real.
+core
+core.[0-9]*
+
 # macOS
 .DS_Store
 

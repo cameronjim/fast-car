@@ -65,10 +65,10 @@ two ESCs.
 
 Then, before anything drives, in the order the existing docs require:
 
-4. **EC5 connectors onto the VESC's battery leads.**
-5. **First LiPo charge**, once the charger arrives (the B6-class balance charger ordered
-   2026-09-11, `docs/notes/build-log.md`). Arrival date is not confirmed here; check before
-   assuming it has landed.
+4. ~~**EC5 connectors onto the VESC's battery leads.**~~ DONE 2026-09-14 (confirmed by photo: EC5 fitted to the FSESC 6.7's battery leads, three phase wires soldered to the board).
+5. **First LiPo charge.** UNBLOCKED 2026-09-15: the B6-class balance charger has arrived, as
+   have AA batteries for the Flysky transmitter. Charge at LiPo / 3S / balance mode / 5.0 A,
+   attended, on a hard surface, in the fireproof bag.
 6. **Finalize the Pico pin mapping and flash the firmware.** Blocked on step 4 of "physical
    build" above (Cameron confirming the final holes against the physical board). Once
    confirmed, the firmware `#define`s and `firmware/safety_mux/README.md`'s pinout table get
@@ -88,9 +88,20 @@ Then, before anything drives, in the order the existing docs require:
 
 Steps 1-3 have no hard ordering dependency between each other, but step 2's joints get redone
 when the FSESC 4.12 arrives, so there is no benefit to rushing ahead of the perfboard work.
-Step 6 is the one confirmed blocker on the list right now: everything from step 6 onward that
-touches the mux board waits on it. Step 5 (first charge) is blocked on the charger, separately
-from step 6.
+Step 6 is the ONLY remaining blocker on the list: everything from step 6 onward that touches
+the mux board waits on the final Pico hole choices. Steps 4 and 5 are now cleared (EC5 fitted,
+charger and AAs in hand).
+
+Scale note, because it is easy to read steps 1-3 as "most of the work": assembly is roughly
+the halfway point of Phase 1, not the end. Steps 11 and 12 (the wheels-off bench sequence and
+the G1 kill test) are budgeted at 6 to 10 hours in `planning-docs/README.md`'s stage table,
+and G1 is the gate that everything downstream depends on.
+
+Also settled since this doc was written: the motor sensor cable needs an ADAPTER, not a repin
+(JST ZH 1.5 mm on the motor vs JST PH 2.0 mm on the VESC; the housings do not mate). No
+purchasable plug-and-play adapter was found in stock. The first spin runs SENSORLESS, which
+needs no sensor cable at all. See the 2026-09-14 build-log entry for the splice procedure and
+the multimeter identification steps.
 
 ## What needs no hardware assembly
 

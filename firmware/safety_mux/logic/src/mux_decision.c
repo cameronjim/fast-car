@@ -1,6 +1,6 @@
 #include "safety_mux/mux_decision.h"
 
-#include "safety_mux/pwm_validity.h"
+#include "safety_mux/pwm_window.h"
 #include "safety_mux/rc_switch.h"
 #include "safety_mux/watchdog.h"
 
@@ -38,20 +38,33 @@ MuxOutput mux_decide(MuxInput input, MuxParams params) {
 
   // 3. Per-channel Jetson PWM validity -- a glitched-but-alive command signal is not the
   // same failure as a frozen Jetson, but it is just as unsafe to forward.
-  if (!pwm_is_valid_us(input.jetson_steering_pwm_us, params.steering_pwm_min_us,
-                       params.steering_pwm_max_us)) {
+  //
+  // The window is the configured range widened by PWM_WINDOW_DEFAULT_TOLERANCE_US on each
+  // side, and the accepted pulse is clamped back into the UNWIDENED range before it is
+  // forwarded -- see pwm_window.h for the hardware observation (GitHub issue #63) that made
+  // this necessary and for how the tolerance was chosen. pwm_window_accept_us() writes the
+  // clamped value only when it accepts, so these two locals cannot carry an unclamped or
+  // unverified number past this point.
+  double steering_out_us = 0.0;
+  double throttle_out_us = 0.0;
+  if (!pwm_window_accept_us(input.jetson_steering_pwm_us, params.steering_pwm_min_us,
+                            params.steering_pwm_max_us, PWM_WINDOW_DEFAULT_TOLERANCE_US,
+                            &steering_out_us)) {
     return cut_with_reason(params, MUX_REASON_STEERING_PWM_INVALID, switch_position);
   }
-  if (!pwm_is_valid_us(input.jetson_throttle_pwm_us, params.throttle_pwm_min_us,
-                       params.throttle_pwm_max_us)) {
+  if (!pwm_window_accept_us(input.jetson_throttle_pwm_us, params.throttle_pwm_min_us,
+                            params.throttle_pwm_max_us, PWM_WINDOW_DEFAULT_TOLERANCE_US,
+                            &throttle_out_us)) {
     return cut_with_reason(params, MUX_REASON_THROTTLE_PWM_INVALID, switch_position);
   }
 
-  // 4. Nominal: pass the Jetson's own commanded PWM straight through.
+  // 4. Nominal: pass the Jetson's own commanded PWM through, clamped to the configured range.
+  // Inside the range (every command the Jetson issues that is not at an end stop) the clamp
+  // is the identity, so this is still passthrough, not a filter.
   MuxOutput out;
   out.cut = false;
-  out.steering_out_us = input.jetson_steering_pwm_us;
-  out.throttle_out_us = input.jetson_throttle_pwm_us;
+  out.steering_out_us = steering_out_us;
+  out.throttle_out_us = throttle_out_us;
   out.reason = MUX_REASON_NORMAL;
   out.switch_position = switch_position;
   return out;

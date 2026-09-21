@@ -138,6 +138,70 @@ Jetson (roadmap 1.3), steering polarity and endpoints are uncalibrated, and the 
 is still the provisional open-loop 5.0 m/s full scale with an unmodelled ~1700 us start
 deadzone.
 
+## 2026-09-21 -- safety mux plausibility window widened for capture quantisation, pass-through clamped
+
+GitHub issue #63, found during the ROS bring-up the same day. With the mux armed, the Jetson
+commanded exactly 2000 us on steering (its configured `steering.pwm_max_us`, full left); the
+diagnostic build reported `gp10=2031us OUT_OF_RANGE(allowed 1000-2000)` and the mux CUT on a
+legal command. Full right, commanded 1000 us, measured 1016 us and passed.
+
+- **Diagnosis.** Neither measurement is a fault. 2031.25 = 130 x 15.625 and 1015.625 = 65 x
+  15.625: both are exact points on a 15.625 us pulse-width grid, and the emitting
+  peripheral's own duty granularity (a 20 ms frame split 256 ways = 78.125 us) is five of
+  those steps. A command that is not itself on the grid cannot be emitted on it, and at the
+  edges of an inclusive window with zero tolerance the rounding points outward.
+- **The grid is not the mux's timebase, so measuring finer was not available.**
+  `pico/pwm_capture.c` already times edges with `time_us_64()`, a 1 us hardware timer. There
+  is no coarser clock in the capture path to refine: the pulse on the wire really is 2031 us
+  long. That ruled out the "measure at higher resolution" option in the issue and left
+  widening the window.
+- **Change.** New host-tested logic unit `logic/pwm_window.c`. The two Jetson command
+  channels are accepted within their configured range widened by **62.5 us (4 x 15.625 us)
+  on each side**, and an accepted pulse is **clamped back into the unwidened range** before
+  it is forwarded. Against the provisional 1000-2000 us steering range: accepted
+  937.5-2062.5 us, forwarded 1000-2000 us, so a 2031 us measurement drives the servo at
+  2000 us and never at 2031 us.
+- **Why 4 steps.** 2 steps (31.25 us) is the minimum that clears the observed error;
+  2.5 steps (39.06 us) is the worst case for nearest-point rounding onto the 78.125 us
+  emitter step; 4 steps is twice the observed error and past that worst case, while still
+  rejecting 900 us (37.5 us below the widened floor) and 2450 us (387.5 us above the widened
+  ceiling). 6 steps would have let 900 us in, which is where a tolerance stops being a
+  tolerance.
+- **Unchanged, deliberately.** The RC kill-switch channel is neither widened nor clamped: its
+  1400/1600 us hysteresis band around the 1500 us threshold reads exactly as before. Stale,
+  no-edge and genuinely out-of-range inputs still cut, with the same reasons and the same
+  priority order. A cut is still both channels to neutral plus the cutoff GPIO.
+  `pwm_is_valid_us()` and its suite are untouched, and `pico/pwm_capture.c`'s 200-5000 us
+  noise band is untouched.
+- **Tests.** Host suite goes from 320 to 511 assertions, all passing, nothing removed or
+  loosened. New `tests/test_pwm_window.c` covers the two hardware numbers (2031 us accepted
+  and clamped to 2000, 984/1016 us at the low edge), both window edges plus and minus one
+  grid step, the tolerance boundary itself and one step past it, the fail-closed paths
+  (NaN/Inf value, NaN/Inf/inverted bounds, NaN/Inf/negative tolerance all degrading to a zero
+  tolerance rather than an open one), and the garbage the issue names. `test_mux_decision.c`
+  gains the same cases end to end through `mux_decide()`, plus explicit cases pinning the
+  kill-switch thresholds as unchanged.
+- **Diagnostic build.** Each channel line now names the slack its window allows and prints
+  `CLAMPED-><value>` when a pulse is accepted only because of it, and the attach banner
+  states the rule. `docs/notes/mux-diagnostic-build.md` updated with the new sample lines.
+- **Artifacts** (built in the documented container: debian:bookworm arm64, arm-none-eabi-gcc
+  12.2, pico-sdk 2.1.0 via FetchContent; both clean, no warnings):
+
+  | Build | Bytes | sha256 |
+  |---|---|---|
+  | shipping `safety_mux.uf2` | 79872 | `e7af70c1f837e7611a5b6ca955a76bdf4776eeeba7b6b3ef4a4b39eccc498663` |
+  | diagnostic `safety_mux_diag.uf2` | 94208 | `86f5b6da76c7f6f75f75870345c0e9de2a43d978116f6e19e20db213160190f8` |
+
+  The shipping binary is 512 bytes larger than the 2026-09-20 one (79360 bytes,
+  `ccddd745...`), as expected: this is a change to `logic/`, so both builds change.
+- **Not verified on hardware.** Nothing here has been flashed. What a bench session still has
+  to confirm: that a commanded 2000 us now passes with the mux armed and that the servo sits
+  at its 2000 us end stop rather than past it; that the measured grid on this board really is
+  15.625 us (a scope reading, not two data points); and the interim mitigation the issue also
+  asks for, which is measuring the real servo endpoints and setting the steering PWM min/max
+  in `vehicle_params` inside the window (the servo buzzed at 1200 us, which this change does
+  not address and is not meant to).
+
 ## 2026-09-20 -- Jetson 40-pin PWM pins enabled and confirmed with a multimeter
 
 Ran the `docs/notes/first-boot-runbook.md` step 4/5 procedure for real, on the actual Jetson

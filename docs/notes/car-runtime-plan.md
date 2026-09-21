@@ -58,10 +58,8 @@ ExecStart=/usr/bin/docker run --rm --name car-stack \
   -v <rosbag output dir>:/bags \
   car:local bash -lc '
     source /opt/ros/humble/setup.bash && source install/setup.bash
-    ros2 launch racer_bringup <car_teleop.launch.py|car_autopilot.launch.py> <args> &
-    LAUNCH_PID=$!
-    ros2 bag record -o /bags/$(date +%Y%m%d_%H%M%S)_session -a &
-    wait $LAUNCH_PID'
+    exec ros2 launch racer_bringup <car_teleop.launch.py|car_autopilot.launch.py> \
+      bag_dir:=/bags <args>'
 Restart=on-failure
 RestartSec=2
 StandardOutput=journal
@@ -121,28 +119,35 @@ the bag, not the journal.
 
 ### How rosbag recording starts with the stack (CLAUDE.md invariant 5)
 
-`CLAUDE.md` invariant 5: "Every run is logged (rosbag + rail voltage). Code paths that drive
-the car without logging are bugs." The sketch above starts `ros2 bag record -a` as a second
-background process in the same `ExecStart`, under the same `Restart=on-failure` umbrella, so
-a stack restart also gets a fresh bag rather than one process silently outliving the other.
-Two things this still needs before it is real, not sketched:
+**Resolved 2026-09-21 (GitHub issue #64, roadmap 1.6). This is no longer a design question,
+and the sketch above no longer starts a second `ros2 bag record` process of its own.**
 
-- **Rail voltage into the same bag.** Whatever node/topic ends up publishing rail voltage
-  (not yet built -- `claude-docs/11-hardware.md`'s rail-voltage sensing, roadmap task 1.2)
-  needs to be `ros2 bag record -a`-visible (i.e. a normal topic, not a side channel) so one
-  `-a` invocation captures both command-path topics and rail voltage together, per the
-  invariant's own phrasing ("rosbag + rail voltage" as one requirement, not two separate
-  logs to reconcile later).
-- **A run without a bag being an actual startup failure, not a silent gap.** Right now
-  nothing enforces this -- CONFIRMED by inspection and on the device 2026-09-21: neither
-  `car_teleop.launch.py` nor any other launch file in `racer_bringup` starts `ros2 bag
-  record`, so the stack as it ships today drives the command path with no log at all, which
-  `CLAUDE.md` invariant 5 makes a bug rather than a gap. It was acceptable for the 2026-09-21
-  bring-up only because nothing could move; the eventual unit should treat `ros2 bag record` failing to start
-  (disk full, `/bags` not mounted, etc.) as reason to stop the whole stack, not drive with
-  logging quietly absent. The exact mechanism (a wrapper script checking the bag process is
-  alive before letting the launch file proceed, vs. a supervisor process) is left to whoever
-  implements this.
+`car_teleop.launch.py` starts the recorder and `rail_voltage_node` itself, on by default:
+
+- **One lifecycle, not two.** The recorder is a launch-managed process, so it starts with the
+  stack, stops with the stack, and cannot outlive it or be outlived by it. The earlier sketch
+  -- two background processes in one `ExecStart` under one `Restart=on-failure` -- had a race
+  the launch file simply does not have.
+- **Rail voltage is a normal topic.** `racer_drivers/rail_voltage_node` publishes the Jetson
+  INA3221's rails at 5 Hz as `std_msgs/Float32` in volts and amps under `/telemetry/...`, so
+  one recorder captures command path and rail voltage together, which is what the invariant's
+  "rosbag + rail voltage" phrasing asks for. The INA226 in `claude-docs/11-hardware.md` is
+  still unfitted; when it lands it publishes onto the same topics and nothing else changes.
+- **A run without a bag IS a startup failure now.** If the recorder exits, the launch logs at
+  error level and shuts itself down (about a second, measured), and `pwm_output_node` takes
+  its ordinary fail-closed shutdown path on the way out. The mechanism the old text left "to
+  whoever implements this" is a launch `OnProcessExit` handler emitting `Shutdown`, not a
+  wrapper script or a supervisor. Critically it is NOT a gate on `/drive`: putting a logging
+  dependency inside safety layer 3 would weaken the layer it sits in to strengthen something
+  that is not a safety layer at all (`claude-docs/05-safety.md`).
+
+What the unit above still owns is only WHERE the bags go: `-v <rosbag output dir>:/bags` plus
+`bag_dir:=/bags`. Interactively, `bag_dir` defaults to `/workspace/data/bags`, which is the
+repo's gitignored `data/` through the existing workspace mount -- see
+`docs/notes/first-boot-runbook.md`'s "Every run is recorded".
+
+Storage format is chosen at launch: mcap when `ros-humble-rosbag2-storage-mcap` is installed
+(it is, in `docker/car`), sqlite3 otherwise, and the choice is logged rather than assumed.
 
 ### Relationship to the heartbeat service (host-level, independent, by design)
 

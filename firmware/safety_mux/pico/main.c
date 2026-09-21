@@ -23,6 +23,15 @@
 #include "pwm_capture.h"
 #include "pwm_output.h"
 
+// DIAGNOSTIC BUILD ONLY (-DDIAG_BUILD=ON). Everything this pulls in is printing: it observes
+// the inputs and the decision this loop already made and writes a line over USB about twice a
+// second. The shipping build does not define SAFETY_MUX_DIAG, so none of it is compiled, and
+// the decision path below is character-for-character the same in both builds. See
+// docs/notes/mux-diagnostic-build.md.
+#ifdef SAFETY_MUX_DIAG
+#include "diag_report.h"
+#endif
+
 #define RC_KILL_SWITCH_GPIO 12
 #define JETSON_STEERING_PWM_IN_GPIO 10
 #define JETSON_THROTTLE_PWM_IN_GPIO 7
@@ -163,6 +172,22 @@ int main(void) {
   pwm_capture_init_channel(JETSON_THROTTLE_PWM_IN_GPIO);
   heartbeat_input_init(JETSON_HEARTBEAT_GPIO);
 
+#ifdef SAFETY_MUX_DIAG
+  // Diagnostic reporting only; takes no decision and touches no pin. Initialized here, after
+  // the params are accepted and after every pin is in its defined state, so it can never be
+  // the reason a startup step is skipped or reordered.
+  const DiagGpioMap diag_gpios = {
+      .kill_gpio = RC_KILL_SWITCH_GPIO,
+      .steering_gpio = JETSON_STEERING_PWM_IN_GPIO,
+      .throttle_gpio = JETSON_THROTTLE_PWM_IN_GPIO,
+      .heartbeat_gpio = JETSON_HEARTBEAT_GPIO,
+      .servo_gpio = SERVO_PWM_OUT_GPIO,
+      .esc_gpio = ESC_PWM_OUT_GPIO,
+      .cutoff_gpio = POWER_CUTOFF_GPIO,
+  };
+  diag_report_init(&diag_gpios, &params);
+#endif
+
   // Seeded INVALID, never ARMED: a kill switch already parked inside its dead band at
   // power-on must resolve to KILL, and only a genuine move past the arm edge may arm it
   // (logic/src/rc_switch.c).
@@ -182,6 +207,14 @@ int main(void) {
     pwm_output_set_us(SERVO_PWM_OUT_GPIO, output.steering_out_us);
     pwm_output_set_us(ESC_PWM_OUT_GPIO, output.throttle_out_us);
     power_cutoff_set_enabled(POWER_CUTOFF_GPIO, !output.cut);
+
+#ifdef SAFETY_MUX_DIAG
+    // AFTER the outputs are applied, deliberately: the line describes a decision that has
+    // already reached the pins, so nothing it prints can be ahead of what the car is doing.
+    // Returns immediately on all but roughly one cycle in a hundred, and prints nothing at
+    // all with no USB host attached (diag_report.h's "REAL-TIME" note).
+    diag_report_tick(&input, &output);
+#endif
 
     sleep_ms(MUX_LOOP_PERIOD_MS);
   }

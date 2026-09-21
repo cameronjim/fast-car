@@ -66,6 +66,10 @@ actuation:
   throttle_pwm_max_us: 2000.0
   throttle_pwm_neutral_us: 1500.0
   throttle_full_scale_mps: 5.0
+  # Deliberately NOT the committed 4000/4000: this is a fixture, and two different values
+  # exercise the per-channel path (GitHub issue #66).
+  steering_pwm_period_us: 20000.0
+  throttle_pwm_period_us: 4000.0
 
 sensors:
   imu:

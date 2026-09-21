@@ -48,9 +48,8 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-_OUTPUT_RATE_HZ = 50.0  # the servo frame rate; not a test knob (see the node's descriptor)
+_OUTPUT_RATE_HZ = 50.0  # the duty-rewrite cadence; not a test knob (see the node's descriptor)
 _DRIVE_TIMEOUT_S = 0.2
-_PERIOD_NS = 20_000_000
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _PARAMS_PATH = _REPO_ROOT / "config" / "vehicle_params.yaml"
@@ -73,6 +72,11 @@ _STEERING_LEFT_US = (
 )
 _STEERING_RIGHT_US = _STEERING_MIN_US if _STEERING_LEFT_US == _STEERING_MAX_US else _STEERING_MAX_US
 _THROTTLE_NEUTRAL_US = _PARAMS["actuation"]["throttle_pwm_neutral_us"]
+# The PWM frame period is a vehicle_params field too now (GitHub issue #66), so it is derived
+# here like every other physical constant in this file rather than typed in as 20_000_000.
+# Per channel, because nothing forces the two channels to share a frame.
+_STEERING_PERIOD_NS = round(_PARAMS["actuation"]["steering_pwm_period_us"] * 1000.0)
+_THROTTLE_PERIOD_NS = round(_PARAMS["actuation"]["throttle_pwm_period_us"] * 1000.0)
 _THROTTLE_MAX_US = _PARAMS["actuation"]["throttle_pwm_max_us"]
 _SPEED_FULL_SCALE_MPS = _PARAMS["actuation"]["throttle_full_scale_mps"]
 
@@ -203,8 +207,9 @@ class TestPwmOutputNode(unittest.TestCase):
     def test_a_neutral_on_start_before_any_drive(self):
         """Runs first (alphabetical method order) because it is the only test that can
         observe the pre-first-/drive state: nothing in this file has published /drive yet."""
-        self.assertEqual(_read_int(_channel_dir(0, 0) / "period"), _PERIOD_NS)
-        self.assertEqual(_read_int(_channel_dir(0, 1) / "period"), _PERIOD_NS)
+        # The configured frame period reached sysfs, per channel, before anything was enabled.
+        self.assertEqual(_read_int(_channel_dir(0, 0) / "period"), _STEERING_PERIOD_NS)
+        self.assertEqual(_read_int(_channel_dir(0, 1) / "period"), _THROTTLE_PERIOD_NS)
         self.assertEqual(_duty_ns(0, 0), _expected_duty_ns(_STEERING_NEUTRAL_US))
         self.assertEqual(_duty_ns(0, 1), _expected_duty_ns(_THROTTLE_NEUTRAL_US))
         self.assertEqual(_enabled(0, 0), 1)

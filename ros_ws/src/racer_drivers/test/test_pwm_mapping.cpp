@@ -50,6 +50,10 @@ MappingConfig nominal_config() {
   config.speed_cap_mps = 10.0;
   config.left_is_pwm_max = true;
   config.drive_timeout_s = 0.1;
+  // Deliberately DIFFERENT per channel (and neither is the committed 4000 us), so a driver
+  // that kept one shared period, or crossed the two over, fails here (GitHub issue #66).
+  config.steering_pwm_period_us = 5000.0;
+  config.throttle_pwm_period_us = 8000.0;
   return config;
 }
 
@@ -424,6 +428,93 @@ TEST(PulseToDuty, TableDriven) {
   EXPECT_EQ(racer_drivers::pulse_us_to_duty_ns(30000.0, kPeriod), kPeriod);
 }
 
+// -- frame period, pulse grid, and period-independence (GitHub issue #66) ---------------------
+//
+// The Jetson's Tegra PWM controller quantises duty to 1/256 of the frame period, so the frame
+// period -- and nothing else in this file -- decides how finely a pulse can be commanded.
+// These tests pin the arithmetic that claim rests on, and pin that the MAPPING does not
+// depend on the period: a pulse width is a pulse width at any frame rate.
+
+TEST(PeriodUsToNs, ConvertsAndRefusesNonsense) {
+  EXPECT_EQ(racer_drivers::period_us_to_ns(20000.0), 20000000ULL);
+  EXPECT_EQ(racer_drivers::period_us_to_ns(4000.0), 4000000ULL);
+  EXPECT_EQ(racer_drivers::period_us_to_ns(4000.4), 4000400ULL);
+  EXPECT_EQ(racer_drivers::period_us_to_ns(0.0), 0ULL);
+  EXPECT_EQ(racer_drivers::period_us_to_ns(-4000.0), 0ULL);
+  EXPECT_EQ(racer_drivers::period_us_to_ns(kNaN), 0ULL);
+  EXPECT_EQ(racer_drivers::period_us_to_ns(kInf), 0ULL);
+}
+
+TEST(PulseGridStep, MatchesTheMeasuredTegraGrid) {
+  // The two numbers this whole change is about: 78.125 us at the old 20 ms frame (the grid
+  // the mux measured on 2026-09-21 as 1484 / 2031 / 1016 us) and 15.625 us at 4 ms.
+  EXPECT_DOUBLE_EQ(racer_drivers::pulse_grid_step_us(20000.0), 78.125);
+  EXPECT_DOUBLE_EQ(racer_drivers::pulse_grid_step_us(4000.0), 15.625);
+  EXPECT_DOUBLE_EQ(racer_drivers::pulse_grid_step_us(8000.0), 31.25);
+  EXPECT_DOUBLE_EQ(racer_drivers::pulse_grid_step_us(0.0), 0.0);
+  EXPECT_DOUBLE_EQ(racer_drivers::pulse_grid_step_us(-4000.0), 0.0);
+  EXPECT_DOUBLE_EQ(racer_drivers::pulse_grid_step_us(kNaN), 0.0);
+  EXPECT_DOUBLE_EQ(racer_drivers::pulse_grid_step_us(kInf), 0.0);
+}
+
+TEST(PulseGridStep, TheMeasuredReadingsAreWholeStepsOfTheGridItReports) {
+  // 1484, 2031 and 1016 us were measured at the mux against a 20 ms frame. Each is a whole
+  // number of grid steps (19, 26, 13), which is the evidence the 8-bit duty claim rests on.
+  const double step = racer_drivers::pulse_grid_step_us(20000.0);
+  EXPECT_NEAR(19.0 * step, 1484.0, 0.5);
+  EXPECT_NEAR(26.0 * step, 2031.0, 0.5);
+  EXPECT_NEAR(13.0 * step, 1016.0, 0.5);
+}
+
+TEST(PulseToDuty, IsIndependentOfThePeriod) {
+  // The same commanded pulse width produces the same duty in nanoseconds at the old 20 ms
+  // frame and at the new 4 ms one. Shortening the frame changes what the HARDWARE can round
+  // to, never what this node asks for.
+  constexpr unsigned long long kOldPeriod = 20000000ULL;
+  constexpr unsigned long long kNewPeriod = 4000000ULL;
+  for (const double pulse_us : {1000.0, 1093.75, 1400.0, 1500.0, 1666.7, 1875.0, 2000.0}) {
+    EXPECT_EQ(racer_drivers::pulse_us_to_duty_ns(pulse_us, kOldPeriod),
+              racer_drivers::pulse_us_to_duty_ns(pulse_us, kNewPeriod))
+        << "pulse " << pulse_us << " us mapped differently at 20 ms and 4 ms";
+  }
+  // The one thing that IS period-dependent, and must stay so: the clamp that keeps a duty
+  // from exceeding its own period (EINVAL from the kernel).
+  EXPECT_EQ(racer_drivers::pulse_us_to_duty_ns(6000.0, kNewPeriod), kNewPeriod);
+  EXPECT_EQ(racer_drivers::pulse_us_to_duty_ns(6000.0, kOldPeriod), 6000000ULL);
+}
+
+TEST(ValidateConfig, RejectsANonFiniteOrNonPositiveFramePeriod) {
+  for (const double bad : {kNaN, kInf, 0.0, -4000.0}) {
+    MappingConfig steering_bad = nominal_config();
+    steering_bad.steering_pwm_period_us = bad;
+    const auto steering_reason = racer_drivers::validate_config(steering_bad);
+    ASSERT_TRUE(steering_reason.has_value());
+    EXPECT_NE(steering_reason->find("steering_pwm_period_us"), std::string::npos);
+
+    MappingConfig throttle_bad = nominal_config();
+    throttle_bad.throttle_pwm_period_us = bad;
+    const auto throttle_reason = racer_drivers::validate_config(throttle_bad);
+    ASSERT_TRUE(throttle_reason.has_value());
+    EXPECT_NE(throttle_reason->find("throttle_pwm_period_us"), std::string::npos);
+  }
+}
+
+TEST(ValidateConfig, RejectsAFramePeriodTooShortForItsOwnLongestPulse) {
+  // nominal_config()'s steering maximum is 2000 us, so anything under 4000 us is refused and
+  // exactly 4000 us is accepted -- the committed configuration's own boundary.
+  MappingConfig config = nominal_config();
+  config.steering_pwm_period_us = 3999.0;
+  ASSERT_TRUE(racer_drivers::validate_config(config).has_value());
+  config.steering_pwm_period_us = 4000.0;
+  EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
+
+  // Throttle maximum is 1900 us in the fixture.
+  config.throttle_pwm_period_us = 3799.0;
+  ASSERT_TRUE(racer_drivers::validate_config(config).has_value());
+  config.throttle_pwm_period_us = 3800.0;
+  EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
+}
+
 // -- PwmOutputDriver sequencing (in-memory sinks, no kernel) ------------------------------------
 
 class DriverFixture : public ::testing::Test {
@@ -431,15 +522,19 @@ class DriverFixture : public ::testing::Test {
   MappingConfig config{nominal_config()};
   InMemoryPwmChannel steering;
   InMemoryPwmChannel throttle;
-  static constexpr unsigned long long kPeriod = 20000000ULL;
+  // The driver takes its periods from the config, not from the fixture: these mirror
+  // nominal_config()'s two frame periods in nanoseconds (GitHub issue #66).
+  static constexpr unsigned long long kSteeringPeriod = 5000000ULL;
+  static constexpr unsigned long long kThrottlePeriod = 8000000ULL;
 };
 
 TEST_F(DriverFixture, StartsBothChannelsAtNeutral) {
-  PwmOutputDriver driver(config, steering, throttle, kPeriod);
+  PwmOutputDriver driver(config, steering, throttle);
   driver.start();
   EXPECT_TRUE(steering.started);
   EXPECT_TRUE(throttle.started);
-  EXPECT_EQ(steering.period_ns, kPeriod);
+  EXPECT_EQ(steering.period_ns, kSteeringPeriod);
+  EXPECT_EQ(throttle.period_ns, kThrottlePeriod);
   ASSERT_EQ(steering.duty_writes.size(), 1U);
   EXPECT_EQ(steering.duty_writes.front(), 1400000ULL);
   ASSERT_EQ(throttle.duty_writes.size(), 1U);
@@ -447,7 +542,7 @@ TEST_F(DriverFixture, StartsBothChannelsAtNeutral) {
 }
 
 TEST_F(DriverFixture, UpdateWritesTheMappedPulseToBothChannels) {
-  PwmOutputDriver driver(config, steering, throttle, kPeriod);
+  PwmOutputDriver driver(config, steering, throttle);
   driver.start();
   CommandState state;
   state.has_command = true;
@@ -461,7 +556,7 @@ TEST_F(DriverFixture, UpdateWritesTheMappedPulseToBothChannels) {
 }
 
 TEST_F(DriverFixture, UpdateWithNoCommandWritesNeutral) {
-  PwmOutputDriver driver(config, steering, throttle, kPeriod);
+  PwmOutputDriver driver(config, steering, throttle);
   driver.start();
   driver.update(CommandState{});
   EXPECT_EQ(steering.duty_writes.back(), 1400000ULL);
@@ -469,7 +564,7 @@ TEST_F(DriverFixture, UpdateWithNoCommandWritesNeutral) {
 }
 
 TEST_F(DriverFixture, ForceNeutralWritesNeutralWithoutDisabling) {
-  PwmOutputDriver driver(config, steering, throttle, kPeriod);
+  PwmOutputDriver driver(config, steering, throttle);
   driver.start();
   CommandState state;
   state.has_command = true;
@@ -484,7 +579,7 @@ TEST_F(DriverFixture, ForceNeutralWritesNeutralWithoutDisabling) {
 }
 
 TEST_F(DriverFixture, StopWritesNeutralThenDisables) {
-  PwmOutputDriver driver(config, steering, throttle, kPeriod);
+  PwmOutputDriver driver(config, steering, throttle);
   driver.start();
   CommandState state;
   state.has_command = true;
@@ -499,7 +594,7 @@ TEST_F(DriverFixture, StopWritesNeutralThenDisables) {
 }
 
 TEST_F(DriverFixture, StopIsIdempotent) {
-  PwmOutputDriver driver(config, steering, throttle, kPeriod);
+  PwmOutputDriver driver(config, steering, throttle);
   driver.start();
   driver.stop();
   const std::size_t writes_after_first_stop = steering.duty_writes.size();
@@ -508,7 +603,7 @@ TEST_F(DriverFixture, StopIsIdempotent) {
 }
 
 TEST_F(DriverFixture, NoUpdateEverLeavesANonNeutralPulseAfterStop) {
-  PwmOutputDriver driver(config, steering, throttle, kPeriod);
+  PwmOutputDriver driver(config, steering, throttle);
   driver.start();
   for (double angle = -0.4; angle <= 0.2; angle += 0.05) {
     CommandState state;
@@ -520,6 +615,52 @@ TEST_F(DriverFixture, NoUpdateEverLeavesANonNeutralPulseAfterStop) {
   driver.stop();
   EXPECT_EQ(steering.duty_writes.back(), 1400000ULL);
   EXPECT_EQ(throttle.duty_writes.back(), 1500000ULL);
+}
+
+TEST_F(DriverFixture, WritesEachChannelsConfiguredPeriodToItsOwnSink) {
+  // The configured period reaches the sink -- on the car that is the sysfs `period` file --
+  // and the two channels do not share or swap it (GitHub issue #66).
+  PwmOutputDriver driver(config, steering, throttle);
+  driver.start();
+  EXPECT_EQ(steering.period_ns, kSteeringPeriod);
+  EXPECT_EQ(throttle.period_ns, kThrottlePeriod);
+  EXPECT_EQ(driver.steering_period_ns(), kSteeringPeriod);
+  EXPECT_EQ(driver.throttle_period_ns(), kThrottlePeriod);
+}
+
+TEST_F(DriverFixture, ChangingTheFramePeriodDoesNotChangeTheDutiesWritten) {
+  // Same commands, two different frame periods, identical duty writes: shortening the frame
+  // buys resolution in the PERIPHERAL and changes nothing this node asks for.
+  MappingConfig slow = config;
+  slow.steering_pwm_period_us = 20000.0;
+  slow.throttle_pwm_period_us = 20000.0;
+  MappingConfig fast = config;
+  fast.steering_pwm_period_us = 4000.0;
+  fast.throttle_pwm_period_us = 4000.0;
+
+  CommandState state;
+  state.has_command = true;
+  state.age_s = 0.0;
+  state.steering_angle_rad = 0.1;
+  state.speed_mps = 2.0;
+
+  InMemoryPwmChannel slow_steering;
+  InMemoryPwmChannel slow_throttle;
+  PwmOutputDriver slow_driver(slow, slow_steering, slow_throttle);
+  slow_driver.start();
+  slow_driver.update(state);
+
+  InMemoryPwmChannel fast_steering;
+  InMemoryPwmChannel fast_throttle;
+  PwmOutputDriver fast_driver(fast, fast_steering, fast_throttle);
+  fast_driver.start();
+  fast_driver.update(state);
+
+  EXPECT_EQ(slow_steering.duty_writes, fast_steering.duty_writes);
+  EXPECT_EQ(slow_throttle.duty_writes, fast_throttle.duty_writes);
+  // ... while the periods themselves did change.
+  EXPECT_EQ(slow_steering.period_ns, 20000000ULL);
+  EXPECT_EQ(fast_steering.period_ns, 4000000ULL);
 }
 
 // -- validate_channel_assignment -------------------------------------------------------------

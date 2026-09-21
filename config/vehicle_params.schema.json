@@ -295,7 +295,8 @@
       "required": [
         "command_to_torque_delay_s", "throttle_time_constant_s", "max_acceleration_mps2",
         "throttle_pwm_min_us", "throttle_pwm_max_us", "throttle_pwm_neutral_us",
-        "throttle_full_scale_mps"
+        "throttle_full_scale_mps",
+        "steering_pwm_period_us", "throttle_pwm_period_us"
       ],
       "properties": {
         "command_to_torque_delay_s": {
@@ -334,6 +335,16 @@
           "units": "m/s",
           "sign_convention": "positive forward; a commanded -this maps to throttle_pwm_min_us",
           "description": "Full-scale speed reference for racer_drivers/pwm_output_node's provisional OPEN-LOOP throttle map: a commanded +this maps to throttle_pwm_max_us and -this to throttle_pwm_min_us. An ACTUATION scale, not a safety limit -- limits.global_speed_cap_mps still clamps the command and is unaffected. Exists because the speed cap (an f1tenth_gym model-validity bound, 20 m/s) made a 1 m/s command only 25 us off neutral, likely inside the VESC PPM deadband (GitHub issue #40). Null until measured; the committed value is PROVISIONAL and unmeasured, replaced by the wheels-off-the-ground throttle sweep in docs/notes/first-boot-runbook.md, and removed entirely when the closed-loop vesc_node replaces the open-loop map."
+        },
+        "steering_pwm_period_us": {
+          "type": "number", "minimum": 2500, "maximum": 20000,
+          "units": "microseconds (raw PWM frame period; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "PWM frame period racer_drivers/pwm_output_node writes to the Jetson's STEERING sysfs PWM channel (period, in ns, is this x 1000). It sets the ACHIEVABLE PULSE GRID and nothing else: the Tegra PWM controller has 8-bit duty resolution (pwm-tegra.c PWM_DUTY_WIDTH 8), so a commanded pulse lands on a multiple of period/256 -- 78.125 us at a 20 ms frame, 15.625 us at 4 ms (GitHub issue #66). It is NOT what the steering servo sees: firmware/safety_mux captures the INPUT pulse width by edge timestamps and REGENERATES its own 50 Hz output to the servo (firmware/safety_mux/pico/pwm_output.c), so this period only exists on the Jetson-to-Pico link. Non-nullable: there is no defensible default for a value that decides actuator resolution, and a consumer must refuse rather than guess (CLAUDE.md invariants 2 and 3). Must be longer than steering.pwm_max_us with room for a low gap between frames; the schema floor of 2500 us is the hard limit and pwm_output_node refuses anything not comfortably above the channel's own pwm_max_us."
+        },
+        "throttle_pwm_period_us": {
+          "type": "number", "minimum": 2500, "maximum": 20000,
+          "units": "microseconds (raw PWM frame period; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "PWM frame period racer_drivers/pwm_output_node writes to the Jetson's THROTTLE sysfs PWM channel. Same meaning, same grid arithmetic and same non-nullable stance as steering_pwm_period_us; kept per channel because the two channels are different pwmchips on this board (pwmchip0 and pwmchip2) and nothing forces them to share a frame. The VESC never sees this either -- the mux regenerates its own 50 Hz PPM output to the ESC."
         }
       }
     },

@@ -5,13 +5,16 @@ On-vehicle drivers (`claude-docs/02-repo-layout.md`). One node so far.
 ## `pwm_output_node` -- the tail of the command path
 
 ```
-safety_node --/drive--> pwm_output_node --2x 50 Hz PWM--> layer-1 mux board --> servo + VESC PPM
+safety_node --/drive--> pwm_output_node --2x 250 Hz PWM--> layer-1 mux board --2x 50 Hz--> servo + VESC PPM
 ```
 
 It subscribes to `/drive` (reliable, depth 10) and to nothing else on the command path, and
 converts `steering_angle` (rad, LEFT positive per `claude-docs/06-vehicle-params.md`) and
-`speed` (m/s) into two 50 Hz servo pulses driven by the Jetson's hardware PWM through the
-Linux sysfs PWM interface.
+`speed` (m/s) into two servo pulses driven by the Jetson's hardware PWM through the Linux
+sysfs PWM interface, on a 4 ms (250 Hz) frame. The frame rate is a resolution decision on the
+Jetson-to-Pico link and nothing more -- the mux regenerates its own 50 Hz pulses to the servo
+and the ESC, so that is still what the actuators see. See "Actuator resolution" below
+(GitHub issue #66).
 
 **It never subscribes to `/drive_raw`.** Doing so would put an ungated command on the wire
 and route around `safety_node`, which is the bypass `CLAUDE.md` invariant 1 forbids. The L3
@@ -92,6 +95,7 @@ these is `null` -- the same refuse-to-arm discipline as `firmware/safety_mux`'s
 | `actuation.throttle_pwm_min_us` / `throttle_pwm_neutral_us` / `throttle_pwm_max_us` | throttle pulse ends and neutral | 1000 / 1500 / 2000 (PROVISIONAL, unmeasured) |
 | `actuation.throttle_full_scale_mps` | full-scale reference for the open-loop speed map | 5.0 (PROVISIONAL, unmeasured) |
 | `limits.global_speed_cap_mps` | clamp applied to the commanded speed before the map | 20.0 (a model-validity bound, NOT a safety cap) |
+| `actuation.steering_pwm_period_us` / `throttle_pwm_period_us` | PWM frame period written to each channel's sysfs `period` | 4000 / 4000 (250 Hz; sets the pulse grid, see "Actuator resolution") |
 
 None of these is null today, so the node starts. The four steering PWM fields (endpoints,
 neutral, and the sign) are now MEASURED, 2026-09-21 (`docs/notes/bench-session-2026-09-20.md`).
@@ -134,13 +138,73 @@ generated binding and refuses to start if the field is not exactly `"pwm_min_us"
 `"pwm_max_us"`. Backwards, the car steers into whatever it was avoiding, which is why this was
 verified with the wheels off the ground before anything else.
 
+### Actuator resolution: the frame period sets the pulse grid (GitHub issue #66)
+
+The Jetson's Tegra PWM controller expresses duty as an **8-bit fraction of the period**
+(Linux `pwm-tegra.c`, `PWM_DUTY_WIDTH 8`). A commanded pulse width therefore lands on the
+nearest multiple of `period / 256`, and nothing above the driver can recover the difference.
+At the 20 ms frame this node used until 2026-09-21 that step is 78.125 us, which is about
+**13 usable positions across 1000-2000 us**: 2.3 deg of steering per step on a +-30 deg rack,
+and a throttle that behaves like a switch, because the first steps off neutral fall inside
+the VESC's 15 percent current deadband and the sensorless motor does not catch until roughly
+1700-1800 us.
+
+Measured at the mux on 2026-09-21, at the 20 ms frame:
+
+| commanded | measured at the Pico | grid steps |
+|---|---|---|
+| 1000 us | 1016 us | 13 x 78.125 |
+| 1500 us | 1484 us | 19 x 78.125 |
+| 2000 us | 2031 us | 26 x 78.125 |
+
+**The fix is a shorter frame on the Jetson side, and it costs nothing downstream.** The
+safety mux captures the INPUT pulse width from edge timestamps
+(`firmware/safety_mux/pico/pwm_capture.c`, `time_us_64`, 1 us resolution) and **regenerates**
+its own outputs to the servo and the ESC at a fixed 50 Hz / 20 ms frame
+(`firmware/safety_mux/pico/pwm_output.c`, `top=39999` at 0.5 us per count). The servo and the
+VESC never see the Jetson's frame rate at all -- only the Jetson-to-Pico link does. So the
+frame period is free to be whatever gives the best resolution, within the limits below.
+
+The achievable grid for a given frame, which `pulse_grid_step_us()` in `pwm_mapping.hpp`
+computes and the node logs at startup:
+
+| frame period | frame rate | pulse grid step | positions across 1000-2000 us |
+|---|---|---|---|
+| 20000 us | 50 Hz | 78.125 us | about 13 |
+| 8000 us | 125 Hz | 31.25 us | about 32 |
+| **4000 us** | **250 Hz** | **15.625 us** | **about 64** |
+| 2000 us | 500 Hz | 7.8125 us | about 128 (but see below) |
+
+Both channels are configured at **4000 us** in `config/vehicle_params.yaml`
+(`actuation.steering_pwm_period_us`, `actuation.throttle_pwm_period_us`). Steering gets the
+short frame too, for the same reason the throttle does: the analog Traxxas 2075 servo is
+behind the mux's regenerated output and never sees this frame either, so leaving steering at
+20 ms would keep 2.3 deg per step in exchange for nothing.
+
+**Why not shorter than 4000 us.** A 2000 us pulse has to fit inside its frame with a clear
+low gap after it, because the mux measures the gap's edges. At 4000 us, full throttle is 50
+percent duty with a 2 ms gap. Shorter frames push that duty towards 100 percent, and a merged
+pair of frames (two consecutive missed edge interrupts on the Pico) stops being rejected by
+`pwm_capture.c`'s 200-5000 us plausibility band and starts looking like a plausible pulse.
+`validate_config()` enforces the same rule from this side: a frame period shorter than twice
+its channel's own `pwm_max_us` is refused at startup, named, and not repaired.
+
+**What this does NOT change.** The mapping is period-independent -- a pulse width in
+microseconds is the same pulse width at any frame rate, and the L1 tests pin that. The duty
+values this node writes are identical before and after; only what the peripheral can round to
+changes. The command update cadence is still 50 Hz (`output_rate_hz`), and the mux's outputs
+are still 50 Hz.
+
+Verify it on the bench before driving: `docs/notes/first-boot-runbook.md`, "Launch and
+drive".
+
 ### Parameters
 
 All declared with descriptors and ranges (`claude-docs/10-conventions.md`).
 
 | Parameter | Default | Notes |
 |---|---|---|
-| `output_rate_hz` | 50.0 | Servo frame rate AND the PWM carrier period. Not a test knob. |
+| `output_rate_hz` | 50.0 | How often the two duty cycles are REWRITTEN (the command update cadence). No longer the PWM carrier period: that is `actuation.steering_pwm_period_us` / `throttle_pwm_period_us` in `config/vehicle_params.yaml` (issue #66). Not a test knob. |
 | `drive_timeout_s` | 0.1 | `/drive` staleness -> neutral. Node tuning, deliberately NOT `limits.mux_watchdog_timeout_s` (that is the layer-1 MCU's own heartbeat window, a different mechanism on a different device). |
 | `sysfs_root` | `/sys/class/pwm` | Only tests change this. |
 | `steering_pwmchip` / `steering_pwm_channel` | 0 / 0 | VERIFIED on the Jetson Orin Nano Super Dev Kit, 2026-09-20: header pin 15. |
@@ -212,8 +276,9 @@ output the pinmux has not routed to a pad. The pinmux has to be switched, which
 
    ```sh
    echo 0        | sudo tee /sys/class/pwm/pwmchipN/export
-   echo 20000000 | sudo tee /sys/class/pwm/pwmchipN/pwm0/period      # 20 ms = 50 Hz
-   echo 10000000 | sudo tee /sys/class/pwm/pwmchipN/pwm0/duty_cycle  # 50 percent duty
+   echo 4000000  | sudo tee /sys/class/pwm/pwmchipN/pwm0/period      # 4 ms = 250 Hz, the
+                                                                     # configured frame
+   echo 2000000  | sudo tee /sys/class/pwm/pwmchipN/pwm0/duty_cycle  # 50 percent duty
    echo 1        | sudo tee /sys/class/pwm/pwmchipN/pwm0/enable
    ```
 

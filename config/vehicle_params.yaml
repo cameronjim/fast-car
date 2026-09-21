@@ -68,6 +68,17 @@
 # changes the schema's required-field set, so this is a minor bump per rule 5; throttle
 # fields are UNCHANGED by this bump. See docs/notes/bench-session-2026-09-20.md's steering
 # endpoint follow-up and docs/notes/build-log.md's 2026-09-21 evening entry.
+#
+# schema_version bumped 0.3.0 -> 0.4.0 on 2026-09-21: two new REQUIRED fields,
+# actuation.steering_pwm_period_us and actuation.throttle_pwm_period_us, carry the Jetson PWM
+# frame period that until now was a hand-written 20 ms in racer_drivers/pwm_output_node
+# (GitHub issue #66). The frame period decides the achievable pulse grid -- period/256 on the
+# Tegra controller's 8-bit duty -- so it is a driver-boundary physical constant and belongs
+# here rather than in a node default (CLAUDE.md invariant 2). Both are set to 4000 us, which
+# takes the grid from 78.125 us to 15.625 us; nothing downstream of the mux changes, because
+# the mux regenerates its own 50 Hz outputs. A new required field changes the schema's
+# required-field set, so this is a minor bump per rule 5. No other field changed. See the
+# actuation section below and docs/notes/build-log.md's 2026-09-21 entry for issue #66.
 
 chassis:
   mass_kg: 3.74                    # gym: m
@@ -162,6 +173,36 @@ actuation:
   # commanded speed, record wheel speed against pulse width, and set this to the speed
   # observed at throttle_pwm_max_us.
   throttle_full_scale_mps: 5.0      # PROVISIONAL (unmeasured open-loop map scale) -- see above
+  # PWM FRAME PERIOD on the Jetson's two sysfs PWM channels (GitHub issue #66). This is the
+  # carrier period racer_drivers/pwm_output_node writes to <channel>/period, in microseconds
+  # (the sysfs value is this x 1000, in nanoseconds).
+  #
+  # WHAT IT ACTUALLY CONTROLS: the achievable pulse-width grid, and nothing else. The Tegra
+  # PWM controller has 8-bit duty resolution (pwm-tegra.c, PWM_DUTY_WIDTH 8), so a commanded
+  # pulse is quantised to a multiple of period/256. At the 20 ms frame this node used until
+  # now that step is 78.125 us: about 13 distinct positions across 1000-2000 us, measured at
+  # the mux on 2026-09-21 as commanded 1500 -> 1484, commanded 2000 -> 2031. At 4000 us
+  # (250 Hz) the step is 15.625 us, 5x finer, about 64 positions across the same span.
+  #
+  # WHAT IT DOES NOT CONTROL: what the servo and the ESC see. firmware/safety_mux captures the
+  # INPUT pulse width from edge timestamps (pico/pwm_capture.c, time_us_64, 1 us) and
+  # REGENERATES its own outputs on GP1/GP3 at a fixed 50 Hz / 20 ms frame (pico/pwm_output.c,
+  # top=39999 at 0.5 us per count). The Jetson frame rate therefore exists only on the
+  # Jetson-to-Pico link. That is why the steering channel gets 4000 us too: the analog Traxxas
+  # 2075 servo never sees it either, so keeping 20 ms there would cost 2.3 deg of steering
+  # resolution per step in exchange for nothing.
+  #
+  # WHY NOT SHORTER: a 2000 us pulse must still fit inside a frame with a clear low gap for
+  # the mux's edge capture. At 4000 us full throttle is 50 percent duty with a 2 ms gap; at
+  # 2500 us it is 80 percent duty, and a merged pair of frames (two consecutive missed edge
+  # interrupts) would start landing inside pwm_capture.c's 200-5000 us plausibility band
+  # instead of safely outside it.
+  #
+  # Both are CONFIGURATION, not measurement: the grid arithmetic is exact, but the Pico-side
+  # readings at the new frame are verified on the bench per docs/notes/first-boot-runbook.md
+  # "Launch and drive" before the car drives on the floor.
+  steering_pwm_period_us: 4000.0    # 250 Hz frame -> 15.625 us pulse grid (issue #66)
+  throttle_pwm_period_us: 4000.0    # 250 Hz frame -> 15.625 us pulse grid (issue #66)
 
 sensors:
   imu:
@@ -224,6 +265,6 @@ meta:
   # no on-vehicle fit of any kind, and this file is less fitted than that name implies, not
   # more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.3.0"
+  schema_version: "0.4.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

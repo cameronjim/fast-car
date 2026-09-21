@@ -74,6 +74,22 @@ struct MappingConfig {
   /// tuning (a cadence), not a physical constant -- see pwm_output_node.cpp for why this is
   /// deliberately NOT vehicle_params' limits.mux_watchdog_timeout_s.
   double drive_timeout_s{0.1};
+
+  /// PWM FRAME PERIOD per channel, microseconds: vehicle_params
+  /// actuation.steering_pwm_period_us / throttle_pwm_period_us, written to the sysfs
+  /// `period` attribute (x1000, as nanoseconds) and used for nothing else here.
+  ///
+  /// It does NOT change the mapping: a pulse width in microseconds is a pulse width in
+  /// microseconds at any frame rate, and `pulse_us_to_duty_ns` is period-independent except
+  /// for the clamp that keeps a duty from exceeding its own period. What it changes is the
+  /// grid the Tegra PWM controller can actually EMIT -- see `pulse_grid_step_us` and GitHub
+  /// issue #66 -- and nothing downstream of the safety mux sees it at all, because the mux
+  /// regenerates its own 50 Hz outputs to the servo and the ESC.
+  ///
+  /// Per channel because the two channels are different pwmchips on this board and nothing
+  /// forces them to share a frame; both are 4000 us in the committed config.
+  double steering_pwm_period_us{0.0};
+  double throttle_pwm_period_us{0.0};
 };
 
 /// A required vehicle_params field, paired with the name to blame if it is null.
@@ -165,6 +181,34 @@ PulsePair neutral_outputs(const MappingConfig& config);
 /// EINVAL, which at 50 Hz / 20 ms cannot happen with sane calibration but is clamped rather
 /// than trusted).
 unsigned long long pulse_us_to_duty_ns(double pulse_us, unsigned long long period_ns);
+
+/// A frame period in microseconds (a vehicle_params actuation.*_pwm_period_us value) as the
+/// nanoseconds the sysfs `period` attribute wants. Rounded to nearest; a non-finite or
+/// non-positive period returns 0, which SysfsPwmChannel would fail on loudly rather than
+/// silently emitting something -- validate_config() refuses such a config before it gets
+/// here anyway.
+unsigned long long period_us_to_ns(double period_us);
+
+/// The ACHIEVABLE PULSE GRID, microseconds, for a frame of `period_us` on the Jetson's Tegra
+/// PWM controller: `period_us / 256`.
+///
+/// WHY 256 (GitHub issue #66). The Tegra PWM controller expresses duty as an 8-bit fraction
+/// of the period (Linux `pwm-tegra.c`, `PWM_DUTY_WIDTH 8`), so a commanded pulse width is
+/// quantised to a multiple of period/256 -- the driver takes the nearest representable step,
+/// and nothing above it can recover the difference. Measured at the mux on 2026-09-21 at the
+/// then-current 20 ms frame: commanded 1500 us read 1484 us (19 steps of 78.125), commanded
+/// 2000 us read 2031 us (26 steps), commanded 1000 us read 1016 us (13 steps).
+///
+///   | frame period | grid step  | positions across 1000-2000 us |
+///   |--------------|------------|-------------------------------|
+///   | 20000 us     | 78.125 us  | about 13                      |
+///   |  8000 us     | 31.25 us   | about 32                      |
+///   |  4000 us     | 15.625 us  | about 64                      |
+///
+/// This is informational: nothing in the command path calls it to change a value, and the
+/// node uses it only to log the grid it is actually going to get. Returns 0 for a
+/// non-finite or non-positive period (there is no grid to describe).
+double pulse_grid_step_us(double period_us);
 
 }  // namespace racer_drivers
 

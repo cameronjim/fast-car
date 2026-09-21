@@ -74,8 +74,11 @@ _TEMPLATE: dict[str, Any] = {
         # then 0.2.2 -> 0.3.0 on 2026-09-21 when steering.pwm_min_us/pwm_max_us/pwm_neutral_us
         # were replaced with MEASURED values and a new required field, steering.pwm_left_bound,
         # was added to carry the measured sign convention (see config/vehicle_params.yaml's
-        # header and docs/notes/build-log.md's 2026-09-21 evening entry).
-        "schema_version": "0.3.0",
+        # header and docs/notes/build-log.md's 2026-09-21 evening entry), then 0.3.0 -> 0.4.0
+        # on 2026-09-21 when two new required fields, actuation.steering_pwm_period_us and
+        # actuation.throttle_pwm_period_us, moved the Jetson PWM frame period out of a
+        # hand-written constant in racer_drivers/pwm_output_node (GitHub issue #66).
+        "schema_version": "0.4.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

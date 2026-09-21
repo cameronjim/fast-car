@@ -137,6 +137,19 @@ reasonable next step once this firmware is closer to bench-tested than drafted.
   those steps). The window absorbs the grid; the clamp makes sure a servo calibrated to a
   1000-2000 us range is never told to go past its end stop.
 
+  **Update, 2026-09-21 (GitHub issue #66): the emitter's 78.125 us step above is historical.**
+  That step was the Jetson's, not this board's -- the Tegra PWM controller quantises duty to
+  1/256 of its frame period, and the frame was 20 ms. `racer_drivers/pwm_output_node` now
+  drives a 4 ms (250 Hz) frame from `config/vehicle_params.yaml`'s
+  `actuation.steering_pwm_period_us` / `throttle_pwm_period_us`, so the emitter step is
+  15.625 us -- the capture grid itself -- and the worst-case rounding displacement falls from
+  39.06 us to 7.8 us. The 62.5 us tolerance below is therefore MORE conservative than it was,
+  not less, and **no firmware change and no reflash were needed**: nothing in `logic/` or
+  `pico/` measures or assumes an input frame rate (`pico/pwm_capture.c:72-93` times edges,
+  `PWM_CAPTURE_MAX_AGE_US` at line 39 is a maximum age that a faster input only makes safer),
+  and the outputs on GPIO 1 and 3 are regenerated here at 50 Hz regardless of what arrives.
+  See `docs/notes/build-log.md`'s 2026-09-21 entry for the full verdict, file by file.
+
   The tolerance is 4 grid steps = 62.5 us: twice the 31.25 us error actually observed, past
   the 39.06 us worst case for nearest-point rounding onto a 78.125 us emitter step, and still
   narrow enough that a genuinely bad pulse is rejected -- 900 us misses the widened floor by

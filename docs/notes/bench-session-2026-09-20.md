@@ -122,8 +122,22 @@ from this doc even though they were not separate numbered checklist steps.
    recentre, `systemctl start racer-heartbeat` -> `HB OK`, `PASS` again.
 8. UBEC root cause for Pico #1's death identified -- PASSED (finding, not a checklist step).
    Pico #1 had been run on the UBEC's 6V position (6.81 V), which is the likely cause.
-9. (checklist 7) VESC Tool configuration and throttle sweep -- PENDING. Not attempted this
-   session.
+9. (checklist 7) VESC Tool configuration and throttle sweep -- PASSED, 2026-09-21 midday.
+   VESC configured per `planning-docs/06-vesc-config-and-jetson-bringup.md` step 3 (see
+   `docs/notes/build-log.md`'s 2026-09-21 midday entry for the full detected parameters and
+   limits); exported config committed as `config/vesc/2026-09-21-fsesc67-motor.xml` and
+   `2026-09-21-fsesc67-app.xml`. Throttle test through the mux, wheels off the ground,
+   steering held at 1500 us, knob armed (`DECISION=PASS`): 1560 us produced nothing; 1600
+   and 1650 us made the rear tyres click for a few seconds without turning; 1700 then
+   1750 us spun the wheels up fast, to the ERPM cap. Knob turned counter-clockwise while
+   spinning:
+   ```
+   KILL 1000us KILLED | DECISION=CUT reason 1:RC_KILL_SWITCH
+   ```
+   wheels stopped, throttle returned to 1500 us. First time the car has moved under Jetson
+   command; motor-channel radio kill proven. Combined with checklist step 6 (steering kill,
+   proven above) and the heartbeat-loss test (item 7 above), Gate G1's bench evidence is now
+   complete.
 
 Open items: real switch for the kill channel (this radio only offers VrA/VrB on CH5 and
 CH6); 5.0 V regulator for the mux rail, or a Schottky diode in series to the Pico's VSYS
@@ -131,4 +145,14 @@ feed, for margin (UBEC 5V position sags to about 5.3 V loaded); FSESC 4.12 swap 
 arrives; sensor cable adapter; provisional vehicle_params replaced with measured values;
 measure steering endpoints (the servo buzzed holding 1200 us this morning, probably against
 its mechanical stop -- 1000-2000 us is still provisional); `tools/mux_diag/read_mux_diag.py`
-one-shot hang and slow consecutive-call behavior fixed in this PR (see that tool's tests).
+one-shot hang and slow consecutive-call behavior fixed in this PR (see that tool's tests);
+throttle start deadzone -- this drivetrain needs roughly 1700 us (about 40 percent of the
+throttle range) to start sensorless from rest, and the throttle map in `racer_drivers` /
+`vehicle_params` does not model it yet (2026-09-21 midday); mirror the VESC limits into
+`config/vehicle_params.yaml` per planning-docs/06 step 6 -- still TODO (2026-09-21 midday);
+sensored hall adapter for low-speed start, the proper fix for the throttle deadzone above
+(planned, not yet in hand); `tools/mux_diag/read_mux_diag.py`'s `--lines` budget counted raw
+serial lines instead of parseable verdict lines, which made it fail against the live device
+on a fresh attach (the four-line banner ate the single-line default budget) even though the
+raw serial stream was fine -- fixed in this PR (2026-09-21 midday; see
+`docs/notes/build-log.md`).

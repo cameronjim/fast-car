@@ -18,10 +18,21 @@
 #ifndef RACER_DRIVERS_PWM_SINK_HPP_
 #define RACER_DRIVERS_PWM_SINK_HPP_
 
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace racer_drivers {
+
+/// Poll `predicate` up to `attempts` times, sleeping `interval_us` between tries, and return
+/// whether it ever became true. Called at most `attempts` times, and not again once true.
+///
+/// Exposed here only so the bounded-retry behaviour SysfsPwmChannel::start() depends on can
+/// be gtest-ed deterministically with a counting predicate, with no kernel and no root
+/// (claude-docs/12-testing.md L1) -- the thing it actually waits for, udev finishing its
+/// chgrp/chmod of a freshly exported channel's attribute files, cannot be staged in a unit
+/// test. See the call sites in pwm_sink.cpp.
+bool wait_until(const std::function<bool()>& predicate, int attempts, unsigned int interval_us);
 
 /// One PWM output channel. Implementations must be safe to `stop()` more than once.
 class PwmChannelSink {

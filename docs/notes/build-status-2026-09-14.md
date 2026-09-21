@@ -45,16 +45,16 @@ two ESCs.
 | Chassis parts laid out for assembly | In progress |
 | Perfboard terminal pins, Pico socket, level-shifter sockets | Done |
 | Perfboard inter-component wiring | In progress |
-| Perfboard flashed with firmware | Not started |
-| Perfboard bench tested | Not started |
-| Pico <-> perfboard pin mapping finalized | **Blocked** -- pending Cameron's confirmation of the final holes |
+| Perfboard flashed with firmware | DONE (diagnostic build) 2026-09-21 -- spare Pico flashed with `safety_mux_diag.uf2`, seated, ran cool (`docs/notes/build-log.md`, 2026-09-21 morning entry). The shipping build still needs to be reflashed before any real driving. |
+| Perfboard bench tested | DONE 2026-09-21 -- first-ever `DECISION PASS`, steering G1 kill test, and the heartbeat-loss test all proven over the mux diagnostic read-out (`docs/notes/build-log.md`, 2026-09-21 morning entry) |
+| Pico <-> perfboard pin mapping finalized | DONE 2026-09-20 -- perfboard soldered, GPIO mapping confirmed against the physical board (`docs/notes/build-log.md`, 2026-09-20) |
 | EC5 connectors on VESC battery leads | Not started |
 | First LiPo charge | Blocked -- charger has not arrived |
 | Jetson setup (JetPack, WiFi, SSH, heartbeat) | Done |
 | Jetson PWM pinmux enable / `pwmchip` numbering | DONE 2026-09-20 -- pin 15 = pwmchip0 = steering, pin 33 = pwmchip2 = throttle, confirmed with a multimeter (`docs/notes/build-log.md`, 2026-09-20) |
-| Jetson-to-mux-board wiring (4 lines) | Not started |
-| Wheels-off bench test | Not started |
-| G1 kill test | Not started |
+| Jetson-to-mux-board wiring (4 lines) | DONE 2026-09-21 -- steering, throttle and heartbeat confirmed reaching the mux over the diagnostic read-out; the kill-switch line comes from the receiver, not a Jetson line (`docs/notes/build-log.md`, 2026-09-21 morning entry) |
+| Wheels-off bench test | DONE (steering channel) 2026-09-21 -- armed/killed steering sweep and the heartbeat-loss test both proven; throttle/VESC actuation still not started, pending VESC Tool configuration |
+| G1 kill test | DONE (steering only) 2026-09-21 -- armed sweep steered the wheels, killed sweep did not move them, mux stayed `CUT reason 1` throughout (`docs/notes/build-log.md`, 2026-09-21 morning entry). Full scope with throttle/VESC engaged still pending |
 
 ## Forward plan, in order, with what blocks what
 
@@ -69,28 +69,34 @@ Then, before anything drives, in the order the existing docs require:
 5. **First LiPo charge.** UNBLOCKED 2026-09-15: the B6-class balance charger has arrived, as
    have AA batteries for the Flysky transmitter. Charge at LiPo / 3S / balance mode / 5.0 A,
    attended, on a hard surface, in the fireproof bag.
-6. **Finalize the Pico pin mapping and flash the firmware.** Blocked on step 4 of "physical
-   build" above (Cameron confirming the final holes against the physical board). Once
-   confirmed, the firmware `#define`s and `firmware/safety_mux/README.md`'s pinout table get
-   updated together, in the same change.
+6. ~~**Finalize the Pico pin mapping and flash the firmware.**~~ DONE 2026-09-20/2026-09-21 --
+   pin mapping confirmed against the physical board 2026-09-20; the diagnostic firmware
+   (not yet the shipping firmware) flashed to the spare Pico 2026-09-21
+   (`docs/notes/build-log.md`, both dates).
 7. **Continuity checks before any power** (no shorts between battery + and -, per
    `planning-docs/README.md`'s standing rules).
 8. **Bench power-up of the rails with a multimeter** (buck-boost and UBEC outputs, per
    `planning-docs/04-power-tree.md`).
 9. ~~**Jetson PWM pinmux enable and `pwmchip` numbering confirmation**~~ DONE 2026-09-20
    (`docs/notes/first-boot-runbook.md` steps 4-5; see `docs/notes/build-log.md`, 2026-09-20).
-10. **Wire the four Jetson lines to the mux board** (steering, throttle, heartbeat, ground --
-    `firmware/safety_mux/README.md`'s board connector map).
+10. ~~**Wire the four Jetson lines to the mux board**~~ DONE 2026-09-21 (steering, throttle,
+    heartbeat all confirmed live over the mux diagnostic; the fourth line is ground). See
+    `docs/notes/build-log.md`, 2026-09-21 morning entry.
 11. **Wheels-off bench test sequence** (per-channel actuation tests,
-    `planning-docs/05-safety-mux-and-kill-test.md` section D).
+    `planning-docs/05-safety-mux-and-kill-test.md` section D). PARTIAL 2026-09-21: the
+    steering and heartbeat channels are proven (armed/killed sweep, heartbeat-loss cut);
+    throttle/VESC actuation is not started, pending VESC Tool configuration.
 12. **The G1 kill test** (`planning-docs/05-safety-mux-and-kill-test.md` section E). Nothing
-    drives on the ground before this passes.
+    drives on the ground before this passes. PARTIAL 2026-09-21: proven for the steering
+    channel (armed sweep steers, killed sweep does not move the wheels, mux stays
+    `CUT reason 1`); full scope with throttle/VESC engaged still pending.
 
 Steps 1-3 have no hard ordering dependency between each other, but step 2's joints get redone
 when the FSESC 4.12 arrives, so there is no benefit to rushing ahead of the perfboard work.
-Step 6 is the ONLY remaining blocker on the list: everything from step 6 onward that touches
-the mux board waits on the final Pico hole choices. Steps 4 and 5 are now cleared (EC5 fitted,
-charger and AAs in hand).
+Steps 4-6, 9 and 10 are now cleared, and 11-12 are cleared for the steering channel; the
+remaining blocker on this list is VESC Tool configuration (needed before the throttle/VESC
+portions of steps 11 and 12 can run) -- see `docs/notes/bench-session-2026-09-20.md`'s
+"Results, morning of 2026-09-21" section.
 
 Scale note, because it is easy to read steps 1-3 as "most of the work": assembly is roughly
 the halfway point of Phase 1, not the end. Steps 11 and 12 (the wheels-off bench sequence and

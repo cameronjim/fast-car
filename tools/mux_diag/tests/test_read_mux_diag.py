@@ -19,9 +19,11 @@ import pytest
 from mux_diag.read_mux_diag import (
     EXIT_CUT,
     EXIT_PASS,
+    _LineBuffer,
     exit_code_for,
     format_summary,
     parse_diag_line,
+    run_once,
 )
 
 # Verbatim from docs/notes/mux-diagnostic-build.md, "A nominal passthrough looks like this:".
@@ -200,3 +202,112 @@ def test_kill_no_edges_has_no_pulse_width():
         "KILL UNREADABLE NO_EDGES | HB OK age 11ms | STEER 1500us | THR 1500us | "
         "DECISION CUT reason 1:RC_SIGNAL_INVALID"
     )
+
+
+# --- _LineBuffer: partial-first-line discard -------------------------------------------
+#
+# This exercises the fix for the bench bug where a one-shot `read_mux_diag.py` invocation
+# could hang and hold `/dev/ttyACM0` open: the reader attaches to an already-running
+# diagnostic firmware mid-stream, so the first bytes it ever reads can be the tail end of a
+# line that started before the fd was opened. `_LineBuffer` is exercised directly here
+# (a fake byte stream, no real serial device) because there is no Pico USB port to open on
+# this host -- the real device path (`_SerialLineReader` against an actual tty) stays
+# untested.
+
+
+def test_line_buffer_discards_partial_first_line():
+    buf = _LineBuffer()
+    # "us) | DECISION..." looks like the tail of a line already in flight when we attached;
+    # it is followed by a newline and then one complete, real line.
+    buf.feed(b"us) | DECISION=PASS reason=NORMAL | tail of a line we joined mid-stream\n")
+    buf.feed(NOMINAL_PASS_LINE.encode() + b"\n")
+
+    line = buf.pop_line()
+
+    assert line == NOMINAL_PASS_LINE
+
+
+def test_line_buffer_discards_partial_first_line_fed_in_pieces():
+    buf = _LineBuffer()
+    # The partial-first-line fragment arrives split across several small reads.
+    for piece in (b"partial", b" fragment", b" before", b" our", b" first", b" newline\n"):
+        buf.feed(piece)
+        assert buf.pop_line() is None  # nothing complete yet; still mid-fragment or discarded
+    buf.feed(KILL_SWITCH_CUT_LINE.encode() + b"\n")
+
+    assert buf.pop_line() == KILL_SWITCH_CUT_LINE
+
+
+def test_line_buffer_returns_subsequent_full_lines_in_order():
+    buf = _LineBuffer()
+    buf.feed(
+        b"discarded partial\n"
+        + NOMINAL_PASS_LINE.encode()
+        + b"\n"
+        + KILL_SWITCH_CUT_LINE.encode()
+        + b"\n"
+    )
+
+    assert buf.pop_line() == NOMINAL_PASS_LINE
+    assert buf.pop_line() == KILL_SWITCH_CUT_LINE
+    assert buf.pop_line() is None
+
+
+def test_line_buffer_no_discard_needed_when_buffer_starts_empty_and_stays_synced():
+    """Once synced (the first newline has been seen), every later line is returned as-is --
+    the discard applies only to the very first line, never to normal steady-state reads."""
+    buf = _LineBuffer()
+    buf.feed(b"\n")  # an empty first line: discarded same as any other first line
+    assert buf.pop_line() is None
+    buf.feed(NOMINAL_PASS_LINE.encode() + b"\n")
+    assert buf.pop_line() == NOMINAL_PASS_LINE
+
+
+# --- run_once: stops at the first parseable verdict line --------------------------------
+
+
+class _FakeReader:
+    """A fake `_SerialLineReader` for `run_once`: yields lines from a fixed list, one per
+    `readline()` call, and records how many times it was called so a test can assert
+    `run_once` stopped as soon as it found a parseable line instead of reading everything
+    available (the other half of the same bench bug: consecutive one-shot calls each
+    taking ~5s because the old default kept reading up to a high line count regardless).
+    """
+
+    def __init__(self, lines: list[str | None]):
+        self._lines = list(lines)
+        self.calls = 0
+
+    def readline(self, timeout_s: float) -> str | None:
+        self.calls += 1
+        if not self._lines:
+            return None
+        return self._lines.pop(0)
+
+
+def test_run_once_stops_at_first_parseable_line():
+    reader = _FakeReader([PWMREG_LINE, NOMINAL_PASS_LINE, KILL_SWITCH_CUT_LINE])
+
+    report = run_once(reader, max_lines=10, timeout_s=5.0)
+
+    assert report is not None
+    assert report.decision == "PASS"
+    assert reader.calls == 2  # PWMREG (skipped), then the first real verdict line
+
+
+def test_run_once_returns_none_when_lines_exhausted_without_a_verdict():
+    reader = _FakeReader(BANNER_LINES + [PWMREG_LINE])
+
+    report = run_once(reader, max_lines=len(BANNER_LINES) + 1, timeout_s=5.0)
+
+    assert report is None
+
+
+def test_run_once_returns_none_when_reader_yields_nothing():
+    """Models a timed-out `readline()` (nothing arrived before the deadline)."""
+    reader = _FakeReader([None])
+
+    report = run_once(reader, max_lines=10, timeout_s=5.0)
+
+    assert report is None
+    assert reader.calls == 1

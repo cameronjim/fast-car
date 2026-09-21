@@ -36,7 +36,7 @@ import sys
 import time
 
 DEFAULT_DEVICE = "/dev/ttyACM0"
-DEFAULT_LINES = 40
+DEFAULT_LINES = 1
 DEFAULT_TIMEOUT_S = 5.0
 
 EXIT_PASS = 0
@@ -245,6 +245,46 @@ def report_to_dict(report: DiagReport) -> dict:
     }
 
 
+class _LineBuffer:
+    """Buffers raw bytes fed to it into complete newline-terminated lines.
+
+    Pure and I/O-free on purpose, so the partial-first-line handling below can be tested
+    against a fake sequence of chunks instead of a real serial device (the real device path
+    stays untested on the host -- there is no Pico USB port to open here).
+
+    The device is a running, already-attached diagnostic firmware (`--watch` sessions and
+    prior invocations may have been reading it for a while); when this process opens the
+    fd, whatever the kernel already has buffered can start mid-line. The first line ever
+    popped is therefore always discarded rather than returned, on the assumption it may be
+    a partial fragment of a line that started before this reader existed -- see
+    `docs/notes/mux-diagnostic-build.md`'s "Not blocking on USB" for why lines can also be
+    dropped mid-stream by the firmware itself, which this same discard-and-resync behavior
+    tolerates.
+    """
+
+    def __init__(self) -> None:
+        self._buf = b""
+        self._synced = False
+
+    def feed(self, chunk: bytes) -> None:
+        self._buf += chunk
+
+    def pop_line(self) -> str | None:
+        """Returns and consumes one complete line, or None if none is buffered yet."""
+        while True:
+            newline_at = self._buf.find(b"\n")
+            if newline_at == -1:
+                return None
+            line = self._buf[:newline_at]
+            self._buf = self._buf[newline_at + 1 :]
+            if not self._synced:
+                # This first line may have started before we ever opened the device.
+                # Discard it and resync on the next newline instead of returning it.
+                self._synced = True
+                continue
+            return line.decode("utf-8", errors="replace")
+
+
 class _SerialLineReader:
     """Non-blocking, timeout-bounded line reader for a tty character device.
 
@@ -252,12 +292,13 @@ class _SerialLineReader:
     returns immediately instead of hanging forever -- the mux's USB CDC port ignores baud
     rate (`docs/notes/mux-diagnostic-build.md`), so there is no `termios` configuration to
     get right here, only "don't block". `select.select` is used to wait for readability up
-    to a caller-given timeout rather than polling in a busy loop.
+    to a caller-given timeout rather than polling in a busy loop. Line buffering and the
+    partial-first-line discard are delegated to `_LineBuffer`.
     """
 
     def __init__(self, path: str):
         self._fd = os.open(path, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
-        self._buf = b""
+        self._lines = _LineBuffer()
 
     def close(self) -> None:
         os.close(self._fd)
@@ -266,11 +307,9 @@ class _SerialLineReader:
         """Returns one decoded, newline-stripped line, or None if the timeout elapsed first."""
         deadline = time.monotonic() + timeout_s
         while True:
-            newline_at = self._buf.find(b"\n")
-            if newline_at != -1:
-                line = self._buf[:newline_at]
-                self._buf = self._buf[newline_at + 1 :]
-                return line.decode("utf-8", errors="replace")
+            line = self._lines.pop_line()
+            if line is not None:
+                return line
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -285,7 +324,7 @@ class _SerialLineReader:
             if not chunk:
                 # Device closed/disconnected: nothing more will ever arrive.
                 return None
-            self._buf += chunk
+            self._lines.feed(chunk)
 
 
 def _emit(report: DiagReport, as_json: bool) -> None:
@@ -297,11 +336,13 @@ def _emit(report: DiagReport, as_json: bool) -> None:
 
 
 def run_once(reader: _SerialLineReader, max_lines: int, timeout_s: float) -> DiagReport | None:
-    """Reads up to `max_lines` raw serial lines (bounded overall by `timeout_s`), returning
-    the most recent parsed diagnostic report seen, or None if none was found in that window.
+    """Reads raw serial lines, one at a time, up to `max_lines` (bounded overall by
+    `timeout_s`), and returns as soon as the first complete, parseable verdict line is
+    found. Non-decision chatter (the attach banner, the PWMREG line, a discarded partial
+    first line) does not count toward finding a report, but each raw line read still counts
+    against `max_lines`. Returns None if no verdict line was found before either bound hit.
     """
     deadline = time.monotonic() + timeout_s
-    latest: DiagReport | None = None
     for _ in range(max_lines):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -311,8 +352,8 @@ def run_once(reader: _SerialLineReader, max_lines: int, timeout_s: float) -> Dia
             break
         parsed = parse_diag_line(line)
         if parsed is not None:
-            latest = parsed
-    return latest
+            return parsed
+    return None
 
 
 def run_watch(reader: _SerialLineReader, as_json: bool) -> int:
@@ -378,9 +419,10 @@ def main(argv: list[str] | None = None) -> int:
         report = run_once(reader, args.lines, args.timeout)
         if report is None:
             print(
-                f"read_mux_diag: no mux diagnostic line seen on {args.device} "
-                f"within {args.lines} lines / {args.timeout}s (wrong device, shipping "
-                "firmware flashed instead of DIAG_BUILD, or nothing attached to USB?)",
+                f"read_mux_diag: timed out after {args.timeout}s (or {args.lines} raw "
+                f"line(s)) with no parseable mux diagnostic line seen on {args.device} "
+                "(wrong device, shipping firmware flashed instead of DIAG_BUILD, or "
+                "nothing attached to USB? try a larger --lines/--timeout)",
                 file=sys.stderr,
             )
             return EXIT_NO_DATA

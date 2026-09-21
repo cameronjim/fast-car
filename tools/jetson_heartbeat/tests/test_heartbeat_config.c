@@ -255,6 +255,85 @@ static void test_default_env_file_matches_compiled_defaults(void) {
         "RACER_HB_RATE_HZ matches the compiled-in default rate");
 }
 
+// Finds the first "Environment=<key>=<value>" line in a systemd unit file (systemd allows
+// several such lines, one per variable, which is exactly how
+// systemd/racer-heartbeat.service declares its fallback defaults) and, if `key` matches,
+// writes the value part. Deliberately does NOT match EnvironmentFile= (a different
+// directive entirely) or a bare "key=value" line outside of "Environment=" -- unlike
+// read_default_env_value() above, this reads a unit file, not a plain KEY=VALUE env file,
+// and the two formats are not interchangeable.
+static bool read_service_environment_value(const char* path, const char* key, char* out,
+                                           size_t out_len) {
+  static const char kPrefix[] = "Environment=";
+  const size_t prefix_len = sizeof(kPrefix) - 1;
+  FILE* f = fopen(path, "r");
+  if (f == NULL) {
+    return false;
+  }
+  char line[256];
+  size_t key_len = strlen(key);
+  bool found = false;
+  while (fgets(line, sizeof(line), f) != NULL) {
+    char* p = line;
+    while (*p == ' ' || *p == '\t') {
+      ++p;
+    }
+    if (strncmp(p, kPrefix, prefix_len) != 0) {
+      continue;
+    }
+    p += prefix_len;
+    if (strncmp(p, key, key_len) != 0 || p[key_len] != '=') {
+      continue;
+    }
+    char* value = p + key_len + 1;
+    size_t value_len = strlen(value);
+    while (value_len > 0 && (value[value_len - 1] == '\n' || value[value_len - 1] == '\r')) {
+      value[--value_len] = '\0';
+    }
+    snprintf(out, out_len, "%s", value);
+    found = true;
+    break;
+  }
+  fclose(f);
+  return found;
+}
+
+// The three Environment= lines in systemd/racer-heartbeat.service ([Service] section, above
+// EnvironmentFile=-/etc/default/racer-heartbeat) are the real fallback if that env file is
+// ever missing or unreadable: EnvironmentFile=-'s leading "-" only makes a missing file
+// non-fatal to unit *loading*, it does not make ExecStart's ${RACER_HB_CHIP} etc.
+// substitutions fall back to anything on their own. With no Environment= lines and no env
+// file, every ${VAR} in ExecStart would expand to the empty string, the binary would exit 1
+// on its first bad argument, and Restart=always would retry that failure forever -- a
+// missing config file silently and permanently cutting the mux. This test is the guard
+// against that: it fails if the unit's own Environment= lines ever drift from
+// include/jetson_heartbeat/config.h's compiled-in defaults (the same defaults
+// test_default_env_file_matches_compiled_defaults() above checks racer-heartbeat.default
+// against), so the unit file, the env file, and the binary cannot quietly disagree. Run
+// from tools/jetson_heartbeat/ (both `make test` and
+// .github/scripts/jetson_heartbeat_host_tests.sh do this).
+static void test_service_environment_lines_match_compiled_defaults(void) {
+  const char* path = "systemd/racer-heartbeat.service";
+  char value[64];
+
+  CHECK(read_service_environment_value(path, "RACER_HB_CHIP", value, sizeof(value)),
+        "racer-heartbeat.service has Environment=RACER_HB_CHIP=...");
+  CHECK(strcmp(value, JETSON_HEARTBEAT_DEFAULT_CHIP) == 0,
+        "unit's Environment=RACER_HB_CHIP matches the compiled-in default chip");
+
+  CHECK(read_service_environment_value(path, "RACER_HB_LINE", value, sizeof(value)),
+        "racer-heartbeat.service has Environment=RACER_HB_LINE=...");
+  char expected_line[32];
+  snprintf(expected_line, sizeof(expected_line), "%u", JETSON_HEARTBEAT_DEFAULT_LINE);
+  CHECK(strcmp(value, expected_line) == 0,
+        "unit's Environment=RACER_HB_LINE matches the compiled-in default line");
+
+  CHECK(read_service_environment_value(path, "RACER_HB_RATE_HZ", value, sizeof(value)),
+        "racer-heartbeat.service has Environment=RACER_HB_RATE_HZ=...");
+  CHECK(strtod(value, NULL) == JETSON_HEARTBEAT_DEFAULT_RATE_HZ,
+        "unit's Environment=RACER_HB_RATE_HZ matches the compiled-in default rate");
+}
+
 void test_heartbeat_config_suite(void) {
   test_defaults_with_no_args();
   test_overrides_all_three();
@@ -268,4 +347,5 @@ void test_heartbeat_config_suite(void) {
   test_installed_service_arguments();
   test_half_period_ns();
   test_default_env_file_matches_compiled_defaults();
+  test_service_environment_lines_match_compiled_defaults();
 }

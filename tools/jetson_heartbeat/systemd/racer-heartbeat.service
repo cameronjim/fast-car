@@ -25,9 +25,20 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+# GPIO chip/line/rate come from /etc/default/racer-heartbeat, not from this unit file, so the
+# pin can be changed (e.g. once tools/jetson_pinmux/ settles which header pin is wired to the
+# mux) with an edit + restart, never a rebuild or a unit-file edit. See
+# tools/jetson_heartbeat/racer-heartbeat.default for the pin table and the required
+# verification steps before trusting a change here. "-" makes a missing file non-fatal (the
+# binary's own compiled-in defaults, include/jetson_heartbeat/config.h, then apply); on the
+# fresh install `make install` always lays this file down, so the "-" is a defense against a
+# manually-deleted file, not the expected path.
+EnvironmentFile=-/etc/default/racer-heartbeat
 # Absolute path: this unit does not source a shell profile, so PATH is whatever systemd's
-# own default is -- do not rely on it finding the binary by name.
-ExecStart=/opt/racer/jetson_heartbeat/racer-heartbeat --chip gpiochip0 --line 144 --rate-hz 50
+# own default is -- do not rely on it finding the binary by name. The three variables are
+# substituted by systemd itself from EnvironmentFile above, not by a shell (Type=simple with
+# no shell wrapper), so no quoting/globbing surprises apply.
+ExecStart=/opt/racer/jetson_heartbeat/racer-heartbeat --chip ${RACER_HB_CHIP} --line ${RACER_HB_LINE} --rate-hz ${RACER_HB_RATE_HZ}
 Restart=always
 RestartSec=1
 # A restart takes about a second, which is ten times the mux's 0.1 s watchdog window: a crash

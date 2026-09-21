@@ -74,16 +74,48 @@ the command; it is no longer the map's full scale.
 ssh racer@racer-car        # 10.0.0.226
 ```
 
-1.3 Confirm the heartbeat service that the mux's watchdog input depends on is running, and
-    that nothing has been reconfigured under it:
+1.3 Confirm the heartbeat service that the mux's watchdog input depends on is running, which
+    GPIO line it is actually configured for, and that nothing has been reconfigured under it:
 
 ```sh
 systemctl status racer-heartbeat.service    # expect: active (running)
-sudo gpioinfo gpiochip0 | grep -w 144       # expect: "racer-heartbeat" output [used]
+cat /etc/default/racer-heartbeat            # RACER_HB_CHIP / RACER_HB_LINE / RACER_HB_RATE_HZ --
+                                             # this is the pin the unit actually asked for, not
+                                             # necessarily header pin 7 / line 144
+source /etc/default/racer-heartbeat
+sudo gpioinfo "$RACER_HB_CHIP" | grep -w "$RACER_HB_LINE"   # expect: "racer-heartbeat" output [used]
 ```
 
-If that line is not claimed, stop and fix it before anything else: `tools/jetson_heartbeat/`
-has the reproduction steps. A silent heartbeat means the mux sees a dead Jetson.
+`gpioinfo` only proves the Jetson's own kernel is driving that line -- it says nothing about
+whether the signal reaches the mux, or even the physical header pad
+(`tools/jetson_heartbeat/README.md`, "What this does not prove"; the same caveat
+`docs/notes/mux-diagnostic-build.md` makes about debugfs-only checks). Do not stop at
+`gpioinfo`. Confirm the signal actually gets to the mux with both of the following before
+treating the heartbeat as working:
+
+(a) **Meter at the physical pin.** With the mux board's JETSON connector plugged in
+    (step 7), a DC multimeter on the header pin named in `/etc/default/racer-heartbeat`'s
+    comment table (pin 7 = line 144, pin 32 = line 116), referenced to pin 9 (ground), should
+    read a nonzero average consistent with a 3.3 V square wave at the configured
+    `RACER_HB_RATE_HZ` -- not 0.0 V and not a steady 3.3 V.
+
+(b) **`read_mux_diag.py` showing `HB OK`.** With the safety_mux DIAGNOSTIC firmware flashed
+    (`docs/notes/mux-diagnostic-build.md`) and its USB port attached:
+
+    ```sh
+    python3 tools/mux_diag/read_mux_diag.py --device /dev/ttyACM0
+    ```
+
+    Expect a line containing `HB OK age <N>ms`, not `HB NO_EDGES_EVER` or `HB TIMED_OUT`.
+    `NO_EDGES_EVER` here is the exact failure this step exists to catch: the Jetson's GPIO
+    register can be toggling correctly (`gpioinfo` happy) while the mux still sees nothing,
+    because the wire, the connector, or the pin choice itself is wrong.
+
+If the service is not running, the line is not claimed, or `read_mux_diag.py` does not show
+`HB OK`, stop and fix it before anything else: `tools/jetson_heartbeat/` has the
+reproduction steps, and changing which pin is used is an edit to
+`/etc/default/racer-heartbeat` plus `sudo systemctl restart racer-heartbeat.service`, not a
+rebuild. A silent heartbeat means the mux sees a dead Jetson.
 
 ## 2. Clone the repo (UNVERIFIED -- not yet cloned on the device)
 

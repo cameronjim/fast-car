@@ -89,9 +89,13 @@ the bag, not the journal.
    (`/etc/racer/car-stack.env`, sourced by `EnvironmentFile=`)? Per-machine config via launch
    arguments is the existing convention (`claude-docs/10-conventions.md`), so the latter is
    the likely answer, but it is not designed here.
-3. Real PWM chip/channel numbers and the `racer-pwm` group GID are per-device facts not yet
-   known (`docs/notes/first-boot-runbook.md` steps 4 and 8 are both still UNVERIFIED) -- this
-   sketch cannot be filled in until those land.
+3. The PWM chip/channel numbers are now known on the one device measured so far (pin 15 =
+   `pwmchip0` = steering, pin 33 = `pwmchip2` = throttle, confirmed 2026-09-20; see
+   `docs/notes/build-log.md`), but they are still a per-device fact, not a project constant --
+   confirm again before hard-coding them into a unit file on different hardware. The
+   `racer-pwm` group GID (`docs/notes/first-boot-runbook.md` step 8) is separately still
+   UNVERIFIED, since it depends on that step actually being run on this device -- this sketch
+   cannot be filled in until that lands too.
 
 ### How rosbag recording starts with the stack (CLAUDE.md invariant 5)
 

@@ -81,6 +81,7 @@ add_custom_target(vehicle_params_generated DEPENDS ${GENERATED_PARAMS_DIR}/vehic
 # what actually ships, not a hand-synced copy) ------------------------------------------
 add_library(safety_mux_logic STATIC
   logic/src/pwm_validity.c
+  logic/src/pwm_window.c
   logic/src/watchdog.c
   logic/src/rc_switch.c
   logic/src/mux_params.c

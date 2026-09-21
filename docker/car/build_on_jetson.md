@@ -1,9 +1,13 @@
 # Building and running `car` on the Jetson Orin Nano
 
-Revised 2026-09-13 for the Jetson that now exists on the bench. Still **NEVER EXECUTED**: the
-board was powered off when this was written, so every command below is a written-ahead
-procedure. Correct it against reality the first time it is run, and note what changed in
-`docs/notes/build-log.md` and `claude-docs/01-roadmap.md`'s task 1.4 entry.
+Revised 2026-09-13, then **EXECUTED FOR REAL on 2026-09-21** and corrected against what
+actually happened (`docs/notes/build-log.md`, 2026-09-21 evening). The build works; it did not
+work first time. Two Dockerfile fixes and one correction to step 5's command came out of that
+session and are folded in below.
+
+The run procedure that has actually been used -- device access, the exact `docker run`, the
+pre-drive checklist -- is `docs/notes/first-boot-runbook.md`'s "Launch and drive" section, not
+step 6 here. Step 6 below is kept only as the Docker-flag reference and now points there.
 
 The runbook that puts these steps in order with the safety checks around them is
 `docs/notes/first-boot-runbook.md`. This file is the reference for the Docker part alone.
@@ -37,16 +41,29 @@ Torch is optional as of 2026-09-13 (`Dockerfile`, `INSTALL_TORCH`). The control 
 is roadmap 5.x. Default is `skip`, so:
 
 ```sh
-docker build -t car:local docker/car
+cd ~/car
+nohup docker build -t car:local docker/car > ~/car-build.log 2>&1 &
 ```
+
+Run it under `nohup` (or `tmux`): a dropped SSH session otherwise kills the build. Poll
+`~/car-build.log`.
 
 Expect a loud `NOTICE: BUILDING WITHOUT TORCH` block in the build log. The image records this
 in `/etc/racer/torch-status` and exports `RACER_TORCH=absent` into every login shell, so
 nothing downstream can quietly assume torch is there.
 
-Expect the build to fail the first few times regardless -- it has never been run. Likely
-early failures: apt package name drift in the ROS 2 apt repo, and the r36.4.0 base's CUDA
-stack behaving oddly on an R36.4.4 host (see step 4).
+**Timing, measured 2026-09-21.** Pulling and extracting the 3.4 GB `l4t-jetpack:r36.4.0` base
+is the long pole at roughly 25 minutes on this device's eMMC. With the base cached, the rest
+is about 5 minutes (the ROS apt layer is 165 s of it). Result: **10.2 GB on disk**. A cold
+first build is therefore 30 minutes, not the "expect it to fail for an hour" the old draft
+implied -- but do check the log rather than assuming, because a build that has stopped making
+progress may be waiting on something (see below).
+
+**The two failures this actually hit, both now fixed in the Dockerfile:** it hung indefinitely
+on `tzdata`'s interactive `Geographic area:` debconf prompt (fixed with `ARG
+DEBIAN_FRONTEND=noninteractive`), and the image was missing `ros-humble-foxglove-bridge`, which
+`car_teleop.launch.py` starts by default. If a future build appears stuck, look for a debconf
+prompt in the log before assuming it is slow.
 
 ### When phase 5 needs torch
 
@@ -98,59 +115,97 @@ There is no arm64 cross-compilation setup in this repo, so the workspace is buil
 Jetson, inside a container from this image, with the repo bind-mounted:
 
 ```sh
-docker run --rm -it --runtime nvidia \
+docker run --rm \
   -v "$PWD":/workspace -w /workspace \
   car:local bash -lc '
     source /opt/ros/humble/setup.bash
-    rosdep update
+    apt-get update
     rosdep install --from-paths ros_ws/src --ignore-src -r -y
     cd ros_ws && colcon build --symlink-install
+    chown -R 1000:1000 build install log /workspace/tools/.venv
   '
 ```
 
-`racer_safety` and `racer_drivers` both regenerate the `vehicle_params` C++ binding during
-the build via `uv run --project tools`, which needs network access on its first run to sync
-`tools/`'s venv from its lockfile.
+VERIFIED 2026-09-21: 6 packages in 68 s. Two corrections to the old draft, both found by
+running it:
+
+- **`apt-get update` is required**, and was missing. This image ends its apt layers with
+  `rm -rf /var/lib/apt/lists/*`, so `rosdep install`'s own `apt-get install` cannot resolve
+  anything: it failed with `E: Unable to locate package python3-jsonschema`. (`rosdep update`
+  alone does not help -- that refreshes rosdep's rules, not apt's package lists.)
+- **`chown` back to your UID at the end.** This container has to run as root, because
+  `rosdep install` installs system packages; without the `chown` it leaves root-owned
+  `build/`, `install/`, `log/` and `tools/.venv` directories in the repo that you then cannot
+  clean without `sudo`.
+
+`--runtime nvidia` is not needed for this and has been dropped: nothing in the workspace uses
+CUDA.
+
+`racer_safety`, `racer_drivers` and `racer_control` all regenerate the `vehicle_params` C++
+binding during the build via `uv run --project tools`, which needs network access on its first
+run to sync `tools/`'s venv from its lockfile. That step now runs under
+`cmake -E env --unset=PYTHONPATH`: this image's own `ENV PYTHONPATH` was otherwise inherited by
+the `tools/` venv's CPython 3.14 and shadowed its site-packages with python3.10 ones, failing
+with `ModuleNotFoundError: No module named 'rpds.rpds'`.
 
 ## 6. Run the car launch file
 
+**The procedure that has actually been executed lives in
+`docs/notes/first-boot-runbook.md`'s "Launch and drive" section** (device access, the exact
+`docker run`, the pre-drive checklist, how to stop it, and what the mux should read at each
+step). Use that. What follows is only the Docker-flag rationale, corrected 2026-09-21.
+
 The PWM pins must already be enabled and their `pwmchip` numbers known -- see
-`ros_ws/src/racer_drivers/README.md`, "Enabling PWM pins on the Jetson".
+`ros_ws/src/racer_drivers/README.md`, "Enabling PWM pins on the Jetson". On this device the
+defaults are already right (pin 15 = `pwmchip0` = steering, pin 33 = `pwmchip2` = throttle),
+so the four chip/channel arguments the old draft passed explicitly are no longer needed.
 
 ```sh
-docker run --rm -it --runtime nvidia \
-  --network host \
-  --privileged \
-  -v /sys:/sys \
+docker run --rm -it --name car-stack --network host \
+  --user "$(id -u):$(id -g)" \
+  --group-add "$(getent group gpio | cut -d: -f3)" \
+  -e HOME=/tmp \
+  -v /sys/devices/platform/bus@0/3280000.pwm:/sys/devices/platform/bus@0/3280000.pwm \
+  -v /sys/devices/platform/bus@0/32c0000.pwm:/sys/devices/platform/bus@0/32c0000.pwm \
   -v "$PWD":/workspace -w /workspace/ros_ws \
   car:local bash -lc '
-    source /opt/ros/humble/setup.bash
-    source install/setup.bash
-    ros2 launch racer_bringup car_teleop.launch.py \
-      viz:=false \
-      steering_pwmchip:=N steering_pwm_channel:=M \
-      throttle_pwmchip:=P throttle_pwm_channel:=Q
-  '
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    exec ros2 launch racer_bringup car_teleop.launch.py browser_teleop:=true'
 ```
 
-**Why `--privileged` / `-v /sys:/sys`, and why that is flagged.** Docker mounts `/sys`
-read-only by default, and `pwm_output_node` writes to `/sys/class/pwm/...`. Bind-mounting
-just `/sys/class/pwm` does not help: those entries are symlinks into `/sys/devices`, which
-would still be the container's own read-only copy. `--privileged` with a writable `/sys` is
-the blunt instrument that certainly works; whether a narrower option (a udev rule granting a
-group write access to the exported channel's attributes, plus `--group-add`) is enough is
-UNVERIFIED and worth trying once the blunt version is proven, since `--privileged` on the
-node that drives the actuators is not a resting place.
+**`--privileged` is NOT needed. RESOLVED 2026-09-21, this was the open question.** Docker does
+mount `/sys` read-only, and bind-mounting `/sys/class/pwm` genuinely does not help (those
+entries are symlinks into `/sys/devices`). But the narrow option the old draft called
+UNVERIFIED turned out to need no new host configuration at all: the Jetson already ships
+`/lib/udev/rules.d/60-jetson-gpio-common.rules`, which chgrps `pwmchipN/{export,unexport}` and
+each exported channel's `period`/`duty_cycle`/`enable` to the stock **`gpio`** group, and
+`racer` is already in it. So `--group-add` that GID, plus read-write bind-mounts of the two
+real device-tree paths the symlinks resolve to, is sufficient -- verified by driving both
+channels for real from a container that is both unprivileged and non-root. No custom udev
+rule, no `racer-pwm` group (one was created during that session, found redundant, and
+removed).
 
-`--network host` is for DDS discovery and for Foxglove if `viz:=true` (port 8765).
+`--runtime nvidia` has been dropped: nothing in the control stack uses CUDA.
+
+`exec` before `ros2 launch` matters: without it `bash` is PID 1 and swallows the signal, so
+the nodes never get a clean shutdown. Even with it, prefer Ctrl-C over `docker stop` -- see the
+runbook's "Stopping" table for the measured difference.
+
+`--network host` is for DDS discovery and for the Foxglove bridge (port 8765, `viz` defaults
+to true).
 
 `--device` entries for the VESC USB link, LiDAR and ingest board are deliberately absent:
 none of them is on the command path for first boot (the VESC is commanded by PWM through the
 mux, `docs/notes/build-log.md` 2026-09-12), and they get added as
-`claude-docs/11-hardware.md`'s wiring is actually done.
+`claude-docs/11-hardware.md`'s wiring is actually done. The safety-mux Pico's `/dev/ttyACM0`
+is deliberately absent too: nothing in the ROS graph reads it, the diagnostic stream is read
+from the HOST, and only one reader at a time can have it.
 
-## Once this all actually works
+## Done, 2026-09-21
 
-Tick roadmap task 1.4 to `[x]` in `claude-docs/01-roadmap.md` with a dated note, and correct
-every "DRAFT"/"never executed" claim in this file and in `README.md` -- an honest doc that
-says "this hasn't been tried" stops being honest the moment it has been.
+Roadmap task 1.4 ticked to `[x]` in `claude-docs/01-roadmap.md` with a dated note, and the
+"DRAFT"/"never executed" claims in this file and in `README.md` corrected -- an honest doc that
+says "this hasn't been tried" stops being honest the moment it has been. What remains untried
+is listed at the end of `docs/notes/build-log.md`'s 2026-09-21 evening entry: no servo has
+moved under ROS command, no ESC has been armed by this stack, and roadmap 1.3's kill test
+against a genuinely frozen Jetson is still open.

@@ -19,7 +19,22 @@ launch tests assert this against the live node graph, not by reading the source.
 
 ### Status
 
-**PIN IDENTITY VERIFIED, NODE BEHAVIOUR STILL UNVERIFIED ON HARDWARE.** As of 2026-09-20 the
+**NODE VERIFIED ON HARDWARE AS FAR AS THE MUX, 2026-09-21.** This node ran on the real Jetson
+out of the `car` image and drove both channels through the full `/drive_raw -> safety_node ->
+/drive` path, with the safety-mux Pico (DIAG_BUILD) confirming the pulses arrive: neutral
+reads `STEER gp10=1484us FRESH` / `THR gp7=1485us FRESH`, a 0.2 rad steering command produces
+exactly the 1738720 ns `pwm_mapping` predicts, and 0.5 m/s produces exactly 1550000 ns. Two
+bugs in `pwm_sink.cpp` were found doing it (a udev permissions race on a freshly exported
+channel, and an `enable` write rejected while `period` was still 0 on pwmchip2) and are fixed;
+see `docs/notes/build-log.md`'s 2026-09-21 evening entry and the comments in `start()`.
+
+What that still does NOT cover: the servo and ESC were unpowered and the servo lead unplugged
+throughout, so **no wheel has moved under this node's command** and the steering polarity
+(`steering_left_is_pwm_max`) is confirmed only at the pin, not at the wheels. Note also that a
+full-lock 2000 us command reads as 2031 us at the mux and trips its `OUT_OF_RANGE` check --
+see the runbook's "Reading the mux numbers".
+
+The earlier pin-identity note, still accurate: as of 2026-09-20 the
 pinmux procedure below has actually been run on the real Jetson Orin Nano Super Dev Kit
 (JetPack 6.2 / L4T R36.4.4): header pins 15 and 33 are confirmed enabled and driven, and the
 `pwmchip0` = pin 15 / `pwmchip2` = pin 33 mapping this node now defaults to is a measurement,

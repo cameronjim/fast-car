@@ -45,7 +45,19 @@ set(RACER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 find_program(RACER_UV_EXECUTABLE uv REQUIRED)
 add_custom_command(
   OUTPUT "${RACER_GENERATED_DIR}/vehicle_params_generated.hpp"
-  COMMAND "${RACER_UV_EXECUTABLE}" run --project "${RACER_REPO_ROOT}/tools" python
+  # `cmake -E env --unset=PYTHONPATH`: the tools/ project is a uv-managed venv with its own
+  # interpreter, and an inherited PYTHONPATH from the surrounding environment gets prepended
+  # to ITS sys.path, ahead of its own site-packages. Found on the Jetson on 2026-09-21
+  # (docs/notes/build-log.md): docker/car sets ENV PYTHONPATH=/car-runtime/.venv/lib/
+  # python3.10/site-packages for racer_policy's runtime deps, tools/ resolves to CPython
+  # 3.14, and this codegen step died with `ModuleNotFoundError: No module named 'rpds.rpds'`
+  # -- a cp310 native extension being imported by a 3.14 interpreter. docker/ros-dev is one
+  # `export PYTHONPATH=...` away from the same failure (docs/notes/milestone-5-browser-
+  # teleop.md's demo procedure does exactly that before `colcon build`), so this is unset for
+  # every environment, not patched around in the car image. Guarded by
+  # .github/scripts/check_uv_codegen_env.py.
+  COMMAND "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH
+          "${RACER_UV_EXECUTABLE}" run --project "${RACER_REPO_ROOT}/tools" python
           "${RACER_REPO_ROOT}/tools/gen_params.py"
           --params "${RACER_REPO_ROOT}/config/vehicle_params.yaml"
           --schema "${RACER_REPO_ROOT}/config/vehicle_params.schema.json"

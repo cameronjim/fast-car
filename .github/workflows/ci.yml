@@ -29,6 +29,12 @@ jobs:
       - name: ruff check + ruff format --check
         run: .github/scripts/lint_python.sh
 
+      # Static guard added 2026-09-21 after the first real Jetson bring-up: an inherited
+      # PYTHONPATH broke the vehicle_params codegen step inside the car image. See that
+      # script's docstring and docs/notes/build-log.md.
+      - name: uv codegen PYTHONPATH guard
+        run: python3 .github/scripts/check_uv_codegen_env.py
+
       - name: Install clang-format
         run: sudo apt-get update && sudo apt-get install -y clang-format
 
@@ -234,6 +240,13 @@ jobs:
 
       - name: hadolint docker/car/Dockerfile
         run: hadolint docker/car/Dockerfile
+
+      # Static cross-check that the image installs every non-racer_* ROS package
+      # car_teleop.launch.py starts BY DEFAULT. Added 2026-09-21 after the first real Jetson
+      # bring-up found the image missing ros-humble-foxglove-bridge while `viz` defaulted to
+      # true -- see that script's docstring and docs/notes/build-log.md.
+      - name: car image / car_teleop.launch.py package consistency
+        run: python3 .github/scripts/check_car_image_launch_packages.py
 
   changes:
     name: Detect changed paths

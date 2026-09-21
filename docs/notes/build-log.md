@@ -5,6 +5,139 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-21 evening -- first real ROS command path on the Jetson, proven at the mux
+
+The classical command path ran on the actual vehicle computer for the first time:
+`/drive_raw -> safety_node -> /drive -> pwm_output_node -> 50 Hz PWM -> safety-mux Pico`.
+The car was physically unable to move throughout: wall adapter only, LiPo out, VESC and
+steering servo unpowered, servo lead unplugged from the mux board. The Pico was on Jetson USB
+running DIAG_BUILD, so what the mux SAW is measured, not inferred.
+
+Four bugs were found by doing this, all of them in code or docs that had never been executed.
+
+**1. The car image could not run its own launch file.** `car_teleop.launch.py` declares `viz`
+with `default_value="true"` and starts `foxglove_bridge` under it; `docker/car/Dockerfile`
+listed `ros-humble-foxglove-bridge` among the "dev visualization" packages it deliberately
+excluded. `ros2 launch racer_bringup car_teleop.launch.py` with no arguments therefore failed
+with `package 'foxglove_bridge' not found`. Resolved in favour of installing the bridge rather
+than flipping the default: the bridge is the owner's DRIVING interface on this car (Foxglove
+Teleop panel -> `/teleop/cmd_vel`), which makes it operator interface, not developer tooling.
+The launch file's L3 test never caught it because it runs in `ros-dev` (which has the bridge)
+and passes `viz:=false`, and CI never builds this image at all.
+
+**2. The image build hung forever on an interactive tzdata prompt.** The ROS 2 Humble apt
+layer pulls `tzdata` transitively; `l4t-jetpack:r36.4.0` ships no `/etc/timezone`, so debconf
+stopped at `Geographic area:` with no tty to answer it. No other Dockerfile in `docker/*/` hits
+this because they build on `ros:humble-ros-base`, which configured tzdata in its own build.
+Fixed with `ARG DEBIAN_FRONTEND=noninteractive` (ARG not ENV, so it does not leak into the
+produced image and silently default a human's prompts later).
+
+**3. `colcon build` died in the vehicle_params codegen step.** `docker/car` sets
+`ENV PYTHONPATH=/car-runtime/.venv/lib/python3.10/site-packages` for `racer_policy`'s runtime
+deps. `tools/` is a uv project on CPython 3.14, and the inherited PYTHONPATH is prepended
+ahead of its own site-packages, so `gen_params.py` imported a cp310 native extension under
+3.14: `ModuleNotFoundError: No module named 'rpds.rpds'`. Fixed in all three CMakeLists that
+invoke it (`racer_control`, `racer_drivers`, `racer_safety`) with
+`cmake -E env --unset=PYTHONPATH`, not with an incantation in the car run command -- `ros-dev`
+is one `export PYTHONPATH=...` away from the identical failure, and
+`docs/notes/milestone-5-browser-teleop.md`'s own demo procedure does exactly that before
+`colcon build`.
+
+**4. `pwm_output_node` refused to start, twice, for two different real reasons.**
+
+- `cannot open /sys/class/pwm/pwmchip0/pwm0/enable for writing: Permission denied`. The
+  kernel creates `pwmN/` synchronously on the export write, but udev applies the group and
+  mode afterwards, asynchronously. `SysfsPwmChannel::start()`'s bounded wait only waited for
+  the DIRECTORY, which is already there on the first check -- so it fell straight through and
+  the next write raced udev and lost. The loop's own comment already said "udev may still be
+  adjusting permissions"; it just waited for the wrong thing. Now waits for the attributes to
+  be present AND writable, same 500 ms budget, same refuse-rather-than-retry-forever.
+- `failed writing '0' to /sys/class/pwm/pwmchip2/pwm0/enable: Invalid argument`. The Tegra PWM
+  driver rejects an `enable` write while `period` is 0, and **pwmchip2 exports with period=0
+  while pwmchip0 exports with its 20 ms period already set** -- which is why only the throttle
+  channel failed, and why nothing caught this when the pins were driven by hand. `start()`'s
+  pre-emptive `enable 0` is now skipped when the period reads 0; a channel with no period is
+  emitting nothing, so there is no stale pulse for that disable to protect against. Whenever
+  the period is non-zero the disable happens exactly as before.
+
+**Container device access: `--privileged` is not needed and is not used.** The runbook's step
+8 proposed a new `racer-pwm` group and a custom udev rule, both marked UNVERIFIED. Neither is
+necessary: the Jetson already ships `/lib/udev/rules.d/60-jetson-gpio-common.rules`, which
+chgrps `pwmchipN/{export,unexport}` and each exported channel's `period`/`duty_cycle`/`enable`
+to the **`gpio`** group, and `racer` is already in it. `--group-add 999` plus read-write
+bind-mounts of the two real device-tree paths
+(`/sys/devices/platform/bus@0/3280000.pwm` and `.../32c0000.pwm`) is the whole story. The
+container also runs as `--user 1000:1000`, i.e. unprivileged AND non-root. The `racer-pwm`
+group and rule were created during this session, found redundant, and removed again; the host
+is back to stock udev.
+
+**What the mux measured.** Neutral, both channels, nothing commanding:
+
+```
+STEER gp10=1484us FRESH(10ms, in 1000-2000) | THR gp7=1485us FRESH(18ms, in 1000-2000)
+HB gp5 age=4ms (timeout 100ms) OK | DECISION=CUT reason=1:RC_SIGNAL_INVALID
+```
+
+(`CUT reason 1` is the transmitter being off, which it was all session. Irrelevant here: the
+`STEER`/`THR` fields are the proof that Jetson pulses reach the Pico.)
+
+Commanding `/drive_raw` directly, at 50 Hz, through the real gate. Every `duty_cycle` matched
+`pwm_mapping`'s prediction exactly:
+
+| Command | Predicted | `duty_cycle` (ns) | Mux reports |
+|---|---|---|---|
+| `steering_angle: 0.2, speed: 0.0` | 1738.72 / 1500 us | 1738720 / 1500000 | `STEER 1719us FRESH`, `THR 1484us FRESH` |
+| `steering_angle: 0.0, speed: 0.5` | 1500 / 1550 us | 1500000 / 1550000 | `STEER 1484us FRESH`, `THR 1563us FRESH` |
+| `steering_angle: 0.0, speed: 0.0` | 1500 / 1500 us | 1500000 / 1500000 | `STEER 1484us`, `THR 1485us`, both FRESH |
+
+Positive steering angle raises the pulse above neutral, i.e. toward `pwm_max_us`, which is
+what `steering_left_is_pwm_max:=true` claims. That confirms the SIGN convention reaches the
+pin; it does not confirm which way the WHEELS turn, because the servo was unpowered and
+unplugged. Step 12's polarity calibration is still open.
+
+**The mux measures on a 15.625 us grid, and full lock falls off the end of it.** Sweeping
+steering with the sysfs value read back each time, every mux reading is an exact multiple of
+15.625 us: 1016, 1485, 1640, 1718, 1875, 2031. A full-left command is a legitimate 2000 us
+pulse, which the mux rounds to 2031 us -- outside its own inclusive 1000-2000 us validity
+window -- and flags `STEER ... OUT_OF_RANGE`. Armed, that is a steering cut (reason 3) at full
+lock. Full right (1016 us) is inside. **Open item, not fixed here:** the steering endpoints are
+still the provisional 1000/2000 us and have to be measured anyway (the servo buzzed against
+its stop at 1200 us on 2026-09-20); narrowing them away from the channel ends removes this.
+Nothing was changed in the mux firmware or in `vehicle_params` for it.
+
+**Shutdown behaviour differs by signal, and the docs now say so.** Ctrl-C / SIGINT is the
+clean path: `pwm_output_node` writes neutral then DISABLES both channels, pulses stop, and the
+mux reports `STEER`/`THR ... STALE (stuck or stopped)`. `docker stop` (SIGTERM) is not: both
+channels stay ENABLED at neutral 1500 us and the mux keeps reading `1484us FRESH` indefinitely.
+This was observed even with `exec ros2 launch` as the container's PID 1. Neither leaves a
+driving pulse behind, but only Ctrl-C actually stops the pulse train.
+
+**Browser teleop works end to end.** `foxglove_bridge` listens on `0.0.0.0:8765`; the
+websocket handshake returns `101 Switching Protocols` with `sec-websocket-protocol:
+foxglove.sdk.v1` both from the Jetson and from the Mac over the LAN. With
+`browser_teleop:=true`, a `Twist` on `/teleop/cmd_vel` (`linear.x=0.5`, `angular.z=1.5`) drove
+both channels through the full gated path: throttle 1550000 ns, steering saturated at 2000000
+ns (that yaw rate at that speed asks for 0.78 rad, well past the 0.4189 limit). **A human
+clicking the Foxglove Teleop panel in a real browser is still not done** -- same gap
+`docs/notes/milestone-5-browser-teleop.md` already records for the sim.
+
+**No rosbag.** `car_teleop.launch.py` starts no `ros2 bag record`, and no launch file in
+`racer_bringup` does. `CLAUDE.md` invariant 5 makes that a bug rather than a gap. Not fixed
+here (it is out of scope for a bring-up whose whole point was that nothing can move, and
+`docs/notes/car-runtime-plan.md` already holds the design); recorded as an open item and a
+manual workaround is in the runbook.
+
+**Numbers.** Image `car:local`, `INSTALL_TORCH=skip`, base digest unchanged: 10.2 GB on disk.
+The first build attempt spent about 25 minutes pulling and extracting the 3.4 GB
+`l4t-jetpack:r36.4.0` base; the final successful build, against a warm base cache, took about
+5 minutes (the ROS apt layer is 165 s of it). `colcon build` of all 6 workspace packages: 68 s.
+
+**Still not done, and none of it was attempted:** no servo has moved under ROS command, no ESC
+has been armed by this stack, the mux has not been kill-tested against a genuinely frozen
+Jetson (roadmap 1.3), steering polarity and endpoints are uncalibrated, and the throttle map
+is still the provisional open-loop 5.0 m/s full scale with an unmodelled ~1700 us start
+deadzone.
+
 ## 2026-09-20 -- Jetson 40-pin PWM pins enabled and confirmed with a multimeter
 
 Ran the `docs/notes/first-boot-runbook.md` step 4/5 procedure for real, on the actual Jetson

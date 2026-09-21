@@ -336,14 +336,25 @@ def _emit(report: DiagReport, as_json: bool) -> None:
 
 
 def run_once(reader: _SerialLineReader, max_lines: int, timeout_s: float) -> DiagReport | None:
-    """Reads raw serial lines, one at a time, up to `max_lines` (bounded overall by
-    `timeout_s`), and returns as soon as the first complete, parseable verdict line is
-    found. Non-decision chatter (the attach banner, the PWMREG line, a discarded partial
-    first line) does not count toward finding a report, but each raw line read still counts
-    against `max_lines`. Returns None if no verdict line was found before either bound hit.
+    """Reads raw serial lines, bounded overall by `timeout_s`, and returns as soon as
+    `max_lines` complete, parseable verdict lines have been seen (the last one seen is
+    returned; `max_lines=1`, the default, returns the first one found).
+
+    `max_lines` counts only parseable verdict lines, never raw serial lines: on a fresh
+    attach the diagnostic firmware's four-line banner (and, mid-stream, a discarded
+    partial first line or a stray PWMREG-only fragment) is not a decision line, and must
+    not consume the budget meant for "how many decisions to wait for" -- a real device
+    prints that banner once per attach before its first verdict line, so a budget that
+    also counted banner/junk lines would time out on attach even with data flowing
+    correctly (this was a real regression: with the previous raw-line-counted budget and
+    its default of 1, the single allowed read almost always landed on banner text, never
+    a verdict line -- see `tools/mux_diag/tests/fixtures/mux_raw_2026-09-21.txt` and its
+    test). The only bound on skipping non-decision chatter is `timeout_s`.
     """
     deadline = time.monotonic() + timeout_s
-    for _ in range(max_lines):
+    parsed_seen = 0
+    latest: DiagReport | None = None
+    while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
@@ -351,8 +362,12 @@ def run_once(reader: _SerialLineReader, max_lines: int, timeout_s: float) -> Dia
         if line is None:
             break
         parsed = parse_diag_line(line)
-        if parsed is not None:
-            return parsed
+        if parsed is None:
+            continue
+        latest = parsed
+        parsed_seen += 1
+        if parsed_seen >= max_lines:
+            return latest
     return None
 
 
@@ -384,8 +399,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_LINES,
         help=(
-            "how many raw serial lines to read looking for a decision line before giving up "
-            f"(default: {DEFAULT_LINES}); ignored with --watch"
+            "how many parseable decision lines to wait for before returning the last one "
+            "seen (default: 1, i.e. return the first one found); non-decision chatter "
+            f"(attach banner, PWMREG lines) never counts against this (default: {DEFAULT_LINES}); "
+            "ignored with --watch"
         ),
     )
     parser.add_argument(
@@ -419,10 +436,10 @@ def main(argv: list[str] | None = None) -> int:
         report = run_once(reader, args.lines, args.timeout)
         if report is None:
             print(
-                f"read_mux_diag: timed out after {args.timeout}s (or {args.lines} raw "
-                f"line(s)) with no parseable mux diagnostic line seen on {args.device} "
-                "(wrong device, shipping firmware flashed instead of DIAG_BUILD, or "
-                "nothing attached to USB? try a larger --lines/--timeout)",
+                f"read_mux_diag: timed out after {args.timeout}s with no parseable mux "
+                f"diagnostic line seen on {args.device} (wrong device, shipping firmware "
+                "flashed instead of DIAG_BUILD, or nothing attached to USB? try a larger "
+                "--timeout)",
                 file=sys.stderr,
             )
             return EXIT_NO_DATA

@@ -124,28 +124,30 @@ def generate_launch_description() -> LaunchDescription:
         default_value="0",
         description=(
             "pwmchip index driving the steering servo pulse (Jetson 40-pin header pin 15). "
-            "UNVERIFIED: read the real number off the device after the /opt/nvidia/jetson-io "
-            "pinmux change and a reboot -- see ros_ws/src/racer_drivers/README.md."
+            "VERIFIED on the Jetson Orin Nano Super Dev Kit, JetPack 6.2 / L4T R36.4.4, on "
+            "the actual device on 2026-09-20: pin 15 is pwmchip0. Confirm on another unit "
+            "with 'ls -l /sys/class/pwm' after the /opt/nvidia/jetson-io pinmux change and a "
+            "reboot -- see ros_ws/src/racer_drivers/README.md."
         ),
     )
     steering_pwm_channel_arg = DeclareLaunchArgument(
         "steering_pwm_channel",
         default_value="0",
-        description="Channel index within steering_pwmchip. UNVERIFIED, see steering_pwmchip.",
+        description="Channel index within steering_pwmchip. VERIFIED, see steering_pwmchip.",
     )
     throttle_pwmchip_arg = DeclareLaunchArgument(
         "throttle_pwmchip",
-        default_value="0",
+        default_value="2",
         description=(
             "pwmchip index driving the throttle/ESC pulse (Jetson 40-pin header pin 33). "
-            "UNVERIFIED, see steering_pwmchip; on the Orin Nano pins 15 and 33 are usually "
-            "on different chips."
+            "VERIFIED, see steering_pwmchip: pin 33 is pwmchip2 on this device -- pins 15 "
+            "and 33 are different chips."
         ),
     )
     throttle_pwm_channel_arg = DeclareLaunchArgument(
         "throttle_pwm_channel",
-        default_value="1",
-        description="Channel index within throttle_pwmchip. UNVERIFIED, see steering_pwmchip.",
+        default_value="0",
+        description="Channel index within throttle_pwmchip. VERIFIED, see steering_pwmchip.",
     )
     steering_left_is_pwm_max_arg = DeclareLaunchArgument(
         "steering_left_is_pwm_max",

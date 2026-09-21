@@ -478,6 +478,224 @@ docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && sourc
 15.7 Stop, power down in reverse order (drive battery, then servo/receiver rail, then the
      Jetson), and write the session up in `docs/notes/build-log.md` the same day.
 
+## Launch and drive (VERIFIED end to end on the Jetson, 2026-09-21)
+
+**This section was executed, not written ahead.** Everything below ran on the real Jetson
+(racer@10.0.0.226, JetPack 6.2.1 / L4T R36.4.4) on 2026-09-21, with the LiPo OUT of the car,
+the VESC and servo unpowered and the servo lead unplugged from the mux board, so nothing could
+move. What that session proved and what it did not is in `docs/notes/build-log.md`'s
+2026-09-21 evening entry. Steps 1-15 above are the first-time procedure; this is the short
+version for every session after the pins and the image already exist.
+
+### Pre-drive checklist (do these in order, every time)
+
+Nothing in this checklist is optional, and the order matters: the car gets power only after
+the software is up and holding neutral.
+
+1. **Wheels off the ground.** A stand, a box, anything. The whole of Phase 1 is off-ground.
+2. **Second person on the kill switch**, before anything is powered (`claude-docs/05-safety.md`
+   two-person rule).
+3. **Heartbeat alive**: `systemctl is-active racer-heartbeat` must print `active` BEFORE the
+   stack starts. If it is not, stop -- the mux watchdog is the Jetson's liveness signal and
+   the mux will cut anyway (`DECISION=CUT reason=2:WATCHDOG_TIMEOUT`).
+4. **Transmitter on, kill knob (VrA / CH5) fully COUNTER-CLOCKWISE** (= killed). Turn the
+   transmitter on before the car has power, and off after, always.
+5. **Plug the servo lead back into the mux board**, and put the battery in. Check the pin-1
+   mark on the plug.
+6. **Start the stack** (below) and confirm both channels sit at neutral BEFORE arming.
+7. **Only then turn the kill knob clockwise to arm.** The mux diagnostic build should show
+   `DECISION=PASS` only at this point, and `CUT` at every earlier step. If it shows `PASS`
+   before you armed, stop and find out why.
+
+### Start the stack
+
+One command, from `~/car` on the Jetson. No `--privileged`, no `-v /sys:/sys`, no
+`--runtime nvidia` (nothing in the control stack uses CUDA):
+
+```sh
+cd ~/car
+docker run --rm -it --name car-stack --network host \
+  --user "$(id -u):$(id -g)" \
+  --group-add "$(getent group gpio | cut -d: -f3)" \
+  -e HOME=/tmp \
+  -v /sys/devices/platform/bus@0/3280000.pwm:/sys/devices/platform/bus@0/3280000.pwm \
+  -v /sys/devices/platform/bus@0/32c0000.pwm:/sys/devices/platform/bus@0/32c0000.pwm \
+  -v "$PWD":/workspace -w /workspace/ros_ws \
+  car:local bash -lc '
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    exec ros2 launch racer_bringup car_teleop.launch.py browser_teleop:=true'
+```
+
+Drop `browser_teleop:=true` to come up with no command source at all (the launch file's
+default), which is what you want for a pure neutral check.
+
+**Why this is not `--privileged`** (this replaces step 8's "UNVERIFIED, try this first"
+sketch, and the custom `racer-pwm` group and udev rule it proposed are NOT needed):
+
+- The Jetson already ships `/lib/udev/rules.d/60-jetson-gpio-common.rules`, which chgrps
+  `pwmchipN/{export,unexport}` and each exported channel's `period`/`duty_cycle`/`enable` to
+  the **`gpio`** group. `racer` is already in `gpio`. So `--group-add` that group's GID (999
+  on this device) is the whole permission story -- verified 2026-09-21, both channels driven
+  for real from an unprivileged, non-root container.
+- The two `-v` lines bind-mount only the real device-tree paths the `/sys/class/pwm/pwmchipN`
+  symlinks resolve to, read-write. Docker mounts `/sys` read-only, and bind-mounting
+  `/sys/class/pwm` does not help because those entries are symlinks into `/sys/devices` --
+  mounting the two `*.pwm` platform directories is the narrow fix. Find them again with
+  `readlink -f /sys/class/pwm/pwmchip0` if the device ever changes.
+- `--user "$(id -u):$(id -g)"` keeps the container off root and stops it writing root-owned
+  build artifacts into your repo. `-e HOME=/tmp` is needed because that UID has no passwd
+  entry inside the image and ROS wants a writable HOME for its logs.
+- `--network host` is for DDS discovery and for the Foxglove bridge's port 8765.
+- `exec` before `ros2 launch` matters -- see "Stopping" below.
+
+The workspace must already be built (step 6). If `install/` is missing, build it first, and
+note the `apt-get update` that step 6's original command was missing:
+
+```sh
+docker run --rm -v "$PWD":/workspace -w /workspace car:local bash -lc '
+  source /opt/ros/humble/setup.bash
+  apt-get update && rosdep install --from-paths ros_ws/src --ignore-src -r -y
+  cd ros_ws && colcon build --symlink-install
+  chown -R 1000:1000 build install log /workspace/tools/.venv'
+```
+
+`apt-get update` is required because the image deletes `/var/lib/apt/lists/*`, so `rosdep`'s
+`apt-get install` cannot find `python3-jsonschema` without it. The `chown` is because that
+build has to run as root (rosdep installs packages) and would otherwise leave root-owned
+directories in the repo.
+
+### Confirm neutral before arming
+
+```sh
+# Both channels: 20 ms period, 1500 us pulse, enabled.
+for c in 0 2; do cat /sys/class/pwm/pwmchip$c/pwm0/{period,duty_cycle,enable}; done
+
+# What the mux actually SEES (this is the evidence that matters):
+sudo stty -F /dev/ttyACM0 115200 raw -echo; sudo timeout 5 cat /dev/ttyACM0
+```
+
+Expect `STEER gp10=1484us FRESH(...)` and `THR gp7=1484us FRESH(...)`. **1484, not 1500, is
+correct** -- see "Reading the mux numbers" below. With the transmitter still off you will also
+see `KILL ... NO_EDGES` and `DECISION=CUT reason=1:RC_SIGNAL_INVALID`; that is expected and is
+exactly what you want before arming.
+
+Only one process may read `/dev/ttyACM0` at a time -- a second reader steals the bytes.
+
+### Drive it from a browser on the Mac
+
+1. Same WiFi as the car. On the Mac, open <https://app.foxglove.dev> (or the desktop app).
+2. **Open connection** -> **Foxglove WebSocket** -> `ws://10.0.0.226:8765`. (Substitute the
+   car's address; `racer-car` also resolves on this network. There is no TLS and no auth on
+   this port -- it is a LAN-only debug interface.)
+3. Add a **Teleop** panel and point it at `/teleop/cmd_vel`. The committed layout
+   `ros_ws/src/racer_bringup/config/foxglove_sim_viz.layout.json` already contains one wired
+   to that topic and can be imported with **Import layout from file**, but it is the SIM
+   layout: its 3D panel expects `/sim/...` topics that do not exist on the car and will sit
+   empty. There is no car-specific layout yet.
+4. The launch must have been started with `browser_teleop:=true`, otherwise
+   `twist_teleop_adapter_node` is not running and the panel publishes into nothing.
+5. Click and hold a direction button. Path:
+   `Teleop panel -> /teleop/cmd_vel (geometry_msgs/Twist) -> twist_teleop_adapter_node ->
+   /drive_raw -> safety_node -> /drive -> pwm_output_node -> PWM -> mux`. Releasing all
+   buttons commands zero after `twist_timeout_s` (0.5 s).
+
+Verified 2026-09-21: the websocket handshake returns `101 Switching Protocols` with
+`sec-websocket-protocol: foxglove.sdk.v1` both from the Jetson itself and from the Mac over
+the LAN, and a `Twist` published on `/teleop/cmd_vel` moved both PWM channels through the full
+gated path. **A human clicking the panel in a real browser has still not been done** -- the
+panel config has never been visually confirmed (the same gap `docs/notes/milestone-5-browser-
+teleop.md` already records).
+
+The default Teleop panel binds the up button to `linear.x = 2.0 m/s`, which is just above the
+deadzone below -- deliberately, so the first click actually moves the car rather than clicking.
+
+### The throttle start deadzone (expect this, it is not a fault)
+
+This drivetrain is **sensorless**, and it needs roughly **1700 us** (about 40 percent of the
+throttle range) to start turning from rest. Measured on the bench 2026-09-21: 1560 us did
+nothing, 1600 and 1650 us made the rear tyres click for a few seconds without turning, 1700
+and 1750 us spun them up.
+
+On the provisional open-loop map (`actuation.throttle_full_scale_mps: 5.0`, so 1 m/s = 100 us
+off neutral) that means:
+
+| Commanded speed | Pulse | What happens from rest |
+|---|---|---|
+| 0.5 m/s | 1550 us | nothing |
+| 1.0 m/s | 1600 us | clicks, does not turn |
+| 1.5 m/s | 1650 us | clicks, does not turn |
+| 2.0 m/s | 1700 us | starts |
+
+So **speed commands below roughly 2 m/s will click and not move**. That is expected until the
+sensored hall adapter is fitted, which is the proper fix; it is not a reason to raise
+`throttle_full_scale_mps`, and the map does not model the deadzone today. Do not sit on a
+clicking command -- it is a stalled motor drawing current.
+
+### Reading the mux numbers (why 1500 reads as 1484)
+
+The DIAG_BUILD firmware measures pulse width on a **15.625 us grid** and reports the nearest
+grid point. Every reading below is an exact multiple of 15.625 us. Measured 2026-09-21,
+commanded value from sysfs against what the Pico reported:
+
+| Commanded | `duty_cycle` (ns) | Mux reports |
+|---|---|---|
+| neutral | 1500000 | 1484 us (`1485` on the other channel) |
+| +0.1 rad | 1619360 | 1640 us |
+| +0.2 rad | 1738720 | 1718 us |
+| +0.3 rad | 1858081 | 1875 us |
+| +0.4189 rad (full left) | 2000000 | **2031 us -- `OUT_OF_RANGE`** |
+| -0.4189 rad (full right) | 1000000 | 1016 us |
+
+**Consequence, and it is a real one:** a legitimate full-left steering command produces a
+2000 us pulse that the mux rounds UP to 2031 us, outside its own inclusive 1000-2000 us
+validity window, so the mux flags `STEER ... OUT_OF_RANGE` and would **CUT on steering
+(reason 3) at full lock while armed**. Full right (1016 us) is fine. This is a known open
+item, not something to work around in software: the steering endpoints in
+`config/vehicle_params.yaml` are still the provisional 1000/1500/2000 us and have to be
+measured anyway (the servo already buzzes against its mechanical stop at 1200 us), and
+narrowing them away from the channel ends removes this as a side effect. Until then, do not
+command full lock with the mux armed.
+
+### Stopping
+
+**Stop with Ctrl-C** (or `docker kill -s INT car-stack` from another shell). Not `docker stop`.
+The two behave differently, and it is worth knowing which you get:
+
+| How you stop it | What the channels do | What the mux sees |
+|---|---|---|
+| **Ctrl-C / SIGINT** (correct) | neutral written, then both channels **disabled** -- pulses stop | `STEER`/`THR ... STALE (stuck or stopped)`, mux cuts |
+| `docker stop` (SIGTERM) | channels stay **enabled at neutral 1500 us**, pulses keep running | `STEER`/`THR 1484us FRESH`, indefinitely |
+
+Both are safe -- neither leaves a driving pulse behind -- but only the first actually stops
+the pulse train. The SIGTERM case was observed even with `exec ros2 launch` as PID 1
+(2026-09-21), so do not assume `docker stop` gives you a clean shutdown.
+
+After Ctrl-C the channels are left exported and disabled. To return the pins to a fully idle
+state:
+
+```sh
+for c in 0 2; do echo 0 > /sys/class/pwm/pwmchip$c/unexport; done
+```
+
+Leave `racer-heartbeat` running. Nothing in this procedure should ever stop it.
+
+### No rosbag is recorded. This is a known gap.
+
+`car_teleop.launch.py` does **not** start `ros2 bag record`, and neither does any other launch
+file in `racer_bringup` (checked 2026-09-21). `CLAUDE.md` invariant 5 says every run is logged
+and that a code path which drives the car without logging is a bug, so **this is an open bug,
+not a decision** -- it is fine for the pin-level bring-up above, where nothing can move, and it
+is not fine for the first real drives. `docs/notes/car-runtime-plan.md`'s "How rosbag recording
+starts with the stack" section is the design for closing it. Until it lands, record by hand in
+a second shell:
+
+```sh
+docker exec -it car-stack bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 bag record -a -o /workspace/data/$(date +%Y%m%d_%H%M%S)_session'
+```
+
+Rail voltage is not published by anything yet (roadmap 1.2), so `-a` cannot capture it and the
+invariant's "rosbag + rail voltage" is only half satisfied either way.
+
 ## Afterwards
 
 - Everything measured in steps 5, 10, 11, 12, 13 and 15 goes into `config/vehicle_params.yaml` or a

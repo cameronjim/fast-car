@@ -48,6 +48,32 @@ Output: `firmware/safety_mux/build/safety_mux_firmware.uf2`. The build tree and
 `CMakeLists.txt` pins pico-sdk to release tag 2.1.0 via `FetchContent` and runs
 `tools/gen_params.py` itself, so there is nothing to install or generate first.
 
+### Diagnostic variant (opt-in, `DIAG_BUILD=ON`)
+
+The same firmware with USB-serial state reporting compiled in: about twice a second it prints
+one line giving every captured pulse width, the heartbeat age, the decoded kill-switch
+position and the threshold it is compared against, the PASS/CUT decision with the winning cut
+condition, and the commanded outputs. A second line per report reads the PWM peripheral
+registers back (slice, TOP, divider, compare level, measured `clk_sys`, and the resulting
+pulse width, frame rate and duty cycle) so the emitted waveform can be checked against a
+multimeter without a scope. It is a bench debugging aid and it changes no safety
+behaviour: nothing in `logic/` is touched, the decision and its priority order are identical,
+and the only added hook is a read-only accessor in `pico/pwm_capture.c`. Both the diagnostic
+sources and that accessor are behind `#ifdef SAFETY_MUX_DIAG`, so the default build
+(`DIAG_BUILD=OFF`) is byte for byte the shipping firmware.
+
+Same container as above, with two changes: `-DDIAG_BUILD=ON` and a separate build tree.
+
+```sh
+  cmake -S firmware/safety_mux -B firmware/safety_mux/build-diag -DDIAG_BUILD=ON &&
+  cmake --build firmware/safety_mux/build-diag -j"$(nproc)"
+```
+
+Output: `firmware/safety_mux/build-diag/safety_mux_firmware.uf2`. Full build commands, how to
+attach to the serial console from a Mac, how to read a line, and a symptom-to-cause table are
+in `docs/notes/mux-diagnostic-build.md`.
+
+
 **As of 2026-09-14 this firmware ARMS: no fault blink.** The nine `vehicle_params` fields the
 mux needs were filled in with PROVISIONAL, UNMEASURED standard-RC values (1000/1500/2000 us,
 100 ms watchdog, 1500 us kill threshold) so a first bench test is possible. With nothing

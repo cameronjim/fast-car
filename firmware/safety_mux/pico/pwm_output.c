@@ -13,6 +13,41 @@
 // (level = pulse_us * 2) without a floating-point divide at runtime.
 #define PWM_OUTPUT_WRAP 39999
 #define PWM_OUTPUT_US_TO_LEVEL(us) ((uint16_t)((us)*2.0))
+#define PWM_OUTPUT_CLKDIV 62.5f
+
+// The three numbers above are one piece of arithmetic split across three constants, and the
+// only thing tying them together used to be a comment. These assertions tie them together at
+// build time instead. They emit no code -- the .uf2 is byte-for-byte unchanged by them -- and
+// they exist because the 2026-09-20 bench session raised "is the emitted frame actually
+// 50 Hz / 1500 us?" and there was no way to answer it from the source alone.
+//
+// What they pin, and what they deliberately do NOT:
+//
+//   - DUTY CYCLE is level / (TOP + 1), and nothing else. The RP2040 counter counts 0..TOP and
+//     wraps (pico-sdk 2.1.0 hardware_pwm/include/hardware/pwm.h), so the period is TOP+1
+//     counts and the output is high for `level` of them. That ratio does not contain clk_sys
+//     or the divider anywhere, so NO divider or system-clock error can change the DC average
+//     a multimeter reads. It can only change the FREQUENCY.
+//   - FREQUENCY is clk_sys / (divider * (TOP + 1)), and that one does depend on clk_sys. The
+//     62.5 divider is only correct at 125 MHz. That was a silent assumption in a comment;
+//     the assertion below makes a different clk_sys a build failure instead of a servo that
+//     mysteriously ignores its signal.
+_Static_assert(SYS_CLK_HZ == 125000000u,
+               "pwm_output.c's 62.5 clock divider assumes a 125 MHz clk_sys. At any other "
+               "system clock the 50 Hz frame rate is wrong (the duty cycle is not: that is "
+               "level/(TOP+1) and is clock-independent). Recompute PWM_OUTPUT_CLKDIV from "
+               "clock_get_hz(clk_sys) rather than changing this assertion.");
+_Static_assert(PWM_OUTPUT_WRAP + 1 == 40000,
+               "The frame is TOP+1 counts. 40000 counts at 0.5 us/count is the 20 ms "
+               "(50 Hz) hobby servo/ESC frame.");
+_Static_assert(PWM_OUTPUT_US_TO_LEVEL(1500.0) == 3000,
+               "One count must be 0.5 us for PWM_OUTPUT_US_TO_LEVEL's `* 2` to be a "
+               "microsecond-to-count conversion: 1500 us must be 3000 counts.");
+_Static_assert(PWM_OUTPUT_US_TO_LEVEL(1500.0) * 8 == (PWM_OUTPUT_WRAP + 1) * 3 / 5,
+               "A 1500 us pulse in a 20 ms frame is 7.5 percent duty, i.e. 3000/40000. This "
+               "is the number a DC multimeter on the output pin measures (7.5 percent of the "
+               "logic level, about 0.25 V at 3.3 V); if this assertion and the meter ever "
+               "disagree, the fault is downstream of this file.");
 
 void pwm_output_init_safe(uint gpio) {
   // Called in the FIRST lines of main(), before params are even read. An RP2040 comes out of
@@ -36,7 +71,7 @@ void pwm_output_init_channel(uint gpio, double initial_pulse_us) {
   // PICO_SDK note (unverified): confirm clk_sys on the actual bench board before trusting
   // this constant -- if the board runs an overclocked or otherwise non-default clk_sys, this
   // divider must be recomputed from clock_get_hz(clk_sys), not hardcoded.
-  pwm_set_clkdiv(slice, 62.5f);
+  pwm_set_clkdiv(slice, PWM_OUTPUT_CLKDIV);
   pwm_set_wrap(slice, PWM_OUTPUT_WRAP);
 
   // Level BEFORE the pin is handed to the PWM peripheral, and before the slice runs. The
@@ -69,3 +104,26 @@ void pwm_output_set_us(uint gpio, double pulse_us) {
   }
   pwm_set_chan_level(slice, channel, PWM_OUTPUT_US_TO_LEVEL(level_us));
 }
+
+#ifdef SAFETY_MUX_DIAG
+// DIAGNOSTIC BUILD ONLY. See pwm_output.h's PwmOutputDiag comment. Read-only.
+PwmOutputDiag pwm_output_diag(uint gpio) {
+  uint slice = pwm_gpio_to_slice_num(gpio);
+  uint channel = pwm_gpio_to_channel(gpio);
+  uint32_t div = pwm_hw->slice[slice].div;
+  uint32_t cc = pwm_hw->slice[slice].cc;
+
+  PwmOutputDiag d;
+  d.slice = slice;
+  d.channel = channel;
+  d.top = (uint16_t)pwm_hw->slice[slice].top;
+  d.div_int = (uint8_t)((div & PWM_CH0_DIV_INT_BITS) >> PWM_CH0_DIV_INT_LSB);
+  d.div_frac = (uint8_t)((div & PWM_CH0_DIV_FRAC_BITS) >> PWM_CH0_DIV_FRAC_LSB);
+  d.level = (uint16_t)(channel ? ((cc & PWM_CH0_CC_B_BITS) >> PWM_CH0_CC_B_LSB)
+                               : ((cc & PWM_CH0_CC_A_BITS) >> PWM_CH0_CC_A_LSB));
+  d.enabled = (pwm_hw->slice[slice].csr & PWM_CH0_CSR_EN_BITS) != 0u;
+  d.pin_is_pwm = (gpio_get_function(gpio) == GPIO_FUNC_PWM);
+  d.clk_sys_hz = (uint32_t)clock_get_hz(clk_sys);
+  return d;
+}
+#endif  // SAFETY_MUX_DIAG

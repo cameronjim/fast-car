@@ -35,4 +35,33 @@ void pwm_output_init_channel(uint gpio, double initial_pulse_us);
 // "leave the output as it was" case at this layer).
 void pwm_output_set_us(uint gpio, double pulse_us);
 
+#ifdef SAFETY_MUX_DIAG
+// DIAGNOSTIC BUILD ONLY (-DDIAG_BUILD=ON). Compiled out of the shipping build entirely.
+//
+// Read-only snapshot of what is ACTUALLY programmed into the PWM hardware for `gpio`: the
+// slice and channel it lands on, that slice's TOP and clock divider, that channel's compare
+// level, whether the slice is running, and whether the pin is really switched to the PWM
+// function. Every field is read straight out of the peripheral registers.
+//
+// It exists because the commanded microseconds and the emitted waveform are two different
+// things, and on 2026-09-20 a multimeter on the servo output disagreed with the commanded
+// 1500 us. Printing the registers turns "the waveform looks wrong" into an arithmetic
+// statement that can be checked without a scope. It writes nothing and changes nothing.
+#include <stdbool.h>
+
+typedef struct {
+  uint slice;
+  uint channel;     // 0 = A, 1 = B
+  uint16_t top;     // slice TOP; the frame is TOP+1 counts
+  uint8_t div_int;  // clock divider, 8.4 fixed point, as programmed
+  uint8_t div_frac;
+  uint16_t level;       // this channel's compare value; duty is level/(TOP+1)
+  bool enabled;         // slice running
+  bool pin_is_pwm;      // gpio_get_function(gpio) == GPIO_FUNC_PWM
+  uint32_t clk_sys_hz;  // measured, not assumed: clock_get_hz(clk_sys)
+} PwmOutputDiag;
+
+PwmOutputDiag pwm_output_diag(uint gpio);
+#endif  // SAFETY_MUX_DIAG
+
 #endif  // SAFETY_MUX_PICO_PWM_OUTPUT_H_

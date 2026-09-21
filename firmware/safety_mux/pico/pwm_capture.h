@@ -37,4 +37,28 @@ void pwm_capture_init_channel(uint gpio);
 // two different pulses.
 double pwm_capture_read_us(uint gpio);
 
+#ifdef SAFETY_MUX_DIAG
+// DIAGNOSTIC BUILD ONLY (-DDIAG_BUILD=ON, see firmware/safety_mux/CMakeLists.txt and
+// docs/notes/mux-diagnostic-build.md). Compiled out entirely of the shipping build.
+//
+// Read-only view of one capture channel's internal state. It exists because
+// pwm_capture_read_us() collapses three distinct failures into the single value -1.0 (never
+// saw a pulse / last pulse is stale / only implausible noise arrived), and a human at the
+// bench needs to know WHICH. It changes nothing: same reads, same interrupt-disabled
+// section, no state is written, no timestamp is refreshed, and nothing the mux decision
+// consumes is touched.
+#include <stdbool.h>
+
+typedef struct {
+  bool registered;         // pwm_capture_init_channel() has been called for this GPIO
+  bool have_pulse;         // a plausible complete pulse has been captured at some point
+  uint32_t last_pulse_us;  // that pulse's width; meaningless unless have_pulse
+  uint64_t age_us;         // since that pulse's falling edge; 0 unless have_pulse
+  bool stale;              // age_us exceeded the capture staleness window
+  uint32_t max_age_us;     // that window (PWM_CAPTURE_MAX_AGE_US), so the report can name it
+} PwmCaptureDiag;
+
+PwmCaptureDiag pwm_capture_diag(uint gpio);
+#endif  // SAFETY_MUX_DIAG
+
 #endif  // SAFETY_MUX_PICO_PWM_CAPTURE_H_

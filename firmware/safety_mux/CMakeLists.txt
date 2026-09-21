@@ -43,6 +43,18 @@ endif()
 set(PICO_SDK_PATH ${pico_sdk_SOURCE_DIR})
 include(${pico_sdk_SOURCE_DIR}/pico_sdk_init.cmake)
 
+# --- Opt-in diagnostic build -----------------------------------------------------------
+# OFF by default, and OFF is the shipping firmware: with DIAG_BUILD=OFF nothing below adds a
+# source file, a compile definition, or a symbol, so the default build is byte-for-byte the
+# firmware that ships. ON adds pico/diag_report.c and defines SAFETY_MUX_DIAG, which is the
+# only thing that enables the `#ifdef SAFETY_MUX_DIAG` blocks in pico/main.c and
+# pico/pwm_capture.c. Those blocks PRINT; they do not decide. Nothing in logic/ is touched by
+# either build. See docs/notes/mux-diagnostic-build.md.
+#
+#   shipping:    cmake -S firmware/safety_mux -B firmware/safety_mux/build
+#   diagnostic:  cmake -S firmware/safety_mux -B firmware/safety_mux/build-diag -DDIAG_BUILD=ON
+option(DIAG_BUILD "Build the USB-serial diagnostic variant (printing only, not for driving)" OFF)
+
 project(safety_mux C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 
@@ -99,5 +111,22 @@ target_link_libraries(safety_mux_firmware
 # README.md) -- a UART could be used instead with no change to the decision-logic side.
 pico_enable_stdio_usb(safety_mux_firmware 1)
 pico_enable_stdio_uart(safety_mux_firmware 0)
+
+if(DIAG_BUILD)
+  target_sources(safety_mux_firmware PRIVATE pico/diag_report.c)
+  target_compile_definitions(safety_mux_firmware PRIVATE
+    SAFETY_MUX_DIAG=1
+    # Do not let a USB host stall the 200 Hz control loop. In pico-sdk 2.1.0,
+    # pico_stdio_usb/stdio_usb.c's stdio_usb_out_chars() returns immediately when no host has
+    # the CDC port open, but when one IS open and stops reading it spins in tud_task() until
+    # PICO_STDIO_USB_STDOUT_TIMEOUT_US (default 500000, i.e. half a second) has elapsed. Zero
+    # makes that break on the first full buffer instead: characters are DROPPED, never waited
+    # on. A dropped diagnostic line is a cosmetic loss; a stalled mux loop is not.
+    PICO_STDIO_USB_STDOUT_TIMEOUT_US=0
+  )
+  message(STATUS "safety_mux: DIAGNOSTIC build (USB-serial state reporting enabled)")
+else()
+  message(STATUS "safety_mux: shipping build (no diagnostic reporting)")
+endif()
 
 pico_add_extra_outputs(safety_mux_firmware)

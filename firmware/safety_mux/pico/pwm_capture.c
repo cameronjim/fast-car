@@ -156,3 +156,41 @@ double pwm_capture_read_us(uint gpio) {
   }
   return (double)width_us;
 }
+
+#ifdef SAFETY_MUX_DIAG
+// DIAGNOSTIC BUILD ONLY -- compiled out of the shipping build. See pwm_capture.h's
+// PwmCaptureDiag comment and docs/notes/mux-diagnostic-build.md. Read-only: it observes
+// exactly what pwm_capture_read_us() observes, under the same interrupt-disabled section,
+// and writes nothing.
+PwmCaptureDiag pwm_capture_diag(uint gpio) {
+  PwmCaptureDiag diag;
+  diag.registered = false;
+  diag.have_pulse = false;
+  diag.last_pulse_us = 0;
+  diag.age_us = 0;
+  diag.stale = false;
+  diag.max_age_us = PWM_CAPTURE_MAX_AGE_US;
+
+  PwmCaptureChannel* ch = find_channel(gpio);
+  if (ch == NULL) {
+    return diag;
+  }
+  diag.registered = true;
+
+  uint32_t irq_state = save_and_disable_interrupts();
+  bool have_pulse = ch->have_pulse;
+  uint32_t width_us = ch->last_pulse_us;
+  uint64_t end_us = ch->last_pulse_end_us;
+  restore_interrupts(irq_state);
+
+  if (!have_pulse) {
+    return diag;
+  }
+  diag.have_pulse = true;
+  diag.last_pulse_us = width_us;
+  uint64_t now_us = time_us_64();
+  diag.age_us = (now_us < end_us) ? 0 : (now_us - end_us);
+  diag.stale = (now_us < end_us) || (diag.age_us > (uint64_t)PWM_CAPTURE_MAX_AGE_US);
+  return diag;
+}
+#endif  // SAFETY_MUX_DIAG

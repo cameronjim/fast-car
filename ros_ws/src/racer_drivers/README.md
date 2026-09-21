@@ -232,8 +232,8 @@ below are perfboard holes on **row 1**, in the planned layout drawn in
 
 | Signal | Jetson 40-pin header | Mux board hole | Mux side |
 |---|---|---|---|
-| Steering pulse | **physical pin 15** (hardware PWM) | column 8, row 1 | level shifter -> RP2040 GPIO 3 |
-| Throttle pulse | **physical pin 33** (hardware PWM) | column 9, row 1 | level shifter -> RP2040 GPIO 4 |
+| Steering pulse | **physical pin 15** (hardware PWM) | column 8, row 1 | level shifter -> RP2040 GPIO 10 |
+| Throttle pulse | **physical pin 33** (hardware PWM) | column 9, row 1 | level shifter -> RP2040 GPIO 7 |
 | Heartbeat | **physical pin 7** (`gpiochip0` line 144, `PAC.06`) -- existing `racer-heartbeat.service`, `tools/jetson_heartbeat/` | column 10, row 1 | direct (already 3.3 V) -> RP2040 GPIO 5 |
 | Ground | **physical pin 9** | column 11, row 1 | the one shared ground net |
 

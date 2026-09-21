@@ -51,8 +51,8 @@ Output: `firmware/safety_mux/build/safety_mux_firmware.uf2`. The build tree and
 **As of 2026-09-14 this firmware ARMS: no fault blink.** The nine `vehicle_params` fields the
 mux needs were filled in with PROVISIONAL, UNMEASURED standard-RC values (1000/1500/2000 us,
 100 ms watchdog, 1500 us kill threshold) so a first bench test is possible. With nothing
-connected it sits in the CUT state driving 50 Hz / 1500 us neutral on GPIO 6 and 7 with the
-GPIO 8 cutoff low. **Wheels off the ground**: those numbers are convention, not measurement,
+connected it sits in the CUT state driving 50 Hz / 1500 us neutral on GPIO 1 and 3 with the
+GPIO 0 cutoff low. **Wheels off the ground**: those numbers are convention, not measurement,
 and must be replaced per `docs/notes/hardware-arrival-checklist.md` section 3 before the car
 drives. The refuse-to-arm guard is untouched -- revert any of those fields to `null` and it
 fast-blinks again. See `docs/notes/safety-mux-first-build.md` for exactly what to expect on
@@ -108,37 +108,39 @@ reasonable next step once this firmware is closer to bench-tested than drafted.
   now (see that file's comments): this firmware **cannot arm** until they are bench-measured
   and filled in.
 
-## Proposed pinout (UNVERIFIED, pending bench wiring)
+## Pinout (confirmed against the as-built perfboard, 2026-09-20)
 
-Pin numbers are RP2040 GPIO numbers, chosen for this draft and matched exactly in
-`pico/main.c`'s `#define`s -- change one, change both. As of 2026-09-14 the perfboard is being
-soldered but the final hole assignments have not been confirmed against the physical board;
-this table and `pico/main.c`'s `#define`s get updated together once that confirmation happens.
+Pin numbers are RP2040 GPIO numbers, matched exactly in `pico/main.c`'s `#define`s -- change
+one, change both. As of 2026-09-20 the perfboard is soldered and this mapping has been
+confirmed by the owner against the physical board; this table and `pico/main.c`'s `#define`s
+were updated together for that confirmation.
 
 `pico/main.c`'s seven `#define`s are the ONLY place a GPIO number reaches the firmware: nothing
 in `logic/`, in `tests/`, or in the build depends on one, so a remap is a one-file code change.
 It is not a one-file CHANGE, though, because the numbers are also written down in prose in
-`docs/notes/safety-mux-first-build.md`, `docs/notes/build-log.md` (the 2026-09-11 and
-2026-09-12 entries), `planning-docs/05-safety-mux-and-kill-test.md`,
-`planning-docs/06-vesc-config-and-jetson-bringup.md`, `ros_ws/src/racer_drivers/README.md`'s
-cabling table, and this file's own connector map below. Update those in the same change.
+`planning-docs/05-safety-mux-and-kill-test.md`, `planning-docs/06-vesc-config-and-jetson-bringup.md`,
+`ros_ws/src/racer_drivers/README.md`'s cabling table, and this file's own connector map below --
+those are the live references and are updated in the same change. `docs/notes/safety-mux-first-build.md`
+and `docs/notes/build-log.md`'s dated entries are historical records of what the numbers were on the
+date they were written and are left as recorded; a remap gets its own new dated `build-log.md` entry
+instead (see the 2026-09-20 entry).
 
 | Signal | Direction | RP2040 GPIO | Notes |
 |---|---|---|---|
-| RC receiver kill-switch channel | in | GPIO 2 | PWM capture (interrupt-timed). Receiver's own valid PWM range and this channel's ARMED/KILL threshold are bench-measured, not assumed (`config/vehicle_params.yaml`'s `limits.mux_kill_switch_threshold_us`). |
-| Jetson steering PWM | in | GPIO 3 | PWM capture. Range = `vehicle_params.steering.pwm_{min,max}_us`. |
-| Jetson throttle PWM | in | GPIO 4 | PWM capture. Range = `vehicle_params.actuation.throttle_pwm_{min,max}_us`. |
+| RC receiver kill-switch channel | in | GPIO 12 | PWM capture (interrupt-timed). Receiver's own valid PWM range and this channel's ARMED/KILL threshold are bench-measured, not assumed (`config/vehicle_params.yaml`'s `limits.mux_kill_switch_threshold_us`). |
+| Jetson steering PWM | in | GPIO 10 | PWM capture. Range = `vehicle_params.steering.pwm_{min,max}_us`. |
+| Jetson throttle PWM | in | GPIO 7 | PWM capture. Range = `vehicle_params.actuation.throttle_pwm_{min,max}_us`. |
 | Jetson heartbeat | in | GPIO 5 | Raw digital toggle from a lightweight Jetson-side process (see `pico/heartbeat_input.h`'s comment) -- NOT a UART message, NOT ROS. Timeout = `vehicle_params.limits.mux_watchdog_timeout_s`. Jetson-side source: `tools/jetson_heartbeat/`, driven off Jetson 40-pin header **physical pin 7** (`gpiochip0` line 144, kernel name `PAC.06`; pin 9 is the shared ground) -- see that tool's README for how the pin mapping was determined and verified. |
-| Servo PWM out | out | GPIO 6 | 50 Hz hardware PWM to the steering servo. |
-| ESC PWM out | out | GPIO 7 | 50 Hz hardware PWM to the ESC. |
-| Power cutoff | out | GPIO 8 | Active-HIGH = power enabled (fail-safe: a dead/reset RP2040 or a browned-out driver circuit defaults this LOW = cut). Drives a relay or high-side MOSFET gate in the motor/servo power path -- exact drive circuit is a bench decision, not fixed here. |
+| Servo PWM out | out | GPIO 1 | 50 Hz hardware PWM to the steering servo. |
+| ESC PWM out | out | GPIO 3 | 50 Hz hardware PWM to the ESC. |
+| Power cutoff | out | GPIO 0 | Active-HIGH = power enabled (fail-safe: a dead/reset RP2040 or a browned-out driver circuit defaults this LOW = cut). Drives a relay or high-side MOSFET gate in the motor/servo power path -- exact drive circuit is a bench decision, not fixed here. |
 | Fault LED | out | Pico's onboard LED (`PICO_DEFAULT_LED_PIN`) | Fast blink = refused to arm (missing `vehicle_params` field), see `pico/main.c`'s `fault_halt_missing_param()`. |
 
-### Board connector map (PLANNED, unverified on hardware)
+### Board connector map (confirmed against the as-built perfboard, 2026-09-20)
 
 The pinout above is GPIO numbers. This is how those GPIOs reach the outside world on the
-perfboard the mux is being built on. It is a planned layout drawn ahead of the build: nothing
-here has been soldered, powered, or bench-checked, and the wiring session may change it.
+perfboard, which is now soldered. This mapping has been confirmed by the owner against the
+physical board (2026-09-20); it has not yet been powered or bench-checked.
 
 | Header | Pins | Carries | Notes |
 |---|---|---|---|
@@ -147,12 +149,18 @@ here has been soldered, powered, or bench-checked, and the wiring session may ch
 | SERVO | 3-pin (SIG, +5V, GND) | steering servo | The board **powers the servo** from the same 5 V rail. SIG is GPIO 6's output. |
 | VESC | 3-pin, **+5V position left EMPTY** | ESC PPM input | The VESC has its own BEC; connecting its middle pin to the board's 5 V would tie two supplies together. Only SIG (GPIO 7) and GND are populated. |
 | CUTOFF | 2-pin (SIG, GND) | power-cutoff drive circuit (GPIO 8) | Reserved. The relay/MOSFET stage does not exist yet; the header is there so it does not need re-soldering later. |
+| KILL | 3-pin (SIG, +5V, GND) | RC receiver's kill-switch channel | The board **powers the receiver** through this lead off the UBEC 5 V rail. SIG goes through the level shifter into GPIO 12. |
+| JETSON | 4-pin (STEER SIG, THROTTLE SIG, HEARTBEAT, GND) | all three Jetson-originated signals plus their shared return | Pin 1 (STEER SIG) is marked on the board and the plug is keyed, because a reversed plug swaps heartbeat and steering and nothing in firmware can see that. No 5 V pin: **the Jetson powers itself.** Steering and throttle go through the shifter into GPIO 10 and 7; the heartbeat is already 3.3 V and goes straight to GPIO 5. On the Jetson side this connector is fed by four 40-pin-header pins: STEER SIG from **physical pin 15**, THROTTLE SIG from **physical pin 33** (the two hardware-PWM-capable pins, driven by `ros_ws/src/racer_drivers/pwm_output_node` -- see that package's README for the pinmux procedure and the hole-by-hole cabling table), HEARTBEAT from **physical pin 7** and GND from **physical pin 9** -- see `tools/jetson_heartbeat/README.md` for how the pin 7 mapping was determined and verified. The two PWM pins are UNVERIFIED: the pinmux change and the resulting chip numbering have not been done on the board. |
+| SERVO | 3-pin (SIG, +5V, GND) | steering servo | The board **powers the servo** from the same 5 V rail. SIG is GPIO 1's output. |
+| VESC | 3-pin, **+5V position left EMPTY** | ESC PPM input | The VESC has its own BEC; connecting its middle pin to the board's 5 V would tie two supplies together. Only SIG (GPIO 3) and GND are populated. |
+| CUTOFF | 2-pin (SIG, GND) | power-cutoff drive circuit (GPIO 0) | Reserved. The relay/MOSFET stage does not exist yet; the header is there so it does not need re-soldering later. |
 | 5V / GND | 2-pin screw terminal | UBEC 5 V in | The whole board's supply. This is the rail a Jetson or compute-rail failure cannot take down. |
 
 **Pico orientation on the board (planned, unverified on hardware).** The Pico sits with its
 USB socket facing the board's **left edge**. Seen from the top, component side up, that puts
 **pins 1 to 20 along the lower row** (pin 1 at the bottom-left) and **pins 40 down to 21 along
-the upper row**. Every GPIO this board uses, **GPIO 2 to 8, is on the lower row**; the upper
+the upper row**. Every GPIO this board uses (GPIO 0, 1, 3, 5, 7, 10, and 12) is on the
+**lower row**; the upper
 row is the power side (VBUS, VSYS, 3V3 OUT, RUN). Get this backwards and the whole signal
 harness lands on the power pins.
 

@@ -1,0 +1,29 @@
+# /etc/default/racer-heartbeat -- environment overrides for racer-heartbeat.service.
+#
+# Installed by `make install` (see Makefile) to /etc/default/racer-heartbeat and read by the
+# systemd unit via EnvironmentFile= (systemd/racer-heartbeat.service). Edit the values below
+# and `systemctl restart racer-heartbeat` to change the GPIO line or rate WITHOUT recompiling
+# the binary or editing the unit file. The binary's own --chip/--line/--rate-hz defaults
+# (include/jetson_heartbeat/config.h) are unchanged and only apply if this file is missing or
+# a variable is left unset.
+#
+# Which physical pin is wired to the mux's heartbeat input is NOT decided yet (see
+# tools/jetson_pinmux/ and docs/notes/build-log.md's tonight's entry) -- that is exactly why
+# this lives in a config file instead of a code default. Known candidates on this board's
+# 40-pin header, from tools/jetson_heartbeat/README.md's pinmux derivation:
+#
+#   Header pin | gpiochip0 line | kernel pad name
+#   -----------|----------------|----------------
+#        7     |      144       | PAC.06
+#        32    |      116       | PX.02
+#
+# WARNING: whichever pin is chosen here must be verified BOTH with a meter at the physical
+# header pin AND with the safety_mux diagnostic firmware showing "HB gp<n> ... OK"
+# (docs/notes/mux-diagnostic-build.md, tools/mux_diag/read_mux_diag.py) before it is trusted.
+# Debugfs (/sys/kernel/debug/gpio) alone is NOT sufficient verification: it only shows that
+# the Jetson's own GPIO register is toggling, not that the signal reaches the mux, or even
+# the physical pad (tools/jetson_heartbeat/README.md, "What this does not prove").
+
+RACER_HB_CHIP=gpiochip0
+RACER_HB_LINE=144
+RACER_HB_RATE_HZ=50

@@ -1,5 +1,7 @@
 #include <math.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "framework.h"
@@ -145,9 +147,13 @@ static void test_empty_chip_errors(void) {
         "an empty --chip is an error, not a chip named \"\"");
 }
 
-// The argument the systemd unit actually passes must parse to exactly the pin mapping
+// The arguments EnvironmentFile= substitution into the systemd unit's ExecStart produces,
+// once ${RACER_HB_CHIP}/${RACER_HB_LINE}/${RACER_HB_RATE_HZ} are expanded from
+// racer-heartbeat.default's shipped values, must parse to exactly the pin mapping
 // tools/jetson_heartbeat/README.md documents. If someone edits one without the other, this
-// fails rather than the Jetson quietly toggling a different line.
+// fails rather than the Jetson quietly toggling a different line. (Consistency between
+// racer-heartbeat.default's literal contents and these compiled-in defaults is
+// test_default_env_file_matches_compiled_defaults(), below.)
 static void test_installed_service_arguments(void) {
   char* argv[] = {
       (char*)"racer-heartbeat", (char*)"--chip", (char*)"gpiochip0", (char*)"--line", (char*)"144",
@@ -155,7 +161,7 @@ static void test_installed_service_arguments(void) {
   HeartbeatConfig cfg;
   char err[256] = {0};
   CHECK(parse(7, argv, &cfg, err, sizeof(err)) == kHeartbeatParseOk,
-        "systemd/racer-heartbeat.service's ExecStart arguments parse");
+        "racer-heartbeat.default's shipped values, once substituted into ExecStart, parse");
   CHECK(strcmp(cfg.chip_name, "gpiochip0") == 0, "service args -> gpiochip0");
   CHECK(cfg.line_offset == 144, "service args -> line 144 (header pin 7, PAC.06)");
   CHECK(cfg.rate_hz == 50.0, "service args -> 50 Hz");
@@ -179,6 +185,76 @@ static void test_half_period_ns(void) {
   }
 }
 
+// Tiny KEY=VALUE reader for racer-heartbeat.default: no quoting, no expansion, just what the
+// systemd EnvironmentFile= parser and this test both need to agree on. Lines that are blank,
+// pure whitespace, or start with '#' (after skipping leading whitespace) are comments; every
+// other line must be NAME=VALUE with no spaces around '=', which is what
+// systemd.exec(5)'s EnvironmentFile= documents and what racer-heartbeat.default is written
+// to. Returns true and writes *out (NUL-terminated, truncated to out_len - 1 if needed) if
+// `key` was found.
+static bool read_default_env_value(const char* path, const char* key, char* out,
+                                   size_t out_len) {
+  FILE* f = fopen(path, "r");
+  if (f == NULL) {
+    return false;
+  }
+  char line[256];
+  size_t key_len = strlen(key);
+  bool found = false;
+  while (fgets(line, sizeof(line), f) != NULL) {
+    char* p = line;
+    while (*p == ' ' || *p == '\t') {
+      ++p;
+    }
+    if (*p == '#' || *p == '\n' || *p == '\0') {
+      continue;
+    }
+    if (strncmp(p, key, key_len) == 0 && p[key_len] == '=') {
+      char* value = p + key_len + 1;
+      size_t value_len = strlen(value);
+      while (value_len > 0 &&
+             (value[value_len - 1] == '\n' || value[value_len - 1] == '\r')) {
+        value[--value_len] = '\0';
+      }
+      snprintf(out, out_len, "%s", value);
+      found = true;
+      break;
+    }
+  }
+  fclose(f);
+  return found;
+}
+
+// racer-heartbeat.default (installed to /etc/default/racer-heartbeat by `make install`, read
+// by systemd/racer-heartbeat.service's EnvironmentFile=) ships the SAME chip/line/rate as
+// this binary's own compiled-in defaults, so that a fresh install (env file present, unedited)
+// and a bare invocation with no flags (env file absent, per systemd's "-" prefix on
+// EnvironmentFile=) behave identically. If someone edits one without the other, this fails
+// rather than the two silently drifting apart. Run from tools/jetson_heartbeat/ (both `make
+// test` and .github/scripts/jetson_heartbeat_host_tests.sh do this), so the path below is
+// relative to that directory, not to this test file.
+static void test_default_env_file_matches_compiled_defaults(void) {
+  const char* path = "racer-heartbeat.default";
+  char value[64];
+
+  CHECK(read_default_env_value(path, "RACER_HB_CHIP", value, sizeof(value)),
+        "racer-heartbeat.default has RACER_HB_CHIP");
+  CHECK(strcmp(value, JETSON_HEARTBEAT_DEFAULT_CHIP) == 0,
+        "RACER_HB_CHIP matches the compiled-in default chip");
+
+  CHECK(read_default_env_value(path, "RACER_HB_LINE", value, sizeof(value)),
+        "racer-heartbeat.default has RACER_HB_LINE");
+  char expected_line[32];
+  snprintf(expected_line, sizeof(expected_line), "%u", JETSON_HEARTBEAT_DEFAULT_LINE);
+  CHECK(strcmp(value, expected_line) == 0,
+        "RACER_HB_LINE matches the compiled-in default line");
+
+  CHECK(read_default_env_value(path, "RACER_HB_RATE_HZ", value, sizeof(value)),
+        "racer-heartbeat.default has RACER_HB_RATE_HZ");
+  CHECK(strtod(value, NULL) == JETSON_HEARTBEAT_DEFAULT_RATE_HZ,
+        "RACER_HB_RATE_HZ matches the compiled-in default rate");
+}
+
 void test_heartbeat_config_suite(void) {
   test_defaults_with_no_args();
   test_overrides_all_three();
@@ -191,4 +267,5 @@ void test_heartbeat_config_suite(void) {
   test_empty_chip_errors();
   test_installed_service_arguments();
   test_half_period_ns();
+  test_default_env_file_matches_compiled_defaults();
 }

@@ -19,10 +19,16 @@ launch tests assert this against the live node graph, not by reading the source.
 
 ### Status
 
-**UNVERIFIED ON HARDWARE.** As of 2026-09-13 this node has been built and tested only in the
-`ros-dev` container against a FAKE sysfs tree (ordinary files in a temp directory). No pin
-has been scoped, no servo has moved, no ESC has been armed by it. Everything under "Enabling
-PWM pins on the Jetson" below is a written-ahead procedure, not a record of something done.
+**PIN IDENTITY VERIFIED, NODE BEHAVIOUR STILL UNVERIFIED ON HARDWARE.** As of 2026-09-20 the
+pinmux procedure below has actually been run on the real Jetson Orin Nano Super Dev Kit
+(JetPack 6.2 / L4T R36.4.4): header pins 15 and 33 are confirmed enabled and driven, and the
+`pwmchip0` = pin 15 / `pwmchip2` = pin 33 mapping this node now defaults to is a measurement,
+not a guess (`docs/notes/build-log.md`, 2026-09-20). What that measurement covers: the pads
+carry a PWM signal at the expected average voltage for 50 Hz / 50 percent duty, driven by
+hand through sysfs. What it does NOT cover: pulse-width accuracy under load, this node's own
+behaviour driving those channels, or anything downstream of the pins (servo, mux board,
+VESC). No pin has been scoped with this node running, no servo has moved, no ESC has been
+armed by it.
 
 ### Fail-closed behaviour
 
@@ -103,73 +109,95 @@ All declared with descriptors and ranges (`claude-docs/10-conventions.md`).
 | `output_rate_hz` | 50.0 | Servo frame rate AND the PWM carrier period. Not a test knob. |
 | `drive_timeout_s` | 0.1 | `/drive` staleness -> neutral. Node tuning, deliberately NOT `limits.mux_watchdog_timeout_s` (that is the layer-1 MCU's own heartbeat window, a different mechanism on a different device). |
 | `sysfs_root` | `/sys/class/pwm` | Only tests change this. |
-| `steering_pwmchip` / `steering_pwm_channel` | 0 / 0 | UNVERIFIED, read off the device. |
-| `throttle_pwmchip` / `throttle_pwm_channel` | 0 / 0 | UNVERIFIED, read off the device. |
+| `steering_pwmchip` / `steering_pwm_channel` | 0 / 0 | VERIFIED on the Jetson Orin Nano Super Dev Kit, 2026-09-20: header pin 15. |
+| `throttle_pwmchip` / `throttle_pwm_channel` | 2 / 0 | VERIFIED, same device and date: header pin 33. |
 | `steering_left_is_pwm_max` | true | Bench-calibrated, see above. |
 
-## Enabling PWM pins on the Jetson (UNVERIFIED PROCEDURE)
+## Enabling PWM pins on the Jetson (VERIFIED PROCEDURE, confirmed 2026-09-20)
 
-**None of this has been run.** The Jetson was powered off when this was written; every
-command below comes from NVIDIA's Jetson-IO documentation and the pattern
-`tools/jetson_heartbeat/README.md` established for determining pin mappings on THIS board.
-Treat the output of each step as the authority and correct this section the first time it is
-actually done.
+**This has been run**, on the actual Jetson Orin Nano Super Dev Kit, JetPack 6.2 / L4T
+R36.4.4. The commands and the mapping below are a record of what was done and measured, not
+a written-ahead guess; the raw output is also logged in `docs/notes/build-log.md`,
+2026-09-20 entry.
 
-On the Jetson Orin Nano 40-pin header, **physical pins 15 and 33** are the two
-hardware-PWM-capable pins. They do not come up as PWM: the pinmux has to be switched, which
+On the Jetson Orin Nano 40-pin header, `sudo python3 /opt/nvidia/jetson-io/config-by-
+function.py -l all` reports exactly three PWM-capable functions: `pwm1` on physical pin 15,
+`pwm5` on physical pin 33, `pwm7` on physical pin 32. This board uses pins 15 and 33 (see
+"Cabling" below); pin 32 / `pwm7` is unused. **Out of the box none of these functions are
+enabled on the 40-pin header**, and this is the trap: a PWM controller can be exported and
+enabled in sysfs and still read 0.0 V, because the kernel happily runs a controller whose
+output the pinmux has not routed to a pad. The pinmux has to be switched, which
 `/opt/nvidia/jetson-io` does by editing the device tree overlay, and that needs a **reboot**.
 
-1. Confirm what the header is currently configured as, the same way the heartbeat pin was
-   determined (this reads the LIVE device tree, it does not guess from a pinout diagram):
+1. List what the header currently supports and what is enabled (this reads the LIVE device
+   tree, it does not guess from a pinout diagram):
 
    ```sh
-   sudo /opt/nvidia/jetson-io/config-by-pin.py
+   sudo python3 /opt/nvidia/jetson-io/config-by-function.py -l all
    ```
 
-   Note which functions pins 15 and 33 currently carry, and confirm nothing else needs them.
-   Physical pin 7 must stay a plain GPIO: that is the heartbeat
+   Confirm pins 15 and 33 are the two entries you expect (`pwm1`, `pwm5`) and that nothing
+   else needs them. Physical pin 7 must stay a plain GPIO: that is the heartbeat
    (`tools/jetson_heartbeat/`, `gpiochip0` line 144 / `PAC.06`), and repurposing it would
    silently disarm the mux's watchdog input.
 
-2. Switch both pins to their PWM function:
+2. Enable both PWM functions in one shot and reboot:
 
    ```sh
-   sudo /opt/nvidia/jetson-io/config-by-function.py
+   sudo python3 /opt/nvidia/jetson-io/config-by-function.py -o dt 1="pwm1 pwm5"
    ```
 
-   Select `pwm` for the entries covering pins 15 and 33, save the configuration as a new
-   device tree overlay when prompted, and reboot.
+   This writes `/boot/jetson-io-hdr40-user-custom.dtbo` and adds it to
+   `/boot/extlinux/extlinux.conf`, so it **survives reboots** -- it is a one-time step, not
+   something to redo every boot. Reboot for the overlay to take effect.
 
-3. After the reboot, find out what the kernel actually called them. **Do not assume
-   pwmchip0/pwm0** -- the numbering depends on which pins were enabled and on probe order:
+3. After the reboot, confirm both functions are enabled and find the kernel's own numbering.
+   **Do not assume pwmchip0/pwm0** -- the numbering depends on which pins were enabled and on
+   probe order, and it is confirmed, not assumed, on this board:
 
    ```sh
-   ls -l /sys/class/pwm/
+   sudo python3 /opt/nvidia/jetson-io/config-by-function.py -l enabled
    for chip in /sys/class/pwm/pwmchip*; do
      echo "$chip -> $(readlink -f "$chip" | sed 's#/sys/devices/##')  npwm=$(cat "$chip/npwm")"
    done
    ```
 
-   The symlink target contains the SoC PWM controller address, which is what ties a chip
-   number to a header pin. Record the mapping in `docs/notes/build-log.md` with the raw
-   command output, the way the heartbeat pin mapping was recorded.
+   **Measured mapping on this device (2026-09-20):** `pwmchip0` = `3280000.pwm` = header pin
+   15 = **steering**; `pwmchip2` = `32c0000.pwm` = header pin 33 = **throttle**
+   (`pwmchip1` = `32a0000.pwm`, `pwmchip3` = `32e0000.pwm`, `pwmchip4` = `39c0000.tachometer`
+   are present but unused). Each chip has `npwm=1`, so the channel index within each chip is
+   always 0. This is the mapping `pwm_output_node`'s defaults now encode
+   (`steering_pwmchip=0`/`steering_pwm_channel=0`, `throttle_pwmchip=2`/
+   `throttle_pwm_channel=0`). Confirm it again on any other unit or kernel build before
+   trusting the defaults there -- the symlink target contains the SoC PWM controller address,
+   which is what actually ties a chip number to a header pin.
 
-4. Verify one channel by hand before any ROS node touches it, with **nothing connected**:
+4. Verify each channel by hand before any ROS node touches it, with **nothing connected**:
 
    ```sh
    echo 0        | sudo tee /sys/class/pwm/pwmchipN/export
    echo 20000000 | sudo tee /sys/class/pwm/pwmchipN/pwm0/period      # 20 ms = 50 Hz
-   echo 1500000  | sudo tee /sys/class/pwm/pwmchipN/pwm0/duty_cycle  # 1500 us neutral
+   echo 10000000 | sudo tee /sys/class/pwm/pwmchipN/pwm0/duty_cycle  # 50 percent duty
    echo 1        | sudo tee /sys/class/pwm/pwmchipN/pwm0/enable
    ```
 
-   Put a scope (or a meter that reads duty cycle) on the pin and confirm 50 Hz and a 1.5 ms
-   high time before believing any of it. Then `echo 0 > .../enable`.
+   **Confirmed on this device:** a DC meter across the pin and its adjacent ground pin reads
+   ~1.64 V on both channels -- pin 15 referenced to pin 14, pin 33 referenced to pin 34 --
+   which is the expected average of a 3.3 V square wave at 50 percent duty (0.5 x 3.3 V =
+   1.65 V). Reading 0.0 V here before the pinmux change in step 2 is the expected failure
+   mode, not a wiring fault: it means the controller is toggling in sysfs but the pad is not
+   yet routed. Then `echo 0 | sudo tee /sys/class/pwm/pwmchipN/pwm0/enable`.
+
+   What this step verifies: the pads carry a PWM signal at the right average voltage. What
+   it does NOT verify: pulse-width accuracy under load, `pwm_output_node`'s own behaviour
+   driving these channels, or anything downstream of the pins.
 
 5. Give the container access. The node writes to `/sys/class/pwm`, which a container does not
    get by default; see `docker/car/build_on_jetson.md` for the exact `docker run` flags.
 
-6. Pass the numbers you found as launch arguments, do not edit code:
+6. The numbers above are now the node's defaults, so a plain
+   `ros2 launch racer_bringup car_teleop.launch.py` uses them. Override only if a different
+   unit measures a different mapping:
 
    ```sh
    ros2 launch racer_bringup car_teleop.launch.py \

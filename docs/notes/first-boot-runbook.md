@@ -108,43 +108,75 @@ Confirm what you built:
 docker run --rm car:local bash -lc 'echo "RACER_TORCH=$RACER_TORCH"'   # expect: absent
 ```
 
-## 4. Enable the two hardware PWM pins (UNVERIFIED -- the whole procedure)
+## 4. Enable the two hardware PWM pins (VERIFIED, confirmed 2026-09-20)
 
-Full steps and the reasoning: `ros_ws/src/racer_drivers/README.md`, "Enabling PWM pins on the
-Jetson". In short:
+**This has actually been run**, on the Jetson Orin Nano Super Dev Kit, JetPack 6.2 / L4T
+R36.4.4. Full steps and the reasoning: `ros_ws/src/racer_drivers/README.md`, "Enabling PWM
+pins on the Jetson". In short:
 
-4.1 `sudo /opt/nvidia/jetson-io/config-by-pin.py` -- record what pins 15 and 33 currently
-    are. **Confirm pin 7 stays a plain GPIO** (the heartbeat).
+4.1 `sudo python3 /opt/nvidia/jetson-io/config-by-function.py -l all` -- confirms the 40-pin
+    header supports exactly `pwm1` (pin 15), `pwm5` (pin 33) and `pwm7` (pin 32); this board
+    uses pins 15 and 33. **Confirm pin 7 stays a plain GPIO** (the heartbeat). Out of the box
+    none of these functions are enabled, so both pins read 0.0 V even if a PWM controller is
+    exported and running in sysfs -- the kernel does not refuse to run a controller whose
+    output is not routed to a pad. That 0.0 V reading is the expected failure mode before
+    step 4.2, not a wiring fault.
 
-4.2 `sudo /opt/nvidia/jetson-io/config-by-function.py` -- select `pwm` for the entries
-    covering pins 15 and 33, save as a new overlay, **reboot**.
+4.2 Enable both in one command and reboot:
 
-4.3 After the reboot, find the real chip/channel numbers -- do not assume `pwmchip0/pwm0`:
+    ```sh
+    sudo python3 /opt/nvidia/jetson-io/config-by-function.py -o dt 1="pwm1 pwm5"
+    ```
 
-```sh
-for chip in /sys/class/pwm/pwmchip*; do
-  echo "$chip -> $(readlink -f "$chip" | sed 's#/sys/devices/##')  npwm=$(cat "$chip/npwm")"
-done
-```
+    This writes `/boot/jetson-io-hdr40-user-custom.dtbo` and adds it to
+    `/boot/extlinux/extlinux.conf`, so it **persists across reboots** -- it is a one-time
+    step. **Reboot** for the overlay to take effect.
 
-4.4 Write the raw output of 4.3 into `docs/notes/build-log.md` with the date. A mapping that
-    lives only in a terminal scrollback did not happen.
+4.3 After the reboot, confirm both are enabled and find the real chip/channel numbers -- do
+    not assume `pwmchip0/pwm0`:
 
-## 5. Bench-check one PWM channel with nothing connected (UNVERIFIED)
+    ```sh
+    sudo python3 /opt/nvidia/jetson-io/config-by-function.py -l enabled
+    for chip in /sys/class/pwm/pwmchip*; do
+      echo "$chip -> $(readlink -f "$chip" | sed 's#/sys/devices/##')  npwm=$(cat "$chip/npwm")"
+    done
+    ```
+
+    **Measured on this device:** pin 15 = `pwmchip0` (`3280000.pwm`) = steering; pin 33 =
+    `pwmchip2` (`32c0000.pwm`) = throttle; both `npwm=1`, so channel index 0 on each. This is
+    now `pwm_output_node`'s default (`ros_ws/src/racer_drivers/README.md`). Confirm again on
+    any other unit or kernel build -- the numbering depends on which pins were enabled and on
+    probe order.
+
+4.4 Already written into `docs/notes/build-log.md` with the date and the raw command output.
+    A mapping that lives only in a terminal scrollback did not happen; do the same if you
+    re-run this on different hardware.
+
+## 5. Bench-check one PWM channel with nothing connected (VERIFIED, confirmed 2026-09-20)
 
 Before any ROS node touches a pin, with **nothing plugged into the header**:
 
 ```sh
 echo 0        | sudo tee /sys/class/pwm/pwmchipN/export
 echo 20000000 | sudo tee /sys/class/pwm/pwmchipN/pwm0/period
-echo 1500000  | sudo tee /sys/class/pwm/pwmchipN/pwm0/duty_cycle
+echo 10000000 | sudo tee /sys/class/pwm/pwmchipN/pwm0/duty_cycle   # 50 percent duty
 echo 1        | sudo tee /sys/class/pwm/pwmchipN/pwm0/enable
 ```
 
-Scope or duty-reading meter on the pin: **50 Hz, 1.5 ms high**. Anything else and the pinmux
-change did not take. Then `echo 0 | sudo tee /sys/class/pwm/pwmchipN/pwm0/enable`.
+**Confirmed with a multimeter on this device:** ~1.64 V DC on both pin 15 (referenced to pin
+14) and pin 33 (referenced to pin 34) at 50 Hz / 50 percent duty -- the expected average of a
+3.3 V square wave at 50 percent (0.5 x 3.3 V = 1.65 V). Reading 0.0 V here before step 4.2's
+pinmux change is the expected failure mode people hit, not a wiring fault. Then
+`echo 0 | sudo tee /sys/class/pwm/pwmchipN/pwm0/enable`.
 
-Repeat for the other pin. Record both measurements.
+Repeat for the other pin. Both measurements are recorded in `docs/notes/build-log.md`,
+2026-09-20.
+
+**What this verifies and what it does not.** Verified: the pads carry a PWM signal at the
+right average voltage for a hand-driven sysfs duty cycle. NOT verified: pulse-width accuracy
+under load, `pwm_output_node`'s own behaviour driving these channels at 50 Hz with real
+duty-cycle values, or anything downstream of the pins (servo, mux board, VESC). Steps 10-14
+below are still where those get checked.
 
 ## 6. Build the workspace on the device (UNVERIFIED on-device; the same build is green in the ros-dev container on the Mac)
 

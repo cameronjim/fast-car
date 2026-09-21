@@ -5,6 +5,43 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-20 -- Jetson 40-pin PWM pins enabled and confirmed with a multimeter
+
+Ran the `docs/notes/first-boot-runbook.md` step 4/5 procedure for real, on the actual Jetson
+Orin Nano Super Dev Kit, JetPack 6.2 / L4T R36.4.4. Everything below is measured, not
+written-ahead.
+
+- `sudo python3 /opt/nvidia/jetson-io/config-by-function.py -l all` lists exactly three
+  PWM-capable functions on the 40-pin header: `pwm1` on physical pin 15, `pwm5` on physical
+  pin 33, `pwm7` on physical pin 32. This board uses pins 15 and 33; pin 32 is unused.
+- Out of the box, **none** of these were enabled. Both pins measured 0.0 V even with the PWM
+  controllers exported and enabled in sysfs -- the trap here is that the kernel runs a PWM
+  controller whose output the pinmux has not routed to a pad, and it does not tell you.
+- Fix applied and now persisted: `sudo python3 /opt/nvidia/jetson-io/config-by-function.py -o
+  dt 1="pwm1 pwm5"`, then reboot. This writes `/boot/jetson-io-hdr40-user-custom.dtbo` and
+  adds it to `/boot/extlinux/extlinux.conf`, so it survives reboots and does not need
+  redoing.
+- After the reboot, `-l enabled` reports `pwm1` (pin 15) and `pwm5` (pin 33) enabled. Owner
+  confirmed with a multimeter: **~1.64 V DC on both pin 15 (referenced to pin 14) and pin 33
+  (referenced to pin 34)**, with each channel driven at 50 Hz / 50 percent duty by hand
+  through sysfs. That is the expected average of a 3.3 V square wave at 50 percent duty
+  (0.5 x 3.3 V = 1.65 V), so the pads are genuinely driven, not just toggling in software.
+- sysfs mapping confirmed on the device: `pwmchip0` = `3280000.pwm` = header pin 15;
+  `pwmchip2` = `32c0000.pwm` = header pin 33 (`pwmchip1` = `32a0000.pwm`, `pwmchip3` =
+  `32e0000.pwm`, `pwmchip4` = `39c0000.tachometer`, all present but unused). Each chip's
+  `npwm` is 1, so the channel index within each chip is 0.
+- **Assignment decision, applied consistently everywhere:** pin 15 / `pwmchip0` = steering,
+  pin 33 / `pwmchip2` = throttle. `pwm_output_node`'s declared parameter defaults
+  (`steering_pwmchip=0`/`steering_pwm_channel=0`, `throttle_pwmchip=2`/
+  `throttle_pwm_channel=0`) and `car_teleop.launch.py`'s launch-argument defaults now match
+  this measurement (`ros_ws/src/racer_drivers/README.md`,
+  `ros_ws/src/racer_bringup/launch/car_teleop.launch.py`).
+- **What is verified and what is not.** Verified: the two pads carry a PWM signal at the
+  right average voltage when driven by hand at 50 Hz / 50 percent duty. NOT verified:
+  pulse-width accuracy under load, `pwm_output_node`'s own behaviour driving these channels,
+  or anything downstream of the pins (servo, mux board, VESC PPM input). Those are still
+  first-boot-runbook.md steps 10-14.
+
 ## 2026-09-14 -- safety mux firmware and heartbeat reviewed before the first flash
 
 Read-and-fix pass over `firmware/safety_mux/` and `tools/jetson_heartbeat/` ahead of flashing

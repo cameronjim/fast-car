@@ -26,11 +26,15 @@ It does not change any safety behaviour. Specifically:
 - The one hook it needed, `pwm_capture_diag()` in `pico/pwm_capture.c`, is a read-only
   accessor: it reads the same fields `pwm_capture_read_us()` reads, under the same
   interrupt-disabled section, and writes nothing. It is compiled only in the diagnostic build.
-- The shipping build is unchanged byte for byte. Proof, not assertion: with `DIAG_BUILD=OFF`
-  this branch produces `safety_mux.uf2` at 79360 bytes,
-  sha256 `ccddd7452d1c6dc114805d4f265a96be6565ee238b911141bc26dd2f2b132683`, which is the same
-  size and the same hash as the shipping artifact recorded in `docs/notes/build-log.md`'s
-  2026-09-20 entry, built before any of this existed.
+- The shipping build is unchanged byte for byte by the diagnostic sources. Proof, not
+  assertion: when this was written, with `DIAG_BUILD=OFF`, the branch produced
+  `safety_mux.uf2` at 79360 bytes, sha256
+  `ccddd7452d1c6dc114805d4f265a96be6565ee238b911141bc26dd2f2b132683`, the same size and hash
+  as the shipping artifact recorded in `docs/notes/build-log.md`'s 2026-09-20 entry, built
+  before any of this existed. Later changes to `logic/` change BOTH builds together and move
+  both hashes; the 2026-09-21 window/clamp change (GitHub issue #63) is the first of those,
+  and that entry in `build-log.md` carries the current pair. What stays true is the property
+  being claimed here: the diagnostic sources add printing, never a decision.
 
 Because the diagnostic binary is a different binary, the shipping build stays the one that
 drives the car. Use the diagnostic build to find out what is wrong, then flash the shipping
@@ -106,12 +110,13 @@ On attaching:
 pins: kill=gp12 steer=gp10 throttle=gp7 heartbeat=gp5 | out servo=gp1 esc=gp3 cutoff=gp0
 params: steer 1000-2000 (neutral 1500) | throttle 1000-2000 (neutral 1500) | watchdog 100ms | kill thr 1500us +-100us | rc range 1000-2000
 cut priority: 1 rc kill/unreadable, 2 heartbeat watchdog, 3 steering, 4 throttle
+pwm window: the two Jetson command channels are accepted up to 62.5us (4 x 15.6us capture grid) OUTSIDE their configured range, and an accepted pulse is CLAMPED back into that range before it is forwarded. The rc kill channel is NOT widened. Stale/no-edge/out-of-range semantics are otherwise unchanged.
 ```
 
 Then, twice a second, one line. A nominal passthrough looks like this:
 
 ```
-[0 t=12.945s] KILL gp12=1872us FRESH(12ms, in 1000-2000) -> ARMED (arm>=1600us kill<1400us) | HB gp5 age=11ms (timeout 100ms) OK | STEER gp10=1500us FRESH(8ms, in 1000-2000) | THR gp7=1500us FRESH(8ms, in 1000-2000) | DECISION=PASS reason=NORMAL | OUT servo gp1=1500us esc gp3=1500us cutoff gp0=HIGH(power enabled)
+[0 t=12.945s] KILL gp12=1872us FRESH(12ms, in 1000-2000 +-0.0us) -> ARMED (arm>=1600us kill<1400us) | HB gp5 age=11ms (timeout 100ms) OK | STEER gp10=1500us FRESH(8ms, in 1000-2000 +-62.5us) | THR gp7=1500us FRESH(8ms, in 1000-2000 +-62.5us) | DECISION=PASS reason=NORMAL | OUT servo gp1=1500us esc gp3=1500us cutoff gp0=HIGH(power enabled)
 ```
 
 Field by field:
@@ -123,30 +128,38 @@ Field by field:
 | `-> ARMED` | The decoded kill-switch position the decision actually used this cycle: `ARMED`, `KILLED`, or `UNREADABLE`. This is `MuxOutput.switch_position`, not a recomputation, so it can never disagree with the decision. |
 | `(arm>=1600us kill<1400us)` | The thresholds it is being compared against: `limits.mux_kill_switch_threshold_us` plus and minus the dead band (`RC_SWITCH_DEFAULT_HYSTERESIS_US`, 100 us). Between the two edges the position holds, and a hold out of `UNREADABLE` resolves to KILL, never ARMED. |
 | `HB gp5 age=11ms (timeout 100ms) OK` | Milliseconds since the last heartbeat edge, the configured `limits.mux_watchdog_timeout_s`, and the watchdog's verdict. `OK` or `TIMED_OUT`, decided by the same `watchdog_timed_out()` the mux uses. `NO_EDGES_EVER` means no edge has ever been seen since boot. |
-| `STEER gp10=...`, `THR gp7=...` | The two Jetson command channels, same format and same states as the kill channel, checked against their own `vehicle_params` ranges. |
+| `STEER gp10=...`, `THR gp7=...` | The two Jetson command channels, same format and same states as the kill channel, checked against their own `vehicle_params` ranges widened by the 62.5 us capture-quantisation slack. Unlike the kill channel, an accepted pulse on these is clamped back into the unwidened range before it is forwarded. |
 | `DECISION=PASS` / `DECISION=CUT` | Whether this cycle passed the Jetson's commands through or cut. |
 | `reason=NORMAL` / `reason=2:WATCHDOG_TIMEOUT` | The winning cut condition, prefixed with its position in the priority order. Several conditions can be true at once; the number tells you which one was checked first and therefore reported. Fix them in number order. |
-| `OUT servo gp1=1500us esc gp3=1500us` | The pulse widths being commanded on the two outputs right now. On a cut these are the configured neutrals; on a pass they mirror the Jetson inputs. |
+| `OUT servo gp1=1500us esc gp3=1500us` | The pulse widths being commanded on the two outputs right now. On a cut these are the configured neutrals; on a pass they mirror the Jetson inputs, clamped to the configured range (so a 2031 us input shows here as 2000 us). |
 | `cutoff gp0=LOW(power cut)` | The power-cutoff GPIO's actual output level, read back from the pin. |
 
 Per-channel states:
 
 | State | Means |
 |---|---|
-| `FRESH(Nms, in A-B)` | A plausible pulse arrived N ms ago and is inside the configured range. The only state that does not cut. |
+| `FRESH(Nms, in A-B +-Tus)` | A plausible pulse arrived N ms ago and is inside the configured range. `T` is the capture-quantisation slack this channel allows (62.5 us on the two Jetson command channels, 0 on the kill channel -- see `firmware/safety_mux/README.md` and GitHub issue #63). One of the two states that does not cut. |
+| `FRESH(Nms, Dus outside A-B, within Tus grid slack; CLAMPED->Vus)` | The pulse is D us outside the configured range but inside the widened window, so it is accepted and **forwarded as V us**, the range edge, not as the measured width. This is what a commanded 2000 us measuring 2031 us looks like. Does not cut. |
 | `NO_EDGES(...)` | No plausible complete pulse has ever been captured on this pin since boot. The line is dead, unplugged, stuck at a level, or carrying only noise. |
 | `STALE(last edge Nms ago, window 60ms; stuck or stopped)` | A pulse was captured once, but nothing has arrived within the capture staleness window, so the last width is not a live command. A stuck-high line looks exactly like this. |
-| `OUT_OF_RANGE(allowed A-B)` | Pulses are arriving and are fresh, but the width is outside the channel's configured range. |
+| `OUT_OF_RANGE(allowed A-B +-Tus grid slack)` | Pulses are arriving and are fresh, but the width is outside the configured range **and** outside the quantisation slack around it. Genuinely bad, not a rounding artefact. |
 | `NOT_REGISTERED` | `pwm_capture_init_channel()` was never called for that GPIO. Should be impossible; it would be a firmware bug, not a wiring fault. |
 
 Real examples of each cut, generated from the actual format strings:
 
 ```
-[1 t=13.545s] KILL gp12=1102us FRESH(9ms, in 1000-2000) -> KILLED (arm>=1600us kill<1400us) | HB gp5 age=11ms (timeout 100ms) OK | STEER gp10=1500us FRESH(8ms, in 1000-2000) | THR gp7=1500us FRESH(8ms, in 1000-2000) | DECISION=CUT reason=1:RC_KILL_SWITCH | OUT servo gp1=1500us esc gp3=1500us cutoff gp0=LOW(power cut)
+[1 t=13.545s] KILL gp12=1102us FRESH(9ms, in 1000-2000 +-0.0us) -> KILLED (arm>=1600us kill<1400us) | HB gp5 age=11ms (timeout 100ms) OK | STEER gp10=1500us FRESH(8ms, in 1000-2000 +-62.5us) | THR gp7=1500us FRESH(8ms, in 1000-2000 +-62.5us) | DECISION=CUT reason=1:RC_KILL_SWITCH | OUT servo gp1=1500us esc gp3=1500us cutoff gp0=LOW(power cut)
 [2 t=14.145s] KILL gp12=--- NO_EDGES(no plausible pulse since boot; line dead/unplugged/noise) -> UNREADABLE (arm>=1600us kill<1400us) | ... | DECISION=CUT reason=1:RC_SIGNAL_INVALID | ...
-[3 t=14.745s] KILL gp12=1872us FRESH(10ms, in 1000-2000) -> ARMED (arm>=1600us kill<1400us) | HB gp5=NO_EDGES_EVER (timeout 100ms) TIMED_OUT | ... | DECISION=CUT reason=2:WATCHDOG_TIMEOUT | ...
+[3 t=14.745s] KILL gp12=1872us FRESH(10ms, in 1000-2000 +-0.0us) -> ARMED (arm>=1600us kill<1400us) | HB gp5=NO_EDGES_EVER (timeout 100ms) TIMED_OUT | ... | DECISION=CUT reason=2:WATCHDOG_TIMEOUT | ...
 [4 t=15.345s] ... | STEER gp10=1500us STALE(last edge 430ms ago, window 60ms; stuck or stopped) | ... | DECISION=CUT reason=3:STEERING_PWM_INVALID | ...
-[5 t=15.945s] ... | THR gp7=2450us OUT_OF_RANGE(allowed 1000-2000) | DECISION=CUT reason=4:THROTTLE_PWM_INVALID | ...
+[5 t=15.945s] ... | THR gp7=2450us OUT_OF_RANGE(allowed 1000-2000 +-62.5us grid slack) | DECISION=CUT reason=4:THROTTLE_PWM_INVALID | ...
+```
+
+And the case that is NOT a cut any more (GitHub issue #63): a commanded 2000 us landing on the
+capture grid at 2031 us is accepted and forwarded at the range edge.
+
+```
+[6 t=16.545s] ... | STEER gp10=2031us FRESH(8ms, 31us outside 1000-2000, within 62.5us grid slack; CLAMPED->2000us) | ... | DECISION=PASS reason=NORMAL | OUT servo gp1=2000us esc gp3=1500us cutoff gp0=HIGH(power enabled)
 ```
 
 ## PWM output audit, 2026-09-20 (prompted by a 0.36 V reading on GP1)
@@ -244,7 +257,7 @@ Tonight's actual symptom is the last row.
 | Mux never passes, kill knob appears to be in the armed position | `KILL gp12=1102us FRESH ... -> KILLED`, `reason=1:RC_KILL_SWITCH` | The knob's armed end is the low end on this channel, or the threshold is wrong for this receiver. Turn VrA the other way and watch the number move. Whichever end reads above 1600 us is the armed end. If the number never crosses 1600 us in either direction, the threshold in `config/vehicle_params.yaml` does not match the measured channel, which is exactly the unmeasured provisional value that has to be replaced. |
 | Mux never passes, receiver is connected | `KILL gp12=--- NO_EDGES ... -> UNREADABLE`, `reason=1:RC_SIGNAL_INVALID` | Nothing usable is reaching GP12. Receiver not powered from the board's 5 V lead, CH5 not the channel that is wired, the signal not passing the level shifter, or no common ground. Note this is the same line you get with the transmitter switched off, because failsafe is set to the kill end. |
 | Mux cuts even with the kill switch clearly armed and the Jetson running | `KILL ... -> ARMED`, then `HB gp5=NO_EDGES_EVER ... TIMED_OUT` or `HB gp5 age=340ms ... TIMED_OUT`, `reason=2:WATCHDOG_TIMEOUT` | The heartbeat is not reaching GP5. `NO_EDGES_EVER` means the wire or the Jetson service is dead at the mux end even though pin 7 toggles at kernel level, so suspect the JETSON connector, a reversed keyed plug, or the shared ground. A finite but too large `age` means the toggle is arriving slower than the 100 ms timeout, which is a rate problem, not a wiring problem. |
-| Mux cuts, kill armed, heartbeat OK | `STEER gp10=... STALE(...)` or `OUT_OF_RANGE(...)`, `reason=3:STEERING_PWM_INVALID` (or the `THR gp7` equivalent, `reason=4`) | `STALE` with a sensible last width means the Jetson stopped producing edges (pwmchip disabled, duty left at 0 or 100 percent), or the line is stuck. `NO_EDGES` means that Jetson PWM pad is not reaching the mux at all, which the pin 15 and pin 33 voltage measurements do not rule out, because they were taken at the Jetson header and not at GP10 and GP7. `OUT_OF_RANGE` means pulses are arriving fine and the commanded width is simply outside 1000 to 2000 us. |
+| Mux cuts, kill armed, heartbeat OK | `STEER gp10=... STALE(...)` or `OUT_OF_RANGE(...)`, `reason=3:STEERING_PWM_INVALID` (or the `THR gp7` equivalent, `reason=4`) | `STALE` with a sensible last width means the Jetson stopped producing edges (pwmchip disabled, duty left at 0 or 100 percent), or the line is stuck. `NO_EDGES` means that Jetson PWM pad is not reaching the mux at all, which the pin 15 and pin 33 voltage measurements do not rule out, because they were taken at the Jetson header and not at GP10 and GP7. `OUT_OF_RANGE` means pulses are arriving fine and the commanded width is outside 1000 to 2000 us by more than the 62.5 us quantisation slack (GitHub issue #63); a width just past an edge is accepted and clamped instead, and the line says `CLAMPED->`. |
 | **Mux says PASS but the servo still does not respond and goes limp** | `DECISION=PASS reason=NORMAL`, `OUT servo gp1=1500us`, `cutoff gp0=HIGH(power enabled)`, and on the `PWMREG` line `duty=7.50% 50.00Hz pinfn=PWM` | Not a logic problem. The decision is passing and the firmware is commanding a 1500 us pulse. Look downstream of GP1: the servo lead, the SERVO header's ground (a servo with 5 V and signal but no common ground with the Pico goes limp exactly like this), the GP1 to header trace or solder joint, or the servo not accepting 3.3 V logic. A limp servo specifically means it is seeing no valid pulse train at all, since a servo that receives 1500 us holds centre stiffly. Scope GP1 directly at the Pico pin, then at the header pin: if the pin is clean and the header is not, the fault is on the board. |
 | Mux says CUT but the servo is limp rather than centred | any `DECISION=CUT` line with `OUT servo gp1=1500us` | Same downstream conclusion as the row above. A cut is not an absence of signal in this design: both outputs are driven to the configured neutral continuously. A limp servo during a cut therefore also points at wiring or waveform, not at the decision. |
 | Output line never appears, board seems alive | nothing on the serial port | Either the shipping build is flashed rather than the diagnostic one, or the terminal is not actually open on the CDC port. The firmware deliberately prints nothing until a host opens the port. |

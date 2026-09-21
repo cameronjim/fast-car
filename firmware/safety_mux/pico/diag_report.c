@@ -12,7 +12,7 @@
 #include "pico/stdlib.h"
 #include "pwm_capture.h"
 #include "pwm_output.h"
-#include "safety_mux/pwm_validity.h"
+#include "safety_mux/pwm_window.h"
 #include "safety_mux/rc_switch.h"
 #include "safety_mux/watchdog.h"
 
@@ -34,12 +34,31 @@ static int32_t us_int(double us) {
   return (int32_t)(us + 0.5);
 }
 
+// Microseconds in tenths, for the quantisation figures: the capture grid is 15.625 us and
+// the tolerance 62.5 us, and rounding those to whole microseconds in a line a human is
+// comparing against a boundary would be its own small lie. Integer arithmetic only: no float
+// formatting on a Cortex-M0+.
+static int32_t us_tenths(double us) {
+  if (!isfinite(us) || us < 0.0) {
+    return -1;
+  }
+  return (int32_t)((us * 10.0) + 0.5);
+}
+
 // One capture channel, rendered as "<width>us <status>". The status is the point of this
 // whole build: pwm_capture_read_us() returns -1.0 for three different faults and the mux
 // treats all three identically, but a human needs to tell "the wire is dead" from "the pulse
 // is the wrong width".
+//
+// `tolerance_us` is the capture-quantisation slack the mux allows on this channel
+// (PWM_WINDOW_DEFAULT_TOLERANCE_US for the two Jetson command channels, 0 for the RC
+// kill-switch channel, which is not widened) -- see logic/include/safety_mux/pwm_window.h and
+// GitHub issue #63. It is passed in rather than assumed here so that this line reports the
+// same verdict mux_decide() reached, via the same function, and cannot drift from it: the
+// channel's status names the widened window, and when a pulse is accepted only because of
+// that slack the line also prints the CLAMPED width that is actually forwarded.
 static void format_channel(char* out, size_t out_len, uint gpio, double reading_us,
-                           double range_min_us, double range_max_us) {
+                           double range_min_us, double range_max_us, double tolerance_us) {
   PwmCaptureDiag d = pwm_capture_diag(gpio);
   if (!d.registered) {
     snprintf(out, out_len, "gp%u=?? NOT_REGISTERED", gpio);
@@ -56,14 +75,32 @@ static void format_channel(char* out, size_t out_len, uint gpio, double reading_
              (unsigned long)(d.max_age_us / 1000u));
     return;
   }
-  if (!pwm_is_valid_us(reading_us, range_min_us, range_max_us)) {
-    snprintf(out, out_len, "gp%u=%ldus OUT_OF_RANGE(allowed %ld-%ld)", gpio,
-             (long)us_int(reading_us), (long)us_int(range_min_us), (long)us_int(range_max_us));
+  double clamped_us = 0.0;
+  if (!pwm_window_accept_us(reading_us, range_min_us, range_max_us, tolerance_us, &clamped_us)) {
+    snprintf(out, out_len, "gp%u=%ldus OUT_OF_RANGE(allowed %ld-%ld +-%ld.%ldus grid slack)", gpio,
+             (long)us_int(reading_us), (long)us_int(range_min_us), (long)us_int(range_max_us),
+             (long)(us_tenths(tolerance_us) / 10), (long)(us_tenths(tolerance_us) % 10));
     return;
   }
-  snprintf(out, out_len, "gp%u=%ldus FRESH(%lums, in %ld-%ld)", gpio, (long)us_int(reading_us),
-           (unsigned long)(d.age_us / 1000u), (long)us_int(range_min_us),
-           (long)us_int(range_max_us));
+  if (clamped_us != reading_us) {
+    // Accepted only because of the quantisation slack. Say so explicitly, and say what is
+    // actually being forwarded, so a bench reading of 2031 us cannot be mistaken either for a
+    // fault or for a 2031 us pulse going out to the servo.
+    snprintf(out, out_len,
+             "gp%u=%ldus FRESH(%lums, %ldus outside %ld-%ld, within %ld.%ldus grid slack; "
+             "CLAMPED->%ldus)",
+             gpio, (long)us_int(reading_us), (unsigned long)(d.age_us / 1000u),
+             (long)us_int(reading_us > range_max_us ? reading_us - range_max_us
+                                                    : range_min_us - reading_us),
+             (long)us_int(range_min_us), (long)us_int(range_max_us),
+             (long)(us_tenths(tolerance_us) / 10), (long)(us_tenths(tolerance_us) % 10),
+             (long)us_int(clamped_us));
+    return;
+  }
+  snprintf(out, out_len, "gp%u=%ldus FRESH(%lums, in %ld-%ld +-%ld.%ldus)", gpio,
+           (long)us_int(reading_us), (unsigned long)(d.age_us / 1000u), (long)us_int(range_min_us),
+           (long)us_int(range_max_us), (long)(us_tenths(tolerance_us) / 10),
+           (long)(us_tenths(tolerance_us) % 10));
 }
 
 // Renders what the PWM hardware is ACTUALLY emitting on one output pin, derived from the
@@ -153,6 +190,17 @@ static void print_banner(void) {
       (long)us_int(g_params.kill_switch_hysteresis_us), (long)us_int(g_params.rc_signal_min_us),
       (long)us_int(g_params.rc_signal_max_us));
   printf("cut priority: 1 rc kill/unreadable, 2 heartbeat watchdog, 3 steering, 4 throttle\n");
+  // GitHub issue #63. Printed every time a host attaches, because "2031us FRESH" on a channel
+  // whose configured max is 2000us looks like a bug unless the reader knows the rule.
+  printf(
+      "pwm window: the two Jetson command channels are accepted up to %ld.%ldus (%d x %ld.%ldus "
+      "capture grid) OUTSIDE their configured range, and an accepted pulse is CLAMPED back into "
+      "that range before it is forwarded. The rc kill channel is NOT widened. "
+      "Stale/no-edge/out-of-range semantics are otherwise unchanged.\n",
+      (long)(us_tenths(PWM_WINDOW_DEFAULT_TOLERANCE_US) / 10),
+      (long)(us_tenths(PWM_WINDOW_DEFAULT_TOLERANCE_US) % 10), PWM_WINDOW_TOLERANCE_GRID_STEPS,
+      (long)(us_tenths(PWM_WINDOW_CAPTURE_GRID_US) / 10),
+      (long)(us_tenths(PWM_WINDOW_CAPTURE_GRID_US) % 10));
 }
 
 void diag_report_init(const DiagGpioMap* gpios, const MuxParams* params) {
@@ -190,12 +238,16 @@ void diag_report_tick(const MuxInput* input, const MuxOutput* output) {
   static char kill_s[128];
   static char steer_s[128];
   static char thr_s[128];
+  // The kill channel gets tolerance 0: mux_decide() does not widen it either (rc_switch_read()
+  // takes the receiver's range exactly), so reporting it with slack would be a lie.
   format_channel(kill_s, sizeof(kill_s), g_gpios.kill_gpio, input->rc_kill_switch_pwm_us,
-                 g_params.rc_signal_min_us, g_params.rc_signal_max_us);
+                 g_params.rc_signal_min_us, g_params.rc_signal_max_us, 0.0);
   format_channel(steer_s, sizeof(steer_s), g_gpios.steering_gpio, input->jetson_steering_pwm_us,
-                 g_params.steering_pwm_min_us, g_params.steering_pwm_max_us);
+                 g_params.steering_pwm_min_us, g_params.steering_pwm_max_us,
+                 PWM_WINDOW_DEFAULT_TOLERANCE_US);
   format_channel(thr_s, sizeof(thr_s), g_gpios.throttle_gpio, input->jetson_throttle_pwm_us,
-                 g_params.throttle_pwm_min_us, g_params.throttle_pwm_max_us);
+                 g_params.throttle_pwm_min_us, g_params.throttle_pwm_max_us,
+                 PWM_WINDOW_DEFAULT_TOLERANCE_US);
 
   // Heartbeat. +Inf means no edge has ever been seen (heartbeat_input_age_s()).
   static char hb_s[96];

@@ -25,7 +25,7 @@ bench-test against instead of a blank firmware project.
 
 | Piece | Where | Tested how |
 |---|---|---|
-| Mux state machine, watchdog timing, PWM validity checks, RC switch interpretation (including the kill-switch hysteresis band), param null/finiteness/range checking | `logic/` | Host-compiled with plain `gcc` (no Pico SDK, no cross-compiler), table-driven, every branch exercised -- see `tests/`. Runs in CI on every push (`.github/scripts/safety_mux_host_tests.sh`). |
+| Mux state machine, watchdog timing, PWM validity checks, the quantisation-tolerant plausibility window and its pass-through clamp, RC switch interpretation (including the kill-switch hysteresis band), param null/finiteness/range checking | `logic/` | Host-compiled with plain `gcc` (no Pico SDK, no cross-compiler), table-driven, every branch exercised -- see `tests/`. Runs in CI on every push (`.github/scripts/safety_mux_host_tests.sh`). |
 | GPIO/PWM capture (including the staleness window and the plausibility band), PWM output, heartbeat input, power-cutoff GPIO, startup ordering, main loop | `pico/` | **Compiles, otherwise untested.** Cross-compiled clean (no warnings) against pico-sdk 2.1.0 and flashed to nothing -- see "Building" below and `docs/notes/safety-mux-first-build.md`. Compiling is not testing: this is real hardware/interrupt access with no host equivalent, it has never run on a chip, and that note records a known IRQ-handler collision between `pwm_capture.c` and `heartbeat_input.c` that a compiler cannot see (since fixed), and `docs/notes/firmware-review-2026-09-14.md` records eight more defects of the same kind -- floating output pins at boot, a captured pulse that never aged out, torn multi-word reads from interrupt context -- all fixed, none of them yet observed on a chip. |
 | The whole thing, on a Jetson, RC receiver, servo, and ESC | (nothing yet) | Roadmap 1.3's kill test, `claude-docs/12-testing.md` L6/L7. Pending hardware. |
 
@@ -53,12 +53,16 @@ Output: `firmware/safety_mux/build/safety_mux_firmware.uf2`. The build tree and
 The same firmware with USB-serial state reporting compiled in: about twice a second it prints
 one line giving every captured pulse width, the heartbeat age, the decoded kill-switch
 position and the threshold it is compared against, the PASS/CUT decision with the winning cut
-condition, and the commanded outputs. A second line per report reads the PWM peripheral
+condition, and the commanded outputs. Each channel line names the quantisation slack its
+window allows and prints `CLAMPED-><value>` when a pulse is accepted only because of that
+slack, so a 2031 us reading on a 1000-2000 us channel reads as what it is. A second line per report reads the PWM peripheral
 registers back (slice, TOP, divider, compare level, measured `clk_sys`, and the resulting
 pulse width, frame rate and duty cycle) so the emitted waveform can be checked against a
 multimeter without a scope. It is a bench debugging aid and it changes no safety
-behaviour: nothing in `logic/` is touched, the decision and its priority order are identical,
-and the only added hook is a read-only accessor in `pico/pwm_capture.c`. Both the diagnostic
+behaviour: it takes no decision and drives no pin, the decision and its priority order are
+identical to the shipping build's, and the only hooks it needs are read-only accessors in
+`pico/pwm_capture.c` and `pico/pwm_output.c`. (The window/clamp change of 2026-09-21 is a
+change to `logic/`, i.e. to BOTH builds equally; the diagnostic build only reports it.) Both the diagnostic
 sources and that accessor are behind `#ifdef SAFETY_MUX_DIAG`, so the default build
 (`DIAG_BUILD=OFF`) is byte for byte the shipping firmware.
 
@@ -105,15 +109,52 @@ reasonable next step once this firmware is closer to bench-tested than drafted.
      input a human directly holds.
   2. Jetson heartbeat watchdog -- catches a frozen/hung/crashed Jetson.
   3. Per-channel Jetson PWM validity -- catches a glitched-but-alive command signal. A
-     channel is invalid if its pulse is out of range OR if no plausible pulse has arrived
-     recently: a stuck-high line produces no edges, and the last width captured before it
-     stuck is not a live command.
-  4. Otherwise: passthrough.
+     channel is invalid if its pulse is outside the window described below OR if no
+     plausible pulse has arrived recently: a stuck-high line produces no edges, and the last
+     width captured before it stuck is not a live command.
+  4. Otherwise: passthrough, clamped to the configured range.
 
   The kill switch has a dead band around its threshold (`logic/rc_switch.c`,
   `RC_SWITCH_DEFAULT_HYSTERESIS_US`, currently a compile-time 100 us): ARMED at or above
   threshold + band, KILL below threshold - band, hold in between. Holding never holds ARMED
   out of an unknown state, so a switch parked in the band at power-on reads KILL.
+- **The plausibility window tolerates capture quantisation, and the pass-through value is
+  clamped** (`logic/pwm_window.c`, GitHub issue #63). A Jetson command channel is accepted if
+  its measured pulse falls inside its configured `[min, max]` from `vehicle_params` **widened
+  by 62.5 us on each side**, and the accepted pulse is then **clamped back into the
+  unwidened range** before anything is forwarded. With the provisional 1000-2000 us steering
+  range: accepted 937.5-2062.5 us, forwarded 1000-2000 us.
+
+  Why: on 2026-09-21 the Jetson commanded exactly 2000 us (its own `pwm_max`), the mux
+  measured 2031 us, and an ARMED mux CUT on a legal full-left command. Neither number is a
+  fault. Both measurements from that session are exact multiples of a 15.625 us step
+  (2031.25 = 130 x 15.625, 1015.625 = 65 x 15.625): the command lands on a coarse pulse-width
+  grid, and at the edges of an inclusive window with zero tolerance that grid step points
+  outward. The grid is **not** this MCU's timebase -- `pico/pwm_capture.c` times edges with
+  `time_us_64()`, a 1 us hardware timer -- so there is nothing here to measure more finely;
+  the pulse on the wire really is 2031 us long and the quantisation is upstream, in the
+  emitting peripheral's duty granularity (a 20 ms frame split 256 ways is 78.125 us, five of
+  those steps). The window absorbs the grid; the clamp makes sure a servo calibrated to a
+  1000-2000 us range is never told to go past its end stop.
+
+  The tolerance is 4 grid steps = 62.5 us: twice the 31.25 us error actually observed, past
+  the 39.06 us worst case for nearest-point rounding onto a 78.125 us emitter step, and still
+  narrow enough that a genuinely bad pulse is rejected -- 900 us misses the widened floor by
+  37.5 us and 2450 us misses the widened ceiling by 387.5 us. It is a compile-time constant
+  (`PWM_WINDOW_DEFAULT_TOLERANCE_US`) for the same reason as the kill-switch dead band: it
+  describes the measurement path, not the vehicle, so it is not a `vehicle_params` physical
+  constant, and the right value is a scope measurement of the real grid rather than a
+  convention.
+
+  What this does NOT change: the **RC kill-switch channel is not widened and not clamped**
+  (its 1400/1600 us hysteresis band around the 1500 us threshold reads exactly as before -- a
+  human's switch position is not a measured command to forward); a **stale** channel, a
+  channel with **no edges**, and a genuinely **out-of-range** pulse all still cut, with the
+  same reasons and the same priority order; a cut is still both channels to neutral plus the
+  cutoff GPIO; and the `pico/pwm_capture.c` noise band (200-5000 us) is untouched. The
+  diagnostic build prints the widened window on every channel line and prints
+  `CLAMPED-><value>` whenever a pulse is accepted only because of the slack.
+
 - A cut is a cut: both PWM outputs go to a configured neutral value (not merely "no signal",
   which would depend on the servo/ESC's own undocumented failsafe behavior) and the power
   cutoff GPIO is asserted, together, every time. There is no partial-cut state.

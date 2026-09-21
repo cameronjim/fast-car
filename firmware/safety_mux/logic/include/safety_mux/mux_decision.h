@@ -43,6 +43,10 @@ typedef struct {
 
 typedef struct {
   bool cut;  // true => power-cutoff GPIO asserted AND both PWM outputs forced to neutral
+  // On a cut, the configured neutral. Otherwise the Jetson's commanded pulse CLAMPED to the
+  // configured [min, max] for that channel: a pulse accepted only because of the capture
+  // quantisation tolerance (pwm_window.h) is forwarded at the range edge, never at its
+  // measured width, so an out-of-range number can never reach a servo or an ESC.
   double steering_out_us;
   double throttle_out_us;
   MuxCutReason reason;
@@ -58,8 +62,9 @@ typedef struct {
 //      holds, checked before anything Jetson-side is even looked at.
 //   2. Jetson heartbeat watchdog -- the guarantee against a frozen/hung/crashed Jetson.
 //   3. Per-channel Jetson PWM validity (steering, then throttle) -- the last line of defense
-//      against a glitched-but-alive command signal.
-//   4. Otherwise: passthrough.
+//      against a glitched-but-alive command signal. The range checked is the configured one
+//      widened by the capture-quantisation tolerance (pwm_window.h).
+//   4. Otherwise: passthrough, clamped to the configured (unwidened) range.
 //
 // This ordering is deliberate and is exactly what test_mux_decision.c's "multiple faults at
 // once" cases pin down: whichever of these is checked first is reported as `reason` when

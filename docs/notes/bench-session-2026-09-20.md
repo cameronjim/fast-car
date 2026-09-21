@@ -156,3 +156,30 @@ serial lines instead of parseable verdict lines, which made it fail against the 
 on a fresh attach (the four-line banner ate the single-line default budget) even though the
 raw serial stream was fine -- fixed in this PR (2026-09-21 midday; see
 `docs/notes/build-log.md`).
+
+## Steering endpoint measurement, 2026-09-21 evening
+
+Closes the "measure steering endpoints" open item listed above.
+
+Wheels off the ground, mux armed, commanded via the Jetson PWM (which quantises to 78.125 us
+steps, so the values below are the nearest achievable grid points, not continuous readings).
+
+- **Neutral:** commanded 1500 us (mux-reported actual 1484 us) puts the wheels straight ahead.
+  Kept at 1500 us commanded.
+- **Left mechanical stop:** 1093.75 us commanded was clean; 1015.6 us made the servo hum
+  against the stop. Left limit committed as 1094 us.
+- **Right mechanical stop:** 1875 us commanded was clean; 1953 us made the servo hum. Right
+  limit committed as 1875 us.
+- **Sign:** a SHORTER pulse turns the wheels LEFT. The mapping had been sending a positive
+  `steering_angle` (LEFT positive, `claude-docs/06-vehicle-params.md`) to a LONGER pulse --
+  verified backwards at the mux earlier this session (`steering_angle` 0.2 rad measured
+  1719 us, above neutral). This is a configuration change, not a hand-edited code constant
+  (`CLAUDE.md` invariant 2): `config/vehicle_params.yaml` gained a new required field,
+  `steering.pwm_left_bound`, set to `"pwm_min_us"`.
+
+Committed to `config/vehicle_params.yaml` (`steering.pwm_min_us` 1094, `pwm_max_us` 1875,
+`pwm_neutral_us` 1500, `pwm_left_bound` `"pwm_min_us"`; schema_version 0.2.2 -> 0.3.0). The
+angle-to-pulse map between these two endpoints is still ASSUMED LINEAR
+(`steering.pwm_to_angle_table` stays `null`); a measured table is a later task. Full detail
+and the corrected test/doc trail: `docs/notes/build-log.md`'s 2026-09-21 evening "steering
+endpoints and sign measured, mapping sign corrected" entry.

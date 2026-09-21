@@ -56,6 +56,7 @@ steering:
   pwm_min_us: 1000.0
   pwm_max_us: 2000.0
   pwm_neutral_us: 1500.0
+  pwm_left_bound: "pwm_min_us"
 
 actuation:
   command_to_torque_delay_s: 0.02

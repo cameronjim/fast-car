@@ -55,6 +55,19 @@
 #   !! THOSE THREE VALUES ARE ALSO NOT MEASURED AND NOT TUNED. !!
 #
 # Each is marked PROVISIONAL inline below with what replaces it and when.
+#
+# schema_version bumped 0.2.2 -> 0.3.0 on 2026-09-21: steering.pwm_min_us / pwm_max_us /
+# pwm_neutral_us replaced with values MEASURED on the car that evening (wheels off the
+# ground, mux armed, commanded via the Jetson PWM), and a new required field,
+# steering.pwm_left_bound, was added to carry the sign convention that measurement also
+# found: a SHORTER pulse turns the wheels LEFT, the opposite of what the mapping had been
+# assuming. That sign used to live as an unmeasured node parameter default
+# (racer_drivers/pwm_output_node's steering_left_is_pwm_max, true) rather than here --
+# CLAUDE.md invariant 2 treats a sign convention as a physical constant, not a code/launch
+# default, so it moved into this file once it was actually measured. A new required field
+# changes the schema's required-field set, so this is a minor bump per rule 5; throttle
+# fields are UNCHANGED by this bump. See docs/notes/bench-session-2026-09-20.md's steering
+# endpoint follow-up and docs/notes/build-log.md's 2026-09-21 evening entry.
 
 chassis:
   mass_kg: 3.74                    # gym: m
@@ -91,15 +104,30 @@ steering:
   min_rate_rad_per_s: -3.2          # gym: sv_min
   max_rate_rad_per_s: 3.2           # gym: sv_max
   time_constant_s: null             # needs Phase 2/3 measurement
-  pwm_to_angle_table: null          # not assumed linear; needs Phase 2/3 calibration
-  # The three fields below are firmware/safety_mux's steering-channel bounds. All three are
-  # PROVISIONAL, standard RC convention, NOT measured:
-  # 1000/1500/2000 us is the standard hobby-RC servo pulse convention, not this servo's
-  # measured travel. Replace by bench measurement:
-  # docs/notes/hardware-arrival-checklist.md section 3 (roadmap task 1.3).
-  pwm_min_us: 1000.0                # PROVISIONAL (standard RC convention, NOT measured) -- see above
-  pwm_max_us: 2000.0                # PROVISIONAL (standard RC convention, NOT measured) -- see above
-  pwm_neutral_us: 1500.0            # PROVISIONAL (standard RC convention, NOT measured) -- see above
+  pwm_to_angle_table: null          # STILL ASSUMED LINEAR between pwm_min_us/pwm_max_us and the
+                                     # corresponding angle limits -- a measured table is a later
+                                     # task (roadmap), not this one. Only the two endpoints and
+                                     # neutral below are measured so far.
+  # MEASURED 2026-09-21 evening, on the car, wheels off the ground, mux armed, commanded via
+  # the Jetson PWM (docs/notes/bench-session-2026-09-20.md's steering endpoint follow-up,
+  # docs/notes/build-log.md's 2026-09-21 evening entry). Method: sweep the commanded pulse
+  # width and watch the front wheels against their mechanical stops.
+  #
+  # QUANTISATION CAVEAT: the Jetson PWM only produces 78.125 us grid steps, so these are the
+  # nearest achievable grid values, not continuous measurements. Left stop: 1093.75 us
+  # commanded was clean, 1015.6 us made the servo hum against the stop. Right stop: 1875 us
+  # commanded was clean, 1953 us hummed.
+  pwm_min_us: 1094.0                 # MEASURED 2026-09-21: left mechanical stop (see pwm_left_bound)
+  pwm_max_us: 1875.0                 # MEASURED 2026-09-21: right mechanical stop
+  pwm_neutral_us: 1500.0             # MEASURED 2026-09-21: commanded 1500us puts the wheels
+                                     # straight ahead (mux reports actual 1484us, quantisation --
+                                     # see docs/notes/first-boot-runbook.md "Reading the mux numbers")
+  # SIGN, MEASURED 2026-09-21 at the mux: a SHORTER pulse turns the wheels LEFT. The mapping
+  # had been sending positive steering_angle (LEFT positive, claude-docs/06-vehicle-params.md)
+  # to a LONGER pulse -- confirmed backwards at the mux (steering_angle 0.2 rad gave 1719 us,
+  # above neutral, before this fix). pwm_left_bound flips this in configuration, not in
+  # hand-edited code (CLAUDE.md invariant 2: a sign convention is a physical constant).
+  pwm_left_bound: "pwm_min_us"       # MEASURED 2026-09-21: pwm_min_us (the shorter pulse) is full LEFT
 
 actuation:
   command_to_torque_delay_s: null   # needs Phase 2/3 measurement
@@ -187,13 +215,15 @@ limits:
   mux_kill_switch_threshold_us: 1500.0  # PROVISIONAL (range midpoint, NOT measured) -- see above
 
 meta:
-  # PROVISIONAL VALUES PRESENT: the nine firmware/safety_mux PWM/watchdog fields above, plus
-  # actuation.throttle_full_scale_mps and the two limits.ttc_*_s thresholds added or filled in
-  # on 2026-09-13, are placeholders, NOT measured, NOT fitted (see the header block and
-  # each field's inline comment). sysid_session_id stays "none-preliminary" -- there is still
+  # PROVISIONAL VALUES STILL PRESENT: the six firmware/safety_mux throttle-channel PWM
+  # fields, plus actuation.throttle_full_scale_mps and the two limits.ttc_*_s thresholds
+  # added or filled in on 2026-09-13, are placeholders, NOT measured, NOT fitted (see the
+  # header block and each field's inline comment). The three steering.pwm_*_us fields and
+  # steering.pwm_left_bound are the exception as of 2026-09-21: they ARE measured (see the
+  # steering section above). sysid_session_id stays "none-preliminary" -- there is still
   # no on-vehicle fit of any kind, and this file is less fitted than that name implies, not
   # more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.2.2"
+  schema_version: "0.3.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

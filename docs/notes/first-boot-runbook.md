@@ -358,38 +358,39 @@ first bench calibration and there is no reason for the motor to be live while it
      power: the neutral value or the polarity is wrong, and step 12 is where that gets sorted
      out -- with the ESC still in the box.
 
-## 12. Calibrate the steering polarity -- THE FIRST BENCH CALIBRATION (UNVERIFIED)
+## 12. Calibrate the steering polarity -- THE FIRST BENCH CALIBRATION (MEASURED 2026-09-21)
 
-This is the one the code is explicitly waiting for, and it comes before the ESC is powered
-because it needs nothing but the servo and because getting it wrong is how the car steers into
-the thing it was avoiding.
+This is the one the code was explicitly waiting for, and it came before the ESC was powered
+because it needed nothing but the servo and because getting it wrong is how the car steers
+into the thing it was avoiding.
 
-`steering_left_is_pwm_max` defaults to `true` **and that default is a GUESS**. No project doc
-defines which pulse end is full left; nobody has put a scope on this servo. The whole
-left-positive chain -- `a`/LEFT key increases `steering_angle_rad`, `angular.z > 0` with
-forward speed gives a positive angle, `safety_node` passes the sign through unchanged, and
-`pwm_output_node` sends a positive angle to `steering.pwm_max_us` when this flag is true -- is
-pinned by unit tests at every hop, so the ONLY unknown left in it is this flag. That makes
-this one measurement the difference between a correct chain and a mirrored one.
+**MEASURED 2026-09-21, on the car, wheels off the ground, mux armed:** a SHORTER pulse turns
+the wheels LEFT. `steering.pwm_left_bound` in `config/vehicle_params.yaml` is
+`"pwm_min_us"` -- this is no longer a code/launch default (the old
+`steering_left_is_pwm_max`, `true`, was a guess; see `docs/notes/build-log.md`'s 2026-09-21
+evening entry). The whole left-positive chain -- `a`/LEFT key increases `steering_angle_rad`,
+`angular.z > 0` with forward speed gives a positive angle, `safety_node` passes the sign
+through unchanged, and `pwm_output_node` sends a positive angle to whichever pulse end
+`steering.pwm_left_bound` names -- is pinned by unit tests at every hop
+(`ros_ws/src/racer_drivers/test/test_pwm_mapping.cpp`'s `CommittedCalibration*` group and
+`SteeringSign` group, `racer_safety/test/test_gate_logic.cpp`'s `SteeringSign` group,
+`racer_tools/test/test_keymap.py`, `test_twist_teleop.py`).
 
-With the wheels off the ground, the ESC unpowered, and the kill switch held:
-
-12.1 Publish a small LEFT command by hand (positive angle, zero speed):
+What was done (for the historical record; do not repeat this to re-verify the sign, only to
+re-verify a specific unit's servo wiring): with the wheels off the ground, the ESC unpowered,
+and the kill switch held, a small LEFT command was published by hand (positive angle, zero
+speed):
 
 ```sh
 ros2 topic pub --once /drive_raw ackermann_msgs/msg/AckermannDriveStamped \
   '{drive: {steering_angle: 0.2, speed: 0.0}}'
 ```
 
-12.2 Watch the front wheels. They must turn **left**. If they turn right, restart the launch
-     with `steering_left_is_pwm_max:=false` and repeat until left means left.
-
-12.3 Write the answer into `docs/notes/build-log.md` AND change the launch file's default so
-     nobody has to remember the flag.
-
-Also check the ends: command `steering_angle: 0.4189` and `-0.4189` and confirm the rack does
-not bind or buzz at either end. If it does, the pulse ends are past this servo's real travel
-and `steering.pwm_min_us` / `pwm_max_us` need measuring, not guessing.
+The front wheels turned left, confirming the shorter-pulse-is-left convention above. The two
+mechanical stops were also swept and are recorded in `config/vehicle_params.yaml`'s
+`steering.pwm_min_us` (1094 us, left) / `pwm_max_us` (1875 us, right); see
+`docs/notes/bench-session-2026-09-20.md`'s steering endpoint follow-up for the sweep method
+and the quantisation caveat (the Jetson PWM's 78.125 us grid).
 
 ## 13. Configure the VESC in VESC Tool over USB, before it is ever fed a pulse (UNVERIFIED)
 
@@ -494,6 +495,13 @@ version for every session after the pins and the image already exist.
 
 Nothing in this checklist is optional, and the order matters: the car gets power only after
 the software is up and holding neutral.
+
+**Steering endpoints and sign are now measured (2026-09-21 evening):** 1094/1500/1875 us,
+shorter pulse is LEFT (`config/vehicle_params.yaml`'s `steering.pwm_min_us` / `pwm_max_us` /
+`pwm_left_bound`, see "Reading the mux numbers" below). A full-lock steering command no
+longer reaches the mux's 1000-2000 us window edge, so the earlier caution against commanding
+full lock while armed no longer applies to steering specifically -- the general first-drive
+caution against anything untested still does.
 
 1. **Wheels off the ground.** A stand, a box, anything. The whole of Phase 1 is off-ground.
 2. **Second person on the kill switch**, before anything is powered (`claude-docs/05-safety.md`
@@ -664,6 +672,17 @@ item, not something to work around in software: the steering endpoints in
 measured anyway (the servo already buzzes against its mechanical stop at 1200 us), and
 narrowing them away from the channel ends removes this as a side effect. Until then, do not
 command full lock with the mux armed.
+
+**RESOLVED 2026-09-21 evening.** The steering endpoints were measured and narrowed to
+1094/1500/1875 us (`docs/notes/bench-session-2026-09-20.md`'s steering endpoint follow-up),
+comfortably inside the mux's 1000-2000 us validity window on both ends, so full lock no
+longer produces an `OUT_OF_RANGE` reading or a steering cut. The same measurement also found
+the sign above was backwards: a positive (LEFT) `steering_angle` had been going to the
+LONGER pulse, and the table above -- from before that fix -- reads that way (+0.2 rad above
+neutral). It is now the opposite: full LEFT is 1094 us, full RIGHT is 1875 us
+(`config/vehicle_params.yaml`'s `steering.pwm_left_bound: "pwm_min_us"`). Commanding full
+lock with the mux armed is no longer a special case; the general pre-drive caution against
+untested new calibration still applies.
 
 ### Stopping
 

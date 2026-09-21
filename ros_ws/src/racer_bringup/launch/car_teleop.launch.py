@@ -18,11 +18,14 @@ downstream of every node started here and nothing here can reconfigure or bypass
 the mux itself has never been kill-tested (firmware/safety_mux/README.md), so "the mux will
 save you" is not yet a claim anyone may lean on.
 
-PHYSICAL PARAMETERS. Every pulse bound, angle limit and speed reference reaches the two nodes
-from config/vehicle_params.yaml through their generated bindings (CLAUDE.md invariant 2);
-nothing physical is passed as a launch argument here. The arguments below are machine
-configuration (which pwmchip, which teleop source) and bench calibration
-(steering_left_is_pwm_max), per claude-docs/10-conventions.md's "per-machine config via
+PHYSICAL PARAMETERS. Every pulse bound, angle limit, speed reference AND the steering sign
+convention reaches the two nodes from config/vehicle_params.yaml through their generated
+bindings (CLAUDE.md invariant 2); nothing physical is passed as a launch argument here. The
+steering sign (steering.pwm_left_bound) used to be a launch argument
+(steering_left_is_pwm_max) because it was an unmeasured guess; it moved into
+config/vehicle_params.yaml once it was actually measured on the car, 2026-09-21
+(docs/notes/build-log.md). The arguments below are now only machine configuration (which
+pwmchip, which teleop source), per claude-docs/10-conventions.md's "per-machine config via
 launch arguments, not edits".
 
 TELEOP, one publisher at a time. Exactly as in sim_teleop.launch.py: `start_teleop` and
@@ -308,16 +311,6 @@ def generate_launch_description() -> LaunchDescription:
         default_value="0",
         description="Channel index within throttle_pwmchip. VERIFIED, see steering_pwmchip.",
     )
-    steering_left_is_pwm_max_arg = DeclareLaunchArgument(
-        "steering_left_is_pwm_max",
-        default_value="true",
-        description=(
-            "true = steering.pwm_max_us is full LEFT (positive road-wheel angle, "
-            "claude-docs/06-vehicle-params.md). BENCH-CALIBRATED, not measured yet: confirm "
-            "it with the wheels off the ground before driving "
-            "(docs/notes/first-boot-runbook.md)."
-        ),
-    )
     drive_timeout_s_arg = DeclareLaunchArgument(
         "drive_timeout_s",
         default_value="0.1",
@@ -414,9 +407,6 @@ def generate_launch_description() -> LaunchDescription:
                 "throttle_pwm_channel": ParameterValue(
                     LaunchConfiguration("throttle_pwm_channel"), value_type=int
                 ),
-                "steering_left_is_pwm_max": ParameterValue(
-                    LaunchConfiguration("steering_left_is_pwm_max"), value_type=bool
-                ),
                 "drive_timeout_s": ParameterValue(
                     LaunchConfiguration("drive_timeout_s"), value_type=float
                 ),
@@ -491,7 +481,6 @@ def generate_launch_description() -> LaunchDescription:
             steering_pwm_channel_arg,
             throttle_pwmchip_arg,
             throttle_pwm_channel_arg,
-            steering_left_is_pwm_max_arg,
             drive_timeout_s_arg,
             record_arg,
             bag_dir_arg,

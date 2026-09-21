@@ -5,6 +5,55 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-21 evening -- steering endpoints and sign measured, mapping sign corrected
+
+The steering channel's two remaining unmeasured provisional numbers -- the PWM endpoints and
+which end is LEFT -- were measured on the car, wheels off the ground, mux armed, commanded
+through the Jetson PWM (`docs/notes/bench-session-2026-09-20.md`'s steering endpoint
+follow-up).
+
+**Endpoints.** Left mechanical stop: 1093.75 us commanded was clean; 1015.6 us made the servo
+hum against the stop. Right mechanical stop: 1875 us commanded was clean; 1953 us hummed.
+Neutral (1500 us commanded) puts the wheels straight ahead. Committed to
+`config/vehicle_params.yaml` as `steering.pwm_min_us: 1094`, `pwm_max_us: 1875`,
+`pwm_neutral_us: 1500` (rounded to the nearest whole microsecond; the Jetson PWM's 78.125 us
+grid means these are the nearest achievable steps, not continuous readings). This also
+resolves the `OUT_OF_RANGE` finding in `docs/notes/first-boot-runbook.md`'s "Reading the mux
+numbers": both new endpoints sit well inside the mux's 1000-2000 us validity window, where the
+old provisional 1000/2000 us pushed a full-left command to a mux-reported 2031 us.
+
+**Sign.** A SHORTER pulse turns the wheels LEFT. The mapping had been assuming the opposite --
+verified backwards at the mux earlier this session (steering_angle 0.2 rad measured 1719 us,
+above neutral). This is the measurement `docs/notes/first-boot-runbook.md` step 12 and
+`ros_ws/src/racer_bringup/launch/car_teleop.launch.py`'s `steering_left_is_pwm_max` argument
+had both been waiting on since it was flagged an unmeasured guess
+(`docs/notes/command-path-review-2026-09-14.md`).
+
+**Where the sign now lives.** Previously `steering_left_is_pwm_max` was a declared ROS
+parameter on `pwm_output_node` with an unmeasured default (`true`), passed down from a launch
+argument of the same name. Now that it is measured, `CLAUDE.md` invariant 2 applies -- a sign
+convention is a physical constant, not a code or launch default -- so it moved into
+`config/vehicle_params.yaml` as a new required field, `steering.pwm_left_bound`
+(`"pwm_min_us"` or `"pwm_max_us"`, schema_version bumped 0.2.2 -> 0.3.0). `pwm_output_node`
+reads it from the generated binding and refuses to start if it is anything else; the launch
+argument and the node parameter are both gone. `pwm_mapping.cpp`'s `left_is_pwm_max` bool is
+unchanged as an internal detail -- it is now derived from `pwm_left_bound` inside the node
+instead of being declared there.
+
+**Tests.** `ros_ws/src/racer_drivers/test/test_pwm_mapping.cpp` gained a
+`committed_steering_config()` golden fixture and a `CommittedCalibration*` test group pinning
+the real committed numbers (full left 0.4189 rad -> 1094 us, full right -0.4189 rad -> 1875
+us, zero -> 1500 us, clamping at and past both bounds, and an exhaustive sweep asserting the
+mapped pulse never leaves `[1094, 1875]`). The L3 launch tests
+(`test_pwm_output_node_launch.py`, `test_pwm_output_node_clock_launch.py`) no longer pass
+`steering_left_is_pwm_max` and instead derive the expected LEFT/RIGHT pulse from
+`config/vehicle_params.yaml`'s `steering.pwm_left_bound` at test time, so they stay correct if
+the sign or the fixture values change again.
+
+**Not yet done, on purpose (later task):** `steering.pwm_to_angle_table` is still `null` -- the
+angle-to-pulse map between these two measured endpoints is still ASSUMED LINEAR, not measured
+as a table.
+
 ## 2026-09-21 late -- rosbag recording and rail voltage wired into car_teleop.launch.py
 
 Closes the logging gap the entry below recorded and left open (GitHub issue #64, roadmap 1.6).

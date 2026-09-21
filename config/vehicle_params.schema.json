@@ -226,7 +226,7 @@
       "required": [
         "min_angle_rad", "max_angle_rad", "min_rate_rad_per_s", "max_rate_rad_per_s",
         "time_constant_s", "pwm_to_angle_table",
-        "pwm_min_us", "pwm_max_us", "pwm_neutral_us"
+        "pwm_min_us", "pwm_max_us", "pwm_neutral_us", "pwm_left_bound"
       ],
       "properties": {
         "min_angle_rad": {
@@ -278,6 +278,14 @@
           "type": ["number", "null"], "minimum": 500, "maximum": 2500,
           "units": "microseconds (raw PWM pulse width; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
           "description": "Steering-servo PWM pulse width firmware/safety_mux (roadmap task 1.3) outputs when cutting (kill switch, watchdog timeout, or invalid input) -- centered/straight, not merely 'no signal', so the failsafe does not depend on the servo's own signal-loss behavior. Added for milestone 4; null until Phase 1 bench measurement."
+        },
+        "pwm_left_bound": {
+          "type": "string",
+          "enum": ["pwm_min_us", "pwm_max_us"],
+          "maxLength": 16,
+          "units": "n/a (identifier)",
+          "sign_convention": "names which of steering.pwm_min_us / steering.pwm_max_us produces a LEFT (positive) road-wheel angle; the other bound is full RIGHT (negative) (claude-docs/06-vehicle-params.md)",
+          "description": "Which end of the steering pulse range is full LEFT. MEASURED on the car 2026-09-21 (docs/notes/bench-session-2026-09-20.md): a SHORTER pulse turns the wheels LEFT, so with pwm_min_us < pwm_max_us this is 'pwm_min_us'. Consumed by racer_drivers/pwm_output_node. This used to be an unmeasured node parameter default (steering_left_is_pwm_max, true) rather than a vehicle_params field -- CLAUDE.md invariant 2 treats a sign convention as a physical constant, not a code/launch default, so it moved here once it was actually measured."
         }
       }
     },

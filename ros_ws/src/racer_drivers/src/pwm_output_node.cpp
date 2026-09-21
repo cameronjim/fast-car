@@ -112,17 +112,6 @@ class PwmOutputNode : public rclcpp::Node {
         "validate_channel_assignment below only refuses an identical (chip, channel) pair. "
         "Matches racer_bringup/launch/car_teleop.launch.py's default.");
 
-    rcl_interfaces::msg::ParameterDescriptor left_descriptor;
-    left_descriptor.description =
-        "Which end of the steering pulse range is a LEFT (positive, per "
-        "claude-docs/06-vehicle-params.md) road-wheel angle. true = steering.pwm_max_us is "
-        "full left. NOT DEFINED BY ANY PROJECT DOC and NOT MEASURED: this default is a "
-        "guess, and it is BENCH-CALIBRATED with the wheels off the ground before the car "
-        "drives (docs/notes/first-boot-runbook.md). Backwards, the car steers into the wall "
-        "it was avoiding.";
-    const bool left_is_pwm_max =
-        this->declare_parameter<bool>("steering_left_is_pwm_max", true, left_descriptor);
-
     // Refuse before anything is exported: two pulses on one channel is not recoverable at
     // runtime and looks like a wiring fault on the car (pwm_mapping.hpp).
     const std::optional<std::string> bad_channels = validate_channel_assignment(
@@ -131,7 +120,7 @@ class PwmOutputNode : public rclcpp::Node {
       throw std::runtime_error(*bad_channels);
     }
 
-    config_ = build_config(drive_timeout_s, left_is_pwm_max);
+    config_ = build_config(drive_timeout_s);
 
     period_ns_ = static_cast<unsigned long long>(1.0e9 / output_rate_hz);
 
@@ -211,7 +200,7 @@ class PwmOutputNode : public rclcpp::Node {
 
   /// Assemble the mapping config from the generated vehicle_params binding. Refuses (throws)
   /// on any null required field, naming it. CLAUDE.md invariant 2 and 3.
-  MappingConfig build_config(double drive_timeout_s, bool left_is_pwm_max) {
+  MappingConfig build_config(double drive_timeout_s) {
     const std::vector<RequiredField> required = {
         {"steering.pwm_min_us", VEHICLE_PARAMS.steering.pwm_min_us},
         {"steering.pwm_neutral_us", VEHICLE_PARAMS.steering.pwm_neutral_us},
@@ -238,6 +227,21 @@ class PwmOutputNode : public rclcpp::Node {
       throw std::runtime_error(*missing);
     }
 
+    // steering.pwm_left_bound is non-nullable in the schema (enum of exactly "pwm_min_us" /
+    // "pwm_max_us"), so the generated binding types it as a plain std::string and
+    // find_missing_fields above does not cover it. It is still checked here, explicitly,
+    // rather than trusting the string and defaulting a typo to "not left_is_pwm_max": this
+    // is the sign of the steering channel, the exact thing the 2026-09-21 bench session found
+    // backwards (docs/notes/build-log.md), and CLAUDE.md invariant 3 refuses on mismatch
+    // rather than downgrading to a warning.
+    const std::string& left_bound = VEHICLE_PARAMS.steering.pwm_left_bound;
+    if (left_bound != "pwm_min_us" && left_bound != "pwm_max_us") {
+      throw std::runtime_error(
+          "config/vehicle_params.yaml steering.pwm_left_bound is '" + left_bound +
+          "', not one of the two values the schema allows ('pwm_min_us', 'pwm_max_us'); "
+          "refusing to guess the steering sign.");
+    }
+
     MappingConfig config;
     config.steering.min_us = *VEHICLE_PARAMS.steering.pwm_min_us;
     config.steering.neutral_us = *VEHICLE_PARAMS.steering.pwm_neutral_us;
@@ -249,7 +253,7 @@ class PwmOutputNode : public rclcpp::Node {
     config.steering_max_angle_rad = VEHICLE_PARAMS.steering.max_angle_rad;
     config.speed_full_scale_mps = *VEHICLE_PARAMS.actuation.throttle_full_scale_mps;
     config.speed_cap_mps = VEHICLE_PARAMS.limits.global_speed_cap_mps;
-    config.left_is_pwm_max = left_is_pwm_max;
+    config.left_is_pwm_max = (left_bound == "pwm_max_us");
     config.drive_timeout_s = drive_timeout_s;
 
     const std::optional<std::string> invalid = validate_config(config);

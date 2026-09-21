@@ -122,7 +122,10 @@ def generate_test_description():
                 "steering_pwm_channel": 0,
                 "throttle_pwmchip": 0,
                 "throttle_pwm_channel": 1,
-                "steering_left_is_pwm_max": True,
+                # steering_left_is_pwm_max is no longer a node parameter: the steering sign
+                # now comes from config/vehicle_params.yaml's steering.pwm_left_bound through
+                # the generated binding (CLAUDE.md invariant 2). This file does not exercise
+                # steering direction anyway.
             }
         ],
         output="screen",

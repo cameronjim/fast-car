@@ -80,6 +80,55 @@ Wheels off the ground throughout. Kill knob counter-clockwise until told otherwi
    current limit, PPM "Current No Reverse With Brake", sensorless detection) and a
    throttle sweep with wheels off the ground.
 
-Open items after that: real switch for the kill channel (this radio only offers VrA/VrB on
-CH5 and CH6), 5.0 V regulator for the mux rail, FSESC 4.12 swap when it arrives, sensor
-cable adapter, provisional vehicle_params replaced with measured values.
+## Results, morning of 2026-09-21
+
+Numbered against the checklist above where a step maps directly; two additional bench
+findings from the same session (7 and 8 below) are included because they resolve open items
+from this doc even though they were not separate numbered checklist steps.
+
+1. (checklist 1) Battery in, Jetson boots, UBEC output confirmed before any Pico was seated
+   -- PASSED. 5V position: 5.69 V unloaded, sagging to about 5.3 V loaded (in range); the
+   6V position (6.81 V) is not used for the Pico.
+2. (checklist 2) Pinmux overlay installed, `dtc` 1.6.1 installed via apt, rebooted --
+   PASSED. `extlinux`'s `OVERLAYS` line now points at `/boot/racer-hdr40-gpio.dtbo`.
+3. (checklist 3) Post-reboot verify -- PASSED. `soc_gpio59_pac6` (pin 7) tristate went
+   1 -> 0; pins 15 and 33 kept function `gp`; pin 32 (`soc_gpio19_pg6`) also reads
+   tristate=0. Meter on the GP5 socket hole with pin 7 held high: 3.44 V (meter reads about
+   3 percent high).
+4. (checklist 4) Spare Pico flashed with `safety_mux_diag.uf2`, seated, USB into the Jetson
+   -- PASSED. Stayed cool after several minutes running. Pico #1 confirmed dead separately
+   (heats within seconds on clean desktop USB alone) and retired.
+5. (checklist 5) Diagnostic read -- PASSED, including the first `DECISION PASS` this mux has
+   ever produced. Transmitter off:
+   ```
+   KILL UNREADABLE NO_EDGES | HB OK age 7ms | STEER 1484us | THR 1484us | DECISION CUT reason 1:RC_SIGNAL_INVALID
+   ```
+   Transmitter on, knob counter-clockwise:
+   ```
+   KILL KILLED 1000us ... DECISION CUT reason 1:RC_KILL_SWITCH
+   ```
+   Knob clockwise:
+   ```
+   KILL ARMED 2000us | HB OK age 6ms | STEER 1484us | THR 1485us | DECISION PASS
+   ```
+6. (checklist 6) G1 kill test, steering only, throttle held at 1500 us -- PASSED. Armed
+   sweep 1200/1500/1800/1500 us on `pwmchip0` turned the front wheels left/centre/right/
+   centre. Identical sweep with the knob killed: wheels did not move, mux stayed
+   `CUT reason 1` throughout.
+7. Heartbeat-loss test (not a separate checklist step, added this session) -- PASSED. Armed,
+   steer left (`STEER 1172us`, `PASS`); `systemctl stop racer-heartbeat` -> `HB TIMED_OUT`,
+   `DECISION CUT reason 2:WATCHDOG_TIMEOUT`, servo self-centred; steer right with the
+   heartbeat dead -> `STEER 1797us` seen arriving, `DECISION CUT`, wheels did not move;
+   recentre, `systemctl start racer-heartbeat` -> `HB OK`, `PASS` again.
+8. UBEC root cause for Pico #1's death identified -- PASSED (finding, not a checklist step).
+   Pico #1 had been run on the UBEC's 6V position (6.81 V), which is the likely cause.
+9. (checklist 7) VESC Tool configuration and throttle sweep -- PENDING. Not attempted this
+   session.
+
+Open items: real switch for the kill channel (this radio only offers VrA/VrB on CH5 and
+CH6); 5.0 V regulator for the mux rail, or a Schottky diode in series to the Pico's VSYS
+feed, for margin (UBEC 5V position sags to about 5.3 V loaded); FSESC 4.12 swap when it
+arrives; sensor cable adapter; provisional vehicle_params replaced with measured values;
+measure steering endpoints (the servo buzzed holding 1200 us this morning, probably against
+its mechanical stop -- 1000-2000 us is still provisional); `tools/mux_diag/read_mux_diag.py`
+one-shot hang and slow consecutive-call behavior fixed in this PR (see that tool's tests).

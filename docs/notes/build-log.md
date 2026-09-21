@@ -931,3 +931,70 @@ in `tools/jetson_heartbeat/` or `racer_drivers` was changed.
 `pull-up-strength=31` and still measures 0.0 V while tristated. A tristated pad with a
 pull-up ought to float near 3.3 V. Noted rather than explained; it does not affect the
 diagnosis or the fix, and the overlay sets `pull=0` on that pad regardless.
+
+## 2026-09-21 morning -- pinmux overlay installed, first PASS, G1 kill test and heartbeat-loss test proven
+
+Everything below was observed on the actual hardware this morning, wheels off the ground
+throughout.
+
+**Pinmux overlay.** `tools/jetson_pinmux/install.sh` was run for real (`dtc` 1.6.1 installed
+via apt first) and the Jetson rebooted. Live pinconf for `soc_gpio59_pac6` (header pin 7)
+went from `tristate=1` before to `tristate=0` after; pins 15 and 33 kept function `gp`; pin
+32 (`soc_gpio19_pg6`) also reads `tristate=0` now. `extlinux`'s `OVERLAYS` line now points at
+`/boot/racer-hdr40-gpio.dtbo`. Meter on the perfboard's GP5 socket hole with pin 7 held high:
+3.44 V (meter reads about 3 percent high, so this is consistent with 3.3 V logic). The
+heartbeat service itself was left unchanged, still on line 144.
+
+**Pico hardware.** Pico #1 is confirmed dead: it heats within seconds on clean desktop USB
+power alone, with nothing else connected. Retired. The spare Pico was flashed with
+`safety_mux_diag.uf2`, seated on the perfboard, and stayed cool after several minutes of
+running.
+
+**UBEC.** The "3A-6S UBEC" (5V/6V jumper on a 3-pin header, middle pin common) reads 6.81 V
+on the 6V position and 5.69 V unloaded on the 5V position (about 5.5 V real, sagging to about
+5.3 V with the Pico attached). The bulk cap is on the 5V rail (top + middle pins). Pico #1
+had been run on the 6V position, which is the likely cause of its death. Follow-up open item:
+a Schottky diode in series to the Pico's VSYS feed, or a proper 5.0 V regulator, for margin.
+
+**First mux PASS.** `tools/mux_diag/read_mux_diag.py` over the Pico's USB on the Jetson,
+transmitter off:
+
+```
+KILL UNREADABLE NO_EDGES | HB OK age 7ms | STEER 1484us | THR 1484us | DECISION CUT reason 1:RC_SIGNAL_INVALID
+```
+
+Transmitter on, kill knob counter-clockwise:
+
+```
+KILL KILLED 1000us ... DECISION CUT reason 1:RC_KILL_SWITCH
+```
+
+Knob clockwise:
+
+```
+KILL ARMED 2000us | HB OK age 6ms | STEER 1484us | THR 1485us | DECISION PASS
+```
+
+This is the first `DECISION PASS` this mux has ever produced.
+
+**G1 kill test, steering only.** Throttle held at 1500 us, wheels off the ground. Armed, a
+1200/1500/1800/1500 us sweep on `pwmchip0` turned the front wheels left/centre/right/centre.
+The identical sweep with the kill knob killed: the wheels did not move and the mux stayed
+`CUT reason 1` throughout.
+
+**Heartbeat-loss test, armed.** Steer left (`STEER 1172us`, `PASS`); `systemctl stop
+racer-heartbeat` -> `HB TIMED_OUT`, `DECISION CUT reason 2:WATCHDOG_TIMEOUT`, servo
+self-centred; steer right with the heartbeat dead -> `STEER 1797us` seen arriving at the mux,
+`DECISION CUT`, wheels did not move; recentre and `systemctl start racer-heartbeat` -> `HB
+OK`, `PASS` again. The servo buzzed while holding 1200 us, probably against its mechanical
+stop -- steering endpoints are still the provisional 1000-2000 us and must be measured before
+any floor driving.
+
+**Not yet done:** VESC configuration, throttle sweep, FSESC 4.12 swap, a real kill switch
+(this radio only offers VrA/VrB on CH5/CH6, not a discrete switch), the motor sensor cable
+adapter.
+
+**Tooling.** `tools/mux_diag/read_mux_diag.py`'s one-shot mode was found, during this same
+session, to sometimes hang and hold `/dev/ttyACM0` open, and consecutive one-shot calls each
+took about 5 s. Fixed in the same PR as this entry; see
+`docs/notes/bench-session-2026-09-20.md`'s open items list.

@@ -1360,3 +1360,20 @@ committed as `tools/mux_diag/tests/fixtures/mux_raw_2026-09-21.txt`. Fixed in th
 (still 5 s by default); non-decision chatter is skipped for free. Covered by a new
 fixture-driven test that drives the real `_SerialLineReader` (open/select/os.read) against a
 pty loaded with the captured bytes, plus updated unit tests for the new budget semantics.
+
+## 2026-09-21, late evening: VESC speed mode tried and reverted, 6000 ERPM cap kept
+
+Tried PPM control type PID Speed Control No Reverse (pid_max_erpm 6000) to get a slow,
+controllable spin from the sensorless Xerun 3652SD. Result: the VESC accepted the write
+(read-back confirmed the mode), logged no faults, and did not turn the motor at all, even
+with the mux forwarding a 1953 us pulse (verified simultaneously: /drive 4.76 m/s, Jetson duty
+1975 us, mux in 1953, mux out 1953, armed, PASS). Sensorless FOC speed control from standstill
+does not start this motor. Reverted the control type to Current No Reverse With Brake (3) and
+kept the new 6000 ERPM cap (about 1.5 m/s at the tread), which is what
+config/vesc/2026-09-21b-fsesc67-app.xml and -motor.xml now record. The hall sensor adapter
+remains the real fix for low-speed control.
+
+Also found tonight: two keyboard_teleop_node sessions running at once (two terminal tabs)
+interleave zeros with the live setpoint on /drive_raw, which looks like jittery steering and
+a dead throttle. One keyboard session at a time; check `ros2 topic info -v /drive_raw` shows
+one publisher. A UBEC ground wire was found unplugged and reseated (battery in, no incident).

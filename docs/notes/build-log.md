@@ -5,6 +5,58 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-21 late -- rosbag recording and rail voltage wired into car_teleop.launch.py
+
+Closes the logging gap the entry below recorded and left open (GitHub issue #64, roadmap 1.6).
+`CLAUDE.md` invariant 5 says every run is logged, rosbag plus rail voltage, and that a code
+path which drives the car without logging is a bug. Until today nothing in `racer_bringup`
+started a recorder, and nothing published rail voltage at all, so the invariant was satisfied
+only by an operator remembering a second shell. It is now the launch file's job.
+
+**What gets recorded.** `car_teleop.launch.py` starts `ros2 bag record` by default, into
+`<bag_dir>/<local ISO timestamp>_car_teleop`, `bag_dir` defaulting to `/workspace/data/bags`
+(= `~/car/data/bags` on the Jetson, through the workspace mount the start command already
+has). Topic selection is a regex rather than a list, so `/scan` is picked up the day a LiDAR
+appears and ignored until then: `/drive_raw`, `/drive`, `/safety/events`, `/teleop/cmd_vel`,
+`/telemetry/.*`, `/scan`, `/rosout`, `/parameter_events`.
+
+**mcap on the car, sqlite3 in ros-dev, and the choice is printed.** `docker/car/Dockerfile`
+gains `ros-humble-rosbag2-storage-mcap` (base digest untouched); `ros-base` ships rosbag2 but
+in Humble its only storage plugin is sqlite3. mcap is worth the one package because a session
+can end with a kill switch or a yanked battery, and a single append-only self-describing file
+survives that better than a sqlite3 bag. `bag_storage:=auto` resolves by asking the ament
+index whether the plugin exists, so the same launch file records mcap on the car and sqlite3
+in the container the L3 test runs in, and says which at startup.
+
+**Rail voltage, from the INA3221 that is already on the board.** The INA226 in
+`claude-docs/11-hardware.md` is not fitted and is not on the critical path for G1. The Orin
+Nano carrier has its own INA3221 exposed through the hwmon sysfs ABI, so
+`racer_drivers/rail_voltage_node` (Python, new) reads it at 5 Hz and publishes VDD_IN as
+`/telemetry/rail_voltage_v` / `/telemetry/rail_current_a` plus every channel by label. Volts
+and amps, converted from the ABI's millivolts and milliamps at the driver boundary, which is
+where invariant 4 says a non-SI wire format gets converted. That factor of 1000 is a kernel
+interface constant, not a vehicle parameter, and deliberately does not go in
+`vehicle_params.yaml`. When the INA226 lands it publishes onto the same topics.
+
+**A recorder that dies takes the launch with it, and that was a deliberate choice.** Three
+options were on the table. Gating `/drive` on the recorder was rejected outright: it would put
+a logging dependency inside safety layer 3, weakening the layer to strengthen something that
+is not a safety layer at all. Publishing a `SafetyEvent` on `/safety/events` was rejected
+because that topic has one publisher, a closed enum of GATES, and
+`claude-docs/09-evaluation.md` counts its `PHASE_ENGAGE` records as interventions -- a
+recorder crash is not an intervention and would corrupt a reported metric. What landed is an
+error-level log plus a launch `Shutdown`. Measured in the container with a deliberately bogus
+storage plugin: recorder exits, `FATAL [CLAUDE.md invariant 5]` at error level, whole launch
+down in about a second, `pwm_output_node` taking its ordinary neutral-and-disable shutdown
+path on the way out. Layers 1 and 2 are untouched and still physically downstream.
+
+**Not verified on the car.** Everything above ran in the `ros-dev` container on the Mac. The
+INA3221 sysfs paths were read from the Jetson earlier and the node is tested against a fixture
+tree of ordinary files with the same shape, so the parsing is proven but the real
+`/sys/bus/i2c/drivers/ina3221/...` read, the actual VDD_IN numbers, the mcap plugin on arm64,
+and writing a bag to the Jetson's disk are all first-drive checks. The runbook's "Every run is
+recorded" section says what to look for.
+
 ## 2026-09-21 evening -- first real ROS command path on the Jetson, proven at the mux
 
 The classical command path ran on the actual vehicle computer for the first time:

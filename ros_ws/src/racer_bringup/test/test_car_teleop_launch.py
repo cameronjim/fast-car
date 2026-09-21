@@ -89,6 +89,14 @@ def generate_test_description():
             "viz": "false",
             "start_teleop": "false",
             "browser_teleop": "false",
+            # record:=false HERE ONLY, and only because this test is about the command path
+            # at rest: a recorder would write a bag into the repo on every colcon test for no
+            # assertion's benefit. The recorder and rail_voltage_node defaults -- CLAUDE.md
+            # invariant 5 -- are asserted by test_car_teleop_bag_launch.py, which passes no
+            # `record` argument at all precisely so the DEFAULT is what it tests. Never copy
+            # this line into a procedure that drives the car.
+            "record": "false",
+            "rail_voltage": "false",
             "sysfs_root": _FAKE_SYSFS,
             "steering_pwmchip": "0",
             "steering_pwm_channel": "0",

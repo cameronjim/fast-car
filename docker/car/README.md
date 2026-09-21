@@ -17,7 +17,11 @@ linux/aarch64 lockfile (`pyproject.toml` + `uv.lock`). Never contains dev toolin
 linters) -- that is `docker/ros-dev/`'s job, not this image's. It DOES contain
 `ros-humble-foxglove-bridge`, which was in that exclusion list until 2026-09-21: see the
 Dockerfile's comment on it, and `docs/notes/build-log.md`. On this image the bridge is the
-owner's driving interface, not developer visualization.
+owner's driving interface, not developer visualization. It also contains
+`ros-humble-rosbag2-storage-mcap` (added 2026-09-21): `car_teleop.launch.py` records a bag on
+every run because `CLAUDE.md` invariant 5 makes an unlogged drive a bug, and mcap is runtime
+logging infrastructure rather than dev tooling. Without it the launch silently falls back to
+sqlite3, which `.github/scripts/check_car_image_launch_packages.py` now refuses to allow.
 
 ## Torch is optional (changed 2026-09-13)
 

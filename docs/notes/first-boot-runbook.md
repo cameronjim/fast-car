@@ -444,7 +444,10 @@ is done and recorded, because until then nobody knows whether a below-neutral pu
 or braking on this ESC.
 
 15.1 Confirm the rosbag is recording and rail voltage is being logged. A run without a bag is
-     a bug (`CLAUDE.md` invariant 5).
+     a bug (`CLAUDE.md` invariant 5). Since 2026-09-21 the launch does this for you: look for
+     the `[invariant 5] recording <format> bag to <path>` line at startup, and for
+     `rail_voltage_node` reporting its INA3221 channels rather than warning that none were
+     found. See "Every run is recorded" below.
 
 15.2 Kill-switch person: cut, confirm the wheels and motor stop, restore. Do this before
      driving, not after.
@@ -503,7 +506,10 @@ the software is up and holding neutral.
 5. **Plug the servo lead back into the mux board**, and put the battery in. Check the pin-1
    mark on the plug.
 6. **Start the stack** (below) and confirm both channels sit at neutral BEFORE arming.
-7. **Only then turn the kill knob clockwise to arm.** The mux diagnostic build should show
+7. **Confirm it is recording.** The startup log must show `[invariant 5] recording <format>
+   bag to <path>` and `rail_voltage_node` must list INA3221 channels, not warn that it found
+   none. No bag, no drive -- see "Every run is recorded" below.
+8. **Only then turn the kill knob clockwise to arm.** The mux diagnostic build should show
    `DECISION=PASS` only at this point, and `CUT` at every earlier step. If it shows `PASS`
    before you armed, stop and find out why.
 
@@ -547,6 +553,9 @@ sketch, and the custom `racer-pwm` group and udev rule it proposed are NOT neede
   entry inside the image and ROS wants a writable HOME for its logs.
 - `--network host` is for DDS discovery and for the Foxglove bridge's port 8765.
 - `exec` before `ros2 launch` matters -- see "Stopping" below.
+- Nothing extra is needed for logging: the `-v "$PWD":/workspace` mount above is also where
+  the bags go (`~/car/data/bags` on the host). Add `record:=false` ONLY for the pin-level
+  checks where the battery is out -- see "Every run is recorded" below.
 
 The workspace must already be built (step 6). If `install/` is missing, build it first, and
 note the `apt-get update` that step 6's original command was missing:
@@ -679,22 +688,79 @@ for c in 0 2; do echo 0 > /sys/class/pwm/pwmchip$c/unexport; done
 
 Leave `racer-heartbeat` running. Nothing in this procedure should ever stop it.
 
-### No rosbag is recorded. This is a known gap.
+### Every run is recorded. A drive with `record:=false` is a bug.
 
-`car_teleop.launch.py` does **not** start `ros2 bag record`, and neither does any other launch
-file in `racer_bringup` (checked 2026-09-21). `CLAUDE.md` invariant 5 says every run is logged
-and that a code path which drives the car without logging is a bug, so **this is an open bug,
-not a decision** -- it is fine for the pin-level bring-up above, where nothing can move, and it
-is not fine for the first real drives. `docs/notes/car-runtime-plan.md`'s "How rosbag recording
-starts with the stack" section is the design for closing it. Until it lands, record by hand in
-a second shell:
+`car_teleop.launch.py` starts a rosbag2 recorder and `rail_voltage_node` **by default**
+(GitHub issue #64, roadmap 1.6). `CLAUDE.md` invariant 5 -- "every run is logged (rosbag +
+rail voltage); code paths that drive the car without logging are bugs" -- is now enforced by
+the launch file, not by remembering to open a second shell. The manual `ros2 bag record`
+workaround that used to live here is gone; do not reintroduce it.
 
-```sh
-docker exec -it car-stack bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 bag record -a -o /workspace/data/$(date +%Y%m%d_%H%M%S)_session'
+**Where bags land.** One directory per run, under the `bag_dir` launch argument:
+
+```
+~/car/data/bags/2026-09-21T19-42-20_car_teleop/     # on the Jetson
+/workspace/data/bags/2026-09-21T19-42-20_car_teleop # the same directory inside the container
 ```
 
-Rail voltage is not published by anything yet (roadmap 1.2), so `-a` cannot capture it and the
-invariant's "rosbag + rail voltage" is only half satisfied either way.
+`bag_dir` defaults to `/workspace/data/bags`, which is the repo's own `data/` (gitignored,
+`claude-docs/02-repo-layout.md`) seen through the `-v "$PWD":/workspace` mount the start
+command already has -- so bags persist on the Jetson's disk with no extra mount and no root.
+The directory name is the local-time ISO timestamp plus the launch name. Pass
+`bag_dir:=/somewhere/else` to record onto a USB disk; the root is created if missing, and
+each run's own directory must not already exist (rosbag2 refuses, which is what keeps bags
+immutable).
+
+**What is recorded**, by regex, so a topic that does not exist yet is skipped rather than
+waited for: `/drive_raw`, `/drive`, `/safety/events`, `/teleop/cmd_vel`, everything under
+`/telemetry/` (the rail volts and amps), `/scan` when a LiDAR is finally fitted, plus
+`/rosout` and `/parameter_events`.
+
+**Format: mcap on the car, sqlite3 elsewhere.** `bag_storage:=auto` (the default) picks mcap
+when `ros-humble-rosbag2-storage-mcap` is installed, which `docker/car/Dockerfile` does, and
+sqlite3 otherwise (the `ros-dev` container, where the L3 launch test runs). The choice is
+printed at startup -- the first `[invariant 5] recording ... bag to ...` line -- so it is
+never a guess. Override with `bag_storage:=sqlite3` if you need to open a bag with a tool
+that cannot read mcap.
+
+**Rail voltage.** `rail_voltage_node` reads the Jetson carrier board's own INA3221 through
+`/sys/bus/i2c/drivers/ina3221/*/hwmon/hwmon*/` and publishes, at 5 Hz, volts and amps in SI:
+`/telemetry/rail_voltage_v` and `/telemetry/rail_current_a` for VDD_IN, plus
+`/telemetry/rail/<label>/voltage_v|current_a` for every channel the chip reports. The INA226
+in `claude-docs/11-hardware.md` is still not fitted; this covers the same failure mode in the
+meantime. If the sysfs tree is missing the node warns once and publishes nothing rather than
+failing -- **if you see that warning on the car, the bag only half satisfies invariant 5 and
+the run should be treated as suspect.**
+
+**If the recorder dies, the launch dies.** A recorder that exits for any reason (disk full,
+`bag_dir` not writable, an unknown storage plugin) logs
+
+```
+[ERROR] [car_teleop]: FATAL [CLAUDE.md invariant 5]: the rosbag recorder exited ...
+```
+
+and shuts the whole launch down within about a second. `pwm_output_node` takes its normal
+shutdown path on the way out -- neutral written, both channels disabled -- so the car stops
+being commanded and the mux sees a stale pulse train and cuts. Nothing in the command path
+consults the recorder: `/drive` is never gated on logging (that would put a logging
+dependency inside safety layer 3). Fix the cause and relaunch.
+
+**`record:=false` is for bench work only.** It exists for the pin-level checks earlier in this
+runbook, where the battery is out and nothing can move. **A drive with `record:=false` is a
+bug**, the same bug this section used to describe. If you find yourself reaching for it to get
+past a recorder error, the recorder error is the thing to fix.
+
+**Copying a bag to the Mac**, from the Mac:
+
+```sh
+rsync -av racer@10.0.0.226:~/car/data/bags/2026-09-21T19-42-20_car_teleop/ \
+  ~/code/car/data/bags/2026-09-21T19-42-20_car_teleop/
+```
+
+`data/` is gitignored on both ends, so a copied bag never lands in a commit. Inspect it with
+`ros2 bag info <dir>` inside the `ros-dev` container (an mcap bag needs the mcap plugin, which
+`ros-dev` does not have -- `pip install mcap` and the `mcap` CLI, or re-record with
+`bag_storage:=sqlite3`, are the two ways round that until `ros-dev` gains the plugin).
 
 ## Afterwards
 

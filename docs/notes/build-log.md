@@ -875,3 +875,59 @@ formatting code on the host against scripted inputs, so the field text is exact,
 the CDC port enumerates, whether the 2 Hz print leaves the 200 Hz loop undisturbed on the
 chip, and whether the captured numbers are right are the bench questions this build exists to
 answer. Roadmap task 1.3 stays `[~]`.
+
+## 2026-09-21 -- the heartbeat pin never drove: 40-pin header pads are tristated
+
+**What happened.** The mux's new diagnostic build was flashed and its first useful report
+was `HB gp5=NO_EDGES_EVER`: the Pico has never seen a heartbeat edge. Meter on the Jetson's
+header pin 7 while `gpioset` holds `gpiochip0` line 144 high: **0.0 V**. Pin 17 reads 3.4 V
+on the same meter with the same ground lead, so the meter and the pin counting are both
+sound. Pins 11, 12, 13, 16, 18, 19 and 21 driven high the same way (lines 112, 50, 122, 126,
+125, 135, 134): all 0.0 V. Pin 15 read 0.0 V as a plain GPIO too, and yet the same pad drove
+1.64 V average once a jetson-io overlay muxed it to `pwm1`.
+
+**Cause, verified read-only on the board.** The pad output driver is disabled.
+`/sys/kernel/debug/pinctrl/2430000.pinmux/pinconf-groups` shows `tristate=1` on every pad
+that reads 0.0 V (`soc_gpio59_pac6` = pin 7, `soc_gpio32_pq5` = pin 29) and `tristate=0` on
+every pad a jetson-io overlay configured (`soc_gpio39_pn1` = pin 15, `soc_gpio21_ph0` = pin
+33, `soc_gpio19_pg6` = pin 32). 165 of 167 pads show `(MUX UNCLAIMED)` in `pinmux-pins`; the
+three jetson-io ones show `(HOG) function gp`, where `gp` is the GP PWM controller and not
+"general purpose IO". The pad's TRISTATE is bit 4 of its PINMUX register in `pinmux@2430000`;
+the GPIO controller is `gpio@2200000` and `gpio-tegra186.c` has no tristate bit and never
+touches the pinmux one. So the GPIO controller can hold a line output-high, report it
+correctly through every software path, and the pad still sits high impedance. That is
+exactly what happened. The tristate hypothesis held.
+
+**The uncomfortable part.** Every "verified toggling" claim in `tools/jetson_heartbeat/`
+was kernel-internal: `gpioinfo`, `/sys/kernel/debug/gpio` showing `out hi`/`out lo`, and a
+program polling that same debugfs file for a rate measurement. All of it was true and none
+of it was evidence that a wire would see anything. The 2026-09-12 entry's rate measurement
+(200 transitions in 1.9901 s) was measuring a register. That README now says so plainly, and
+lists the meter reading and the mux's `HB ... OK` diag line as the two required checks.
+
+**Also corrected:** header pin 32 on this carrier is `soc_gpio19_pg6` (PG.06, `gpiochip0`
+line 41), **not** `gp_pwm2_px2`. `gp_pwm2_px2` is PX.02 / line 116 and is not routed to the
+40-pin header at all. Both the decompiled jetson-io overlay and jetson-io's own live pinmap
+agree.
+
+**Change.** New `tools/jetson_pinmux/`: `racer-hdr40-gpio.dts`, an overlay built on the
+decompiled `/boot/jetson-io-hdr40-user-custom.dtbo` from this board, plus idempotent
+`install.sh`, `rollback.sh` and `verify.sh`. It configures pin 7 and pin 32 as driven GPIO
+outputs (`tristate=0`, `enable-input=0`, `pull=0`, no `nvidia,function` so the mux and
+GPIO_SFIO_SEL are left to the GPIO request path) and carries the pwm1 (pin 15) and pwm5
+(pin 33) nodes copied verbatim so steering and throttle keep working. One overlay rather
+than two, because both would create `exp-header-pinmux` under the same `&pinmux` target and
+both would claim `pinctrl-0`. The cost is pwm7 on pin 32, dropped on purpose. `install.sh`
+removes the jetson-io entry from the `OVERLAYS` line and `rollback.sh` puts it back.
+
+**Status.** Prepared, **not applied**. The Jetson was touched read-only this session:
+another session is using the board. The `.dts` compiles with `dtc -@` and decompiles to the
+same node structure, `__symbols__`, `__fixups__` and `__local_fixups__` as the jetson-io
+template, but nothing is installed and nothing has been rebooted, so "pin 7 measures 3.3 V"
+remains unproven. The pin decision, 7 versus 32, is being made on the bench and no default
+in `tools/jetson_heartbeat/` or `racer_drivers` was changed.
+
+**One thing still unexplained.** Pin 7's pad reports `pull=2` (pull-up) with
+`pull-up-strength=31` and still measures 0.0 V while tristated. A tristated pad with a
+pull-up ought to float near 3.3 V. Noted rather than explained; it does not affect the
+diagnosis or the fix, and the overlay sets `pull=0` on that pad regardless.

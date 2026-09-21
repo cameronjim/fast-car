@@ -584,19 +584,65 @@ directories in the repo.
 ### Confirm neutral before arming
 
 ```sh
-# Both channels: 20 ms period, 1500 us pulse, enabled.
+# Both channels: 4 ms period (4000000 ns), 1500 us pulse, enabled.
 for c in 0 2; do cat /sys/class/pwm/pwmchip$c/pwm0/{period,duty_cycle,enable}; done
 
 # What the mux actually SEES (this is the evidence that matters):
 sudo stty -F /dev/ttyACM0 115200 raw -echo; sudo timeout 5 cat /dev/ttyACM0
 ```
 
-Expect `STEER gp10=1484us FRESH(...)` and `THR gp7=1484us FRESH(...)`. **1484, not 1500, is
-correct** -- see "Reading the mux numbers" below. With the transmitter still off you will also
-see `KILL ... NO_EDGES` and `DECISION=CUT reason=1:RC_SIGNAL_INVALID`; that is expected and is
+**The period changed on 2026-09-21: 4000000 ns, not 20000000.** The Jetson frame is now 4 ms
+(250 Hz), from `config/vehicle_params.yaml`'s `actuation.steering_pwm_period_us` /
+`throttle_pwm_period_us` (GitHub issue #66). A `period` of 20000000 here means you are running
+an older build; check it before reading anything else, because it changes every number below.
+The servo and the ESC are unaffected either way -- the mux regenerates its own 50 Hz outputs.
+
+Expect `STEER gp10=1500us FRESH(...)` and `THR gp7=1500us FRESH(...)`, within about 8 us
+(1484 and 1516 are the neighbouring grid points). **This is the change: it used to read 1484**
+-- see "Reading the mux numbers" below. With the transmitter still off you will also see
+`KILL ... NO_EDGES` and `DECISION=CUT reason=1:RC_SIGNAL_INVALID`; that is expected and is
 exactly what you want before arming.
 
 Only one process may read `/dev/ttyACM0` at a time -- a second reader steals the bytes.
+
+### Bench verification of the 4 ms frame (do this once, before the next drive)
+
+UNVERIFIED AS OF 2026-09-21: the arithmetic below is exact, but nobody has yet put the new
+frame in front of the Pico. Run this with the wheels off the ground, the battery OUT, the
+servo lead unplugged and the VESC unpowered -- it is a pin-and-diagnostic check, nothing
+needs to move. (Battery out means no bag is required for this one: start the stack with
+`record:=false`, per "Every run is recorded" below.)
+
+1. Start the stack as above, with no teleop source, and confirm the startup log's frame line:
+   `pwm frame: steering 4000 us (250.0 Hz, 15.625 us pulse grid), throttle 4000 us ...`.
+2. `for c in 0 2; do cat /sys/class/pwm/pwmchip$c/pwm0/period; done` must print `4000000`
+   twice. If it prints `20000000`, stop: the node did not take the configured period.
+3. Read the Pico diagnostic (`sudo timeout 5 cat /dev/ttyACM0`) and check three commanded
+   pulses. Command them through the normal gated path, not by writing sysfs by hand:
+
+   | Commanded pulse | Nearest 15.625 us grid point | Acceptable mux reading |
+   |---|---|---|
+   | 1500 us | 1500.000 (96 steps, exact) | 1500 +- 8 us |
+   | 1600 us | 1593.75 / 1609.375 | 1594 or 1609, and nothing further than 8 us from 1600 |
+   | 1700 us | 1703.125 (109 steps) | 1703 +- 8 us |
+
+   The old 78.125 us grid could only produce 1484, 1562 and 1719 for those three. Seeing any
+   of those three numbers means the frame did not change.
+4. Confirm the mux still REGENERATES a **50 Hz pulse** to the servo and the ESC. Two places
+   on the diagnostic, and both must hold:
+   - the first line's `OUT servo gp1=1500us esc gp3=1500us` -- what the mux decided to emit;
+   - the `PWMREG` line under it -- what the RP2040's registers are actually emitting:
+     `servo gp1 ... frame=20000.0us 50.00Hz` and the same for `esc gp3`.
+
+   This is the whole safety argument for the change: the Jetson frame moved, the mux's output
+   frame did not. If that `frame=` reads anything but about 20000.0 us / 50 Hz, stop and do
+   not arm.
+5. Confirm the decision is still `DECISION=CUT reason=1:RC_SIGNAL_INVALID` with the
+   transmitter off, and that both channels read `FRESH` rather than `STALE`: a 4 ms frame
+   refreshes the capture five times as often, so staleness must be further away than before,
+   never closer.
+
+Record the readings in `docs/notes/build-log.md` when this is run.
 
 ### Drive it from a browser on the Mac
 
@@ -648,11 +694,20 @@ sensored hall adapter is fitted, which is the proper fix; it is not a reason to 
 `throttle_full_scale_mps`, and the map does not model the deadzone today. Do not sit on a
 clicking command -- it is a stalled motor drawing current.
 
-### Reading the mux numbers (why 1500 reads as 1484)
+### Reading the mux numbers (why 1500 used to read as 1484)
+
+**SUPERSEDED 2026-09-21 by the frame-period change (GitHub issue #66); the table below is the
+20 ms record, kept because it is the measurement the change was made from.** The coarse grid
+in it was never the Pico's: it was the JETSON's. The Tegra PWM controller has 8-bit duty
+resolution (`pwm-tegra.c`, `PWM_DUTY_WIDTH 8`), so a commanded pulse was quantised to
+period/256 = 78.125 us at the 20 ms frame -- about 13 positions across the whole 1000-2000 us
+range. With the frame now 4000 us the step is 15.625 us and a commanded 1500 us is an exact
+grid point, so it should read 1500, not 1484. See "Bench verification of the 4 ms frame"
+above, and `ros_ws/src/racer_drivers/README.md`'s "Actuator resolution" for the arithmetic.
 
 The DIAG_BUILD firmware measures pulse width on a **15.625 us grid** and reports the nearest
-grid point. Every reading below is an exact multiple of 15.625 us. Measured 2026-09-21,
-commanded value from sysfs against what the Pico reported:
+grid point. Every reading below is an exact multiple of 15.625 us. Measured 2026-09-21 at the
+OLD 20 ms frame, commanded value from sysfs against what the Pico reported:
 
 | Commanded | `duty_cycle` (ns) | Mux reports |
 |---|---|---|

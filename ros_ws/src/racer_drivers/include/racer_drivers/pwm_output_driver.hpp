@@ -15,8 +15,13 @@ namespace racer_drivers {
 class PwmOutputDriver {
  public:
   /// Non-owning references to the two channels; they must outlive the driver.
-  PwmOutputDriver(const MappingConfig& config, PwmChannelSink& steering, PwmChannelSink& throttle,
-                  unsigned long long period_ns);
+  ///
+  /// The two frame periods are NOT arguments: they come from `config`
+  /// (actuation.steering_pwm_period_us / throttle_pwm_period_us, GitHub issue #66) exactly
+  /// like every other physical constant here, so there is no second place a period could be
+  /// passed in and disagree with the configured one. `validate_config()` has already refused
+  /// a period that cannot contain its channel's longest pulse by the time this is built.
+  PwmOutputDriver(const MappingConfig& config, PwmChannelSink& steering, PwmChannelSink& throttle);
 
   /// Bring both channels up AT NEUTRAL. Nothing has arrived on /drive yet at this point and
   /// nothing may, so the very first electrical state of both outputs is neutral.
@@ -35,13 +40,16 @@ class PwmOutputDriver {
   void stop() noexcept;
 
   const MappingConfig& config() const { return config_; }
-  unsigned long long period_ns() const { return period_ns_; }
+  /// The sysfs `period` values this driver wrote to each channel, nanoseconds.
+  unsigned long long steering_period_ns() const { return steering_period_ns_; }
+  unsigned long long throttle_period_ns() const { return throttle_period_ns_; }
 
  private:
   MappingConfig config_;
   PwmChannelSink& steering_;
   PwmChannelSink& throttle_;
-  unsigned long long period_ns_;
+  unsigned long long steering_period_ns_;
+  unsigned long long throttle_period_ns_;
   bool stopped_{false};
 };
 

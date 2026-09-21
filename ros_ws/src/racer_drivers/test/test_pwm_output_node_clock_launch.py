@@ -63,6 +63,9 @@ with open(_PARAMS_PATH, "r", encoding="utf-8") as _handle:
 
 _THROTTLE_NEUTRAL_US = _PARAMS["actuation"]["throttle_pwm_neutral_us"]
 _STEERING_NEUTRAL_US = _PARAMS["steering"]["pwm_neutral_us"]
+# Derived, not typed in: the frame period is a vehicle_params field (GitHub issue #66).
+_STEERING_PERIOD_NS = round(_PARAMS["actuation"]["steering_pwm_period_us"] * 1000.0)
+_THROTTLE_PERIOD_NS = round(_PARAMS["actuation"]["throttle_pwm_period_us"] * 1000.0)
 
 _FAKE_SYSFS = tempfile.mkdtemp(prefix="racer_fake_sysfs_clock_")
 
@@ -169,6 +172,10 @@ class TestPwmOutputNodeStalenessClock(unittest.TestCase):
     def test_a_node_still_writes_pulses_with_a_frozen_ros_clock(self):
         """Precondition: the output loop is a WALL timer, so a frozen ROS clock does not stop
         it. Without this the staleness assertion below would pass vacuously."""
+        # A frozen ROS clock does not change the frame period either: it is configuration
+        # (GitHub issue #66), not something derived from a clock this node reads.
+        self.assertEqual(_read_int(_channel_dir(0) / "period"), _STEERING_PERIOD_NS)
+        self.assertEqual(_read_int(_channel_dir(1) / "period"), _THROTTLE_PERIOD_NS)
         drive_pub = self.node.create_publisher(AckermannDriveStamped, "/drive", _reliable_qos())
         self._spin_for(0.5)
         msg = AckermannDriveStamped()

@@ -62,11 +62,15 @@ class PwmOutputNode : public rclcpp::Node {
   PwmOutputNode() : Node("pwm_output_node") {
     const double output_rate_hz = declare_double(
         "output_rate_hz", 50.0, 1.0, 400.0,
-        "Servo frame rate, Hz. This is BOTH the PWM carrier period and the rate at which "
-        "duty cycles are rewritten -- one pulse per frame. 50 Hz is the hobby-RC servo/ESC "
-        "convention the mux firmware and config/vehicle_params.yaml's pulse bounds assume "
-        "(claude-docs/04-architecture.md's 50 Hz command path). Changing it changes what the "
-        "servo and the ESC physically see; do not retune it to speed up a test.");
+        "Rate at which this node REWRITES the two duty cycles, Hz -- the command update "
+        "cadence, i.e. how often a fresh /drive can reach the wire. It is no longer the PWM "
+        "carrier period: that is now "
+        "config/vehicle_params.yaml's actuation.steering_pwm_period_us / "
+        "throttle_pwm_period_us (GitHub issue #66), because the frame period decides the "
+        "achievable pulse grid and a physical constant does not belong in a node default "
+        "(CLAUDE.md invariant 2). 50 Hz matches the command path in "
+        "claude-docs/04-architecture.md and the mux loop; raising it does not make the "
+        "actuators move sooner, because the mux regenerates its own 50 Hz outputs.");
 
     const double drive_timeout_s = declare_double(
         "drive_timeout_s", 0.1, 1e-3, 5.0,
@@ -122,12 +126,12 @@ class PwmOutputNode : public rclcpp::Node {
 
     config_ = build_config(drive_timeout_s);
 
-    period_ns_ = static_cast<unsigned long long>(1.0e9 / output_rate_hz);
-
     steering_sink_ = std::make_unique<SysfsPwmChannel>(sysfs_root, steering_chip, steering_channel);
     throttle_sink_ = std::make_unique<SysfsPwmChannel>(sysfs_root, throttle_chip, throttle_channel);
-    driver_ =
-        std::make_unique<PwmOutputDriver>(config_, *steering_sink_, *throttle_sink_, period_ns_);
+    // The frame periods are inside config_, straight from the generated vehicle_params
+    // binding; the driver derives the sysfs `period` values from them. There is no
+    // hand-written 20000000 anywhere on this path any more (GitHub issue #66).
+    driver_ = std::make_unique<PwmOutputDriver>(config_, *steering_sink_, *throttle_sink_);
 
     // Neutral on BOTH channels before the subscription exists, let alone before any /drive
     // message can be delivered. Any failure here throws out of the constructor and main()
@@ -153,6 +157,18 @@ class PwmOutputNode : public rclcpp::Node {
                 throttle_channel, config_.throttle.min_us, config_.throttle.neutral_us,
                 config_.throttle.max_us, config_.speed_full_scale_mps, config_.speed_cap_mps,
                 config_.drive_timeout_s);
+    // The grid is logged, not merely the period, because the period alone does not tell an
+    // operator at the bench what to expect: a commanded pulse lands on a multiple of
+    // period/256 (GitHub issue #66), which is what the mux diagnostic will be reporting back.
+    RCLCPP_INFO(this->get_logger(),
+                "pwm frame: steering %.0f us (%.1f Hz, %.3f us pulse grid), throttle %.0f us "
+                "(%.1f Hz, %.3f us pulse grid), from config/vehicle_params.yaml. The servo "
+                "and the ESC do not see these frames: the layer-1 mux regenerates its own 50 "
+                "Hz outputs (firmware/safety_mux).",
+                config_.steering_pwm_period_us, 1.0e6 / config_.steering_pwm_period_us,
+                pulse_grid_step_us(config_.steering_pwm_period_us), config_.throttle_pwm_period_us,
+                1.0e6 / config_.throttle_pwm_period_us,
+                pulse_grid_step_us(config_.throttle_pwm_period_us));
   }
 
   ~PwmOutputNode() override { shutdown(); }
@@ -221,6 +237,14 @@ class PwmOutputNode : public rclcpp::Node {
         // Nullable in the schema, so the generated binding types it as an optional and the
         // refusal above is live: with this field null the node names it and does not start.
         {"actuation.throttle_full_scale_mps", VEHICLE_PARAMS.actuation.throttle_full_scale_mps},
+        // Non-nullable in the schema (GitHub issue #66: a frame period that decides actuator
+        // resolution has no defensible default), so these are plain doubles in the generated
+        // binding and cannot be null here. Listed for the same reason as the two angle limits
+        // above: if the schema ever makes them nullable, the refusal starts firing by itself.
+        {"actuation.steering_pwm_period_us",
+         std::optional<double>(VEHICLE_PARAMS.actuation.steering_pwm_period_us)},
+        {"actuation.throttle_pwm_period_us",
+         std::optional<double>(VEHICLE_PARAMS.actuation.throttle_pwm_period_us)},
     };
     const std::optional<std::string> missing = find_missing_fields(required);
     if (missing.has_value()) {
@@ -255,6 +279,8 @@ class PwmOutputNode : public rclcpp::Node {
     config.speed_cap_mps = VEHICLE_PARAMS.limits.global_speed_cap_mps;
     config.left_is_pwm_max = (left_bound == "pwm_max_us");
     config.drive_timeout_s = drive_timeout_s;
+    config.steering_pwm_period_us = VEHICLE_PARAMS.actuation.steering_pwm_period_us;
+    config.throttle_pwm_period_us = VEHICLE_PARAMS.actuation.throttle_pwm_period_us;
 
     const std::optional<std::string> invalid = validate_config(config);
     if (invalid.has_value()) {
@@ -292,7 +318,6 @@ class PwmOutputNode : public rclcpp::Node {
   }
 
   MappingConfig config_;
-  unsigned long long period_ns_{0};
   CommandState last_command_;
   // Monotonic-clock receipt time, used ONLY as the left operand of an elapsed-time
   // subtraction, never as a stamp (CLOCK POLICY, top of file). Default-constructed with the

@@ -81,6 +81,37 @@ std::optional<std::string> validate_config(const MappingConfig& config) {
   if (!finite(config.drive_timeout_s) || config.drive_timeout_s <= 0.0) {
     return std::string("drive_timeout_s must be finite and > 0");
   }
+  // The frame period has to be long enough to CONTAIN the longest pulse the channel can be
+  // commanded to, with a low gap after it: a duty equal to or longer than the period is
+  // EINVAL from the kernel, and a pulse that fills most of its frame leaves the mux's edge
+  // capture almost no low time to see a falling edge in. The margin is expressed as "at
+  // least twice the channel's own maximum pulse" rather than a microsecond constant, so it
+  // scales with the calibration instead of being another number to keep in sync: at the
+  // committed 4000 us frame and a 2000 us maximum that is exactly the boundary, and a
+  // calibration whose maximum grows has to grow the frame with it.
+  const auto check_period = [&finite](double period_us, double max_pulse_us, const char* field,
+                                      const char* pulse_field) -> std::optional<std::string> {
+    if (!finite(period_us) || period_us <= 0.0) {
+      return std::string("actuation.") + field + " must be finite and > 0";
+    }
+    if (period_us < 2.0 * max_pulse_us) {
+      return std::string("actuation.") + field + " is shorter than twice " + pulse_field +
+             ", so the longest commandable pulse would fill at least half its frame and "
+             "leave the safety mux's edge capture no reliable low gap; lengthen the frame "
+             "or lower the pulse maximum";
+    }
+    return std::nullopt;
+  };
+  if (const std::optional<std::string> bad =
+          check_period(config.steering_pwm_period_us, config.steering.max_us,
+                       "steering_pwm_period_us", "steering.pwm_max_us")) {
+    return bad;
+  }
+  if (const std::optional<std::string> bad =
+          check_period(config.throttle_pwm_period_us, config.throttle.max_us,
+                       "throttle_pwm_period_us", "actuation.throttle_pwm_max_us")) {
+    return bad;
+  }
   return std::nullopt;
 }
 
@@ -179,6 +210,24 @@ unsigned long long pulse_us_to_duty_ns(double pulse_us, unsigned long long perio
     return period_ns;
   }
   return static_cast<unsigned long long>(duty_ns);
+}
+
+unsigned long long period_us_to_ns(double period_us) {
+  if (!std::isfinite(period_us) || period_us <= 0.0) {
+    return 0ULL;
+  }
+  return static_cast<unsigned long long>(std::round(period_us * 1000.0));
+}
+
+double pulse_grid_step_us(double period_us) {
+  if (!std::isfinite(period_us) || period_us <= 0.0) {
+    return 0.0;
+  }
+  // 256 = 2^PWM_DUTY_WIDTH from the Tegra PWM driver; see the header for the measurements
+  // this matches. Deliberately a plain divisor and not a vehicle_params field: it is a
+  // property of the SoC's PWM peripheral, not of the vehicle (CLAUDE.md invariant 2 covers
+  // masses, geometry, ratios and conversions, not a register width).
+  return period_us / 256.0;
 }
 
 }  // namespace racer_drivers

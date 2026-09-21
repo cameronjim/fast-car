@@ -5,6 +5,90 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-21 late -- Jetson PWM frame shortened to 4 ms: 15.6 us actuator resolution (issue #66)
+
+GitHub issue #66 recorded the measurement that started this: the Jetson commands a pulse and
+the mux reads a different one. 1500 us commanded read 1484, 2000 read 2031, 1000 read 1016 --
+every reading an exact multiple of 78.125 us. The cause is not the mux and not the cable. The
+Tegra PWM controller expresses duty as an 8-bit fraction of the period (`pwm-tegra.c`,
+`PWM_DUTY_WIDTH 8`), so at the 20 ms frame `pwm_output_node` was writing, the smallest
+expressible step is 20000/256 = 78.125 us. That is about **13 distinct positions across
+1000-2000 us**: 2.3 deg of steering per step, and a throttle that behaves like a switch,
+because the first steps off neutral sit inside the VESC's 15 percent current deadband and the
+sensorless motor does not catch until roughly 1700-1800 us (see the runbook's throttle
+deadzone table, measured the same day).
+
+**The decision: option 1 from the issue, at 4 ms rather than 5.** The frame period is now a
+configured value, `actuation.steering_pwm_period_us` and `actuation.throttle_pwm_period_us`,
+both 4000 us (250 Hz), which puts the grid at 15.625 us -- five times finer, about 64
+positions across the same span.
+
+**Why this is not a servo-tolerance question at all, which is what the issue assumed.** The
+issue listed "the servo is the risk" for a shorter frame. It is not, because the servo never
+sees this frame. `firmware/safety_mux` captures the INPUT pulse width on GP10/GP7 from edge
+timestamps (`pico/pwm_capture.c`, `time_us_64`, 1 us) and **regenerates** its own outputs on
+GP1/GP3 at a fixed 50 Hz / 20 ms frame (`pico/pwm_output.c`, `top = 39999` at 0.5 us per
+count, set from `clk_sys`). The Jetson frame rate exists only on the Jetson-to-Pico link. The
+analog Traxxas 2075 and the VESC PPM input keep getting exactly the 50 Hz they got before, so
+the steering channel gets the short frame too: leaving it at 20 ms would keep 2.3 deg per step
+in exchange for nothing.
+
+**Firmware verdict: nothing to change, and nothing was changed.** Checked line by line before
+touching anything:
+
+- Capture measures high time from edges and assumes no frame at all.
+  `pico/pwm_capture.c:72-93`: rising edge stores `time_us_64()`, falling edge subtracts. The
+  only frame-shaped assumption is the plausibility band at lines 23-24 (200-5000 us), which
+  exists to reject noise spikes, not to police a frame rate.
+- The staleness window still behaves. `PWM_CAPTURE_MAX_AGE_US` is 60000 us
+  (`pico/pwm_capture.c:39`) and it is a MAXIMUM AGE, not a frame multiple: at 4 ms a pulse
+  arrives five times as often, so every reading is fresher than before and the window is
+  further away, never closer. Its comment at lines 26-29 describes it as "three missed frames"
+  at 50 Hz, which at 250 Hz is now fifteen -- less sensitive to a stalled link, not more, and
+  changing it is a separate decision (it is already on the subject-to-change list in
+  `docs/notes/firmware-review-2026-09-14.md`) rather than something this change should
+  silently retune.
+- Validity is unchanged. `logic/src/pwm_validity.c` and `logic/src/pwm_window.c` are pure
+  range checks on a measured width, with no period term anywhere. The 62.5 us tolerance
+  (`logic/include/safety_mux/pwm_window.h:56`) was derived from the worst case of rounding
+  onto the emitter's 78.125 us step; at 15.625 us that worst case shrinks to 7.8 us, so the
+  existing tolerance is now more conservative than it was, not less. The header's rationale
+  text still describes the 20 ms emitter, which is now a historical note; it is a comment,
+  not a behaviour, and it is not worth a reflash.
+- The output stage is untouched. `pico/pwm_output.c` computes its own `top` and `clkdiv` from
+  `clk_sys` and never reads an input frame.
+- IRQ load is not a concern. Two captured Jetson channels at 250 Hz is 1000 edges per second,
+  plus about 100 for the 50 Hz RC kill channel and about 100 for the heartbeat: roughly 1200
+  interrupts per second on a 125 MHz RP2040, where the handler is a lookup, a subtraction and
+  a range check. That is order 0.1 percent of the core, and the 200 Hz main loop
+  (`pico/main.c:44`) is unchanged.
+- One genuine edge case, and it fails closed. Two consecutive missed edge interrupts could
+  merge frames into a measured width of `frame + high` = up to 5000 us, which at 20 ms was far
+  outside the 200-5000 us plausibility band and at 4 ms sits right at its ceiling. If such a
+  reading is ever believed by the capture, it still has to pass
+  `pwm_window_accept_us()` against the configured 1000-2000 us range widened by 62.5 us, which
+  rejects it, and the mux cuts. Worse readings cut; they do not pass.
+
+So the `.uf2` files are unchanged and no reflash is needed. The firmware's compiled-in
+vehicle_params values are also untouched by this bump -- the two new fields are consumed by
+`racer_drivers`, not by the mux.
+
+**Schema.** `schema_version` 0.3.0 -> 0.4.0 (two new required fields, so a minor bump per
+`claude-docs/06-vehicle-params.md` rule 5). `pwm_output_node` no longer derives the carrier
+period from `output_rate_hz`; that parameter is now only the duty-rewrite cadence, still
+50 Hz, and the period comes from the generated binding per channel. `validate_config()`
+refuses a frame period shorter than twice its channel's own `pwm_max_us`, which is the rule
+that keeps a 2000 us pulse from filling its frame and leaving the mux's edge capture no low
+gap. At 4000 us and a 2000 us maximum that is exactly the boundary, which is also why the
+frame is 4 ms and not the 2.5 ms the schema floor allows.
+
+**NOT YET VERIFIED ON HARDWARE.** The grid arithmetic is exact and the tests pin it, but the
+new frame has not been in front of the Pico. The bench procedure is in
+`docs/notes/first-boot-runbook.md`, "Bench verification of the 4 ms frame": commanded 1500 /
+1600 / 1700 us should read within one 15.6 us step, and the mux `OUT` fields must still show a
+50 Hz regenerated pulse. Do not drive on the floor before that has been read off the
+diagnostic.
+
 ## 2026-09-21 evening -- steering endpoints and sign measured, mapping sign corrected
 
 The steering channel's two remaining unmeasured provisional numbers -- the PWM endpoints and

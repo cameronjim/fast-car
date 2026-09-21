@@ -23,13 +23,13 @@
 #include "pwm_capture.h"
 #include "pwm_output.h"
 
-#define RC_KILL_SWITCH_GPIO 2
-#define JETSON_STEERING_PWM_IN_GPIO 3
-#define JETSON_THROTTLE_PWM_IN_GPIO 4
+#define RC_KILL_SWITCH_GPIO 12
+#define JETSON_STEERING_PWM_IN_GPIO 10
+#define JETSON_THROTTLE_PWM_IN_GPIO 7
 #define JETSON_HEARTBEAT_GPIO 5
-#define SERVO_PWM_OUT_GPIO 6
-#define ESC_PWM_OUT_GPIO 7
-#define POWER_CUTOFF_GPIO 8
+#define SERVO_PWM_OUT_GPIO 1
+#define ESC_PWM_OUT_GPIO 3
+#define POWER_CUTOFF_GPIO 0
 #define FAULT_LED_GPIO PICO_DEFAULT_LED_PIN
 
 #define MUX_LOOP_PERIOD_MS 5  // 200 Hz -- comfortably faster than a 50 Hz servo/ESC frame
@@ -98,8 +98,8 @@ static const char* problem_text(MuxParamProblem problem) {
 // Deliberately never returns.
 //
 // SAFE-STATE PRECONDITION: main() drives the power cutoff and both PWM output pins to their
-// safe states BEFORE it reads any param, so reaching here leaves GPIO 6/7 driven LOW (no
-// pulses, nothing for a servo or an ESC to act on) and GPIO 8 LOW (power cut) for as long as
+// safe states BEFORE it reads any param, so reaching here leaves GPIO 1/3 driven LOW (no
+// pulses, nothing for a servo or an ESC to act on) and GPIO 0 LOW (power cut) for as long as
 // the board stays powered. This function must never be called before that has happened.
 static void fault_halt_missing_param(const char* field, MuxParamProblem problem) {
   gpio_init(FAULT_LED_GPIO);
@@ -130,7 +130,7 @@ int main(void) {
   // until the params are validated a few lines down, and inventing one would be the silent
   // default CLAUDE.md invariant 2 exists to prevent. Low is the correct state for that gap,
   // and it is also the state the pins keep forever if the firmware refuses to arm.
-  power_cutoff_init(POWER_CUTOFF_GPIO);  // GPIO 8 LOW = power cut
+  power_cutoff_init(POWER_CUTOFF_GPIO);  // GPIO 0 LOW = power cut
   pwm_output_init_safe(SERVO_PWM_OUT_GPIO);
   pwm_output_init_safe(ESC_PWM_OUT_GPIO);
 

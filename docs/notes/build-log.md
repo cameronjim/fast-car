@@ -998,3 +998,67 @@ adapter.
 session, to sometimes hang and hold `/dev/ttyACM0` open, and consecutive one-shot calls each
 took about 5 s. Fixed in the same PR as this entry; see
 `docs/notes/bench-session-2026-09-20.md`'s open items list.
+
+## 2026-09-21 midday -- VESC configured, first motor spin under Jetson command, G1 bench complete
+
+Wheels off the ground throughout. Board on the 3S pack (~12.2 V) the whole session.
+
+**VESC configuration.** Flipsky FSESC 6.7 (hardware reports "60-no_hw_limits", VESC ID 114)
+configured in VESC Tool from the owner's Windows desktop over micro-USB. VESC Tool reported
+"limited mode" (a firmware version mismatch); configuration writes and read-backs worked
+anyway. Firmware was deliberately not updated: the 6.7 runs below its rated input voltage and
+a brown-out mid-flash could brick it, and the FSESC 4.12 replaces it soon regardless.
+
+Sensorless FOC detection succeeded: R 6.60 mOhm, L 1.88 uH, Lq-Ld 0.29 uH, flux linkage
+0.25 mWb. The detection wizard suggested 71 A motor current; overridden.
+
+Limits written per `planning-docs/06-vesc-config-and-jetson-bringup.md` step 3: motor current
+max 30 A, motor brake -15 A, battery max 25 A, battery regen -15 A, absolute max 70 A, battery
+cutoff start 10.2 V / end 9.6 V, max ERPM +12000 / min -12000 (12000 ERPM is about 3 m/s tread
+speed with the stock Slash 4x4 11.82:1 overall drive, 4.31 in tyres, 2 pole pairs), FET and
+motor temperature start 85 C. App layer: PPM input, control type 3 (Current No Reverse With
+Brake), pulses 1.0/1.5/2.0 ms, hysteresis 0.15, safe_start on, ramp 0.4 s / 0.2 s. Exported
+configuration committed as `config/vesc/2026-09-21-fsesc67-motor.xml` and
+`2026-09-21-fsesc67-app.xml` (PR 60, merged). Step 6 of the same planning doc, mirroring these
+limits into `config/vehicle_params.yaml`, is still open -- see open items below.
+
+**Throttle test through the mux, first motor spin.** Jetson driving the throttle PWM through
+the mux, wheels off the ground, steering held at 1500 us, kill knob armed (mux
+`DECISION=PASS`): 1560 us produced nothing; 1600 and 1650 us made the rear tyres click for a
+few seconds without turning (a sensorless start attempt with too little current against the
+4WD drivetrain); 1700 then 1750 us spun the wheels up fast, to the ERPM cap. The owner turned
+the kill knob counter-clockwise while the wheels were spinning: they stopped, and the mux read
+`KILL 1000us KILLED`, `DECISION=CUT reason 1:RC_KILL_SWITCH`. Throttle then returned to
+1500 us. This is the first time the car has moved under Jetson command, and it proves the
+motor-channel radio kill.
+
+Consequence for software: from rest, this drivetrain needs roughly 1700 us to start
+sensorless -- about 40 percent of the current throttle range. The throttle map in
+`racer_drivers` / `vehicle_params` (`throttle_full_scale_mps` 5.0 provisional, PWM
+1000/1500/2000) does not model this deadzone yet. A sensored hall adapter (already planned,
+see the 2026-09-14 entry) is the proper fix for low-speed start; noted as an open item below
+rather than worked around in software.
+
+**G1 bench evidence, complete.** Combined with the morning's steering kill test and
+heartbeat-loss test (see the 2026-09-21 morning entry above), Gate G1's bench evidence is now
+complete: the teleop command path runs through layer-1 safety end to end, the kill switch is
+proven on both the steering and throttle channels, and heartbeat loss is proven on steering.
+See `docs/notes/bench-session-2026-09-20.md` for the full numbered results and open items, and
+`docs/notes/build-status-2026-09-14.md` for the updated build-status snapshot.
+
+**Tooling, `mux_diag` reader regression.** `tools/mux_diag/read_mux_diag.py`, as merged in PR
+59, was found this session to fail against the real device
+(`read_mux_diag: timed out ... no parseable mux diagnostic line seen`) while a raw
+`stty -F /dev/ttyACM0 115200 raw -echo; timeout 5 cat /dev/ttyACM0` capture read perfectly good
+lines on the same device at the same time. Root cause: PR 59's fix made `run_once`'s `--lines`
+budget count every raw serial line read (including the diagnostic firmware's four-line attach
+banner, a discarded partial first line, and stray `PWMREG` continuation lines), not only
+parseable decision lines, and dropped the default from 40 to 1. On a fresh attach, the
+banner prints before any verdict line, so the single allowed read under the new default
+almost always landed on banner text and gave up, even with good verdict lines arriving right
+behind it -- reproduced directly against a 15-line raw capture from the live device,
+committed as `tools/mux_diag/tests/fixtures/mux_raw_2026-09-21.txt`. Fixed in this PR:
+`run_once`'s budget now counts only parseable verdict lines, bounded overall by `--timeout`
+(still 5 s by default); non-decision chatter is skipped for free. Covered by a new
+fixture-driven test that drives the real `_SerialLineReader` (open/select/os.read) against a
+pty loaded with the captured bytes, plus updated unit tests for the new budget semantics.

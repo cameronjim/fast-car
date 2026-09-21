@@ -53,8 +53,8 @@ two ESCs.
 | Jetson setup (JetPack, WiFi, SSH, heartbeat) | Done |
 | Jetson PWM pinmux enable / `pwmchip` numbering | DONE 2026-09-20 -- pin 15 = pwmchip0 = steering, pin 33 = pwmchip2 = throttle, confirmed with a multimeter (`docs/notes/build-log.md`, 2026-09-20) |
 | Jetson-to-mux-board wiring (4 lines) | DONE 2026-09-21 -- steering, throttle and heartbeat confirmed reaching the mux over the diagnostic read-out; the kill-switch line comes from the receiver, not a Jetson line (`docs/notes/build-log.md`, 2026-09-21 morning entry) |
-| Wheels-off bench test | DONE (steering channel) 2026-09-21 -- armed/killed steering sweep and the heartbeat-loss test both proven; throttle/VESC actuation still not started, pending VESC Tool configuration |
-| G1 kill test | DONE (steering only) 2026-09-21 -- armed sweep steered the wheels, killed sweep did not move them, mux stayed `CUT reason 1` throughout (`docs/notes/build-log.md`, 2026-09-21 morning entry). Full scope with throttle/VESC engaged still pending |
+| Wheels-off bench test | DONE 2026-09-21 -- armed/killed steering sweep, the heartbeat-loss test, and the VESC-configured throttle test (first motor spin under Jetson command, kill proven on the throttle channel too) all proven (`docs/notes/build-log.md`, 2026-09-21 morning and midday entries) |
+| G1 kill test | DONE 2026-09-21 -- armed sweep steered the wheels, killed sweep did not move them, mux stayed `CUT reason 1` throughout, on both the steering channel (morning) and the throttle channel (midday, VESC configured, wheels spun up then stopped on kill). Gate G1's bench evidence is complete (`docs/notes/build-log.md`, 2026-09-21 morning and midday entries; `docs/notes/bench-session-2026-09-20.md` "Results" section) |
 
 ## Forward plan, in order, with what blocks what
 
@@ -82,21 +82,24 @@ Then, before anything drives, in the order the existing docs require:
 10. ~~**Wire the four Jetson lines to the mux board**~~ DONE 2026-09-21 (steering, throttle,
     heartbeat all confirmed live over the mux diagnostic; the fourth line is ground). See
     `docs/notes/build-log.md`, 2026-09-21 morning entry.
-11. **Wheels-off bench test sequence** (per-channel actuation tests,
-    `planning-docs/05-safety-mux-and-kill-test.md` section D). PARTIAL 2026-09-21: the
-    steering and heartbeat channels are proven (armed/killed sweep, heartbeat-loss cut);
-    throttle/VESC actuation is not started, pending VESC Tool configuration.
-12. **The G1 kill test** (`planning-docs/05-safety-mux-and-kill-test.md` section E). Nothing
-    drives on the ground before this passes. PARTIAL 2026-09-21: proven for the steering
-    channel (armed sweep steers, killed sweep does not move the wheels, mux stays
-    `CUT reason 1`); full scope with throttle/VESC engaged still pending.
+11. ~~**Wheels-off bench test sequence**~~ (per-channel actuation tests,
+    `planning-docs/05-safety-mux-and-kill-test.md` section D). DONE 2026-09-21: steering and
+    heartbeat channels proven in the morning (armed/killed sweep, heartbeat-loss cut);
+    throttle/VESC actuation proven midday, VESC configured and the wheels spun up and stopped
+    on kill under Jetson command.
+12. ~~**The G1 kill test**~~ (`planning-docs/05-safety-mux-and-kill-test.md` section E). DONE
+    2026-09-21: proven on the steering channel in the morning (armed sweep steers, killed
+    sweep does not move the wheels, mux stays `CUT reason 1`) and on the throttle channel
+    midday (wheels spun up under Jetson command, kill knob stopped them, mux read
+    `CUT reason 1:RC_KILL_SWITCH`). Gate G1's bench evidence is complete.
 
 Steps 1-3 have no hard ordering dependency between each other, but step 2's joints get redone
 when the FSESC 4.12 arrives, so there is no benefit to rushing ahead of the perfboard work.
-Steps 4-6, 9 and 10 are now cleared, and 11-12 are cleared for the steering channel; the
-remaining blocker on this list is VESC Tool configuration (needed before the throttle/VESC
-portions of steps 11 and 12 can run) -- see `docs/notes/bench-session-2026-09-20.md`'s
-"Results, morning of 2026-09-21" section.
+Steps 4-6 and 9-12 are now cleared. The remaining forward-plan items are outside this
+numbered sequence: mirroring the VESC limits into `config/vehicle_params.yaml`
+(planning-docs/06 step 6), a sensored hall adapter for low-speed throttle start, and the
+items still open in `docs/notes/bench-session-2026-09-20.md`'s open-items list -- see
+`docs/notes/build-log.md`'s 2026-09-21 midday entry for the full throttle/VESC results.
 
 Scale note, because it is easy to read steps 1-3 as "most of the work": assembly is roughly
 the halfway point of Phase 1, not the end. Steps 11 and 12 (the wheels-off bench sequence and

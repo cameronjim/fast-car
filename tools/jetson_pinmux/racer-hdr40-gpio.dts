@@ -1,0 +1,148 @@
+/*
+ * racer-hdr40-gpio.dts -- 40-pin header pad configuration for the racer Jetson.
+ *
+ * Jetson Orin Nano Super Developer Kit (p3768-0000 carrier + p3767-0005 module),
+ * JetPack 6.2 / L4T R36.4.4.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * A 40-pin header pad that no device tree node configures keeps its MB1 boot-time
+ * pad configuration, and on this board that configuration has TRISTATE=1 -- the
+ * pad's output driver is disabled. The GPIO controller (gpio@2200000) and the pad
+ * mux/config block (pinmux@2430000) are separate hardware: the GPIO controller
+ * will happily report, and actually hold, an output-high line while the pad stays
+ * high impedance, so a multimeter on the header pin reads 0.0 V. Measured on this
+ * exact board, 2026-09-21, from /sys/kernel/debug/pinctrl/2430000.pinmux/
+ * pinconf-groups:
+ *
+ *   soc_gpio59_pac6 (header pin 7,  unconfigured): tristate=1   <- reads 0.0 V
+ *   soc_gpio32_pq5  (header pin 29, unconfigured): tristate=1   <- reads 0.0 V
+ *   soc_gpio39_pn1  (header pin 15, jetson-io pwm1): tristate=0 <- drives 1.64 V
+ *   soc_gpio21_ph0  (header pin 33, jetson-io pwm5): tristate=0 <- drives
+ *
+ * Setting nvidia,tristate = <0> here is what enables the output driver.
+ *
+ * WHAT THIS OVERLAY DOES
+ * ----------------------
+ * It REPLACES /boot/jetson-io-hdr40-user-custom.dtbo. It carries the pwm1 (pin 15)
+ * and pwm5 (pin 33) pad nodes copied verbatim from that overlay, so steering and
+ * throttle keep working, and adds two pads as plain GPIO outputs. It deliberately
+ * DROPS the jetson-io overlay's pwm7 (pin 32) node, because pin 32 is the fallback
+ * heartbeat pin and cannot be both.
+ *
+ * Do not list both this overlay and the jetson-io one on the OVERLAYS line. See
+ * README.md, "Ordering and coexistence".
+ *
+ * See tools/jetson_pinmux/README.md for the full story, the install/rollback/verify
+ * procedure, and how to add another pad.
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	jetson-header-name = "Jetson 40pin Header";
+	overlay-name = "Racer HDR40 GPIO";
+
+	/*
+	 * Copied verbatim from the decompiled /boot/jetson-io-hdr40-user-custom.dtbo
+	 * on this board. The live /proc/device-tree/compatible is
+	 * "nvidia,p3768-0000+p3767-0005-super", which is in this list.
+	 */
+	compatible = "nvidia,p3768-0000+p3767-0000\0nvidia,p3768-0000+p3767-0001\0nvidia,p3768-0000+p3767-0003\0nvidia,p3768-0000+p3767-0004\0nvidia,p3768-0000+p3767-0005\0nvidia,p3768-0000+p3767-0000-super\0nvidia,p3768-0000+p3767-0001-super\0nvidia,p3768-0000+p3767-0003-super\0nvidia,p3768-0000+p3767-0004-super\0nvidia,p3768-0000+p3767-0005-super\0nvidia,p3509-0000+p3767-0000\0nvidia,p3509-0000+p3767-0001\0nvidia,p3509-0000+p3767-0003\0nvidia,p3509-0000+p3767-0004\0nvidia,p3509-0000+p3767-0005";
+
+	fragment@0 {
+		target = <&pinmux>;
+
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&jetson_io_pinmux>;
+
+			jetson_io_pinmux: exp-header-pinmux {
+
+				/*
+				 * Header pin 7 -- the heartbeat pin as currently wired.
+				 * Pad soc_gpio59_pac6 == PAC.06 == gpiochip0 line 144.
+				 *
+				 * No nvidia,function: writing one would make the pinctrl
+				 * driver force the pad to SFIO at hog time. Omitting it
+				 * touches pinconf only and leaves the GPIO/SFIO select to
+				 * the GPIO request path, which is what libgpiod triggers
+				 * and what the known-good community overlay for this pad
+				 * does. The pad's current mux is already parked on rsvd2
+				 * (verified in pinconf-groups), so nothing else drives it.
+				 * Legal alternatives for this pad, if ever needed:
+				 * "aud", "i2s8", "rsvd2", "rsvd3".
+				 */
+				hdr40-pin7 {
+					nvidia,pins = "soc_gpio59_pac6";
+					nvidia,tristate = <0x00>;
+					nvidia,enable-input = <0x00>;
+					nvidia,pull = <0x00>;
+				};
+
+				/*
+				 * Header pin 32 -- the fallback heartbeat pin.
+				 * Pad soc_gpio19_pg6 == PG.06 == gpiochip0 line 41.
+				 *
+				 * NOTE: pin 32 on this carrier is soc_gpio19_pg6, NOT
+				 * gp_pwm2_px2. gp_pwm2_px2 (PX.02, gpiochip0 line 116) is
+				 * not routed to the 40-pin header at all -- confirmed
+				 * against jetson-io's own live pinmap for this board.
+				 *
+				 * This pad is jetson-io's "pwm7". Configuring it as GPIO
+				 * here is what removes pwm7. The pad's mux stays on "gp"
+				 * (no nvidia,function, same reasoning as pin 7); that is
+				 * harmless because the GPIO request clears GPIO_SFIO_SEL,
+				 * and with pwm7 gone nothing opens the GP PWM channel.
+				 * Legal alternatives: "gp", "rsvd1", "rsvd2", "rsvd3".
+				 */
+				hdr40-pin32 {
+					nvidia,pins = "soc_gpio19_pg6";
+					nvidia,tristate = <0x00>;
+					nvidia,enable-input = <0x00>;
+					nvidia,pull = <0x00>;
+				};
+
+				/*
+				 * Header pin 15 -- pwm1, steering. Copied verbatim from the
+				 * jetson-io overlay. Do not change.
+				 */
+				hdr40-pin15 {
+					nvidia,pins = "soc_gpio39_pn1";
+					nvidia,function = "gp";
+					nvidia,tristate = <0x00>;
+					nvidia,enable-input = <0x00>;
+				};
+
+				/*
+				 * Header pin 33 -- pwm5, throttle. Copied verbatim from the
+				 * jetson-io overlay. Do not change.
+				 */
+				hdr40-pin33 {
+					nvidia,pins = "soc_gpio21_ph0";
+					nvidia,function = "gp";
+					nvidia,tristate = <0x00>;
+					nvidia,enable-input = <0x00>;
+				};
+			};
+		};
+	};
+
+	/*
+	 * jetson-io always emits this second, empty fragment for the AON pinmux
+	 * (pinmux@c300000). No header pin we use lives there. Kept so the node
+	 * structure matches the template exactly; harmless if unused.
+	 */
+	fragment@1 {
+		target = <&pinmux_aon>;
+
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&jetson_io_pinmux_aon>;
+
+			jetson_io_pinmux_aon: exp-header-pinmux {
+			};
+		};
+	};
+};

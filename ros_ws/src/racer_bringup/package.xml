@@ -30,6 +30,10 @@
   <exec_depend>racer_tools</exec_depend>
   <exec_depend>racer_drivers</exec_depend>
   <exec_depend>foxglove_bridge</exec_depend>
+  <!-- car_teleop.launch.py starts `ros2 bag record` by default (CLAUDE.md invariant 5). The
+       verb comes from ros2bag; the storage plugin is chosen at launch time (mcap on the car,
+       sqlite3 in ros-dev) so no specific rosbag2_storage_* plugin is declared here. -->
+  <exec_depend>ros2bag</exec_depend>
   <!-- racer_gym_bridge (referenced by package name in launch/*.launch.py, resolved by
        ros2 launch at runtime from whatever workspace is sourced) is intentionally NOT
        declared here: it lives in sim/bridge, a separate colcon workspace from ros_ws, and
@@ -39,6 +43,8 @@
 
 
   <test_depend>ackermann_msgs</test_depend>
+  <test_depend>geometry_msgs</test_depend>
+  <test_depend>std_msgs</test_depend>
   <test_depend>launch_testing</test_depend>
   <test_depend>launch_testing_ros</test_depend>
   <test_depend>launch_testing_ament_cmake</test_depend>

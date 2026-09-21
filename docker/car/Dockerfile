@@ -75,6 +75,18 @@ ARG DEBIAN_FRONTEND=noninteractive
 # for the Jetson happens ON the Jetson, inside a container from this image, the same way
 # ros-dev is used for amd64/dev-machine builds.
 #
+# ros-humble-rosbag2-storage-mcap (added 2026-09-21, roadmap 1.6 / GitHub issue #64):
+# car_teleop.launch.py starts a rosbag2 recorder by default, because CLAUDE.md invariant 5
+# makes an unlogged drive a bug. `ros-humble-ros-base` already brings rosbag2 and the `ros2
+# bag` verb, but in Humble its ONLY storage plugin is sqlite3; this package adds mcap, which
+# rosbag2 made the default from Iron onward. It is worth the one apt package here because a
+# session can end with a kill switch or a yanked battery, and an mcap file -- a single
+# self-describing, append-only file -- survives an unclean writer exit far better than a
+# sqlite3 bag does. The launch file's `bag_storage:=auto` picks mcap when this package is
+# present and sqlite3 when it is not, so the car records mcap and docker/ros-dev (stock
+# ros:humble-ros-base, no mcap) records sqlite3 in the L3 launch test. This is RUNTIME
+# logging infrastructure, not dev tooling, so it does not contradict the list below.
+#
 # Deliberately NOT installed (claude-docs/03-environments.md "car: ... Never contains: dev
 # tooling bloat", contrast docker/ros-dev/Dockerfile): ros-humble-launch-testing[-ament-cmake],
 # ros-humble-ament-cmake-gtest/-pytest, clang-format, clang-tidy, gcovr. Those are test/lint
@@ -112,6 +124,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-ros-base \
         ros-humble-ackermann-msgs \
         ros-humble-foxglove-bridge \
+        ros-humble-rosbag2-storage-mcap \
         build-essential \
         cmake \
         git \

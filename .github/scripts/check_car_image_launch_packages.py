@@ -36,6 +36,14 @@ APT_PACKAGE_FOR = {
     "foxglove_bridge": "ros-humble-foxglove-bridge",
 }
 
+# Same idea for the rosbag2 recorder car_teleop.launch.py starts when `record` defaults to
+# true (CLAUDE.md invariant 5, roadmap 1.6). The recorder is an ExecuteProcess, not a Node, so
+# the loop below cannot see it, and its `bag_storage:=auto` FALLS BACK to sqlite3 rather than
+# failing when the mcap plugin is missing -- which is a silent downgrade of the storage format
+# the Dockerfile and the runbook both document. This check makes that non-silent.
+RECORD_ARGUMENT = "record"
+MCAP_APT_PACKAGE = "ros-humble-rosbag2-storage-mcap"
+
 
 def _condition_arg(node_call: ast.Call) -> str | None:
     """Return the launch-argument name a Node(...) call's `condition=` is gated on."""
@@ -120,6 +128,16 @@ def main() -> int:
                 + f", but docker/car/Dockerfile does not install '{apt_package}'. "
                 "`ros2 launch racer_bringup car_teleop.launch.py` would fail in the car "
                 f"image with \"package '{package}' not found\"."
+            )
+
+    if defaults.get(RECORD_ARGUMENT, "false").lower() == "true":
+        checked += 1
+        if not re.search(rf"^\s*{re.escape(MCAP_APT_PACKAGE)}\s*\\?\s*$", dockerfile, re.MULTILINE):
+            problems.append(
+                f"{LAUNCH_FILE.name} records a rosbag by default ('{RECORD_ARGUMENT}' defaults "
+                f"to true), but docker/car/Dockerfile does not install '{MCAP_APT_PACKAGE}'. "
+                "The launch would silently fall back to sqlite3 instead of the mcap format "
+                "the Dockerfile and docs/notes/first-boot-runbook.md document."
             )
 
     if problems:

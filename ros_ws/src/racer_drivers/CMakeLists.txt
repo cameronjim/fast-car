@@ -10,6 +10,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(ackermann_msgs REQUIRED)
@@ -72,12 +73,35 @@ install(TARGETS pwm_output_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# -- Python telemetry drivers (roadmap 1.6, CLAUDE.md invariant 5) -----------------------------
+# racer_drivers is a HYBRID package: the command path is C++ (CLAUDE.md "control-critical code
+# in C++"), and rail_voltage_node -- which reads the Jetson's INA3221 through sysfs and can
+# never move the car -- is Python. It lives here rather than in a new racer_telemetry package
+# because claude-docs/02-repo-layout.md names racer_drivers as the home for on-vehicle drivers
+# and lists no telemetry package; a sensor reader is a driver.
+ament_python_install_package(${PROJECT_NAME})
+install(PROGRAMS scripts/rail_voltage_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME rail_voltage_node
+)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_racer_drivers_pwm_core
     test/test_pwm_mapping.cpp
   )
   target_link_libraries(test_racer_drivers_pwm_core racer_drivers_pwm_core)
+
+  # L1 unit tests for the ROS-free INA3221 parsing/discovery half of rail_voltage_node.
+  # racer_drivers is skipped by .github/scripts/run_python_tests.sh (see its comment), so
+  # these run here, in the l3-and-cpp CI job's colcon test.
+  find_package(ament_cmake_pytest REQUIRED)
+  # APPEND_ENV PYTHONPATH: the test imports racer_drivers.rail_voltage, and at colcon-test
+  # time the source tree is the only place that package is guaranteed to be importable from
+  # (ament_python_install_package's result is not on PYTHONPATH for this package's own tests).
+  ament_add_pytest_test(test_rail_voltage test/test_rail_voltage.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+  )
 
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_pwm_output_node_launch.py

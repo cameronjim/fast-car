@@ -15,17 +15,32 @@
     via the generated binding; the node refuses to start on a null field. Mapping and output
     sequencing (include/racer_drivers/) are ROS-free and gtest-unit-tested per
     claude-docs/12-testing.md L1.
+
+    Second node: rail_voltage_node (Python, roadmap 1.6), a telemetry driver with no path to
+    the actuators. It reads the Jetson carrier board's onboard INA3221 through the hwmon
+    sysfs ABI and publishes each rail's volts and amps as std_msgs/Float32, so that
+    car_teleop.launch.py's rosbag satisfies both halves of CLAUDE.md invariant 5 ("rosbag +
+    rail voltage") until the INA226 in claude-docs/11-hardware.md is fitted. It warns once
+    and publishes nothing when the sensor is absent, and never exits on a read failure.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <depend>rclcpp</depend>
   <depend>rcl_interfaces</depend>
   <depend>ackermann_msgs</depend>
 
+  <!-- rail_voltage_node (Python): reads the Jetson's onboard INA3221 through sysfs and
+       publishes volts/amps so CLAUDE.md invariant 5's "rosbag + rail voltage" has something
+       to record. std_msgs only - no custom message, per claude-docs/02-repo-layout.md. -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>launch</test_depend>
   <test_depend>launch_ros</test_depend>
   <test_depend>launch_testing</test_depend>

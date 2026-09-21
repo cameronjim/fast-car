@@ -774,3 +774,104 @@ sha256 `ccddd7452d1c6dc114805d4f265a96be6565ee238b911141bc26dd2f2b132683`. Host 
 
 **Status.** Pin mapping confirmed against the as-built perfboard. Still nothing powered,
 flashed, or bench-tested against real hardware; roadmap task 1.3's kill test is still pending.
+
+## 2026-09-20 -- opt-in diagnostic firmware build that reports mux state over USB
+
+**Why.** The board is built, powered, and armed (3.3 V rail good, LED dark), the Jetson drives
+header pin 15 (`pwmchip0`, steering) and pin 33 (`pwmchip2`, throttle) at a confirmed ~1.64 V
+average at 50 percent duty, the heartbeat toggles header pin 7 at 50 Hz verified at kernel
+level, and the Flysky radio is bound with kill on CH5 (VrA, clockwise armed, failsafe to the
+kill end). But the steering servo does not respond off the board's SERVO header and goes limp
+rather than holding centre, while the same servo steers correctly plugged straight into the
+receiver's CH1. A meter at the servo header reads 5 V on power and about 0.24 V average on
+signal, which is what a 3.3 V 1500 us 50 Hz pulse train averages to, and which a meter cannot
+tell apart from a malformed waveform at the same duty. The mux reports nothing: the only
+`printf` in the firmware is the refuse-to-arm fault line, so "is it cutting, and on which
+condition" is unobservable from outside.
+
+**Change.** A diagnostic variant of the same firmware, behind a new `DIAG_BUILD` CMake option
+that defaults to OFF. With it ON, `pico/diag_report.c` is compiled in and prints one line over
+USB serial about twice a second: every captured pulse width on GP12/GP10/GP7 with a named
+reason when a channel is unusable (`NO_EDGES`, `STALE`, `OUT_OF_RANGE`), the heartbeat age
+against the configured timeout and the watchdog's verdict, the decoded kill-switch position
+with the arm and kill edges it is compared against, the PASS/CUT decision with the winning cut
+condition numbered by priority, and the commanded servo/ESC pulse widths plus the cutoff
+GPIO's read-back level. A four line banner with the pin map and the params prints each time a
+USB host attaches. New files: `pico/diag_report.{h,c}`, `docs/notes/mux-diagnostic-build.md`.
+
+**Safety impact: none.** Nothing in `logic/` was modified. Same `mux_decide()`, same priority
+order, same fail-safe defaults, same outputs. The diagnostic code reads state the cycle has
+already produced and prints it; it takes no decision and writes no pin. The one hook it needed
+is `pwm_capture_diag()`, a read-only accessor in `pico/pwm_capture.c` that reads the same
+fields `pwm_capture_read_us()` reads under the same interrupt-disabled section and writes
+nothing. It and the `main.c` call sites are behind `#ifdef SAFETY_MUX_DIAG`, which only
+`DIAG_BUILD=ON` defines.
+
+**Not blocking on USB.** Checked against pico-sdk 2.1.0's
+`src/rp2_common/pico_stdio_usb/stdio_usb.c` rather than assumed: `stdio_usb_out_chars()`
+returns immediately with no host attached, but with a host attached and not reading it spins
+until `PICO_STDIO_USB_STDOUT_TIMEOUT_US` (default 500000, half a second, i.e. 100 missed
+control cycles). The diagnostic target therefore compiles with
+`PICO_STDIO_USB_STDOUT_TIMEOUT_US=0` so characters are dropped instead of waited on, and
+`diag_report_tick()` checks `stdio_usb_connected()` before doing any formatting work.
+
+**Builds.** Both produced in the container from `docs/notes/safety-mux-first-build.md`
+(debian:bookworm arm64, `arm-none-eabi-gcc` 12.2, pico-sdk 2.1.0 via `FetchContent`,
+`tools/gen_params.py` run as a build step), zero compiler warnings, and the three touched
+files additionally recompiled with `-Wall -Wextra` for zero warnings:
+
+| Artifact | Bytes | sha256 |
+|---|---|---|
+| `firmware/safety_mux/build-artifacts/safety_mux.uf2` (shipping, `DIAG_BUILD=OFF`) | 79360 | `ccddd7452d1c6dc114805d4f265a96be6565ee238b911141bc26dd2f2b132683` |
+| `firmware/safety_mux/build-artifacts/safety_mux_diag.uf2` (diagnostic, `DIAG_BUILD=ON`) | 90624 | `86a8291d0f552b3b2d67768b4a114c8c00d3d4911fe394cdae247a6fa8272f5b` |
+
+The shipping hash is identical to the one recorded in the 2026-09-20 pin-remap entry above,
+built before any of this existed: the default build really is byte for byte unchanged. Both
+artifacts are gitignored build output, not committed.
+
+**PWM output audit (same day, prompted by a second bench measurement).** A DC meter on GP1
+read a constant 0.36 V, about 10.9 percent duty, where a 1500 us pulse in a 20 ms frame should
+be 7.5 percent, about 0.25 V. `pico/pwm_output.c`'s slice, divider and wrap arithmetic was
+audited against the RP2040 peripheral and pico-sdk 2.1.0's `hardware_pwm/include/hardware/pwm.h`.
+**No defect was found**: 125 MHz / 62.5 = 2 MHz = 0.5 us per count, TOP+1 = 40000 counts =
+20.000 ms = 50.000 Hz exactly; 62.5 is exact in the 8.4 fixed-point divider (int 62, frac 8)
+with no truncation; GP1 (slice 0 channel B) and GP3 (slice 1 channel B) are separate slices,
+each configured by its own `pwm_output_init_channel()` call; GP0 is slice 0 channel A but is
+driven through SIO and never routed to the PWM function, so it writes no PWM register and
+cannot disturb slice 0 for GP1; `pwm_output_set_us()` converts with the same 0.5 us per count
+the init programmed; and the compare register is double-buffered, so the 200 Hz writes cannot
+produce runt pulses.
+
+The significant correction is that **duty cycle is `level / (TOP + 1)` and contains no clock
+term**, so a divider or `clk_sys` error changes the frame RATE and the microsecond pulse
+width but cannot change the DC average at all. The "period is 13.75 ms" hypothesis is
+therefore ruled out as an explanation of 0.36 V; only a compare level near 4360 (about
+2180 us) would do that, and nothing in the decision path can command 2180 us (neutral is
+1500, the range maximum is 2000). Also worth recording: the servo header signal pin read about
+0.24 V earlier the same evening, which is the expected 7.5 percent, and GP1 reads 0.36 V now,
+on the same net with continuity confirmed. Both cannot be right, and a DC meter averaging a
+50 Hz 7.5 percent square wave is a plausible source of the discrepancy.
+
+Two additions came out of the audit, neither of which changes emitted code. `pico/pwm_output.c`
+gained `_Static_assert`s pinning the frame arithmetic, including that `SYS_CLK_HZ` is
+125000000 (the 62.5 divider's previously silent assumption, now a build failure rather than a
+comment). `_Static_assert` emits no code and the shipping `.uf2` hash above is unchanged with
+them in place, rebuilt to confirm. The diagnostic build gained a second `PWMREG` line per
+report, read back from the peripheral registers: slice and channel, TOP, divider, compare
+level, slice enabled, whether the pin is really switched to the PWM function, the measured
+`clock_get_hz(clk_sys)`, and the resulting pulse width, frame period, frequency and duty. The
+duty field is directly comparable to a multimeter reading, so this class of question is
+answerable from the serial log instead of from a meter.
+
+The one warning seen while auditing, a GCC `-Warray-bounds` false positive on the SDK's
+inlined `pwm_set_clkdiv()`, is pre-existing: the same file on `main` produces the same two
+occurrences under `-Wall -Wextra`, and the project's own build flags produce zero warnings.
+
+**Tests.** `.github/scripts/safety_mux_host_tests.sh` still green, all 320 assertions.
+
+**Status.** Nothing here has run on an RP2040. The example output lines in
+`docs/notes/mux-diagnostic-build.md` were produced by compiling the real `diag_report.c`
+formatting code on the host against scripted inputs, so the field text is exact, but whether
+the CDC port enumerates, whether the 2 Hz print leaves the 200 Hz loop undisturbed on the
+chip, and whether the captured numbers are right are the bench questions this build exists to
+answer. Roadmap task 1.3 stays `[~]`.

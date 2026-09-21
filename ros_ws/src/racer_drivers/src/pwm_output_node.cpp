@@ -86,26 +86,31 @@ class PwmOutputNode : public rclcpp::Node {
 
     const int steering_chip = declare_int(
         "steering_pwmchip", 0, 0, 15,
-        "pwmchip index for the steering channel: the N in /sys/class/pwm/pwmchipN. UNVERIFIED "
-        "on this board -- the number depends on which pin was enabled in "
-        "/opt/nvidia/jetson-io and on kernel probe order, and must be READ OFF THE DEVICE "
-        "after the pinmux change and a reboot. See README.md, 'Enabling PWM pins on the "
-        "Jetson'.");
+        "pwmchip index for the steering channel: the N in /sys/class/pwm/pwmchipN. VERIFIED "
+        "on the Jetson Orin Nano Super Dev Kit, JetPack 6.2 / L4T R36.4.4, on the actual "
+        "device on 2026-09-20: header pin 15 is pwmchip0 (3280000.pwm), driven at 50 Hz / 50 "
+        "percent duty and measured ~1.64 V DC pin 15 to pin 14 after the "
+        "/opt/nvidia/jetson-io pinmux change and a reboot. That numbering can still differ "
+        "on another unit or kernel build -- read it off the device with 'ls -l "
+        "/sys/class/pwm' before trusting this default there. See README.md, 'Enabling PWM "
+        "pins on the Jetson'.");
     const int steering_channel = declare_int(
         "steering_pwm_channel", 0, 0, 7,
-        "Channel index within the steering pwmchip: the M in pwmchipN/pwmM. UNVERIFIED, see "
-        "steering_pwmchip.");
-    const int throttle_chip =
-        declare_int("throttle_pwmchip", 0, 0, 15,
-                    "pwmchip index for the throttle channel. UNVERIFIED, see steering_pwmchip. "
-                    "On the Jetson Orin Nano header pins 15 and 33 are usually different chips.");
+        "Channel index within the steering pwmchip: the M in pwmchipN/pwmM. VERIFIED, see "
+        "steering_pwmchip (npwm=1, so channel 0 is the only channel on this chip).");
+    const int throttle_chip = declare_int(
+        "throttle_pwmchip", 2, 0, 15,
+        "pwmchip index for the throttle channel. VERIFIED, see steering_pwmchip: header pin "
+        "33 is pwmchip2 (32c0000.pwm), measured ~1.64 V DC pin 33 to pin 34 at 50 Hz / 50 "
+        "percent duty on the same device and date. Pins 15 and 33 are different chips on "
+        "this board.");
     const int throttle_channel = declare_int(
-        "throttle_pwm_channel", 1, 0, 7,
-        "Channel index within the throttle pwmchip. Defaults to 1, not 0, so that the "
-        "all-defaults configuration is at least two DIFFERENT channels rather than both "
-        "pulses on pwmchip0/pwm0 (which validate_channel_assignment now refuses). Matches "
-        "racer_bringup/launch/car_teleop.launch.py's default. UNVERIFIED, see "
-        "steering_pwmchip.");
+        "throttle_pwm_channel", 0, 0, 7,
+        "Channel index within the throttle pwmchip. VERIFIED, see steering_pwmchip (npwm=1). "
+        "Different pwmchip from steering (0 vs 2), so the all-defaults configuration is "
+        "still two distinct channels even though both channel indices are 0 -- "
+        "validate_channel_assignment below only refuses an identical (chip, channel) pair. "
+        "Matches racer_bringup/launch/car_teleop.launch.py's default.");
 
     rcl_interfaces::msg::ParameterDescriptor left_descriptor;
     left_descriptor.description =

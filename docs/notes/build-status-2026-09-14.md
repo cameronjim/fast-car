@@ -51,7 +51,7 @@ two ESCs.
 | EC5 connectors on VESC battery leads | Not started |
 | First LiPo charge | Blocked -- charger has not arrived |
 | Jetson setup (JetPack, WiFi, SSH, heartbeat) | Done |
-| Jetson PWM pinmux enable / `pwmchip` numbering | Not started |
+| Jetson PWM pinmux enable / `pwmchip` numbering | DONE 2026-09-20 -- pin 15 = pwmchip0 = steering, pin 33 = pwmchip2 = throttle, confirmed with a multimeter (`docs/notes/build-log.md`, 2026-09-20) |
 | Jetson-to-mux-board wiring (4 lines) | Not started |
 | Wheels-off bench test | Not started |
 | G1 kill test | Not started |
@@ -77,8 +77,8 @@ Then, before anything drives, in the order the existing docs require:
    `planning-docs/README.md`'s standing rules).
 8. **Bench power-up of the rails with a multimeter** (buck-boost and UBEC outputs, per
    `planning-docs/04-power-tree.md`).
-9. **Jetson PWM pinmux enable and `pwmchip` numbering confirmation**
-   (`docs/notes/first-boot-runbook.md` steps 4-5).
+9. ~~**Jetson PWM pinmux enable and `pwmchip` numbering confirmation**~~ DONE 2026-09-20
+   (`docs/notes/first-boot-runbook.md` steps 4-5; see `docs/notes/build-log.md`, 2026-09-20).
 10. **Wire the four Jetson lines to the mux board** (steering, throttle, heartbeat, ground --
     `firmware/safety_mux/README.md`'s board connector map).
 11. **Wheels-off bench test sequence** (per-channel actuation tests,
@@ -108,7 +108,8 @@ the multimeter identification steps.
 These can happen any time the Jetson is powered, independent of the perfboard, the motor, or
 the chassis work:
 
-- Jetson PWM pinmux enable and `pwmchip` numbering confirmation (step 9 above).
+- ~~Jetson PWM pinmux enable and `pwmchip` numbering confirmation (step 9 above).~~ DONE
+  2026-09-20.
 - Any further Jetson-side software or configuration work (SSH, the car image build, ROS
   workspace build on-device) per `docs/notes/first-boot-runbook.md` steps 1-3, 6.
 - Reviewing/updating firmware and docs once the pin mapping is confirmed (step 6 is a doc/code

@@ -25,14 +25,29 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-# GPIO chip/line/rate come from /etc/default/racer-heartbeat, not from this unit file, so the
-# pin can be changed (e.g. once tools/jetson_pinmux/ settles which header pin is wired to the
-# mux) with an edit + restart, never a rebuild or a unit-file edit. See
+# These three Environment= lines are the actual fallback: they must match
+# include/jetson_heartbeat/config.h's JETSON_HEARTBEAT_DEFAULT_* compiled-in defaults
+# exactly (test_default_env_file_matches_compiled_defaults, tests/test_heartbeat_config.c,
+# checks this file's Environment= lines against those constants). Without them, a missing or
+# unreadable /etc/default/racer-heartbeat would NOT fall back to the binary's own defaults:
+# EnvironmentFile=-... only makes the missing file non-fatal to systemd's unit-loading, it
+# does not make the shell-style ${RACER_HB_CHIP} etc. substitutions in ExecStart below fall
+# back to anything. With no Environment= line and no env file, each ${VAR} expands to the
+# empty string, ExecStart becomes `racer-heartbeat --chip "" --line "" --rate-hz ""`, the
+# binary exits 1 on the first bad argument, and Restart=always retries that same failure
+# forever -- a missing config file would silently and permanently cut the mux. Putting the
+# real defaults here first means EnvironmentFile= below can only ever override them, never
+# leave a variable unset.
+Environment=RACER_HB_CHIP=gpiochip0
+Environment=RACER_HB_LINE=144
+Environment=RACER_HB_RATE_HZ=50
+# GPIO chip/line/rate are then overridden from /etc/default/racer-heartbeat when present, so
+# the pin can be changed (e.g. once tools/jetson_pinmux/ settles which header pin is wired to
+# the mux) with an edit + restart, never a rebuild or a unit-file edit. See
 # tools/jetson_heartbeat/racer-heartbeat.default for the pin table and the required
-# verification steps before trusting a change here. "-" makes a missing file non-fatal (the
-# binary's own compiled-in defaults, include/jetson_heartbeat/config.h, then apply); on the
-# fresh install `make install` always lays this file down, so the "-" is a defense against a
-# manually-deleted file, not the expected path.
+# verification steps before trusting a change here. The leading "-" makes a missing file a
+# non-event rather than a unit-load error; per the Environment= lines above, "missing" now
+# means "use the compiled defaults", not "use empty strings".
 EnvironmentFile=-/etc/default/racer-heartbeat
 # Absolute path: this unit does not source a shell profile, so PATH is whatever systemd's
 # own default is -- do not rely on it finding the binary by name. The three variables are

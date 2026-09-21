@@ -12,12 +12,25 @@ PROVISIONAL).
 ## Status
 
 Built, installed, and running as a systemd service on the bench Jetson (racer-car,
-10.0.0.226) as of 2026-09-12. The GPIO line genuinely toggles (verified by two independent
-software-only methods below). It has **not** been connected to the mux board -- that plug
-does not exist yet per `firmware/safety_mux/README.md`'s own status -- and the toggle rate has
-**not** been confirmed with a loopback jumper, oscilloscope, or multimeter. See "Verification"
-and "What remains unproven" below before treating this as a bench-tested part of the safety
-chain.
+10.0.0.226) as of 2026-09-12. The GPIO line toggles **at the kernel level**, verified by two
+independent software-only methods below. It has **not** been connected to the mux board --
+that plug does not exist yet per `firmware/safety_mux/README.md`'s own status -- and the
+toggle rate has **not** been confirmed with a loopback jumper, oscilloscope, or multimeter.
+See "Verification" and "What remains unproven" below before treating this as a bench-tested
+part of the safety chain.
+
+> **Correction, 2026-09-21. The pin does not actually drive.** Everything this document
+> called "verified toggling" was verified inside the kernel only -- `gpioinfo`,
+> `/sys/kernel/debug/gpio` showing `out hi` / `out lo`, and a program polling that same
+> debugfs file. None of it ever touched the physical header pin. A multimeter on header
+> pin 7 on 2026-09-21 reads **0.0 V** while `gpioset` holds `gpiochip0` line 144 high,
+> with pin 17 reading 3.4 V on the same meter as a control. The mux's diagnostic firmware
+> independently reports `HB gp5=NO_EDGES_EVER`. The cause is a pad-level pinmux problem,
+> not a problem in this program: unconfigured 40-pin header pads come up with their output
+> driver disabled, so the GPIO controller's output never reaches the pin. The fix is the
+> device-tree overlay in `tools/jetson_pinmux/` (prepared, not yet applied). Until that
+> overlay is installed and the two verification steps below are done **at the pin**, treat
+> this heartbeat as non-functional end to end.
 
 ## GPIO mapping
 
@@ -120,7 +133,23 @@ here rather than added silently, since it reintroduces the dependency above.
 Performed on the bench Jetson (racer-car, 10.0.0.226, JetPack 6.2 / L4T R36.4.4) on
 2026-09-12. Full detail and dated narrative: `docs/notes/build-log.md` (2026-09-12 entry).
 
-**Proven, by software only:**
+**Required verification -- neither of these has been done, and no kernel-level evidence
+substitutes for them:**
+
+1. **Meter the pin.** With the `tools/jetson_pinmux/` overlay installed and the board
+   rebooted, hold the line high and put a DC voltmeter on the physical header pin, black
+   lead on pin 9 (GND): `tools/jetson_pinmux/verify.sh 144 15`. Expect ~3.3 V. Sanity-check
+   the meter on pin 17 (3.3 V rail) first. **0.0 V here means the signal does not exist,
+   whatever the kernel says.** As of 2026-09-21 this reads 0.0 V.
+2. **Read the mux's own diagnostic report.** Flash the mux's `DIAG_BUILD` firmware
+   (`firmware/safety_mux/`, `docs/notes/mux-diagnostic-build.md`), wire pin 7 to the mux's
+   GP5 with a shared ground, run this service, and read the USB CDC port on the Jetson or a
+   laptop: `cat /dev/ttyACM0`. The heartbeat field must read `HB gp5 age=<small>ms
+   (timeout 100ms) OK`. `HB gp5=NO_EDGES_EVER` means the edges are not arriving, which is
+   what it reports today. This is the only check that proves the whole chain, pad through
+   wire through MCU input, rather than one end of it.
+
+**Proven, by software only -- kernel-internal, NOT evidence that the pin drives:**
 
 1. **The pin mapping** (see "GPIO mapping" above) -- read from this board's own live pinmux
    device tree via NVIDIA's own `jetson-io` tooling, cross-checked against `gpioinfo`'s
@@ -166,11 +195,12 @@ stands: none of those touched the toggle loop or the pin mapping.
 
 **NOT proven, and not claimed:**
 
-- That the electrical signal genuinely reaches the physical header pin 7 pad on this specific
-  board's connector (as opposed to the SoC's internal GPIO register, which is what all of the
-  above actually observes). The pinmux mapping is sourced from NVIDIA's own live device tree
-  for this exact carrier, which is about as authoritative as software can get, but no
-  multimeter or oscilloscope probe has touched pin 7 itself.
+- ~~That the electrical signal genuinely reaches the physical header pin 7 pad~~ -- **as of
+  2026-09-21 this is disproven, not merely unproven.** A meter on pin 7 reads 0.0 V while the
+  line is held high. All of the evidence above observes the SoC's internal GPIO register, and
+  that register is genuinely being set; the pad's output driver is what is disabled. The pin
+  mapping itself (pin 7 == line 144 == `PAC.06` == `soc_gpio59_pac6`) is unaffected and still
+  believed correct. See `tools/jetson_pinmux/README.md`.
 - The actual voltage levels (assumed 3.3 V logic, per `firmware/safety_mux/README.md`'s
   "the heartbeat is already 3.3 V" note) and rise/fall times -- not measured.
 - Real-time jitter under CPU load, thermal throttling, or during a `car` image /ROS boot --

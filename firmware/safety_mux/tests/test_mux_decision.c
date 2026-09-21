@@ -253,4 +253,120 @@ void test_mux_decision_suite(void) {
     CHECK(out.steering_out_us == params.steering_pwm_neutral_us,
           "commanding neutral steering value passes through as itself");
   }
+
+  // --- Capture quantisation at the window edges (GitHub issue #63, observed on hardware
+  // 2026-09-21). The unit-level table is in test_pwm_window.c; these cases prove the
+  // behaviour end to end through mux_decide(), which is what actually drives the pins:
+  // the mux no longer CUTS on a legal full-lock command, and the widened window never
+  // forwards a width outside the configured range. -------------------------------------
+  {
+    MuxInput in = nominal_input();
+    in.jetson_steering_pwm_us = 2031.0;  // commanded 2000 us, measured on the capture grid
+    MuxOutput out = mux_decide(in, params);
+    CHECK(!out.cut, "issue #63: steering measured at 2031 us no longer cuts an armed mux");
+    CHECK(out.reason == MUX_REASON_NORMAL, "issue #63: 2031 us steering -> reason NORMAL");
+    CHECK(out.steering_out_us == params.steering_pwm_max_us,
+          "issue #63: 2031 us steering is FORWARDED AS 2000 us, clamped, never as 2031");
+    CHECK(out.throttle_out_us == in.jetson_throttle_pwm_us,
+          "issue #63: the other channel is untouched by the steering clamp");
+  }
+  {
+    MuxInput in = nominal_input();
+    in.jetson_steering_pwm_us = 1016.0;  // full right, as measured on the bench: in range
+    MuxOutput out = mux_decide(in, params);
+    CHECK(!out.cut, "issue #63: steering measured at 1016 us passes, as it did before");
+    CHECK(out.steering_out_us == 1016.0,
+          "an in-range measurement is forwarded as measured, the clamp is the identity");
+  }
+  {
+    MuxInput in = nominal_input();
+    in.jetson_steering_pwm_us = 984.0;  // the same edge rounding the other way
+    MuxOutput out = mux_decide(in, params);
+    CHECK(!out.cut, "984 us steering (one grid step below min) no longer cuts");
+    CHECK(out.steering_out_us == params.steering_pwm_min_us,
+          "984 us steering is forwarded as 1000 us, clamped up");
+  }
+  {
+    MuxInput in = nominal_input();
+    in.jetson_throttle_pwm_us = 2031.0;  // the throttle channel gets the same treatment
+    MuxOutput out = mux_decide(in, params);
+    CHECK(!out.cut, "2031 us throttle no longer cuts");
+    CHECK(out.throttle_out_us == params.throttle_pwm_max_us,
+          "2031 us throttle is forwarded as 2000 us, clamped");
+    CHECK(out.steering_out_us == in.jetson_steering_pwm_us,
+          "the steering channel is untouched by the throttle clamp");
+  }
+  // Garbage is still garbage: the tolerance moved the edge, it did not remove it.
+  {
+    MuxInput in = nominal_input();
+    in.jetson_steering_pwm_us = 2450.0;
+    MuxOutput out = mux_decide(in, params);
+    CHECK(out.cut, "2450 us steering is STILL out of range -> cut");
+    CHECK(out.reason == MUX_REASON_STEERING_PWM_INVALID, "2450 us steering -> reason STEERING");
+    CHECK(out.steering_out_us == params.steering_pwm_neutral_us,
+          "2450 us steering -> neutral, never the clamped 2000 us (a cut is a cut)");
+  }
+  {
+    MuxInput in = nominal_input();
+    in.jetson_steering_pwm_us = 900.0;
+    MuxOutput out = mux_decide(in, params);
+    CHECK(out.cut, "900 us steering is STILL out of range -> cut");
+    CHECK(out.reason == MUX_REASON_STEERING_PWM_INVALID, "900 us steering -> reason STEERING");
+  }
+  {
+    MuxInput in = nominal_input();
+    in.jetson_throttle_pwm_us = 2450.0;
+    MuxOutput out = mux_decide(in, params);
+    CHECK(out.cut, "2450 us throttle is STILL out of range -> cut");
+    CHECK(out.reason == MUX_REASON_THROTTLE_PWM_INVALID, "2450 us throttle -> reason THROTTLE");
+  }
+  {
+    MuxInput in = nominal_input();
+    in.jetson_steering_pwm_us = -1.0;  // pwm_capture_read_us()'s "no believable pulse"
+    MuxOutput out = mux_decide(in, params);
+    CHECK(out.cut, "no-believable-pulse (-1.0) still cuts, tolerance or not");
+    CHECK(out.reason == MUX_REASON_STEERING_PWM_INVALID, "-1.0 steering -> reason STEERING");
+  }
+  // The RC kill-switch channel is NOT widened and NOT clamped: its thresholds are a human's
+  // switch position, not a measured command to forward. 1400/1600 against a 1500 us
+  // threshold with the 100 us dead band must read exactly as they did before this change.
+  {
+    MuxParams hyst = fixture_params();
+    hyst.kill_switch_hysteresis_us = 100.0;
+    MuxInput in = nominal_input();
+    in.rc_kill_switch_pwm_us = 1600.0;  // exactly the arm edge
+    in.previous_switch_position = RC_SWITCH_KILL;
+    MuxOutput out = mux_decide(in, hyst);
+    CHECK(out.switch_position == RC_SWITCH_ARMED, "kill switch at 1600 us still arms (unchanged)");
+    CHECK(!out.cut, "kill switch at 1600 us -> no cut (unchanged)");
+  }
+  {
+    MuxParams hyst = fixture_params();
+    hyst.kill_switch_hysteresis_us = 100.0;
+    MuxInput in = nominal_input();
+    in.rc_kill_switch_pwm_us = 1399.0;  // just below the kill edge
+    in.previous_switch_position = RC_SWITCH_ARMED;
+    MuxOutput out = mux_decide(in, hyst);
+    CHECK(out.switch_position == RC_SWITCH_KILL, "kill switch below 1400 us still kills");
+    CHECK(out.reason == MUX_REASON_RC_KILL_SWITCH, "kill switch below 1400 us -> reason KILL");
+  }
+  {
+    MuxParams hyst = fixture_params();
+    hyst.kill_switch_hysteresis_us = 100.0;
+    MuxInput in = nominal_input();
+    in.rc_kill_switch_pwm_us = 1500.0;  // inside the dead band: holds, never widened into ARMED
+    in.previous_switch_position = RC_SWITCH_KILL;
+    MuxOutput out = mux_decide(in, hyst);
+    CHECK(out.switch_position == RC_SWITCH_KILL, "kill switch in the dead band still holds KILL");
+  }
+  {
+    MuxInput in = nominal_input();
+    // A kill channel 2 grid steps past the receiver's range is still UNREADABLE: the
+    // quantisation tolerance is applied to the two Jetson command channels only.
+    in.rc_kill_switch_pwm_us = params.rc_signal_max_us + 31.25;
+    MuxOutput out = mux_decide(in, params);
+    CHECK(out.cut, "an over-range kill channel still reads unreadable -> cut");
+    CHECK(out.reason == MUX_REASON_RC_SIGNAL_INVALID,
+          "the kill channel is not given the command channels' tolerance");
+  }
 }

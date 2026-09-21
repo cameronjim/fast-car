@@ -9,10 +9,12 @@ void test_pwm_validity_suite(void);
 void test_watchdog_suite(void);
 void test_rc_switch_suite(void);
 void test_mux_params_suite(void);
+void test_pwm_window_suite(void);
 void test_mux_decision_suite(void);
 
 int main(void) {
   RUN_SUITE(test_pwm_validity_suite);
+  RUN_SUITE(test_pwm_window_suite);
   RUN_SUITE(test_watchdog_suite);
   RUN_SUITE(test_rc_switch_suite);
   RUN_SUITE(test_mux_params_suite);

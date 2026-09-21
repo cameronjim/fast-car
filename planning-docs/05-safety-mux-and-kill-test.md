@@ -43,8 +43,8 @@ then passthrough. It never talks to ROS and shares no power rail with the Jetson
 ### C. Wire it
 
 9. Wire per the pinout table and the board connector map in `firmware/safety_mux/README.md`
-   (GPIO 2 kill channel in, 3 steering in, 4 throttle in, 5 heartbeat in, 6 servo out, 7 ESC
-   out, 8 power cutoff). On the perfboard the three Jetson inputs land on **one 4-pin header**
+   (GPIO 12 kill channel in, 10 steering in, 7 throttle in, 5 heartbeat in, 1 servo out, 3 ESC
+   out, 0 power cutoff). On the perfboard the three Jetson inputs land on **one 4-pin header**
    (STEER SIG, THROTTLE SIG, HEARTBEAT, GND) rather than three separate connectors: the three
    signals share one return because they are all measured against the same ground, and the
    Jetson supplies its own power, so there is no 5 V pin on that header. Mark pin 1 on the
@@ -52,7 +52,7 @@ then passthrough. It never talks to ROS and shares no power rail with the Jetson
    cannot detect that. Every 5 V signal into the Pico goes through a level shifter channel; the
    Pico's 3.3 V outputs to the servo and ESC go through shifter channels the other way. Scope
    the shifted signals: clean edges, correct levels.
-10. Power cutoff: the Pico's GPIO 8 drives a relay or a high-side MOSFET in the servo/ESC power
+10. Power cutoff: the Pico's GPIO 0 drives a relay or a high-side MOSFET in the servo/ESC power
     path so that a dead Pico (pin low) means cut. Teammate designs this small circuit; Claude
     reviews the schematic photo. This is a bench decision the firmware README leaves open.
 11. Mux Pico and receiver on the UBEC rail only. Confirm with the multimeter that no wire

@@ -722,3 +722,55 @@ entries at the bottom.
 - Today's work order: mechanical check of the truck, photograph then remove stock ESC and
   receiver (servo and motor stay), then session 1 at the shop (sockets and headers only, no
   wiring until the layout photo is checked).
+
+## 2026-09-20 -- safety mux perfboard soldered: GPIO mapping confirmed against the physical board
+
+**Change.** Cameron finished soldering the layer-1 mux perfboard and measured the actual hole
+assignments against the board in hand, replacing the planned-but-unconfirmed mapping from the
+2026-09-11/2026-09-12 entries above. New RP2040 GPIO assignments, `pico/main.c`'s seven
+`#define`s and `firmware/safety_mux/README.md`'s pinout table and connector map updated
+together in the same change:
+
+| Signal | old GPIO (planned) | new GPIO (as-built) |
+|---|---|---|
+| RC receiver kill-switch channel (in) | 2 | 12 |
+| Jetson steering PWM (in) | 3 | 10 |
+| Jetson throttle PWM (in) | 4 | 7 |
+| Jetson heartbeat (in) | 5 | 5 (unchanged) |
+| Servo PWM (out) | 6 | 1 |
+| ESC/VESC PWM (out) | 7 | 3 |
+| Power cutoff (out) | 8 | 0 |
+| Fault LED | `PICO_DEFAULT_LED_PIN` | unchanged |
+
+**Why.** The 2026-09-11/12 entries above recorded a *planned* column layout, drawn ahead of
+soldering; per those entries' own "Status" lines, nothing had been soldered, powered, or
+measured yet. With the board now physically built, the planned holes did not all line up with
+where the level shifter, headers, and Pico footprint actually landed on the perfboard, so
+Cameron measured the as-built board directly and confirmed this mapping against it, rather
+than against the drawing. This is a pin-assignment change only: no mux decision logic, no
+watchdog timing, no PWM validity check, and no output/safe-state behavior changed. The
+underlying pico-sdk facts already checked before this remap still hold with the new numbers:
+`pico_enable_stdio_uart` is 0 and `pico_enable_stdio_usb` is 1 in `CMakeLists.txt`, so GP0/GP1
+were free for GPIO 0 (power cutoff) and GPIO 1 (servo PWM); and GP1 (servo, slice 0 channel B)
+and GP3 (ESC, slice 1 channel B) sit on independent PWM slices, so the two 50 Hz outputs still
+cannot fight over a shared period register, while GP0 (cutoff) stays a plain digital output
+and is never configured as PWM.
+
+**What was updated in this change.** `pico/main.c`'s seven `#define`s;
+`firmware/safety_mux/README.md`'s pinout table and board connector map (now marked confirmed
+against the as-built board rather than planned/unverified); `planning-docs/05-safety-mux-and-kill-test.md`'s
+step 9 wiring list and step 10's cutoff GPIO; `ros_ws/src/racer_drivers/README.md`'s cabling
+table. The 2026-09-11/2026-09-12 entries above and `docs/notes/safety-mux-first-build.md` are
+left as originally recorded -- they document the planned numbers that were true on the dates
+they were written, not the as-built board.
+
+**Rebuild.** Firmware rebuilt from this branch exactly per `docs/notes/safety-mux-first-build.md`'s
+containerized build command (`debian:bookworm` arm64, `arm-none-eabi-gcc`, pico-sdk 2.1.0 via
+`FetchContent`, `tools/gen_params.py` run as part of the build). Output
+`firmware/safety_mux/build-artifacts/safety_mux.uf2`, 79360 bytes,
+sha256 `ccddd7452d1c6dc114805d4f265a96be6565ee238b911141bc26dd2f2b132683`. Host logic tests
+(`.github/scripts/safety_mux_host_tests.sh`) still pass, all 320 assertions -- nothing in
+`logic/` depends on a GPIO number, so none of it needed to change.
+
+**Status.** Pin mapping confirmed against the as-built perfboard. Still nothing powered,
+flashed, or bench-tested against real hardware; roadmap task 1.3's kill test is still pending.

@@ -66,6 +66,12 @@ _STEERING_NEUTRAL_US = _PARAMS["steering"]["pwm_neutral_us"]
 _STEERING_MAX_US = _PARAMS["steering"]["pwm_max_us"]
 _STEERING_MIN_US = _PARAMS["steering"]["pwm_min_us"]
 _STEERING_MAX_ANGLE_RAD = _PARAMS["steering"]["max_angle_rad"]
+# steering.pwm_left_bound (CLAUDE.md invariant 2: the sign convention is a vehicle_params
+# field now, not a node parameter) names which pulse end a LEFT (positive) angle goes to.
+_STEERING_LEFT_US = (
+    _STEERING_MAX_US if _PARAMS["steering"]["pwm_left_bound"] == "pwm_max_us" else _STEERING_MIN_US
+)
+_STEERING_RIGHT_US = _STEERING_MIN_US if _STEERING_LEFT_US == _STEERING_MAX_US else _STEERING_MAX_US
 _THROTTLE_NEUTRAL_US = _PARAMS["actuation"]["throttle_pwm_neutral_us"]
 _THROTTLE_MAX_US = _PARAMS["actuation"]["throttle_pwm_max_us"]
 _SPEED_FULL_SCALE_MPS = _PARAMS["actuation"]["throttle_full_scale_mps"]
@@ -147,7 +153,10 @@ def generate_test_description():
                 "steering_pwm_channel": 0,
                 "throttle_pwmchip": 0,
                 "throttle_pwm_channel": 1,
-                "steering_left_is_pwm_max": True,
+                # steering_left_is_pwm_max is no longer a node parameter: the steering sign
+                # now comes from config/vehicle_params.yaml's steering.pwm_left_bound through
+                # the generated binding (CLAUDE.md invariant 2). See _STEERING_LEFT_US /
+                # _STEERING_RIGHT_US above, derived from that same field.
             }
         ],
         output="screen",
@@ -211,7 +220,7 @@ class TestPwmOutputNode(unittest.TestCase):
         speed = _SPEED_FULL_SCALE_MPS / 2.0
         self._publish_steadily(publisher, _make_drive(steering, speed), seconds=1.0)
 
-        expected_steering_us = _STEERING_MAX_US  # left == pwm_max_us with the default polarity
+        expected_steering_us = _STEERING_LEFT_US  # left end per steering.pwm_left_bound
         expected_throttle_us = _THROTTLE_NEUTRAL_US + 0.5 * (
             _THROTTLE_MAX_US - _THROTTLE_NEUTRAL_US
         )
@@ -234,7 +243,7 @@ class TestPwmOutputNode(unittest.TestCase):
         self._publish_steadily(
             publisher, _make_drive(_PARAMS["steering"]["min_angle_rad"], 0.0), seconds=1.0
         )
-        self.assertAlmostEqual(_duty_ns(0, 0) / 1000.0, _STEERING_MIN_US, delta=1.0)
+        self.assertAlmostEqual(_duty_ns(0, 0) / 1000.0, _STEERING_RIGHT_US, delta=1.0)
         self.assertAlmostEqual(_duty_ns(0, 1) / 1000.0, _THROTTLE_NEUTRAL_US, delta=1.0)
 
     def test_d_neutral_on_drive_silence(self):

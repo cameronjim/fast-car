@@ -626,6 +626,11 @@ def _schema_leaf_strategy(node: dict, root: dict):
         lo = int(resolved.get("minimum", 0))
         hi = int(resolved.get("maximum", 1000))
         strat = st.integers(min_value=lo, max_value=hi)
+    elif kind == "string" and "enum" in resolved:
+        # e.g. steering.pwm_left_bound: a closed set of identifier values, not free text --
+        # the generic alphabet-of-lowercase-letters strategy below would (correctly) fail
+        # schema validation on almost every draw for a field like this.
+        strat = st.sampled_from(resolved["enum"])
     elif kind == "string":
         max_len = resolved.get("maxLength", 63)
         strat = st.text(

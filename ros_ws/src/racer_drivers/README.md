@@ -29,10 +29,22 @@ channel, and an `enable` write rejected while `period` was still 0 on pwmchip2) 
 see `docs/notes/build-log.md`'s 2026-09-21 evening entry and the comments in `start()`.
 
 What that still does NOT cover: the servo and ESC were unpowered and the servo lead unplugged
-throughout, so **no wheel has moved under this node's command** and the steering polarity
-(`steering_left_is_pwm_max`) is confirmed only at the pin, not at the wheels. Note also that a
-full-lock 2000 us command reads as 2031 us at the mux and trips its `OUT_OF_RANGE` check --
-see the runbook's "Reading the mux numbers".
+throughout, so **no wheel has moved under this node's command** and, AT THE TIME, the steering
+polarity was confirmed only at the pin, not at the wheels. Note also that at the OLD,
+provisional 1000/1500/2000 us endpoints a full-lock 2000 us command read as 2031 us at the mux
+and tripped its `OUT_OF_RANGE` check -- see the runbook's "Reading the mux numbers".
+
+**STEERING ENDPOINTS AND SIGN MEASURED AT THE WHEELS, 2026-09-21 evening.** With the wheels
+off the ground and the mux armed, the steering channel's mechanical limits and its sign were
+both measured for the first time (`docs/notes/bench-session-2026-09-20.md`): left mechanical
+stop 1094 us, right mechanical stop 1875 us, neutral 1500 us (actual 1484 us at the mux,
+quantisation), and **a SHORTER pulse turns the wheels LEFT** -- the opposite of what the
+mapping had been assuming (a positive, LEFT, `steering_angle` had been going to a LONGER
+pulse; 0.2 rad measured 1719 us, above neutral, before this fix). Both the endpoints and the
+sign now live in `config/vehicle_params.yaml` (`steering.pwm_min_us` / `pwm_max_us` /
+`pwm_left_bound`), not in this node. The new, narrower endpoints also resolve the
+`OUT_OF_RANGE` issue above: full lock now produces 1094 or 1875 us, both comfortably inside
+the mux's 1000-2000 us validity window.
 
 The earlier pin-identity note, still accurate: as of 2026-09-20 the
 pinmux procedure below has actually been run on the real Jetson Orin Nano Super Dev Kit
@@ -74,15 +86,18 @@ these is `null` -- the same refuse-to-arm discipline as `firmware/safety_mux`'s
 
 | vehicle_params field | Used for | Value today |
 |---|---|---|
-| `steering.pwm_min_us` / `pwm_neutral_us` / `pwm_max_us` | steering pulse ends and neutral | 1000 / 1500 / 2000 (PROVISIONAL, unmeasured) |
+| `steering.pwm_min_us` / `pwm_neutral_us` / `pwm_max_us` | steering pulse ends and neutral | 1094 / 1500 / 1875 (MEASURED 2026-09-21) |
+| `steering.pwm_left_bound` | which pulse end is full LEFT | `pwm_min_us` (MEASURED 2026-09-21: shorter pulse is left) |
 | `steering.min_angle_rad` / `max_angle_rad` | angle range the pulse ends correspond to | -0.4189 / +0.4189 (gym defaults) |
 | `actuation.throttle_pwm_min_us` / `throttle_pwm_neutral_us` / `throttle_pwm_max_us` | throttle pulse ends and neutral | 1000 / 1500 / 2000 (PROVISIONAL, unmeasured) |
 | `actuation.throttle_full_scale_mps` | full-scale reference for the open-loop speed map | 5.0 (PROVISIONAL, unmeasured) |
 | `limits.global_speed_cap_mps` | clamp applied to the commanded speed before the map | 20.0 (a model-validity bound, NOT a safety cap) |
 
-None of these is null today, so the node starts. **Every one of the six PWM values is a
-standard-RC-convention placeholder, not a measurement** (see that file's header block and
-`docs/notes/hardware-arrival-checklist.md` section 3).
+None of these is null today, so the node starts. The four steering PWM fields (endpoints,
+neutral, and the sign) are now MEASURED, 2026-09-21 (`docs/notes/bench-session-2026-09-20.md`).
+**The three throttle PWM values are still a standard-RC-convention placeholder, not a
+measurement** (see that file's header block and `docs/notes/hardware-arrival-checklist.md`
+section 3).
 
 The full scale and the cap are two different numbers and were split apart on 2026-09-13
 (GitHub issue #40). Before that the cap was also the full scale, and at 20 m/s that put a
@@ -107,13 +122,17 @@ all at first boot; it is replaced by the real closed-loop VESC driver
 telemetry and configuration only (`docs/notes/build-log.md`, 2026-09-12 command-path
 decision).
 
-### Steering polarity is bench-calibrated, not documented
+### Steering polarity is measured, not a code default
 
-No project doc says which pulse end is full LEFT. The node therefore takes a declared
-parameter, `steering_left_is_pwm_max` (default `true` = `steering.pwm_max_us` is full left),
-and it must be confirmed with the wheels off the ground before the car drives
-(`docs/notes/first-boot-runbook.md`). Backwards, the car steers into whatever it was
-avoiding.
+**MEASURED 2026-09-21** (`docs/notes/bench-session-2026-09-20.md`, wheels off the ground, mux
+armed): a SHORTER pulse turns the wheels LEFT, so `steering.pwm_left_bound` is `"pwm_min_us"`.
+This is no longer a node parameter -- it used to be a declared parameter,
+`steering_left_is_pwm_max` (default `true`, an unmeasured guess), and it moved into
+`config/vehicle_params.yaml` once it was actually measured, per `CLAUDE.md` invariant 2 (a
+sign convention is a physical constant, not a code default). The node reads it from the
+generated binding and refuses to start if the field is not exactly `"pwm_min_us"` or
+`"pwm_max_us"`. Backwards, the car steers into whatever it was avoiding, which is why this was
+verified with the wheels off the ground before anything else.
 
 ### Parameters
 
@@ -126,7 +145,9 @@ All declared with descriptors and ranges (`claude-docs/10-conventions.md`).
 | `sysfs_root` | `/sys/class/pwm` | Only tests change this. |
 | `steering_pwmchip` / `steering_pwm_channel` | 0 / 0 | VERIFIED on the Jetson Orin Nano Super Dev Kit, 2026-09-20: header pin 15. |
 | `throttle_pwmchip` / `throttle_pwm_channel` | 2 / 0 | VERIFIED, same device and date: header pin 33. |
-| `steering_left_is_pwm_max` | true | Bench-calibrated, see above. |
+
+Steering polarity is no longer a node parameter -- see "Steering polarity is measured, not a
+code default" above.
 
 ## Enabling PWM pins on the Jetson (VERIFIED PROCEDURE, confirmed 2026-09-20)
 

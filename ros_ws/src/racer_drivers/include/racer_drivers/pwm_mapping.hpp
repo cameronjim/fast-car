@@ -61,11 +61,13 @@ struct MappingConfig {
   double speed_cap_mps{0.0};
 
   /// Which end of the steering pulse range corresponds to a LEFT (positive) road-wheel
-  /// angle. NOT defined by any project doc -- no one has yet put a scope on this servo and
-  /// turned the wheels -- so it is a declared ROS parameter on the node with this default,
-  /// and it is BENCH-CALIBRATED (docs/notes/first-boot-runbook.md). Get it backwards and the
-  /// car steers the wrong way, which is why the runbook checks it with the wheels off the
-  /// ground before anything else.
+  /// angle. MEASURED on the car 2026-09-21 (docs/notes/bench-session-2026-09-20.md,
+  /// docs/notes/build-log.md): a shorter pulse turns the wheels left. Sourced from
+  /// config/vehicle_params.yaml's steering.pwm_left_bound through the generated binding
+  /// (pwm_output_node.cpp), NOT a declared ROS parameter default -- CLAUDE.md invariant 2
+  /// treats a sign convention as a physical constant, and it used to be an unmeasured node
+  /// parameter default (`true`) before this measurement existed. Get it backwards and the
+  /// car steers the wrong way.
   bool left_is_pwm_max{true};
 
   /// Seconds since the last /drive message after which the node outputs neutral. Node

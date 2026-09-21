@@ -583,6 +583,70 @@ TEST(SteeringSign, FlippingTheFlagMirrorsThePulseAboutNeutralForBothPolarities) 
               min_config.steering.max_us, 1e-6);
 }
 
+// -- golden: the committed steering calibration, config/vehicle_params.yaml -----------------
+//
+// MEASURED 2026-09-21 on the car, wheels off the ground, mux armed, commanded via the Jetson
+// PWM (docs/notes/bench-session-2026-09-20.md's steering endpoint follow-up): left mechanical
+// stop 1094 us, right mechanical stop 1875 us, neutral 1500 us, and a SHORTER pulse turns the
+// wheels LEFT (so steering.pwm_left_bound is "pwm_min_us", i.e. left_is_pwm_max is false).
+//
+// These numbers are typed in here deliberately, not read out of vehicle_params.yaml: this is
+// the L1 layer (claude-docs/12-testing.md), which per this file's own CMakeLists.txt
+// deliberately never includes the generated vehicle_params binding, so it is table-fixture
+// values ALL THE WAY DOWN. What ties this fixture back to the real committed file is
+// test_pwm_output_node_launch.py's L3 suite, which reads config/vehicle_params.yaml directly
+// and would fail the moment these two disagree. If the committed calibration changes, this
+// fixture must be updated to match, on purpose -- that is what "golden" means here.
+MappingConfig committed_steering_config() {
+  MappingConfig config = nominal_config();
+  config.steering.min_us = 1094.0;
+  config.steering.neutral_us = 1500.0;
+  config.steering.max_us = 1875.0;
+  config.steering_min_angle_rad = -0.4189;
+  config.steering_max_angle_rad = 0.4189;
+  config.left_is_pwm_max = false;  // pwm_left_bound: "pwm_min_us" -- shorter pulse is LEFT
+  return config;
+}
+
+TEST(SteeringAngleToPulse, CommittedCalibrationFullLeftIsPwmMinUs) {
+  const MappingConfig config = committed_steering_config();
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.4189), 1094.0, 1e-6);
+}
+
+TEST(SteeringAngleToPulse, CommittedCalibrationFullRightIsPwmMaxUs) {
+  const MappingConfig config = committed_steering_config();
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.4189), 1875.0, 1e-6);
+}
+
+TEST(SteeringAngleToPulse, CommittedCalibrationZeroIsNeutral) {
+  const MappingConfig config = committed_steering_config();
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.0), 1500.0, 1e-6);
+}
+
+TEST(SteeringAngleToPulse, CommittedCalibrationOutOfRangeAnglesClampToTheEndpointsNeverBeyond) {
+  const MappingConfig config = committed_steering_config();
+  // Epsilon and far over both directions: clamps exactly at the endpoint, never past it.
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.4189 + kEps), 1094.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 100.0), 1094.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.4189 - kEps), 1875.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -100.0), 1875.0, 1e-6);
+}
+
+TEST(SteeringAngleToPulse, CommittedCalibrationNeverLeaves1094To1875ForAnyAngle) {
+  const MappingConfig config = committed_steering_config();
+  for (double angle = -50.0; angle <= 50.0; angle += 0.01) {
+    const double pulse = racer_drivers::steering_angle_to_pulse_us(config, angle);
+    EXPECT_GE(pulse, 1094.0) << "angle=" << angle;
+    EXPECT_LE(pulse, 1875.0) << "angle=" << angle;
+  }
+  // Non-finite input is neutral, also inside the range.
+  for (double angle : {kNaN, kInf, -kInf}) {
+    const double pulse = racer_drivers::steering_angle_to_pulse_us(config, angle);
+    EXPECT_GE(pulse, 1094.0);
+    EXPECT_LE(pulse, 1875.0);
+  }
+}
+
 // -- reverse / below-neutral pulses ------------------------------------------------------------
 //
 // The mapping itself still maps a negative speed to a below-neutral pulse; whether a negative

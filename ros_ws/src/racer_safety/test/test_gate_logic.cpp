@@ -1013,7 +1013,8 @@ TEST(ZeroThrottleCommand, GarbageNonFinitePreviousSteeringCentresInsteadOfEmitti
 // POSITIVE). safety_node is a pass-through for the sign; these pin that it never inverts one.
 // The other hops are pinned in racer_tools/test/test_keymap.py (left key -> +angle),
 // test_twist_teleop.py (+angular.z, forward -> +angle) and racer_drivers/
-// test/test_pwm_mapping.cpp (+angle -> the pwm end steering_left_is_pwm_max names).
+// test/test_pwm_mapping.cpp (+angle -> the pwm end config/vehicle_params.yaml's
+// steering.pwm_left_bound names).
 // ---------------------------------------------------------------------------------------
 
 TEST(SteeringSign, LeftPositiveCommandPassesThroughStillPositive) {

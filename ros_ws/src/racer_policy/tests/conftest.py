@@ -70,8 +70,12 @@ _TEMPLATE: dict[str, Any] = {
         # 2026-09-12 when that file's nine safety_mux PWM/watchdog fields were given
         # PROVISIONAL (unmeasured) values so the mux firmware could arm on the bench, then
         # 0.2.1 -> 0.2.2 on 2026-09-13 when actuation.throttle_full_scale_mps was added and
-        # the two limits.ttc_*_s thresholds were filled in, also PROVISIONAL (issues #40, #36).
-        "schema_version": "0.2.2",
+        # the two limits.ttc_*_s thresholds were filled in, also PROVISIONAL (issues #40, #36),
+        # then 0.2.2 -> 0.3.0 on 2026-09-21 when steering.pwm_min_us/pwm_max_us/pwm_neutral_us
+        # were replaced with MEASURED values and a new required field, steering.pwm_left_bound,
+        # was added to carry the measured sign convention (see config/vehicle_params.yaml's
+        # header and docs/notes/build-log.md's 2026-09-21 evening entry).
+        "schema_version": "0.3.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

@@ -1,6 +1,9 @@
 # Car runtime plan: eventual container lifecycle (design only, follow-up)
 
-Status: **design doc, not implemented.** `docs/notes/first-boot-runbook.md` has the operator
+Status: **design doc, not implemented.** Two things in it are no longer speculative as of
+2026-09-21, and are marked inline below: the container's device access (RESOLVED -- stock
+`gpio` group, no `--privileged`, no custom udev rule) and the absence of rosbag recording
+(CONFIRMED on the device). Everything else here is still design. `docs/notes/first-boot-runbook.md` has the operator
 start the `car` image by hand, and that is correct for first boot -- a human should be present
 for every command-path change until roadmap 1.3's kill test passes and G1 is signed off
 (`claude-docs/01-roadmap.md`). This document specifies the shape the container lifecycle
@@ -45,9 +48,12 @@ Wants=network-online.target
 Type=simple
 ExecStartPre=-/usr/bin/docker rm -f car-stack
 ExecStart=/usr/bin/docker run --rm --name car-stack \
-  --runtime nvidia --network host \
-  --group-add <racer-pwm GID, see docs/notes/first-boot-runbook.md step 8> \
-  -v /sys/devices/<pwm chip path>:/sys/devices/<pwm chip path> \
+  --network host \
+  --user 1000:1000 \
+  --group-add 999 \
+  -e HOME=/tmp \
+  -v /sys/devices/platform/bus@0/3280000.pwm:/sys/devices/platform/bus@0/3280000.pwm \
+  -v /sys/devices/platform/bus@0/32c0000.pwm:/sys/devices/platform/bus@0/32c0000.pwm \
   -v /opt/racer/car:/workspace -w /workspace/ros_ws \
   -v <rosbag output dir>:/bags \
   car:local bash -lc '
@@ -64,6 +70,11 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 ```
+
+**No `--runtime nvidia`.** Dropped from the sketch 2026-09-21: nothing in the control stack
+touches CUDA, and the 2026-09-21 bring-up ran the whole command path without it. Add it back
+when `racer_policy` inference actually runs on the car (roadmap 5.x), which is also when the
+image needs torch.
 
 **Restart policy: `on-failure`, not `always`.** A crash mid-drive should not silently
 respawn the stack with the servo/ESC still powered and the operator possibly not watching --
@@ -92,10 +103,21 @@ the bag, not the journal.
 3. The PWM chip/channel numbers are now known on the one device measured so far (pin 15 =
    `pwmchip0` = steering, pin 33 = `pwmchip2` = throttle, confirmed 2026-09-20; see
    `docs/notes/build-log.md`), but they are still a per-device fact, not a project constant --
-   confirm again before hard-coding them into a unit file on different hardware. The
-   `racer-pwm` group GID (`docs/notes/first-boot-runbook.md` step 8) is separately still
-   UNVERIFIED, since it depends on that step actually being run on this device -- this sketch
-   cannot be filled in until that lands too.
+   confirm again before hard-coding them into a unit file on different hardware. Re-derive the
+   two bind-mount paths the same way, with `readlink -f /sys/class/pwm/pwmchipN`.
+
+   **RESOLVED 2026-09-21 (device access).** The sketch above used to say `--group-add
+   <racer-pwm GID>`, pending a custom group and udev rule that `first-boot-runbook.md` step 8
+   proposed and marked UNVERIFIED. Neither is needed and neither exists: the Jetson already
+   ships `/lib/udev/rules.d/60-jetson-gpio-common.rules`, which grants the stock **`gpio`**
+   group (GID 999 on this device) write access to `pwmchipN/{export,unexport}` and to each
+   exported channel's `period`/`duty_cycle`/`enable`, and `racer` is already a member. The
+   `racer-pwm` group and rule were created during the 2026-09-21 bring-up, found redundant,
+   and removed; the host is back to stock udev. VERIFIED on the device: both channels driven
+   for real from an unprivileged, non-root (`--user 1000:1000`) container with nothing but
+   `--group-add 999` and the two read-write bind-mounts above. Note the GID is a per-device
+   fact like the chip numbers -- a unit file should read it from `getent group gpio` rather
+   than hard-code 999.
 
 ### How rosbag recording starts with the stack (CLAUDE.md invariant 5)
 
@@ -112,7 +134,11 @@ Two things this still needs before it is real, not sketched:
   invariant's own phrasing ("rosbag + rail voltage" as one requirement, not two separate
   logs to reconcile later).
 - **A run without a bag being an actual startup failure, not a silent gap.** Right now
-  nothing enforces this; the eventual unit should treat `ros2 bag record` failing to start
+  nothing enforces this -- CONFIRMED by inspection and on the device 2026-09-21: neither
+  `car_teleop.launch.py` nor any other launch file in `racer_bringup` starts `ros2 bag
+  record`, so the stack as it ships today drives the command path with no log at all, which
+  `CLAUDE.md` invariant 5 makes a bug rather than a gap. It was acceptable for the 2026-09-21
+  bring-up only because nothing could move; the eventual unit should treat `ros2 bag record` failing to start
   (disk full, `/bags` not mounted, etc.) as reason to stop the whole stack, not drive with
   logging quietly absent. The exact mechanism (a wrapper script checking the bag process is
   alive before letting the launch file proceed, vs. a supervisor process) is left to whoever

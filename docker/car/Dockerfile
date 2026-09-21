@@ -48,6 +48,23 @@
 # list when phase 5 needs torch anyway.
 FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0@sha256:34ccf0f3b63c6da9eee45f2e79de9bf7fdf3beda9abfd72bbf285ae9d40bb673
 
+# --- Non-interactive apt (added 2026-09-21, first real Jetson build) --------------------
+# Without this the ROS 2 Humble apt layer below HANGS FOREVER on tzdata's interactive
+# "Geographic area:" debconf prompt. Observed on the Jetson on 2026-09-21: the build sat at
+# that prompt with no tty to answer it (`docker build` gives the RUN step no stdin), burning
+# wall clock until it was killed by hand. l4t-jetpack:r36.4.0 ships no /etc/timezone, and
+# ros-humble-ros-base pulls tzdata in transitively, so this image hits the prompt where
+# docker/ros-dev's `ros:humble-ros-base` base never does (that image's own build already
+# configured tzdata) -- which is why no other Dockerfile in docker/*/ needs this line and
+# why CI's Dockerfile-lint-only coverage of this file could not have caught it.
+#
+# ARG, not ENV, deliberately: it applies to every RUN in this stage (ARG after FROM persists
+# for the stage) but is NOT baked into the produced image's environment, so a human running
+# `apt-get install` inside a container from this image still gets normal interactive prompts
+# rather than silently-defaulted debconf answers.
+ARG DEBIAN_FRONTEND=noninteractive
+
+
 # --- ROS 2 Humble (claude-docs/03-environments.md: "JetPack 6 -> Humble") ---------------
 # L4T r36.4.0 is Ubuntu 22.04 (jammy) userspace, the same distro ros-dev's `ros:humble-
 # ros-base` is built on -- so the standard ROS 2 apt-repo install (not a source build) works
@@ -60,8 +77,22 @@ FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0@sha256:34ccf0f3b63c6da9eee45f2e79de9bf7f
 #
 # Deliberately NOT installed (claude-docs/03-environments.md "car: ... Never contains: dev
 # tooling bloat", contrast docker/ros-dev/Dockerfile): ros-humble-launch-testing[-ament-cmake],
-# ros-humble-ament-cmake-gtest/-pytest, clang-format, clang-tidy, gcovr, ros-humble-foxglove-
-# bridge. Those are test/lint/dev-visualization tooling with no on-vehicle runtime role.
+# ros-humble-ament-cmake-gtest/-pytest, clang-format, clang-tidy, gcovr. Those are test/lint
+# tooling with no on-vehicle runtime role.
+#
+# ros-humble-foxglove-bridge IS installed (added 2026-09-21, first real Jetson bring-up).
+# It was previously in the "dev visualization" exclusion list above, which was wrong for this
+# image specifically: racer_bringup/launch/car_teleop.launch.py -- the ONLY launch file this
+# image exists to run -- declares `viz` with default_value="true" and starts
+# foxglove_bridge on port 8765 under it, so `ros2 launch racer_bringup car_teleop.launch.py`
+# with no arguments failed in this image with "package 'foxglove_bridge' not found". More
+# than a default mismatch: the bridge is how the owner DRIVES this car (Foxglove's Teleop
+# panel -> /teleop/cmd_vel -> twist_teleop_adapter_node -> /drive_raw, see
+# docs/notes/milestone-5-browser-teleop.md and car_teleop.launch.py's `browser_teleop` arg),
+# which makes it on-vehicle operator interface, not developer tooling. The alternative --
+# flipping `viz` to default false -- was rejected: it would leave the car's only driving UI
+# off by default and still unavailable when asked for. Kept in sync by
+# .github/scripts/check_car_image_launch_packages.py (docker-car-lint CI job).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         locales \
         curl \
@@ -80,6 +111,7 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-ros-base \
         ros-humble-ackermann-msgs \
+        ros-humble-foxglove-bridge \
         build-essential \
         cmake \
         git \

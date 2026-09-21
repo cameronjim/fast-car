@@ -609,4 +609,68 @@ TEST(SpeedToPulse, TheFullSpanStaysInsideTheMuxPwmValidityWindow) {
   }
 }
 
+// -- wait_until: the bounded retry SysfsPwmChannel::start() waits for udev with ---------------
+//
+// Added 2026-09-21 after the first real Jetson bring-up (docs/notes/build-log.md). start()
+// used to wait only for the exported channel's DIRECTORY to appear, which the kernel creates
+// synchronously on the export write -- so the wait always fell through on its first check and
+// the next write raced udev's chgrp of the attribute files and lost ("Permission denied" on
+// pwm0/enable, unprivileged, in the car container). It now waits on a predicate that also
+// requires those attributes to be writable.
+//
+// The udev race itself cannot be staged in a unit test (no kernel, no PWM chip, and as root
+// every access(W_OK) succeeds anyway). What IS testable, and what the fix actually rests on,
+// is that this retry helper polls a not-yet-true condition instead of giving up on the first
+// look -- which is precisely what the old loop failed to do for the condition that mattered.
+
+TEST(WaitUntil, ReturnsTrueImmediatelyWithoutSleepingWhenAlreadySatisfied) {
+  int calls = 0;
+  EXPECT_TRUE(racer_drivers::wait_until(
+      [&calls] {
+        ++calls;
+        return true;
+      },
+      50, 0));
+  EXPECT_EQ(calls, 1);
+}
+
+TEST(WaitUntil, KeepsPollingUntilTheConditionBecomesTrue) {
+  // The regression this pins: a condition that is false on the first look and true a few
+  // polls later must still be seen. The old loop would have surfaced this as a hard failure.
+  int calls = 0;
+  EXPECT_TRUE(racer_drivers::wait_until(
+      [&calls] {
+        ++calls;
+        return calls >= 4;
+      },
+      50, 0));
+  EXPECT_EQ(calls, 4);
+}
+
+TEST(WaitUntil, GivesUpAfterTheBudgetRatherThanRetryingForever) {
+  // Bounded, on purpose: this is the actuator path, and "never became writable" must reach
+  // the operator as a refuse-to-start, not as a node that hangs in start() (CLAUDE.md
+  // invariant 1's fail-closed stance, and pwm_output_node's own refuse-to-start discipline).
+  int calls = 0;
+  EXPECT_FALSE(racer_drivers::wait_until(
+      [&calls] {
+        ++calls;
+        return false;
+      },
+      5, 0));
+  // Five polls in the loop plus the final confirming call before reporting failure.
+  EXPECT_EQ(calls, 6);
+}
+
+TEST(WaitUntil, ZeroAttemptsStillEvaluatesTheConditionExactlyOnce) {
+  int calls = 0;
+  EXPECT_TRUE(racer_drivers::wait_until(
+      [&calls] {
+        ++calls;
+        return true;
+      },
+      0, 0));
+  EXPECT_EQ(calls, 1);
+}
+
 }  // namespace

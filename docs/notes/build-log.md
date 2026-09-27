@@ -1496,14 +1496,16 @@ Both need Phase 1 measurement to un-provisional (spur/pinion count for the gear 
 caliper measurement for tire radius, tracked in `sysid/drift/` per
 `claude-docs/06-vehicle-params.md`).
 
-**Schema version.** `meta.schema_version` stays at "0.4.0". These five drivetrain fields plus
-`tires.nominal_radius_m` were already-nullable required fields, and this change fills values
-without adding or removing a schema key. Flagging the tension rather than resolving it
-silently: `claude-docs/06-vehicle-params.md` rule 5 ("Any change bumps schema_version") and
-this file's own precedent (0.2.0 -> 0.2.1 on 2026-09-12, a value-only fill of provisional
-fields with no key added/removed) would call for a patch bump to 0.4.1 here. Left at 0.4.0 for
-this PR per the task that produced it; worth a second look before the next vehicle_params
-change lands.
+**Schema version.** `meta.schema_version` bumped 0.4.0 -> 0.4.1. These five drivetrain fields
+plus `tires.nominal_radius_m` were already-nullable required fields, so no schema key was
+added or removed, but `claude-docs/06-vehicle-params.md` rule 5 ("Any change bumps
+schema_version") and this file's own precedent (0.2.0 -> 0.2.1 on 2026-09-12, a value-only
+fill of provisional fields with no key added/removed) both call for a patch bump on a
+values-only change, so this is a patch bump rather than a minor one. Every pinned copy of the
+schema version in `ros_ws/src/racer_policy/tests/` (`conftest.py`'s fixture manifest,
+`test_load_contract.py`'s assertion, `test_vehicle_params_wiring.py`'s comment) was updated to
+match; `tools/tests/fixtures/full_fixture.yaml` was left alone since it is an independent,
+explicitly-arbitrary codegen fixture (its own header says so), not a live pin.
 
 **Still open:** the Hobbywing sensored motor and VESC use different 6-pin JST-PH sensor
 pinouts (11-hardware.md compatibility notes); the hall/temp sensor cable pinout is still

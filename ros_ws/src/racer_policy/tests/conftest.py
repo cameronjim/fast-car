@@ -77,8 +77,12 @@ _TEMPLATE: dict[str, Any] = {
         # header and docs/notes/build-log.md's 2026-09-21 evening entry), then 0.3.0 -> 0.4.0
         # on 2026-09-21 when two new required fields, actuation.steering_pwm_period_us and
         # actuation.throttle_pwm_period_us, moved the Jetson PWM frame period out of a
-        # hand-written constant in racer_drivers/pwm_output_node (GitHub issue #66).
-        "schema_version": "0.4.0",
+        # hand-written constant in racer_drivers/pwm_output_node (GitHub issue #66), then
+        # 0.4.0 -> 0.4.1 on 2026-09-27 when drivetrain.gear_ratio/pole_pairs/
+        # motor_kv_rad_per_s_per_v/current_limit_a/brake_current_limit_a and
+        # tires.nominal_radius_m were filled in from the vendor Hobbywing G3 spec sheet and the
+        # committed VESC config (no field added/removed, but rule 5 bumps on any change).
+        "schema_version": "0.4.1",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

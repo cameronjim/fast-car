@@ -80,16 +80,15 @@
 # required-field set, so this is a minor bump per rule 5. No other field changed. See the
 # actuation section below and docs/notes/build-log.md's 2026-09-21 entry for issue #66.
 #
-# schema_version LEFT AT 0.4.0 on 2026-09-27: drivetrain.gear_ratio, .pole_pairs,
+# schema_version bumped 0.4.0 -> 0.4.1 on 2026-09-27: drivetrain.gear_ratio, .pole_pairs,
 # .motor_kv_rad_per_s_per_v, .current_limit_a, and .brake_current_limit_a were filled in below
 # (values from the vendor-supplied Hobbywing Xerun G3 spec sheet and the committed VESC
-# config, planning-docs/06-vesc-config-and-jetson-bringup.md step 6). No schema field was
-# added or removed -- these five keys were already present and nullable -- so per the task
-# that produced this entry the schema_version was NOT bumped, even though
-# claude-docs/06-vehicle-params.md rule 5 ("Any change bumps schema_version") and this file's
-# own precedent (0.2.0 -> 0.2.1 on 2026-09-12, a value-only fill of provisional fields with no
-# added/removed key) would call for a patch bump to 0.4.1 here. Flagged rather than silently
-# resolved either way; see docs/notes/build-log.md's 2026-09-27 entry.
+# config, planning-docs/06-vesc-config-and-jetson-bringup.md step 6), along with
+# tires.nominal_radius_m. No schema field was added or removed -- these six keys were already
+# present and nullable -- but per claude-docs/06-vehicle-params.md rule 5 ("Any change bumps
+# schema_version") and this file's own precedent (0.2.0 -> 0.2.1 on 2026-09-12, a value-only
+# fill of provisional fields with no key added/removed), a patch bump is required here too.
+# Consumers refuse on mismatch either way. See docs/notes/build-log.md's 2026-09-27 entry.
 
 chassis:
   mass_kg: 3.74                    # gym: m
@@ -311,6 +310,6 @@ meta:
   # no on-vehicle fit of any kind, and this file is less fitted than that name implies, not
   # more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.4.0"
+  schema_version: "0.4.1"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

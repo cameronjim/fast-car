@@ -1461,3 +1461,58 @@ Also found tonight: two keyboard_teleop_node sessions running at once (two termi
 interleave zeros with the live setpoint on /drive_raw, which looks like jittery steering and
 a dead throttle. One keyboard session at a time; check `ros2 topic info -v /drive_raw` shows
 one publisher. A UBEC ground wire was found unplugged and reseated (battery in, no incident).
+
+## 2026-09-27 -- vendor spec sheet for the Xerun 3652SD G3 motor, 2S rating finding, pinout still unknown
+
+Vendor (Hobbywing) supplied a spec table for the motor already on order/fitted: Xerun
+3652SD-4500KV-G3 (HW30401064), 4 poles (2 pole pairs), no-load current 6.1 A, mass 189 g, can
+36.6 x 53 mm, 5 mm x 15 mm shaft, front/rear bearings 13x5x4 mm / 11x5x5 mm, 25.4 mm 6xM3 bolt
+circle, CCW rotation viewed from the shaft end. `config/vehicle_params.yaml`'s
+`drivetrain.pole_pairs` (2) and `drivetrain.motor_kv_rad_per_s_per_v` (471.2389, from the
+datasheet's 4500 RPM/V converted to SI at this boundary per CLAUDE.md invariant 4) are filled
+in from this table. `drivetrain.current_limit_a` (30) and `.brake_current_limit_a` (15) are
+mirrored from the already-committed `config/vesc/2026-09-21b-fsesc67-motor.xml`
+(`l_current_max` / `l_current_min`) per `planning-docs/06-vesc-config-and-jetson-bringup.md`
+step 6, which was still open as of the 2026-09-21 midday entry above.
+
+**2S RATING FINDING.** The vendor table states the 3652SD family (unlike the 3660 family,
+rated 2-3S) is rated for 2S LiPo only. This car runs a 3S pack. This is safe only under the
+VESC limits already committed: `l_max_erpm` capped at 6000 (kept after the speed-mode
+experiment reverted, see the 2026-09-21 late-evening entry above), `l_current_max` 30 A, and
+motor temperature limit 85 C (`l_temp_motor_start`). The ERPM cap must never be raised above
+6000 while this motor runs on 3S. Motor temperature monitoring is not yet possible: the
+hall/temp sensor cable is not fitted, so `l_temp_motor_start`/`l_temp_motor_end` are currently
+unenforceable in practice. Recorded as a constraint note alongside the drivetrain fields in
+`vehicle_params.yaml` rather than invented as a new schema field.
+
+Also recorded, since the schema has no home for them: the sensorless-FOC VESC-detected
+electrical constants from 2026-09-21 (`config/vesc/2026-09-21b-fsesc67-motor.xml`) --
+phase resistance R 6.60 mOhm, phase inductance L 1.88 uH, flux linkage 0.25 mWb.
+
+`drivetrain.gear_ratio` (11.82) and `tires.nominal_radius_m` (0.1095 m, from 4.31 in tires)
+are filled in PROVISIONAL and ASSUMED, not measured: both are the stock Traxxas Slash 4x4 VXL
+published specs (overall drive ratio, tire diameter), not this car's own drivetrain or tires.
+Both need Phase 1 measurement to un-provisional (spur/pinion count for the gear ratio, direct
+caliper measurement for tire radius, tracked in `sysid/drift/` per
+`claude-docs/06-vehicle-params.md`).
+
+**Schema version.** `meta.schema_version` stays at "0.4.0". These five drivetrain fields plus
+`tires.nominal_radius_m` were already-nullable required fields, and this change fills values
+without adding or removing a schema key. Flagging the tension rather than resolving it
+silently: `claude-docs/06-vehicle-params.md` rule 5 ("Any change bumps schema_version") and
+this file's own precedent (0.2.0 -> 0.2.1 on 2026-09-12, a value-only fill of provisional
+fields with no key added/removed) would call for a patch bump to 0.4.1 here. Left at 0.4.0 for
+this PR per the task that produced it; worth a second look before the next vehicle_params
+change lands.
+
+**Still open:** the Hobbywing sensored motor and VESC use different 6-pin JST-PH sensor
+pinouts (11-hardware.md compatibility notes); the hall/temp sensor cable pinout is still
+unknown and unconfirmed against either datasheet. Motor temperature telemetry and low-speed
+hall-sensored start both remain blocked on that.
+
+Verification: `config/vehicle_params.yaml` validates against `config/vehicle_params.schema.json`;
+`tools/gen_params.py` regenerates the three bindings cleanly; `tools/` pytest (116 tests) and
+`ruff check` both pass; `ros_ws`'s full colcon build + test (`.github/scripts/ros_build_test.sh`,
+run inside the `ros-dev` image via colima/docker) passes all 373 tests; `racer_policy`'s own
+pytest suite (27 tests, including the vehicle_params schema_version wiring and load-contract
+tests) passes.

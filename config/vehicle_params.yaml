@@ -79,6 +79,16 @@
 # the mux regenerates its own 50 Hz outputs. A new required field changes the schema's
 # required-field set, so this is a minor bump per rule 5. No other field changed. See the
 # actuation section below and docs/notes/build-log.md's 2026-09-21 entry for issue #66.
+#
+# schema_version bumped 0.4.0 -> 0.4.1 on 2026-09-27: drivetrain.gear_ratio, .pole_pairs,
+# .motor_kv_rad_per_s_per_v, .current_limit_a, and .brake_current_limit_a were filled in below
+# (values from the vendor-supplied Hobbywing Xerun G3 spec sheet and the committed VESC
+# config, planning-docs/06-vesc-config-and-jetson-bringup.md step 6), along with
+# tires.nominal_radius_m. No schema field was added or removed -- these six keys were already
+# present and nullable -- but per claude-docs/06-vehicle-params.md rule 5 ("Any change bumps
+# schema_version") and this file's own precedent (0.2.0 -> 0.2.1 on 2026-09-12, a value-only
+# fill of provisional fields with no key added/removed), a patch bump is required here too.
+# Consumers refuse on mismatch either way. See docs/notes/build-log.md's 2026-09-27 entry.
 
 chassis:
   mass_kg: 3.74                    # gym: m
@@ -97,17 +107,52 @@ tires:
   linear_cornering_stiffness_rear_n_per_rad: 5.4562   # gym: C_Sr (placeholder for a full Pacejka fit)
   pacejka_front: null               # needs Phase 3 sysid (constant-radius sweeps, see 07-sim-and-sysid.md)
   pacejka_rear: null                # needs Phase 3 sysid
-  nominal_radius_m: null            # MEASURED + drift-tracked value; needs Phase 1 wheel measurement
+  nominal_radius_m: 0.1095          # PROVISIONAL, ASSUMED (not measured): 4.31 in tires per
+                                     # Traxxas published Slash 4x4 VXL specs, source: vendor-
+                                     # supplied Hobbywing G3 spec table, 2026-09-27. This field's
+                                     # description calls for a MEASURED, drift-tracked value
+                                     # (tires wear) -- this is not that yet; replace with a Phase 1
+                                     # wheel measurement per sysid/drift/ before treating it as fitted.
   compound_id: "unknown-pending-phase3-tire-spec"
   surface_id: "unknown-pending-venue-survey"
   kinematic_dynamic_switch_velocity_mps: 7.319        # gym: v_switch
 
 drivetrain:
-  gear_ratio: null                  # needs Phase 1 drivetrain assembly
-  pole_pairs: null                  # needs motor spec/measurement
-  motor_kv_rad_per_s_per_v: null    # needs motor spec, converted to SI at the driver boundary (CLAUDE.md invariant 4)
-  current_limit_a: null             # mirrors VESC layer-2 config, which does not exist yet
-  brake_current_limit_a: null       # mirrors VESC layer-2 config, which does not exist yet
+  # Hobbywing Xerun 3652SD-4500KV-G3 (HW30401064). Source: vendor-supplied Hobbywing G3 spec
+  # table, 2026-09-27. 4 poles -> 2 pole pairs (poles / 2).
+  gear_ratio: 11.82                 # PROVISIONAL, ASSUMED (not measured): stock Traxxas Slash 4x4
+                                     # overall drive ratio per Traxxas published VXL specs, source:
+                                     # vendor-supplied Hobbywing G3 spec table, 2026-09-27. Not
+                                     # confirmed against this car's actual spur/pinion count; needs
+                                     # Phase 1 drivetrain assembly measurement to un-provisional.
+  pole_pairs: 2                     # source: vendor-supplied Hobbywing G3 spec table, 2026-09-27
+                                     # (4 poles / 2 = 2 pole pairs, Hobbywing Xerun 3652SD-4500KV-G3)
+  motor_kv_rad_per_s_per_v: 471.2389  # source: vendor-supplied Hobbywing G3 spec table, 2026-09-27.
+                                     # Datasheet Kv 4500 RPM/V, converted to SI at this boundary
+                                     # (CLAUDE.md invariant 4): 4500 * 2*pi/60 = 471.2389 rad/s/V.
+  current_limit_a: 30               # source: config/vesc/2026-09-21b-fsesc67-motor.xml l_current_max
+                                     # (30 A), mirrored per planning-docs/06-vesc-config-and-jetson-
+                                     # bringup.md step 6.
+  brake_current_limit_a: 15         # source: config/vesc/2026-09-21b-fsesc67-motor.xml l_current_min
+                                     # magnitude (-15 A), mirrored per planning-docs/06-vesc-config-
+                                     # and-jetson-bringup.md step 6.
+  # CONSTRAINT, not a schema field (no home for it in this section): the 3652SD family is rated
+  # by Hobbywing for 2S LiPo only (the 3660 models are rated 2-3S); this car runs a 3S pack.
+  # Safe operation on 3S depends entirely on the committed VESC limits above staying where they
+  # are: l_max_erpm capped at 6000 (config/vesc/2026-09-21b-fsesc67-motor.xml), l_current_max
+  # 30 A, and the motor temperature limit at 85 C (l_temp_motor_start). The l_max_erpm cap must
+  # NEVER be raised while this motor runs on 3S. Motor temperature monitoring is not yet
+  # possible -- the hall/temp sensor cable is not fitted -- so l_temp_motor_start/end are
+  # currently unenforceable in practice; treat that as an open safety item until the cable is
+  # fitted. Source: vendor-supplied Hobbywing G3 spec table, 2026-09-27; see
+  # docs/notes/build-log.md's 2026-09-27 entry.
+  #
+  # VESC-DETECTED electrical constants (sensorless FOC, 2026-09-21): phase resistance R
+  # 6.60 mOhm, phase inductance L 1.88 uH, flux linkage 0.25 mWb
+  # (config/vesc/2026-09-21b-fsesc67-motor.xml foc_motor_r/foc_motor_l/foc_motor_flux_linkage).
+  # No field in this schema section holds them; per the task that produced this entry they are
+  # not being added as a new section, and are recorded instead in docs/notes/build-log.md's
+  # 2026-09-27 entry.
 
 steering:
   min_angle_rad: -0.4189            # gym: s_min
@@ -265,6 +310,6 @@ meta:
   # no on-vehicle fit of any kind, and this file is less fitted than that name implies, not
   # more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.4.0"
+  schema_version: "0.4.1"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

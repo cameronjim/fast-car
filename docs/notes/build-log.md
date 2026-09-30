@@ -29,7 +29,7 @@ pulse shows up as a VESC that never responds. Use the centred PID Speed Control,
 centre on the rest pulse.
 
 **VESC settings now in use** (committed as `config/vesc/2026-09-29c-fsesc67-app.xml` /
-`-motor.xml` on the separate `config/vesc-speed-centered-2026-09-29` branch): sensored FOC
+`-motor.xml`, PR 80): sensored FOC
 (hall adapter fitted and detected earlier today), PPM control type PID Speed Control
 (centred), pulse 1.0 / **centre 1.4875** / 2.0 ms, **deadband (hyst) 10 percent** (50 us of the
 500 us half range), safe start on, pid_max_erpm 6000, speed PID **kp 0.015, ki 0.04** (kd

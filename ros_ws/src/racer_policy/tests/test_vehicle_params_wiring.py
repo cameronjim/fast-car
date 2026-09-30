@@ -23,7 +23,7 @@ from racer_policy.verify import verify_against_environment
 def test_accepts_when_contract_matches_the_real_committed_params(
     tmp_path: Path, valid_manifest: dict[str, Any], real_vehicle_params: Any
 ) -> None:
-    # config/vehicle_params.yaml currently has meta.schema_version = "0.5.0" (0.1.0 ->
+    # config/vehicle_params.yaml currently has meta.schema_version = "0.5.1" (0.1.0 ->
     # 0.2.0 for milestone 4, roadmap task 1.3; 0.2.0 -> 0.2.1 when that file's safety_mux
     # PWM/watchdog fields were given PROVISIONAL values; 0.2.1 -> 0.2.2 when
     # actuation.throttle_full_scale_mps was added and the TTC thresholds were filled in,
@@ -33,7 +33,8 @@ def test_accepts_when_contract_matches_the_real_committed_params(
     # drivetrain motor constants and tire radius were filled in from the vendor Hobbywing G3
     # spec sheet, no field added/removed; 0.4.1 -> 0.5.0 on 2026-09-29 when the measured
     # achieved PWM frame periods, GitHub issue #77, and throttle_deadband_us were added as
-    # required actuation fields, see that file's header) and meta.sysid_session_id =
+    # required actuation fields, see that file's header; 0.5.0 -> 0.5.1 the same day when
+    # throttle_deadband_us went 50 -> 20, value-only) and meta.sysid_session_id =
     # "none-preliminary" -- the same values `_TEMPLATE` in conftest.py records under
     # `vehicle_params`, by construction.
     assert (

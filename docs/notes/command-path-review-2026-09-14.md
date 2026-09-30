@@ -217,3 +217,8 @@ list for THIS code; `config/vehicle_params.yaml`'s own header carries the file-l
    watchdog trips inside assertions that assume it does not. `claude-docs/12-testing.md` says a
    flaky test is quarantined within a day with an issue filed; this one deserves the issue,
    and probably a `_spin_for` that waits on a condition rather than a wall-clock duration.
+   **Update 2026-09-29 (GitHub issue #58):** the L3 script now runs `colcon test --executor
+   sequential`, and `test_pwm_output_node_clock_launch` waits on `/drive` subscription discovery
+   instead of a fixed 0.5 s spin. Cause seen in the CI log: discovery outlasted the fixed wait under
+   parallel load. `racer_safety`'s wall-clock `_spin_for` assertions are unchanged and rely on the
+   serial executor.

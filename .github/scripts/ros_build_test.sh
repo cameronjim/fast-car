@@ -58,5 +58,14 @@ rosdep install --from-paths src --ignore-src -r -y
 # CMakeLists.txt via `uv run --project tools ...`) needs network access on first run to
 # sync tools/'s venv from its lockfile; available in this CI job.
 colcon build --symlink-install
-colcon test --event-handlers console_direct+
+# --executor sequential: one package's tests at a time. The default parallel executor
+# runs racer_drivers', racer_control's, racer_safety's and racer_bringup's launch tests (each
+# a rclpy client plus real nodes on 50 Hz timers) concurrently on the 4-CPU runner. That
+# starves them: test_pwm_output_node_clock_launch failed on PR #57 (DDS discovery outlasted a
+# fixed 0.5 s wait, so its /drive burst went to nobody) and the Milestone 1 e2e job failed on
+# PR #59, both on PRs that touched no ros_ws code and both green on rerun (GitHub issue #58,
+# docs/notes/command-path-review-2026-09-14.md finding 3). Tests inside a package already run
+# one after another under ctest, so this serialises every launch test with every other one
+# and with the gtest binaries, at a cost of tens of seconds. No test is skipped or retried.
+colcon test --executor sequential --event-handlers console_direct+
 colcon test-result --verbose

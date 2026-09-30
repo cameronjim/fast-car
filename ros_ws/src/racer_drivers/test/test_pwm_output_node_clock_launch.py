@@ -163,6 +163,21 @@ class TestPwmOutputNodeStalenessClock(unittest.TestCase):
         while time.monotonic() < end:
             rclpy.spin_once(self.node, timeout_sec=0.02)
 
+    def _wait_for_drive_subscriber(self, publisher, timeout_s: float = 20.0) -> None:
+        """Readiness wait, not a behaviour assertion: block until DDS has matched this
+        publisher with pwm_output_node's /drive subscription. A fixed spin (this used to be
+        `_spin_for(0.5)`) is a guess at discovery time; under CPU starvation (GitHub issue
+        #58) discovery outlasted it and every message of the following 0.5 s burst was
+        published to nobody."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline and publisher.get_subscription_count() < 1:
+            rclpy.spin_once(self.node, timeout_sec=0.02)
+        self.assertGreaterEqual(
+            publisher.get_subscription_count(),
+            1,
+            "pwm_output_node's /drive subscription was never discovered",
+        )
+
     def _publish_steadily(self, publisher, msg, seconds: float) -> None:
         end = time.monotonic() + seconds
         while time.monotonic() < end:
@@ -177,7 +192,7 @@ class TestPwmOutputNodeStalenessClock(unittest.TestCase):
         self.assertEqual(_read_int(_channel_dir(0) / "period"), _STEERING_PERIOD_NS)
         self.assertEqual(_read_int(_channel_dir(1) / "period"), _THROTTLE_PERIOD_NS)
         drive_pub = self.node.create_publisher(AckermannDriveStamped, "/drive", _reliable_qos())
-        self._spin_for(0.5)
+        self._wait_for_drive_subscriber(drive_pub)
         msg = AckermannDriveStamped()
         msg.drive.steering_angle = 0.0
         msg.drive.speed = 1.0
@@ -194,7 +209,7 @@ class TestPwmOutputNodeStalenessClock(unittest.TestCase):
         drive_timeout_s. A node measuring age on its own (frozen) ROS clock measures 0.0 s
         forever, never times out, and leaves the commanded throttle pulse on the wire."""
         drive_pub = self.node.create_publisher(AckermannDriveStamped, "/drive", _reliable_qos())
-        self._spin_for(0.5)
+        self._wait_for_drive_subscriber(drive_pub)
 
         msg = AckermannDriveStamped()
         msg.drive.steering_angle = 0.2

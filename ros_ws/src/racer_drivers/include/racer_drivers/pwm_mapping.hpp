@@ -52,6 +52,16 @@ struct MappingConfig {
   /// (GitHub issue #40). This is an actuation scale; the safety clamp is speed_cap_mps below.
   double speed_full_scale_mps{0.0};
 
+  /// vehicle_params actuation.throttle_deadband_us: where the throttle map STARTS for a
+  /// non-zero command, as an offset from throttle.neutral_us. Speed 0 maps to exactly
+  /// neutral; any speed > 0 maps to neutral + this + a linear share of what is left of the
+  /// forward range, reaching throttle.max_us at speed_full_scale_mps; negative speed mirrors
+  /// it below neutral. It mirrors the VESC PPM deadband, so the first non-zero command lands
+  /// outside it instead of being swallowed (docs/notes/build-log.md 2026-09-29). 0 restores
+  /// the plain linear map. validate_config() refuses a value that leaves no linear span on
+  /// either side of neutral.
+  double throttle_deadband_us{0.0};
+
   /// vehicle_params limits.global_speed_cap_mps. The command magnitude is clamped to this
   /// BEFORE the map is applied, exactly as it was when the cap was also the full scale. With
   /// a full scale below the cap, a command between the two saturates the pulse at the channel
@@ -90,7 +100,30 @@ struct MappingConfig {
   /// forces them to share a frame; both are 4000 us in the committed config.
   double steering_pwm_period_us{0.0};
   double throttle_pwm_period_us{0.0};
+
+  /// The frame period each channel ACTUALLY emits when the period above is requested,
+  /// microseconds, MEASURED at the mux: vehicle_params actuation.steering_pwm_achieved_period_us
+  /// / throttle_pwm_achieved_period_us (GitHub issue #77).
+  ///
+  /// pwm-tegra.c turns the requested duty into an 8-bit count against the REQUESTED period,
+  /// but emits a frame of 256 x (PWM_SCALE + 1) cycles of whatever rate the PWM clock settled
+  /// at. When the clock cannot hit the requested rate the frame is off and every pulse on the
+  /// wire is scaled by achieved / requested (measured 2026-09-29 at 4000 us requested: 1500 us
+  /// commanded read 1475 us). `frame_compensated_duty_ns` undoes that by pre-scaling the duty
+  /// by requested / achieved. Equal to the requested period means no compensation.
+  /// validate_config() refuses a value more than kMaxAchievedPeriodDeviation from the
+  /// requested period.
+  double steering_pwm_achieved_period_us{0.0};
+  double throttle_pwm_achieved_period_us{0.0};
 };
+
+/// The largest relative difference between a channel's requested and measured achieved frame
+/// period that validate_config() accepts: 5 percent. The measured difference on this Jetson is
+/// about 1.9 percent (GitHub issue #77); anything several times that is far more likely to be a
+/// typo in config/vehicle_params.yaml than a clock, and since the value scales EVERY pulse on
+/// the channel, a typo must refuse to start rather than drive. This is a plausibility band on
+/// a configuration value, not a physical constant of the vehicle.
+inline constexpr double kMaxAchievedPeriodDeviation = 0.05;
 
 /// A required vehicle_params field, paired with the name to blame if it is null.
 struct RequiredField {
@@ -106,8 +139,11 @@ std::optional<std::string> find_missing_fields(const std::vector<RequiredField>&
 
 /// Structural sanity on an assembled config: finite values, min < neutral < max on both
 /// channels, a two-sided steering range (min < 0 < max), a positive speed full scale, a
-/// positive speed cap, and a positive timeout. Returns std::nullopt when the config is usable, else
-/// the reason. This is a refusal, not a repair: nothing here clamps a bad config into a good one.
+/// positive speed cap, a positive timeout, a throttle deadband that leaves a linear span on both
+/// sides of neutral, frame periods long enough for their longest pulse, and achieved frame
+/// periods within kMaxAchievedPeriodDeviation of the requested ones. Returns std::nullopt when the
+/// config is usable, else the reason. This is a refusal, not a repair: nothing here clamps a bad
+/// config into a good one.
 std::optional<std::string> validate_config(const MappingConfig& config);
 
 /// The /drive-side state the mapping decides from.
@@ -157,6 +193,13 @@ double steering_angle_to_pulse_us(const MappingConfig& config, double steering_a
 
 /// Map a commanded speed (m/s) to a throttle pulse width (us).
 ///
+/// DEADBAND OFFSET (config.throttle_deadband_us). Speed exactly 0 maps to exactly
+/// throttle.neutral_us. A speed > 0 maps to
+///   neutral_us + deadband_us + (max_us - neutral_us - deadband_us) x min(speed, full) / full
+/// so the first non-zero command already clears the ESC's PPM deadband and full scale still
+/// lands exactly on max_us. A speed < 0 mirrors this below neutral towards min_us. The map is
+/// monotonic non-decreasing in speed, with a deliberate step of deadband_us at zero on each side.
+///
 /// PROVISIONAL AND OPEN LOOP. The VESC is in PPM mode, where a pulse commands duty or
 /// current, NOT speed: there is no feedback here and no claim that commanding X m/s produces
 /// X m/s. This is a linear stand-in scaled by actuation.throttle_full_scale_mps so the car
@@ -181,6 +224,30 @@ PulsePair neutral_outputs(const MappingConfig& config);
 /// EINVAL, which at 50 Hz / 20 ms cannot happen with sane calibration but is clamped rather
 /// than trusted).
 unsigned long long pulse_us_to_duty_ns(double pulse_us, unsigned long long period_ns);
+
+/// Pulse width (us) to the sysfs duty_cycle (ns) that makes the pulse ON THE WIRE equal
+/// `pulse_us`, given that the channel was asked for `requested_period_ns` but actually emits a
+/// frame of `achieved_period_us` (GitHub issue #77). The Tegra driver scales every duty by
+/// achieved / requested, so this pre-scales by requested / achieved and then applies
+/// `pulse_us_to_duty_ns` (rounding, and the clamp to the requested period the kernel enforces).
+/// With achieved equal to requested this is exactly `pulse_us_to_duty_ns`.
+///
+/// A non-finite or non-positive achieved period returns 0 (no pulse at all, which the mux
+/// treats as invalid input and CUTS on) rather than guessing; validate_config() refuses such a
+/// config before it gets here.
+unsigned long long frame_compensated_duty_ns(double pulse_us,
+                                             unsigned long long requested_period_ns,
+                                             double achieved_period_us);
+
+/// MODEL of what the Tegra PWM controller puts on the wire for a sysfs duty write, microseconds:
+/// the driver computes the 8-bit duty count against the REQUESTED period,
+/// c = DIV_ROUND_CLOSEST(duty_ns x 256, requested_period_ns) (pwm-tegra.c tegra_pwm_config),
+/// and the controller then holds the line high for c/256 of the frame it ACTUALLY runs,
+/// achieved_period_us. Used by the tests to assert the end-to-end pulse is within half a grid
+/// step of the commanded one, and by the node to log what the mux should read at neutral.
+/// Returns 0 for a zero requested period or a non-finite/non-positive achieved period.
+double tegra_emitted_pulse_us(unsigned long long duty_ns, unsigned long long requested_period_ns,
+                              double achieved_period_us);
 
 /// A frame period in microseconds (a vehicle_params actuation.*_pwm_period_us value) as the
 /// nanoseconds the sysfs `period` attribute wants. Rounded to nearest; a non-finite or

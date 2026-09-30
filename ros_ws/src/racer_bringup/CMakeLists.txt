@@ -17,6 +17,12 @@ if(BUILD_TESTING)
   # both PWM channels sit at the calibrated neutral with no input. The sim launch files are
   # covered by tests/e2e_sim_safety and tests/l5_tracker_lap instead, which need f1tenth_gym
   # in the workspace and therefore cannot live here.
+  # L1 check of car_teleop.launch.py's first-drive teleop profile (GitHub issue #72): the
+  # launch argument default and that it reaches keyboard_teleop_node's speed_step_mps. Pure
+  # launch-description inspection, no processes started.
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_car_teleop_profile test/test_car_teleop_profile.py)
+
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_car_teleop_launch.py
     TARGET test_car_teleop_launch

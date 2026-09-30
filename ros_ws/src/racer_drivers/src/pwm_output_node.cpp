@@ -149,14 +149,14 @@ class PwmOutputNode : public rclcpp::Node {
     RCLCPP_INFO(this->get_logger(),
                 "pwm_output_node up at %.1f Hz on %s: steering pwmchip%d/pwm%d "
                 "[%.0f/%.0f/%.0f us, left=%s], throttle pwmchip%d/pwm%d [%.0f/%.0f/%.0f us, "
-                "full scale %.2f m/s, cap %.2f m/s, OPEN LOOP PROVISIONAL], drive timeout "
-                "%.3f s. Both channels are at neutral until /drive arrives.",
+                "full scale %.2f m/s, deadband %.1f us, cap %.2f m/s, OPEN LOOP PROVISIONAL], "
+                "drive timeout %.3f s. Both channels are at neutral until /drive arrives.",
                 output_rate_hz, sysfs_root.c_str(), steering_chip, steering_channel,
                 config_.steering.min_us, config_.steering.neutral_us, config_.steering.max_us,
                 config_.left_is_pwm_max ? "pwm_max_us" : "pwm_min_us", throttle_chip,
                 throttle_channel, config_.throttle.min_us, config_.throttle.neutral_us,
-                config_.throttle.max_us, config_.speed_full_scale_mps, config_.speed_cap_mps,
-                config_.drive_timeout_s);
+                config_.throttle.max_us, config_.speed_full_scale_mps, config_.throttle_deadband_us,
+                config_.speed_cap_mps, config_.drive_timeout_s);
     // The grid is logged, not merely the period, because the period alone does not tell an
     // operator at the bench what to expect: a commanded pulse lands on a multiple of
     // period/256 (GitHub issue #66), which is what the mux diagnostic will be reporting back.
@@ -169,6 +169,26 @@ class PwmOutputNode : public rclcpp::Node {
                 pulse_grid_step_us(config_.steering_pwm_period_us), config_.throttle_pwm_period_us,
                 1.0e6 / config_.throttle_pwm_period_us,
                 pulse_grid_step_us(config_.throttle_pwm_period_us));
+    // What the operator should see at the mux, and why (GitHub issue #77): the frame each
+    // channel ACTUALLY emits is the measured achieved period, every duty is pre-scaled by
+    // requested / achieved, and the model of the Tegra driver predicts the neutral pulse the
+    // mux diagnostic should report. The real grid is achieved / 256, not requested / 256.
+    const PulsePair neutral = neutral_outputs(config_);
+    const unsigned long long steering_neutral_duty = driver_->steering_duty_ns(neutral.steering_us);
+    const unsigned long long throttle_neutral_duty = driver_->throttle_duty_ns(neutral.throttle_us);
+    RCLCPP_INFO(this->get_logger(),
+                "pwm frame compensation (issue #77): steering achieved %.1f us (measured), "
+                "neutral %.0f us written as duty %llu ns, predicted at the mux %.1f us; "
+                "throttle achieved %.1f us (measured), neutral %.0f us written as duty %llu "
+                "ns, predicted at the mux %.1f us. Real pulse grid %.3f / %.3f us.",
+                config_.steering_pwm_achieved_period_us, neutral.steering_us, steering_neutral_duty,
+                tegra_emitted_pulse_us(steering_neutral_duty, driver_->steering_period_ns(),
+                                       config_.steering_pwm_achieved_period_us),
+                config_.throttle_pwm_achieved_period_us, neutral.throttle_us, throttle_neutral_duty,
+                tegra_emitted_pulse_us(throttle_neutral_duty, driver_->throttle_period_ns(),
+                                       config_.throttle_pwm_achieved_period_us),
+                pulse_grid_step_us(config_.steering_pwm_achieved_period_us),
+                pulse_grid_step_us(config_.throttle_pwm_achieved_period_us));
   }
 
   ~PwmOutputNode() override { shutdown(); }
@@ -245,6 +265,15 @@ class PwmOutputNode : public rclcpp::Node {
          std::optional<double>(VEHICLE_PARAMS.actuation.steering_pwm_period_us)},
         {"actuation.throttle_pwm_period_us",
          std::optional<double>(VEHICLE_PARAMS.actuation.throttle_pwm_period_us)},
+        // Non-nullable in the schema too (GitHub issue #77: the measured achieved frame scales
+        // every pulse, and a consumer must refuse rather than assume it equals the request).
+        // Listed for the same reason as the requested periods above.
+        {"actuation.steering_pwm_achieved_period_us",
+         std::optional<double>(VEHICLE_PARAMS.actuation.steering_pwm_achieved_period_us)},
+        {"actuation.throttle_pwm_achieved_period_us",
+         std::optional<double>(VEHICLE_PARAMS.actuation.throttle_pwm_achieved_period_us)},
+        {"actuation.throttle_deadband_us",
+         std::optional<double>(VEHICLE_PARAMS.actuation.throttle_deadband_us)},
     };
     const std::optional<std::string> missing = find_missing_fields(required);
     if (missing.has_value()) {
@@ -281,6 +310,11 @@ class PwmOutputNode : public rclcpp::Node {
     config.drive_timeout_s = drive_timeout_s;
     config.steering_pwm_period_us = VEHICLE_PARAMS.actuation.steering_pwm_period_us;
     config.throttle_pwm_period_us = VEHICLE_PARAMS.actuation.throttle_pwm_period_us;
+    config.steering_pwm_achieved_period_us =
+        VEHICLE_PARAMS.actuation.steering_pwm_achieved_period_us;
+    config.throttle_pwm_achieved_period_us =
+        VEHICLE_PARAMS.actuation.throttle_pwm_achieved_period_us;
+    config.throttle_deadband_us = VEHICLE_PARAMS.actuation.throttle_deadband_us;
 
     const std::optional<std::string> invalid = validate_config(config);
     if (invalid.has_value()) {

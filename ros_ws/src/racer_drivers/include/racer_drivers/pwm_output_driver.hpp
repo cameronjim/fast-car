@@ -44,6 +44,12 @@ class PwmOutputDriver {
   unsigned long long steering_period_ns() const { return steering_period_ns_; }
   unsigned long long throttle_period_ns() const { return throttle_period_ns_; }
 
+  /// The sysfs duty (ns) written for a given pulse width on each channel: the pulse pre-scaled
+  /// by requested / achieved frame period so the width on the wire is `pulse_us` (GitHub issue
+  /// #77, `frame_compensated_duty_ns`). Every write this driver makes goes through these.
+  unsigned long long steering_duty_ns(double pulse_us) const;
+  unsigned long long throttle_duty_ns(double pulse_us) const;
+
  private:
   MappingConfig config_;
   PwmChannelSink& steering_;

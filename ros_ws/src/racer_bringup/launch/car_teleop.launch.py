@@ -68,6 +68,28 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 _FOXGLOVE_BRIDGE_PORT = 8765
 
+#: FIRST-DRIVE TELEOP PROFILE (GitHub issue #72). keyboard_teleop_node's tap sizes default to
+#: a derivation from vehicle_params (one 50 Hz control period at the vehicle's maximum
+#: acceleration / steering rate: 0.19 m/s and 0.064 rad per key event). For a first drive on
+#: the real car the speed tap is set to 0.25 m/s instead, because:
+#:
+#:   * with racer_drivers' deadband offset (vehicle_params actuation.throttle_deadband_us,
+#:     50 us) and the frame compensation (GitHub issue #77), ONE tap of 0.25 m/s commands
+#:     1500 + 50 + 450 x 0.25 / 5.0 = 1572.5 us, which the mux should read as about 1579 us:
+#:     35 us past the VESC's PPM deadband edge (centre 1487.5 us + 10 percent = 1537.5 us),
+#:     so the first tap turns the wheels slowly under the VESC's speed PID, and it keeps a
+#:     margin even if the frame compensation is off by its full +-8 us bench tolerance;
+#:   * each further tap adds 22.5 us (about 5 percent of the forward range), small enough to
+#:     creep up on a speed with the wheels off the ground;
+#:   * it is a round number an operator can count taps against (4 taps = 1 m/s commanded).
+#:
+#: Steering keeps its derived step (0.064 rad, about 3.7 deg per tap): nothing about the first
+#: drive needed it changed. Hold-to-ramp is unchanged: holding W adds one step per key-repeat
+#: event. This profile only applies when this launch starts the keyboard node
+#: (start_teleop:=true); the supported second-terminal `ros2 run` passes the same value with
+#: `--ros-args -p speed_step_mps:=0.25` (docs/notes/first-boot-runbook.md "Launch and drive").
+FIRST_DRIVE_SPEED_STEP_MPS = 0.25
+
 #: Everything a drive has to be reconstructable from (CLAUDE.md invariant 5). Passed to
 #: `ros2 bag record --regex`, not as a positional topic list, for two reasons: a topic that
 #: does not exist on this run (`/scan` -- no LiDAR is fitted yet, roadmap 2.x) is simply not
@@ -261,6 +283,17 @@ def generate_launch_description() -> LaunchDescription:
             "(docs/notes/first-boot-runbook.md)."
         ),
     )
+    teleop_speed_step_mps_arg = DeclareLaunchArgument(
+        "teleop_speed_step_mps",
+        default_value=str(FIRST_DRIVE_SPEED_STEP_MPS),
+        description=(
+            "keyboard_teleop_node's speed change per throttle key event, m/s (its "
+            "speed_step_mps parameter, GitHub issue #72). Defaults to the first-drive profile "
+            f"({FIRST_DRIVE_SPEED_STEP_MPS} m/s, see FIRST_DRIVE_SPEED_STEP_MPS in this file "
+            "for why); the node's own default, used by a bare `ros2 run`, is the "
+            "vehicle_params derivation. Must be a float > 0. Only used with start_teleop:=true."
+        ),
+    )
     viz_arg = DeclareLaunchArgument(
         "viz",
         default_value="true",
@@ -423,6 +456,10 @@ def generate_launch_description() -> LaunchDescription:
                 "allow_reverse": ParameterValue(
                     LaunchConfiguration("allow_reverse"), value_type=bool
                 ),
+                # First-drive tap size; see FIRST_DRIVE_SPEED_STEP_MPS at the top of this file.
+                "speed_step_mps": ParameterValue(
+                    LaunchConfiguration("teleop_speed_step_mps"), value_type=float
+                ),
             }
         ],
         condition=IfCondition(LaunchConfiguration("start_teleop")),
@@ -475,6 +512,7 @@ def generate_launch_description() -> LaunchDescription:
             teleop_cmd_vel_topic_arg,
             twist_timeout_s_arg,
             allow_reverse_arg,
+            teleop_speed_step_mps_arg,
             viz_arg,
             sysfs_root_arg,
             steering_pwmchip_arg,

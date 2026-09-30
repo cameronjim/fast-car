@@ -5,6 +5,74 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-29 late -- first tap turns the wheels: exact pulse widths on the 4 ms frame, a throttle deadband offset, configurable tap size (issues #77, #72)
+
+Evening bench session, wheels off the ground, then a software change to go with it. The
+software is NOT yet verified on the car; the bench check is written into
+`docs/notes/first-boot-runbook.md` ("Bench verification of the frame compensation").
+
+**What the bench found (observed).** After PR 73 moved the Jetson PWM frame to 4000 us, the
+mux read every pulse short: commanded 1500 us read 1475 us on both channels, commanded 1652
+read 1620 to 1624, while sysfs `period` read back the requested 4000000. At the old 20 ms
+frame there was no error beyond the 8-bit rounding (1500 read 1484 = 19 x 78.125). The mux
+regenerates its outputs at 50 Hz, emits exactly 1500 us when it CUTs and forwards the measured
+width when it PASSes, so the VESC was seeing two different neutrals: about 1475 us from the
+Jetson while armed, 1500 us from the mux on a cut.
+
+**The VESC lesson (observed, and it caused a runaway).** In VESC PPM "No Reverse" control
+types the whole pulse range maps 0 to 100 percent, with no centre: 1.0 ms is 0, 2.0 ms is 100
+percent, so **1.5 ms is 50 percent throttle**. A neutral pulse in a No Reverse mode is half
+throttle, and that is what ran away tonight. The centred types ("PID Speed Control", "Current
+No Reverse With Brake") treat the centre pulse as zero. Separately, safe start blocks forever
+when the app's mapped value at rest is not zero, so a centre that does not match the rest
+pulse shows up as a VESC that never responds. Use the centred PID Speed Control, with the
+centre on the rest pulse.
+
+**VESC settings now in use** (committed as `config/vesc/2026-09-29c-fsesc67-app.xml` /
+`-motor.xml` on the separate `config/vesc-speed-centered-2026-09-29` branch): sensored FOC
+(hall adapter fitted and detected earlier today), PPM control type PID Speed Control
+(centred), pulse 1.0 / **centre 1.4875** / 2.0 ms, **deadband (hyst) 10 percent** (50 us of the
+500 us half range), safe start on, pid_max_erpm 6000, speed PID **kp 0.015, ki 0.04** (kd
+0.0001), **minimum ERPM 150** (`s_pid_min_erpm`, lowered). The centre sits between the two
+neutrals (1475 and 1500) and the 50 us deadband swallows both. The cost: the first ~100 us
+of throttle is dead, and at the old 0.19 m/s = 19 us per keyboard tap the wheels only started
+on about the sixth tap.
+
+**Software change (this PR).**
+
+1. *Frame compensation, issue #77.* From `drivers/pwm/pwm-tegra.c` (`tegra_pwm_config()`,
+   v5.15 and v6.12): the duty count is computed against the REQUESTED period, but the frame
+   is `256 x (PWM_SCALE + 1)` cycles of whatever rate the PWM clock settled at, so a clock that
+   misses the requested rate scales every pulse. No interface reports the achieved frame
+   (no `.get_state`, so sysfs and `/sys/kernel/debug/pwm` echo the request; the clock rate is
+   only in root-only debugfs), so it is now a MEASURED vehicle_params value:
+   `actuation.steering_pwm_achieved_period_us` / `throttle_pwm_achieved_period_us` = 3925 us,
+   the least-squares fit of the two readings above (1475 x 256 / 96 = 3933.3; 1620-1624 x 256
+   / 106 = 3912-3922). pwm_output_node pre-scales every duty by requested / achieved. Model
+   predictions at the mux: 1500 -> 1502.5, 1600 -> 1594.5, 2000 -> 1993.2 us. Changing the
+   requested period invalidates the measurement.
+2. *Deadband offset.* New `actuation.throttle_deadband_us`, PROVISIONAL 50 us (a copy of the
+   VESC deadband, not a measurement of where the wheels start). Speed 0 maps to exactly
+   1500 us; any speed > 0 maps to 1550 + 450 x speed / 5.0 us, reaching 2000 at full scale.
+3. *Tap size, issue #72.* keyboard_teleop_node now has `speed_step_mps` / `steering_step_rad`
+   parameters defaulting to the old derivation; `car_teleop.launch.py` carries a first-drive
+   profile of 0.25 m/s per tap (`teleop_speed_step_mps`), and the runbook's second-terminal
+   command passes the same. One tap is now 1572.5 us commanded, about 1579 us at the mux:
+   35 us past the VESC deadband edge at 1537.5 us, so the first tap should turn the wheels
+   slowly.
+
+`config/vehicle_params.yaml` schema 0.4.1 -> 0.5.0 (three new required fields); the
+racer_policy schema-version pins moved with it.
+
+**Next, in this order, and not before the previous step passes:** run the runbook's frame
+compensation check on both channels (1500 -> 1500 +- 8, 1600 -> 1600 +- 8, 2000 inside the
+window). **Once that is verified at the bench, the VESC centre should go back to 1.500 ms and
+the deadband can shrink to about 4 percent (20 us)**, because the Jetson neutral and the mux
+CUT neutral will then both be 1500 +- 8 us. **`actuation.throttle_deadband_us` must then be
+changed to match the new VESC deadband in the same session** (20 us for 4 percent), with a
+schema patch bump, or the first tap will again land in the wrong place relative to the ESC's
+deadband. Record the VESC re-export in `config/vesc/` with a new date.
+
 ## 2026-09-29 -- L3 launch tests run serially to stop the CI flake (GitHub issue #58)
 
 `test_pwm_output_node_clock_launch` failed once in the L3 job on PR #57 (tools/docs only) and

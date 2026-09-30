@@ -90,6 +90,14 @@ _FOXGLOVE_BRIDGE_PORT = 8765
 #: `--ros-args -p speed_step_mps:=0.25` (docs/notes/first-boot-runbook.md "Launch and drive").
 FIRST_DRIVE_SPEED_STEP_MPS = 0.25
 
+#: First-drive minimum commanded speed (owner-tested on the car, 2026-09-30): the first tap
+#: from rest commands this speed, so the car starts moving at once instead of the operator
+#: tapping through the VESC deadband, and a throttle-down that would land below it goes
+#: straight to 0 (no crawl). With the 0.25 m/s step above the ladder is 0, 0.8, 1.05, 1.3 ...
+#: The supported second-terminal `ros2 run` passes
+#: `--ros-args -p min_speed_mps:=0.8 -p speed_step_mps:=0.25`.
+FIRST_DRIVE_MIN_SPEED_MPS = 0.8
+
 #: Everything a drive has to be reconstructable from (CLAUDE.md invariant 5). Passed to
 #: `ros2 bag record --regex`, not as a positional topic list, for two reasons: a topic that
 #: does not exist on this run (`/scan` -- no LiDAR is fitted yet, roadmap 2.x) is simply not
@@ -294,6 +302,17 @@ def generate_launch_description() -> LaunchDescription:
             "vehicle_params derivation. Must be a float > 0. Only used with start_teleop:=true."
         ),
     )
+    teleop_min_speed_mps_arg = DeclareLaunchArgument(
+        "teleop_min_speed_mps",
+        default_value=str(FIRST_DRIVE_MIN_SPEED_MPS),
+        description=(
+            "keyboard_teleop_node's minimum commanded speed while moving, m/s (its "
+            "min_speed_mps parameter). Defaults to the first-drive profile "
+            f"({FIRST_DRIVE_MIN_SPEED_MPS} m/s, see FIRST_DRIVE_MIN_SPEED_MPS in this file); "
+            "0.0 disables it. Must be a float >= 0 and <= the maximum speed. Only used with "
+            "start_teleop:=true."
+        ),
+    )
     viz_arg = DeclareLaunchArgument(
         "viz",
         default_value="true",
@@ -460,6 +479,10 @@ def generate_launch_description() -> LaunchDescription:
                 "speed_step_mps": ParameterValue(
                     LaunchConfiguration("teleop_speed_step_mps"), value_type=float
                 ),
+                # First-drive minimum speed; see FIRST_DRIVE_MIN_SPEED_MPS at the top.
+                "min_speed_mps": ParameterValue(
+                    LaunchConfiguration("teleop_min_speed_mps"), value_type=float
+                ),
             }
         ],
         condition=IfCondition(LaunchConfiguration("start_teleop")),
@@ -513,6 +536,7 @@ def generate_launch_description() -> LaunchDescription:
             twist_timeout_s_arg,
             allow_reverse_arg,
             teleop_speed_step_mps_arg,
+            teleop_min_speed_mps_arg,
             viz_arg,
             sysfs_root_arg,
             steering_pwmchip_arg,

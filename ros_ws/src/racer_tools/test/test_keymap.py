@@ -340,3 +340,162 @@ def test_throttle_and_steer_keys_combine_independently():
     state = apply_key(_CONFIG, state, "a")
     assert state.speed_mps == pytest.approx(1.0)
     assert state.steering_angle_rad == pytest.approx(0.1)
+
+
+# --------------------------------------------------------------------------------------
+# min_speed_mps: minimum commanded speed while moving (0.0 = disabled)
+# --------------------------------------------------------------------------------------
+
+
+def _min_config(min_speed=0.8, step=0.25, allow_reverse=False):
+    return build_teleop_config(
+        _fake_vehicle_params(),
+        50.0,
+        allow_reverse=allow_reverse,
+        speed_step_mps=step,
+        min_speed_mps=min_speed,
+    )
+
+
+def _press(config, keys, speed=0.0):
+    state = TeleopState(speed_mps=speed)
+    for key in keys:
+        state = apply_key(config, state, key)
+    return state.speed_mps
+
+
+def test_min_speed_defaults_to_disabled_in_config():
+    assert build_teleop_config(_fake_vehicle_params(), 50.0).min_speed_mps == 0.0
+
+
+def test_min_speed_from_rest_jumps_to_the_minimum():
+    assert _press(_min_config(), "w") == 0.8
+
+
+@pytest.mark.parametrize("key", ["w", "W", "UP"])
+def test_min_speed_applies_to_every_throttle_up_key(key):
+    assert _press(_min_config(), [key]) == 0.8
+
+
+def test_min_speed_from_rest_uses_the_step_when_the_step_is_larger():
+    assert _press(_min_config(min_speed=0.8, step=1.5), "w") == 1.5
+
+
+def test_min_speed_above_the_minimum_adds_one_step_per_tap():
+    assert _press(_min_config(), "ww") == pytest.approx(1.05)
+    assert _press(_min_config(), "www") == pytest.approx(1.30)
+
+
+def test_min_speed_throttle_down_above_the_minimum_subtracts_one_step():
+    assert _press(_min_config(), "s", speed=1.30) == pytest.approx(1.05)
+    assert _press(_min_config(), "s", speed=1.05) == pytest.approx(0.80)
+
+
+def test_min_speed_throttle_down_below_the_minimum_goes_to_exactly_zero():
+    config = _min_config()
+    # 0.8 - 0.25 = 0.55 < 0.8: clean stop, no lingering crawl.
+    assert _press(config, "s", speed=0.8) == 0.0
+    assert _press(config, "wwss") == 0.0
+    # The ladder works back down to zero and stays there (reverse disabled).
+    assert _press(config, "wwwsssss") == 0.0
+
+
+def test_min_speed_throttle_down_landing_exactly_on_the_minimum_stays():
+    assert _press(_min_config(min_speed=0.8, step=0.5), "s", speed=1.3) == pytest.approx(0.8)
+
+
+def test_min_speed_throttle_down_at_rest_stays_at_rest_without_reverse():
+    assert _press(_min_config(), "s") == 0.0
+
+
+def test_min_speed_clamps_at_the_maximum():
+    config = _min_config()
+    assert _press(config, "w" * 100) == 20.0
+    assert _press(_min_config(min_speed=20.0), "w") == 20.0
+
+
+def test_min_speed_equal_to_the_maximum_is_valid():
+    assert _min_config(min_speed=20.0).min_speed_mps == 20.0
+
+
+def test_min_speed_zero_is_the_original_behaviour():
+    config = _min_config(min_speed=0.0)
+    assert _press(config, "w") == 0.25
+    assert _press(config, "ww") == 0.5
+    assert _press(config, "s", speed=0.3) == pytest.approx(0.05)
+    assert _press(config, "s", speed=0.1) == 0.0  # clamped at 0 (no reverse), as before
+
+
+def test_min_speed_zero_with_reverse_matches_plain_add_subtract():
+    config = _min_config(min_speed=0.0, allow_reverse=True)
+    assert _press(config, "s") == -0.25
+    assert _press(config, "s", speed=0.1) == pytest.approx(-0.15)
+
+
+def test_min_speed_space_and_q_still_zero_the_speed():
+    config = _min_config()
+    for key in (" ", "q", "Q"):
+        assert apply_key(config, TeleopState(speed_mps=3.0), key).speed_mps == 0.0
+
+
+def test_min_speed_does_not_touch_steering():
+    config = _min_config()
+    state = apply_key(config, TeleopState(), "a")
+    assert state.steering_angle_rad == pytest.approx(config.steering_step_rad)
+    assert state.speed_mps == 0.0
+
+
+def test_min_speed_negative_side_from_rest_jumps_to_minus_the_minimum():
+    assert _press(_min_config(allow_reverse=True), "s") == -0.8
+
+
+def test_min_speed_negative_side_from_rest_uses_the_step_when_larger():
+    assert _press(_min_config(step=1.5, allow_reverse=True), "s") == -1.5
+
+
+def test_min_speed_negative_side_grows_by_one_step():
+    assert _press(_min_config(allow_reverse=True), "ss") == pytest.approx(-1.05)
+
+
+def test_min_speed_negative_side_throttle_up_below_the_minimum_goes_to_zero():
+    config = _min_config(allow_reverse=True)
+    assert _press(config, "w", speed=-0.8) == 0.0
+    assert _press(config, "w", speed=-1.05) == pytest.approx(-0.8)
+    assert _press(config, "ssw") == pytest.approx(-0.8)
+    assert _press(config, "sw") == 0.0
+
+
+def test_min_speed_does_not_cross_zero_in_one_tap_either_way():
+    config = _min_config(allow_reverse=True)
+    # Forward 0.8, down: 0.55 < 0.8 -> 0, not -0.x. Reverse needs a further tap.
+    assert _press(config, "s", speed=0.8) == 0.0
+    assert _press(config, "ss", speed=0.8) == -0.8
+    assert _press(config, "w", speed=-0.8) == 0.0
+    assert _press(config, "ww", speed=-0.8) == 0.8
+
+
+def test_min_speed_negative_side_clamps_at_the_reverse_limit():
+    assert _press(_min_config(allow_reverse=True), "s" * 100) == -5.0
+
+
+def test_min_speed_a_huge_step_from_rest_saturates_at_the_limits():
+    config = _min_config(step=100.0, allow_reverse=True)
+    assert _press(config, "w") == 20.0
+    assert _press(config, "s") == -5.0
+
+
+@pytest.mark.parametrize("bad", [-0.1, -1.0, float("nan"), float("inf"), float("-inf")])
+def test_min_speed_must_be_finite_and_non_negative(bad):
+    with pytest.raises(ValueError, match="min_speed_mps"):
+        build_teleop_config(_fake_vehicle_params(), 50.0, min_speed_mps=bad)
+
+
+def test_min_speed_above_the_maximum_speed_is_rejected():
+    with pytest.raises(ValueError, match="maximum speed"):
+        build_teleop_config(_fake_vehicle_params(), 50.0, min_speed_mps=20.5)
+
+
+def test_min_speed_above_the_reverse_limit_is_rejected_only_when_reverse_is_allowed():
+    build_teleop_config(_fake_vehicle_params(), 50.0, min_speed_mps=6.0)  # fine, no reverse
+    with pytest.raises(ValueError, match="reverse limit"):
+        build_teleop_config(_fake_vehicle_params(), 50.0, allow_reverse=True, min_speed_mps=6.0)

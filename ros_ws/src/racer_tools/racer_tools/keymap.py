@@ -77,6 +77,9 @@ class TeleopConfig:
     steering_max_rad: float
     speed_min_mps: float
     speed_max_mps: float
+    # Minimum commanded |speed| while moving (0.0 = disabled, the original behaviour). See
+    # `_step_speed`: a throttle key never produces a speed with 0 < |speed| < min_speed_mps.
+    min_speed_mps: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,7 @@ def build_teleop_config(
     allow_reverse: bool = False,
     speed_step_mps: float | None = None,
     steering_step_rad: float | None = None,
+    min_speed_mps: float = 0.0,
 ) -> TeleopConfig:
     """Build a TeleopConfig from the generated vehicle_params binding
     (`racer_gym`/C++ pattern: `from vehicle_params_generated import VEHICLE_PARAMS`, see
@@ -137,8 +141,29 @@ def build_teleop_config(
     (GitHub issue #72). A non-finite or non-positive override raises ValueError: a zero step
     would make the key dead, a negative one would invert it, and neither is a tap size. There
     is no upper bound here because `apply_key` clamps every result to the ranges below.
+
+    `min_speed_mps` (default 0.0 = disabled) is the smallest |speed| a throttle key will
+    command while moving: a tap from rest jumps straight to it (or to one step if that is
+    larger), and a throttle tap that would land below it stops the car instead of leaving a
+    crawl. It must be finite, >= 0 and no larger than the speed range it applies to (the
+    maximum speed, and the reverse limit too when `allow_reverse`), otherwise the clamp would
+    silently produce a speed below the minimum, so it raises ValueError and the node refuses
+    to start.
     """
     derived_steering_step, derived_speed_step = derived_steps(vehicle_params, control_rate_hz)
+    min_speed_mps = float(min_speed_mps)
+    speed_min_mps = vehicle_params.limits.min_velocity_mps if allow_reverse else 0.0
+    speed_max_mps = vehicle_params.limits.global_speed_cap_mps
+    if not (math.isfinite(min_speed_mps) and min_speed_mps >= 0.0):
+        raise ValueError(f"min_speed_mps must be finite and >= 0, got {min_speed_mps!r}")
+    if min_speed_mps > speed_max_mps:
+        raise ValueError(
+            f"min_speed_mps {min_speed_mps} exceeds the maximum speed {speed_max_mps} m/s"
+        )
+    if allow_reverse and min_speed_mps > -speed_min_mps:
+        raise ValueError(
+            f"min_speed_mps {min_speed_mps} exceeds the reverse limit {-speed_min_mps} m/s"
+        )
     return TeleopConfig(
         steering_step_rad=(
             derived_steering_step
@@ -152,8 +177,9 @@ def build_teleop_config(
         ),
         steering_min_rad=vehicle_params.steering.min_angle_rad,
         steering_max_rad=vehicle_params.steering.max_angle_rad,
-        speed_min_mps=vehicle_params.limits.min_velocity_mps if allow_reverse else 0.0,
-        speed_max_mps=vehicle_params.limits.global_speed_cap_mps,
+        speed_min_mps=speed_min_mps,
+        speed_max_mps=speed_max_mps,
+        min_speed_mps=min_speed_mps,
     )
 
 
@@ -163,6 +189,29 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     if value > hi:
         return hi
     return value
+
+
+def _step_speed(config: TeleopConfig, speed: float, direction: int) -> float:
+    """One throttle tap: direction +1 (throttle-up) or -1 (throttle-down). With
+    `min_speed_mps` == 0 this is the plain `speed + direction * step`, clamped. With a minimum
+    m > 0, the rule is on |speed| and is symmetric about zero:
+
+      * from rest, the tap sets |speed| = max(m, step) in that direction;
+      * growing |speed| adds one step (clamped to the range);
+      * shrinking |speed| subtracts one step, but if the result would be below m in
+        magnitude (or cross zero) it is exactly 0: a clean stop, never a crawl below m.
+        Crossing through zero to the other direction takes a further tap.
+    """
+    step = config.speed_step_mps
+    minimum = config.min_speed_mps
+    if speed == 0.0:
+        candidate = direction * max(minimum, step)
+    else:
+        candidate = speed + direction * step
+        shrinking = speed * direction < 0.0
+        if shrinking and minimum > 0.0 and (candidate * speed <= 0.0 or abs(candidate) < minimum):
+            candidate = 0.0
+    return _clamp(candidate, config.speed_min_mps, config.speed_max_mps)
 
 
 def apply_key(config: TeleopConfig, state: TeleopState, key: str | None) -> TeleopState:
@@ -183,13 +232,9 @@ def apply_key(config: TeleopConfig, state: TeleopState, key: str | None) -> Tele
     new_speed = state.speed_mps
 
     if key in THROTTLE_UP_KEYS:
-        new_speed = _clamp(
-            new_speed + config.speed_step_mps, config.speed_min_mps, config.speed_max_mps
-        )
+        new_speed = _step_speed(config, new_speed, +1)
     elif key in THROTTLE_DOWN_KEYS:
-        new_speed = _clamp(
-            new_speed - config.speed_step_mps, config.speed_min_mps, config.speed_max_mps
-        )
+        new_speed = _step_speed(config, new_speed, -1)
 
     if key in STEER_LEFT_KEYS:
         # LEFT positive (claude-docs/06-vehicle-params.md) -- pressing left INCREASES the

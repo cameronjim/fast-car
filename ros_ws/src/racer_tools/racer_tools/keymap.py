@@ -16,10 +16,19 @@ scaled by `1 / control_rate_hz`. `control_rate_hz` itself is loop-rate tuning (l
 tracker_node's lookahead gains), not a physical constant, so it is a plain function
 parameter here (the ROS node declares it as a parameter, default 50 Hz per
 claude-docs/04-architecture.md).
+
+That derivation is the DEFAULT tap size, and it can be overridden (GitHub issue #72): a tap
+is an operator-interface choice, not a physical constant, and the derived 0.19 m/s per tap
+was too fine for a first drive. `build_teleop_config` takes optional `speed_step_mps` /
+`steering_step_rad` overrides (the node's ROS parameters of the same names), which must be
+finite and > 0. Whatever the step, every command is still clamped to the vehicle_params
+ranges below, so a large step saturates at the limit rather than exceeding it, and holding a
+key still ramps one step per key-repeat event.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 # --------------------------------------------------------------------------------------
@@ -77,8 +86,33 @@ class TeleopState:
     quit_requested: bool = False
 
 
+def derived_steps(vehicle_params, control_rate_hz: float) -> tuple[float, float]:
+    """The default (steering_step_rad, speed_step_mps): what the vehicle could achieve in one
+    control period at its own maximum steering rate / acceleration (this module's docstring).
+    The node uses these as the declared defaults of its `steering_step_rad` /
+    `speed_step_mps` parameters."""
+    if not (math.isfinite(control_rate_hz) and control_rate_hz > 0.0):
+        raise ValueError("control_rate_hz must be > 0")
+    period_s = 1.0 / control_rate_hz
+    return (
+        vehicle_params.steering.max_rate_rad_per_s * period_s,
+        vehicle_params.actuation.max_acceleration_mps2 * period_s,
+    )
+
+
+def _checked_step(name: str, value: float) -> float:
+    value = float(value)
+    if not (math.isfinite(value) and value > 0.0):
+        raise ValueError(f"{name} must be finite and > 0, got {value!r}")
+    return value
+
+
 def build_teleop_config(
-    vehicle_params, control_rate_hz: float, allow_reverse: bool = False
+    vehicle_params,
+    control_rate_hz: float,
+    allow_reverse: bool = False,
+    speed_step_mps: float | None = None,
+    steering_step_rad: float | None = None,
 ) -> TeleopConfig:
     """Build a TeleopConfig from the generated vehicle_params binding
     (`racer_gym`/C++ pattern: `from vehicle_params_generated import VEHICLE_PARAMS`, see
@@ -98,13 +132,24 @@ def build_teleop_config(
     not to emit below-neutral pulses at all. It is a declared ROS parameter on the node
     (`allow_reverse`), not a constant, so the bench can turn it on deliberately once the VESC
     control type is known and recorded. See docs/notes/first-boot-runbook.md.
+
+    `speed_step_mps` / `steering_step_rad` override the derived tap sizes when not None
+    (GitHub issue #72). A non-finite or non-positive override raises ValueError: a zero step
+    would make the key dead, a negative one would invert it, and neither is a tap size. There
+    is no upper bound here because `apply_key` clamps every result to the ranges below.
     """
-    if control_rate_hz <= 0.0:
-        raise ValueError("control_rate_hz must be > 0")
-    period_s = 1.0 / control_rate_hz
+    derived_steering_step, derived_speed_step = derived_steps(vehicle_params, control_rate_hz)
     return TeleopConfig(
-        steering_step_rad=vehicle_params.steering.max_rate_rad_per_s * period_s,
-        speed_step_mps=vehicle_params.actuation.max_acceleration_mps2 * period_s,
+        steering_step_rad=(
+            derived_steering_step
+            if steering_step_rad is None
+            else _checked_step("steering_step_rad", steering_step_rad)
+        ),
+        speed_step_mps=(
+            derived_speed_step
+            if speed_step_mps is None
+            else _checked_step("speed_step_mps", speed_step_mps)
+        ),
         steering_min_rad=vehicle_params.steering.min_angle_rad,
         steering_max_rad=vehicle_params.steering.max_angle_rad,
         speed_min_mps=vehicle_params.limits.min_velocity_mps if allow_reverse else 0.0,

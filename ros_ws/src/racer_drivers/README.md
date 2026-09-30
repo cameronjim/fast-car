@@ -95,7 +95,9 @@ these is `null` -- the same refuse-to-arm discipline as `firmware/safety_mux`'s
 | `actuation.throttle_pwm_min_us` / `throttle_pwm_neutral_us` / `throttle_pwm_max_us` | throttle pulse ends and neutral | 1000 / 1500 / 2000 (PROVISIONAL, unmeasured) |
 | `actuation.throttle_full_scale_mps` | full-scale reference for the open-loop speed map | 5.0 (PROVISIONAL, unmeasured) |
 | `limits.global_speed_cap_mps` | clamp applied to the commanded speed before the map | 20.0 (a model-validity bound, NOT a safety cap) |
-| `actuation.steering_pwm_period_us` / `throttle_pwm_period_us` | PWM frame period written to each channel's sysfs `period` | 4000 / 4000 (250 Hz; sets the pulse grid, see "Actuator resolution") |
+| `actuation.steering_pwm_period_us` / `throttle_pwm_period_us` | PWM frame period REQUESTED on each channel's sysfs `period` | 4000 / 4000 (250 Hz; sets the pulse grid, see "Actuator resolution") |
+| `actuation.steering_pwm_achieved_period_us` / `throttle_pwm_achieved_period_us` | frame the hardware ACTUALLY emits for that request; every duty is pre-scaled by requested / achieved | 3925 / 3925 (MEASURED 2026-09-29 at the mux, issue #77; see "Frame compensation") |
+| `actuation.throttle_deadband_us` | offset from neutral where the throttle map starts for any non-zero speed | 50 (PROVISIONAL, mirrors the VESC PPM deadband; see "Throttle deadband offset") |
 
 None of these is null today, so the node starts. The four steering PWM fields (endpoints,
 neutral, and the sign) are now MEASURED, 2026-09-21 (`docs/notes/bench-session-2026-09-20.md`).
@@ -115,6 +117,30 @@ unmeasured; it is replaced by the wheels-off-the-ground throttle sweep in step 1
 `limits.global_speed_cap_mps` is unchanged in role: a commanded speed is clamped to it before
 the map runs, exactly as before. A command above the full scale but below the cap is not
 rejected -- it saturates the pulse at the channel end. Lower the cap before driving.
+
+### Throttle deadband offset (`actuation.throttle_deadband_us`)
+
+Speed exactly 0 maps to exactly `throttle_pwm_neutral_us`. Any speed above 0 maps to
+`neutral + deadband + (max - neutral - deadband) x speed / full_scale`, so the first non-zero
+command already clears the ESC's PPM deadband and full scale still lands exactly on
+`throttle_pwm_max_us`; a negative speed mirrors this below neutral (every teleop source
+clamps at 0 today, but the mapping stays defined). With the committed 1000/1500/2000 us,
+5.0 m/s full scale and 50 us deadband:
+
+| commanded speed | pulse |
+|---|---|
+| 0 | 1500 us, exactly |
+| 0.19 m/s (one derived keyboard tap) | 1567.1 us |
+| 0.25 m/s (one first-drive tap) | 1572.5 us |
+| 1.0 m/s | 1640 us |
+| 5.0 m/s and above | 2000 us |
+
+Before this offset the first ~100 us of throttle (about five taps) sat inside the VESC's
+deadband and nothing moved. The value mirrors the VESC PPM app's deadband (10 percent of the
+500 us half range = 50 us in the 2026-09-29 config) and **must be changed whenever that
+deadband or the VESC centre changes** -- `docs/notes/build-log.md` 2026-09-29.
+`validate_config()` refuses a negative or non-finite value, or one that leaves no linear
+span between `neutral +- deadband` and either channel end.
 
 ### The throttle map is open loop and provisional
 
@@ -192,11 +218,70 @@ its channel's own `pwm_max_us` is refused at startup, named, and not repaired.
 **What this does NOT change.** The mapping is period-independent -- a pulse width in
 microseconds is the same pulse width at any frame rate, and the L1 tests pin that. The duty
 values this node writes are identical before and after; only what the peripheral can round to
-changes. The command update cadence is still 50 Hz (`output_rate_hz`), and the mux's outputs
+changes. (That assumes the hardware emits the frame it is asked for. It does not, quite, at
+4000 us on this Jetson: see "Frame compensation" below, which is the one thing that does
+change the duty written.) The command update cadence is still 50 Hz (`output_rate_hz`), and the mux's outputs
 are still 50 Hz.
 
 Verify it on the bench before driving: `docs/notes/first-boot-runbook.md`, "Launch and
 drive".
+
+### Frame compensation: the Jetson does not emit the frame it is asked for (GitHub issue #77)
+
+At the 4000 us frame the mux measured every pulse about 1.7 percent short: commanded 1500 us
+read 1475 us, commanded 1652 us read 1620-1624 us, on both channels, while sysfs `period`
+read back the requested 4000000 ns. At 20 ms there was no such error beyond the 8-bit
+rounding.
+
+**Why, from the driver source** (`drivers/pwm/pwm-tegra.c`, `tegra_pwm_config()`, same shape in
+Linux v5.15 and v6.12):
+
+- the duty count is computed against the **requested** period:
+  `c = DIV_ROUND_CLOSEST_ULL(duty_ns << 8, period_ns)`;
+- the frame is `256 x (PWM_SCALE + 1)` cycles of the PWM clock, where the clock is set with
+  `clk_set_rate()` (v5.15) / `dev_pm_opp_set_rate()` (v6.x) to roughly `256 / period` and
+  then **read back** with `clk_get_rate()`, and `PWM_SCALE` is an integer (13-bit field)
+  derived from that settled rate;
+- so if the clock settles off the requested rate, the frame is off, and since the line is high
+  for `c / 256` of the frame, **every pulse is scaled by achieved / requested**.
+
+**Why the achieved period is measured rather than read.** Three options were considered, in
+the order issue #77 lists them:
+
+1. *Read it from the kernel.* Nothing exposes it. `pwm-tegra.c` has no `.get_state`
+   callback, so sysfs `period` and `/sys/kernel/debug/pwm` both show the cached REQUEST (the
+   car reads back 4000000). It could be computed from the clock rate, but that is only in
+   debugfs (`/sys/kernel/debug/clk/...`), which needs root and a debugfs mount the unprivileged
+   car container deliberately does not have. Rejected: not available where the node runs.
+2. *Pick a period the clock hits exactly.* Only possible by reading the clock tree off the
+   device (same debugfs problem), and 20 ms, the one period known to be exact, is the coarse
+   78 us grid issue #66 removed. Rejected for now; worth revisiting if someone reads
+   `clk_rate` on the Jetson as root.
+3. **Chosen: a measured achieved period, stored in `config/vehicle_params.yaml` with
+   provenance** (`actuation.*_pwm_achieved_period_us`, 3925 us, the least-squares fit of the
+   two bench readings). The node pre-scales each duty by requested / achieved
+   (`frame_compensated_duty_ns()` in `pwm_mapping.hpp`), so the pulse on the wire is the
+   commanded one, within half a grid step of the achieved frame (7.7 us). The requested
+   period written to sysfs is unchanged. `validate_config()` refuses an achieved period more
+   than 5 percent from the requested one (that is a typo, not a clock).
+
+The measurement is only valid for the requested period it was taken at: **changing
+`*_pwm_period_us` invalidates `*_pwm_achieved_period_us`**, and both must be re-measured
+together. `tegra_emitted_pulse_us()` models the driver's rounding and the achieved frame; the
+L1 tests use it to check every whole-microsecond pulse from 1000 to 2000 us lands within half
+a step on the wire, and the node logs the predicted neutral reading at startup. Predicted mux
+readings at the committed values: 1500 -> 1502.5 us, 1600 -> 1594.5 us, 2000 -> 1993.2 us,
+1094 -> 1088.6 us, 1875 -> 1870.5 us.
+
+**Pulse fill.** On the wire the 2000 us full-throttle pulse now fills 2000 / 3925 = 51 percent
+of the frame it actually sits in, leaving a 1925 us low gap. That is the same frame the car has
+run since PR 73 (the achieved frame did not change, only the duty did); a merged pair of frames
+would still read 2000 + 3925 = 5925 us, outside `pwm_capture.c`'s 5000 us plausibility ceiling.
+`validate_config()`'s "frame at least twice the longest pulse" rule is still applied, unchanged,
+to the requested period.
+
+Bench verification: `docs/notes/first-boot-runbook.md`, "Bench verification of the frame
+compensation".
 
 ### Parameters
 

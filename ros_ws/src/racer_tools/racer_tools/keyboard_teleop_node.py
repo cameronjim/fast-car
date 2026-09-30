@@ -31,7 +31,13 @@ from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-from racer_tools.keymap import TeleopState, apply_key, build_teleop_config, decode_key
+from racer_tools.keymap import (
+    TeleopState,
+    apply_key,
+    build_teleop_config,
+    decode_key,
+    derived_steps,
+)
 from racer_tools.vehicle_params_loader import load_vehicle_params
 
 
@@ -106,8 +112,48 @@ class KeyboardTeleopNode(Node):
         )
 
         vehicle_params = load_vehicle_params()
+        # Tap sizes (GitHub issue #72). The DEFAULT of each parameter is the derivation from
+        # vehicle_params (one control period at the vehicle's maximum rate, see
+        # racer_tools.keymap), computed here so `ros2 param describe` shows the real value; a
+        # launch file or `-p` overrides it. Validation (finite, > 0) is in keymap, so a bad
+        # value refuses to start rather than producing a dead or inverted key.
+        derived_steering_step, derived_speed_step = derived_steps(
+            vehicle_params, self.control_rate_hz
+        )
+        speed_step_descriptor = ParameterDescriptor(
+            description=(
+                "Speed change per throttle key event, m/s (GitHub issue #72). Default is "
+                "vehicle_params actuation.max_acceleration_mps2 / control_rate_hz "
+                f"({derived_speed_step:.4f} m/s at the current rate). An operator-interface "
+                "choice, not a physical constant: car_teleop.launch.py passes a first-drive "
+                "profile. Must be finite and > 0; the command is still clamped to the "
+                "vehicle_params speed range. Pass a float (0.25, not 1)."
+            ),
+        )
+        steering_step_descriptor = ParameterDescriptor(
+            description=(
+                "Steering change per steering key event, rad (GitHub issue #72). Default is "
+                "vehicle_params steering.max_rate_rad_per_s / control_rate_hz "
+                f"({derived_steering_step:.4f} rad at the current rate). Must be finite and > "
+                "0; the command is still clamped to the vehicle_params steering range."
+            ),
+        )
+        speed_step_mps = float(
+            self.declare_parameter(
+                "speed_step_mps", derived_speed_step, speed_step_descriptor
+            ).value
+        )
+        steering_step_rad = float(
+            self.declare_parameter(
+                "steering_step_rad", derived_steering_step, steering_step_descriptor
+            ).value
+        )
         self._config = build_teleop_config(
-            vehicle_params, self.control_rate_hz, allow_reverse=self.allow_reverse
+            vehicle_params,
+            self.control_rate_hz,
+            allow_reverse=self.allow_reverse,
+            speed_step_mps=speed_step_mps,
+            steering_step_rad=steering_step_rad,
         )
         self._state = TeleopState()
 

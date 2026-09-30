@@ -29,6 +29,7 @@ invariant 2).
 
 from __future__ import annotations
 
+import math
 import os
 
 # Distinct from every domain already claimed in this workspace (racer_control 77/79,
@@ -66,6 +67,10 @@ _STEERING_NEUTRAL_US = _PARAMS["steering"]["pwm_neutral_us"]
 # Derived, not typed in: the frame period is a vehicle_params field (GitHub issue #66).
 _STEERING_PERIOD_NS = round(_PARAMS["actuation"]["steering_pwm_period_us"] * 1000.0)
 _THROTTLE_PERIOD_NS = round(_PARAMS["actuation"]["throttle_pwm_period_us"] * 1000.0)
+# The measured frame each channel actually emits (GitHub issue #77); every duty is pre-scaled
+# by requested / achieved, so the expected neutral duties are too.
+_STEERING_ACHIEVED_US = _PARAMS["actuation"]["steering_pwm_achieved_period_us"]
+_THROTTLE_ACHIEVED_US = _PARAMS["actuation"]["throttle_pwm_achieved_period_us"]
 
 _FAKE_SYSFS = tempfile.mkdtemp(prefix="racer_fake_sysfs_clock_")
 
@@ -95,8 +100,18 @@ def _duty_ns(channel: int) -> int:
     return _read_int(_channel_dir(channel) / "duty_cycle")
 
 
-def _expected_duty_ns(pulse_us: float) -> int:
-    return round(pulse_us * 1000.0)
+def _compensated_duty_ns(pulse_us: float, period_ns: int, achieved_us: float) -> int:
+    """Same arithmetic, same order, same half-away-from-zero rounding as
+    racer_drivers::frame_compensated_duty_ns."""
+    return math.floor(pulse_us * ((period_ns / 1000.0) / achieved_us) * 1000.0 + 0.5)
+
+
+_STEERING_NEUTRAL_DUTY_NS = _compensated_duty_ns(
+    _STEERING_NEUTRAL_US, _STEERING_PERIOD_NS, _STEERING_ACHIEVED_US
+)
+_THROTTLE_NEUTRAL_DUTY_NS = _compensated_duty_ns(
+    _THROTTLE_NEUTRAL_US, _THROTTLE_PERIOD_NS, _THROTTLE_ACHIEVED_US
+)
 
 
 def _reliable_qos() -> QoSProfile:
@@ -199,7 +214,7 @@ class TestPwmOutputNodeStalenessClock(unittest.TestCase):
         self._publish_steadily(drive_pub, msg, seconds=0.5)
         self.assertNotEqual(
             _duty_ns(1),
-            _expected_duty_ns(_THROTTLE_NEUTRAL_US),
+            _THROTTLE_NEUTRAL_DUTY_NS,
             "pwm_output_node never left neutral with use_sim_time:=true and no /clock; its "
             "output loop must be a wall timer, independent of the ROS clock",
         )
@@ -217,7 +232,7 @@ class TestPwmOutputNodeStalenessClock(unittest.TestCase):
         self._publish_steadily(drive_pub, msg, seconds=0.5)
         self.assertNotEqual(
             _duty_ns(1),
-            _expected_duty_ns(_THROTTLE_NEUTRAL_US),
+            _THROTTLE_NEUTRAL_DUTY_NS,
             "the node never acted on the /drive command at all",
         )
 
@@ -226,14 +241,14 @@ class TestPwmOutputNodeStalenessClock(unittest.TestCase):
 
         self.assertEqual(
             _duty_ns(1),
-            _expected_duty_ns(_THROTTLE_NEUTRAL_US),
+            _THROTTLE_NEUTRAL_DUTY_NS,
             "throttle channel did not return to neutral after /drive went silent, with the "
             "ROS clock frozen: staleness is being measured on the ROS clock, not "
             "RCL_STEADY_TIME. A dead /drive publisher leaves a driving pulse on the wire.",
         )
         self.assertEqual(
             _duty_ns(0),
-            _expected_duty_ns(_STEERING_NEUTRAL_US),
+            _STEERING_NEUTRAL_DUTY_NS,
             "steering channel did not return to neutral either",
         )
 

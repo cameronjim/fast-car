@@ -89,6 +89,17 @@
 # schema_version") and this file's own precedent (0.2.0 -> 0.2.1 on 2026-09-12, a value-only
 # fill of provisional fields with no key added/removed), a patch bump is required here too.
 # Consumers refuse on mismatch either way. See docs/notes/build-log.md's 2026-09-27 entry.
+#
+# schema_version bumped 0.4.1 -> 0.5.0 on 2026-09-29: three new REQUIRED actuation fields.
+# actuation.steering_pwm_achieved_period_us and actuation.throttle_pwm_achieved_period_us
+# carry the frame period the Jetson's PWM channels ACTUALLY emit when 4000 us is requested,
+# measured at the mux (GitHub issue #77: every pulse was about 1.7 percent short, commanded
+# 1500 read 1475), so racer_drivers/pwm_output_node can pre-scale each duty and put the
+# commanded pulse width on the wire. actuation.throttle_deadband_us makes the open-loop
+# throttle map jump past the VESC's PPM deadband on the first non-zero command, so speed 0 is
+# exactly neutral and the first keyboard tap turns the wheels. New required fields change the
+# schema's required-field set, so this is a minor bump per rule 5. No existing value changed.
+# See the actuation section below and docs/notes/build-log.md's 2026-09-29 entry for #77.
 
 chassis:
   mass_kg: 3.74                    # gym: m
@@ -248,6 +259,60 @@ actuation:
   # "Launch and drive" before the car drives on the floor.
   steering_pwm_period_us: 4000.0    # 250 Hz frame -> 15.625 us pulse grid (issue #66)
   throttle_pwm_period_us: 4000.0    # 250 Hz frame -> 15.625 us pulse grid (issue #66)
+  #
+  # ACHIEVED FRAME PERIOD (GitHub issue #77). The two fields above are what pwm_output_node
+  # REQUESTS; these two are what the hardware EMITS, and on this Jetson at 4000 us they differ.
+  #
+  # WHY THEY DIFFER, from the driver source (Linux drivers/pwm/pwm-tegra.c,
+  # tegra_pwm_config(), the same in v5.15 and v6.12): the duty count is computed against the
+  # REQUESTED period, c = round(256 x duty_ns / period_ns), but the frame the controller runs
+  # is 256 x (PWM_SCALE + 1) cycles of the PWM clock, where the clock is whatever
+  # clk_set_rate() / dev_pm_opp_set_rate() actually settled at for a requested
+  # 256 / period and PWM_SCALE is an integer (13-bit) derived from that settled rate. If the
+  # clock cannot hit the rate exactly, the frame is not the requested one, and because the
+  # duty is a fraction of the frame, EVERY pulse is scaled by achieved / requested.
+  #
+  # WHY IT IS MEASURED, NOT READ BACK: no kernel interface reports the achieved frame. sysfs
+  # <channel>/period and /sys/kernel/debug/pwm both echo the REQUESTED state (pwm-tegra.c has
+  # no .get_state callback, so the PWM core only has the cached request to show; sysfs
+  # `period` reads back 4000000 on the car). The clock rate it could be computed from is only
+  # in debugfs (/sys/kernel/debug/clk/...), which needs root and a debugfs mount the
+  # unprivileged car container deliberately does not have. And no requested period can be
+  # chosen as "one the clock hits exactly" without reading that clock tree off the device.
+  # So the achieved period is a bench measurement, like the steering endpoints.
+  #
+  # MEASURED 2026-09-29 at the safety mux (DIAG_BUILD), 4000 us requested on both channels,
+  # before this compensation existed: commanded 1500 us (duty count 96) read 1475 us on both
+  # channels, which alone gives 1475 x 256 / 96 = 3933.3 us; commanded 1652 us (count 106)
+  # read 1620 to 1624 us, which gives 3912 to 3922 us. 3925.0 is the least-squares fit of
+  # both readings (residuals about -3 us and +3 us). At 20000 us requested there was no such
+  # error beyond the 8-bit rounding (1500 read 1484 = 19 x 78.125), so this is specific to the
+  # requested period: CHANGING THE REQUESTED PERIOD INVALIDATES THESE TWO VALUES.
+  #
+  # Verified by docs/notes/first-boot-runbook.md "Bench verification of the frame
+  # compensation": commanded 1500 must read 1500 +- 8 us, 1600 must read 1600 +- 8 us. If a
+  # reading is off, the runbook gives the formula to re-derive the value from it.
+  steering_pwm_achieved_period_us: 3925.0  # MEASURED 2026-09-29 at the mux (issue #77) -- see above
+  throttle_pwm_achieved_period_us: 3925.0  # MEASURED 2026-09-29 at the mux (issue #77) -- see above
+  #
+  # THROTTLE DEADBAND OFFSET. pwm_output_node's open-loop map sends speed 0 to exactly
+  # throttle_pwm_neutral_us, and any speed > 0 to neutral + this + a linear share of the rest
+  # of the forward range (reaching throttle_pwm_max_us at throttle_full_scale_mps); negative
+  # speed mirrors it below neutral. Without it the first ~100 us of throttle (about five
+  # keyboard taps) were swallowed by the VESC's PPM deadband and nothing moved.
+  #
+  # It mirrors the VESC PPM app's deadband (app_ppm_conf.hyst, a fraction of the 500 us half
+  # range): 10 percent = 50 us in the 2026-09-29 centred PID Speed Control config, centre
+  # 1.4875 ms. The VESC centre sits at 1487.5 us, between the two neutrals the ESC can see
+  # (the Jetson's, about 1475 us before issue #77 was fixed, and the mux's own 1500 us on a
+  # CUT), and the 50 us deadband swallows both. A tap at 0.25 m/s is then
+  # 1500 + 50 + 450 x 0.25 / 5.0 = 1572.5 us, 35 us past the VESC deadband edge (1537.5 us).
+  #
+  # PROVISIONAL, NOT MEASURED: 50 us is the VESC setting copied across, not a bench
+  # measurement of where the wheels start. Once the frame compensation is verified at the
+  # bench and the VESC centre goes back to 1.500 ms with a deadband of about 4 percent
+  # (20 us), THIS VALUE MUST BE CHANGED TO MATCH (docs/notes/build-log.md 2026-09-29).
+  throttle_deadband_us: 50.0        # PROVISIONAL (mirrors VESC PPM deadband 10 percent) -- see above
 
 sensors:
   imu:
@@ -306,10 +371,12 @@ meta:
   # added or filled in on 2026-09-13, are placeholders, NOT measured, NOT fitted (see the
   # header block and each field's inline comment). The three steering.pwm_*_us fields and
   # steering.pwm_left_bound are the exception as of 2026-09-21: they ARE measured (see the
-  # steering section above). sysid_session_id stays "none-preliminary" -- there is still
+  # steering section above). Added 2026-09-29: actuation.throttle_deadband_us is
+  # PROVISIONAL (a copied VESC setting), and the two actuation.*_pwm_achieved_period_us
+  # fields are MEASURED at the mux. sysid_session_id stays "none-preliminary" -- there is still
   # no on-vehicle fit of any kind, and this file is less fitted than that name implies, not
   # more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.4.1"
+  schema_version: "0.5.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

@@ -20,6 +20,7 @@ real mapping the moment the calibration is bench-measured and changed.
 
 from __future__ import annotations
 
+import math
 import os
 
 # Pinned BEFORE rclpy is imported, same reasoning as racer_safety's and racer_control's
@@ -79,6 +80,12 @@ _STEERING_PERIOD_NS = round(_PARAMS["actuation"]["steering_pwm_period_us"] * 100
 _THROTTLE_PERIOD_NS = round(_PARAMS["actuation"]["throttle_pwm_period_us"] * 1000.0)
 _THROTTLE_MAX_US = _PARAMS["actuation"]["throttle_pwm_max_us"]
 _SPEED_FULL_SCALE_MPS = _PARAMS["actuation"]["throttle_full_scale_mps"]
+_THROTTLE_DEADBAND_US = _PARAMS["actuation"]["throttle_deadband_us"]
+# The MEASURED frame each channel actually emits for the requested period (GitHub issue #77).
+# The node pre-scales every duty by requested / achieved so the pulse on the wire is the
+# commanded one; the expected duties below apply the same scaling, from the same file.
+_STEERING_ACHIEVED_US = _PARAMS["actuation"]["steering_pwm_achieved_period_us"]
+_THROTTLE_ACHIEVED_US = _PARAMS["actuation"]["throttle_pwm_achieved_period_us"]
 
 # One temp fake sysfs tree for the whole file; the launch description and the tests both need
 # its path, and launch_testing gives no clean way to hand state from one to the other besides
@@ -118,8 +125,25 @@ def _enabled(chip: int, channel: int) -> int:
     return _read_int(_channel_dir(chip, channel) / "enable")
 
 
-def _expected_duty_ns(pulse_us: float) -> int:
-    return round(pulse_us * 1000.0)
+def _compensated_duty_ns(pulse_us: float, period_ns: int, achieved_us: float) -> int:
+    """The duty the node must write for `pulse_us` to appear on the wire: the same
+    arithmetic, in the same order, as racer_drivers::frame_compensated_duty_ns, with C++
+    std::round's half-away-from-zero rounding (Python's round() is half-to-even)."""
+    return math.floor(pulse_us * ((period_ns / 1000.0) / achieved_us) * 1000.0 + 0.5)
+
+
+def _expected_steering_duty_ns(pulse_us: float) -> int:
+    return _compensated_duty_ns(pulse_us, _STEERING_PERIOD_NS, _STEERING_ACHIEVED_US)
+
+
+def _expected_throttle_duty_ns(pulse_us: float) -> int:
+    return _compensated_duty_ns(pulse_us, _THROTTLE_PERIOD_NS, _THROTTLE_ACHIEVED_US)
+
+
+def _wire_pulse_us(duty_ns: int, period_ns: int, achieved_us: float) -> float:
+    """The pulse width a written duty produces on the wire, ignoring the 8-bit rounding: the
+    duty is a fraction of the requested period, applied to the achieved frame."""
+    return (duty_ns / 1000.0) * achieved_us / (period_ns / 1000.0)
 
 
 def _reliable_qos() -> QoSProfile:
@@ -210,8 +234,8 @@ class TestPwmOutputNode(unittest.TestCase):
         # The configured frame period reached sysfs, per channel, before anything was enabled.
         self.assertEqual(_read_int(_channel_dir(0, 0) / "period"), _STEERING_PERIOD_NS)
         self.assertEqual(_read_int(_channel_dir(0, 1) / "period"), _THROTTLE_PERIOD_NS)
-        self.assertEqual(_duty_ns(0, 0), _expected_duty_ns(_STEERING_NEUTRAL_US))
-        self.assertEqual(_duty_ns(0, 1), _expected_duty_ns(_THROTTLE_NEUTRAL_US))
+        self.assertEqual(_duty_ns(0, 0), _expected_steering_duty_ns(_STEERING_NEUTRAL_US))
+        self.assertEqual(_duty_ns(0, 1), _expected_throttle_duty_ns(_THROTTLE_NEUTRAL_US))
         self.assertEqual(_enabled(0, 0), 1)
         self.assertEqual(_enabled(0, 1), 1)
 
@@ -226,17 +250,20 @@ class TestPwmOutputNode(unittest.TestCase):
         self._publish_steadily(publisher, _make_drive(steering, speed), seconds=1.0)
 
         expected_steering_us = _STEERING_LEFT_US  # left end per steering.pwm_left_bound
-        expected_throttle_us = _THROTTLE_NEUTRAL_US + 0.5 * (
-            _THROTTLE_MAX_US - _THROTTLE_NEUTRAL_US
+        # Half full scale: neutral + deadband, then half of what is left of the forward range.
+        expected_throttle_us = (
+            _THROTTLE_NEUTRAL_US
+            + _THROTTLE_DEADBAND_US
+            + 0.5 * (_THROTTLE_MAX_US - _THROTTLE_NEUTRAL_US - _THROTTLE_DEADBAND_US)
         )
         self.assertAlmostEqual(
-            _duty_ns(0, 0) / 1000.0,
+            _wire_pulse_us(_duty_ns(0, 0), _STEERING_PERIOD_NS, _STEERING_ACHIEVED_US),
             expected_steering_us,
             delta=1.0,
             msg="steering pulse did not follow a nominal /drive",
         )
         self.assertAlmostEqual(
-            _duty_ns(0, 1) / 1000.0,
+            _wire_pulse_us(_duty_ns(0, 1), _THROTTLE_PERIOD_NS, _THROTTLE_ACHIEVED_US),
             expected_throttle_us,
             delta=1.0,
             msg="throttle pulse did not follow a nominal /drive",
@@ -248,8 +275,13 @@ class TestPwmOutputNode(unittest.TestCase):
         self._publish_steadily(
             publisher, _make_drive(_PARAMS["steering"]["min_angle_rad"], 0.0), seconds=1.0
         )
-        self.assertAlmostEqual(_duty_ns(0, 0) / 1000.0, _STEERING_RIGHT_US, delta=1.0)
-        self.assertAlmostEqual(_duty_ns(0, 1) / 1000.0, _THROTTLE_NEUTRAL_US, delta=1.0)
+        self.assertAlmostEqual(
+            _wire_pulse_us(_duty_ns(0, 0), _STEERING_PERIOD_NS, _STEERING_ACHIEVED_US),
+            _STEERING_RIGHT_US,
+            delta=1.0,
+        )
+        # Speed exactly 0 is exactly neutral, never neutral + deadband.
+        self.assertEqual(_duty_ns(0, 1), _expected_throttle_duty_ns(_THROTTLE_NEUTRAL_US))
 
     def test_d_neutral_on_drive_silence(self):
         publisher = self.node.create_publisher(AckermannDriveStamped, "/drive", _reliable_qos())
@@ -257,13 +289,13 @@ class TestPwmOutputNode(unittest.TestCase):
         self._publish_steadily(publisher, _make_drive(0.2, 2.0), seconds=0.8)
         self.assertNotEqual(
             _duty_ns(0, 1),
-            _expected_duty_ns(_THROTTLE_NEUTRAL_US),
+            _expected_throttle_duty_ns(_THROTTLE_NEUTRAL_US),
             "throttle was already neutral before the silence test began",
         )
 
         time.sleep(_DRIVE_TIMEOUT_S * 5.0)
-        self.assertEqual(_duty_ns(0, 0), _expected_duty_ns(_STEERING_NEUTRAL_US))
-        self.assertEqual(_duty_ns(0, 1), _expected_duty_ns(_THROTTLE_NEUTRAL_US))
+        self.assertEqual(_duty_ns(0, 0), _expected_steering_duty_ns(_STEERING_NEUTRAL_US))
+        self.assertEqual(_duty_ns(0, 1), _expected_throttle_duty_ns(_THROTTLE_NEUTRAL_US))
 
     def test_e_drive_subscription_is_reliable_not_best_effort(self):
         """A best_effort /drive publisher must be QoS-incompatible with the node's
@@ -272,8 +304,8 @@ class TestPwmOutputNode(unittest.TestCase):
         publisher = self.node.create_publisher(AckermannDriveStamped, "/drive", _best_effort_qos())
         self._spin_for(0.3)
         self._publish_steadily(publisher, _make_drive(0.2, 3.0), seconds=1.0)
-        self.assertEqual(_duty_ns(0, 0), _expected_duty_ns(_STEERING_NEUTRAL_US))
-        self.assertEqual(_duty_ns(0, 1), _expected_duty_ns(_THROTTLE_NEUTRAL_US))
+        self.assertEqual(_duty_ns(0, 0), _expected_steering_duty_ns(_STEERING_NEUTRAL_US))
+        self.assertEqual(_duty_ns(0, 1), _expected_throttle_duty_ns(_THROTTLE_NEUTRAL_US))
 
     def test_f_node_subscribes_to_drive_and_never_drive_raw(self):
         """CLAUDE.md invariant 1: a /drive_raw subscription here would bypass safety_node.
@@ -297,12 +329,15 @@ class TestPwmOutputNodeShutdown(unittest.TestCase):
         Neutral on both channels, both disabled -- no stale non-neutral pulse survives a
         SIGINT."""
         root = pathlib.Path(fake_sysfs)
-        for channel, neutral_us in ((0, _STEERING_NEUTRAL_US), (1, _THROTTLE_NEUTRAL_US)):
+        for channel, expected_duty in (
+            (0, _expected_steering_duty_ns(_STEERING_NEUTRAL_US)),
+            (1, _expected_throttle_duty_ns(_THROTTLE_NEUTRAL_US)),
+        ):
             duty = int((root / "pwmchip0" / f"pwm{channel}" / "duty_cycle").read_text().strip())
             enable = int((root / "pwmchip0" / f"pwm{channel}" / "enable").read_text().strip())
             self.assertEqual(
                 duty,
-                _expected_duty_ns(neutral_us),
+                expected_duty,
                 f"channel {channel} did not end at neutral: {json.dumps({'duty_ns': duty})}",
             )
             self.assertEqual(enable, 0, f"channel {channel} was left enabled after shutdown")

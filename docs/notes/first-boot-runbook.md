@@ -471,15 +471,21 @@ or braking on this ESC.
      by the launch file):
 
 ```sh
-docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node'
+docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node --ros-args -p speed_step_mps:=0.25'
 ```
 
-15.4 Smallest possible speed command first. Confirm: the motor spins the correct direction,
-     releasing the key returns to neutral within the watchdog timeout, and the kill switch
-     stops it instantly at any point. A 1 m/s command should be 1600 us on the throttle
-     channel; if the motor does not move at 1600 us, the VESC's PPM deadband is wider than
-     100 us and wants narrowing in VESC Tool (record the change in the committed VESC config),
-     not a bigger number in vehicle_params.
+     `speed_step_mps:=0.25` is the first-drive tap size (GitHub issue #72; the rationale is
+     `FIRST_DRIVE_SPEED_STEP_MPS` in `car_teleop.launch.py`). Without it the node uses the
+     derived 0.19 m/s. The startup line prints the step it is actually using.
+
+15.4 Smallest possible speed command first: ONE tap. Confirm: the motor spins the correct
+     direction, releasing the key returns to neutral within the watchdog timeout, and the
+     kill switch stops it instantly at any point. Since 2026-09-29 one 0.25 m/s tap is
+     1572.5 us on the throttle channel (1500 + the 50 us deadband offset + 22.5 us; see
+     "Launch and drive" below). If the wheels do not turn on the first tap, compare the VESC
+     PPM centre and deadband against `actuation.throttle_deadband_us` before touching
+     anything else: the two must agree, and the fix goes in whichever one is wrong, recorded
+     in the committed VESC config or in `config/vehicle_params.yaml`.
 
 15.5 **Release the key and watch what actually happens.** Releasing does not brake: the
      command goes to zero, the pulse goes to neutral, and on this ESC that is zero current.
@@ -598,7 +604,7 @@ directories in the repo.
 ### Confirm neutral before arming
 
 ```sh
-# Both channels: 4 ms period (4000000 ns), 1500 us pulse, enabled.
+# Both channels: 4 ms period (4000000 ns), duty 1528662 ns (see below), enabled.
 for c in 0 2; do cat /sys/class/pwm/pwmchip$c/pwm0/{period,duty_cycle,enable}; done
 
 # What the mux actually SEES (this is the evidence that matters):
@@ -611,15 +617,30 @@ sudo stty -F /dev/ttyACM0 115200 raw -echo; sudo timeout 5 cat /dev/ttyACM0
 an older build; check it before reading anything else, because it changes every number below.
 The servo and the ESC are unaffected either way -- the mux regenerates its own 50 Hz outputs.
 
-Expect `STEER gp10=1500us FRESH(...)` and `THR gp7=1500us FRESH(...)`, within about 8 us
-(1484 and 1516 are the neighbouring grid points). **This is the change: it used to read 1484**
--- see "Reading the mux numbers" below. With the transmitter still off you will also see
+**The duty is 1528662 ns, not 1500000, and that is correct (since 2026-09-29, GitHub issue
+#77).** The Jetson does not emit the 4000 us frame it is asked for: it emits about 3925 us,
+which scaled every pulse about 1.9 percent short (1500 read 1475). pwm_output_node now
+pre-scales each duty by requested / achieved (`actuation.*_pwm_achieved_period_us` in
+`config/vehicle_params.yaml`), so it writes 1500 x 4000 / 3925 = 1528.662 us of duty to get
+1500 us on the wire. The startup log prints the same thing in its
+`pwm frame compensation (issue #77)` line, including the neutral reading the mux should
+report (1502.5 us). A duty of exactly 1500000 means an older build.
+
+Expect `STEER gp10=1500us FRESH(...)` and `THR gp7=1500us FRESH(...)` within 8 us (the model
+predicts 1502 to 1503). **1475 means the compensation is not running** (older build, or the
+achieved period in vehicle_params equals the requested one); 1484 means a 20 ms frame. With the transmitter still off you will also see
 `KILL ... NO_EDGES` and `DECISION=CUT reason=1:RC_SIGNAL_INVALID`; that is expected and is
 exactly what you want before arming.
 
 Only one process may read `/dev/ttyACM0` at a time -- a second reader steals the bytes.
 
 ### Bench verification of the 4 ms frame (do this once, before the next drive)
+
+**RUN 2026-09-29, and it FAILED step 3 in an instructive way:** the grid did get finer, but
+every reading was about 1.7 percent short (1500 read 1475, 1652 read 1620 to 1624) while
+`period` read back 4000000. That is GitHub issue #77, fixed by the frame compensation; verify
+that fix with the next section, which supersedes step 3's table below. Steps 1, 2, 4 and 5
+still apply as written.
 
 UNVERIFIED AS OF 2026-09-21: the arithmetic below is exact, but nobody has yet put the new
 frame in front of the Pico. Run this with the wheels off the ground, the battery OUT, the
@@ -658,6 +679,71 @@ needs to move. (Battery out means no bag is required for this one: start the sta
 
 Record the readings in `docs/notes/build-log.md` when this is run.
 
+### Bench verification of the frame compensation (GitHub issue #77; do this once, before the next drive)
+
+UNVERIFIED: written 2026-09-29 from the bench readings that found the problem, not yet run
+against the fix. Same conditions as the section above: wheels off the ground, battery OUT,
+servo lead unplugged, VESC unpowered, `record:=false`, no teleop source. Nothing needs to move;
+the acceptance is read off the mux diagnostic.
+
+1. Start the stack and confirm the startup log has the line
+   `pwm frame compensation (issue #77): steering achieved 3925.0 us (measured), neutral 1500 us
+   written as duty 1528662 ns, predicted at the mux 1502.5 us; throttle achieved 3925.0 us ...`.
+   No such line means an older build: stop.
+2. `for c in 0 2; do cat /sys/class/pwm/pwmchip$c/pwm0/{period,duty_cycle}; done` must print
+   `4000000` and `1528662` for each channel. The period is still the REQUESTED 4000000; only
+   the duty is compensated.
+3. Command these pulses through the gated path (not by writing sysfs), and read the mux
+   (`sudo timeout 5 cat /dev/ttyACM0`). The throttle channel is the easiest to drive to an exact
+   pulse: publish `/drive_raw` with `ros2 topic pub -r 50 /drive_raw
+   ackermann_msgs/msg/AckermannDriveStamped "{drive: {speed: S}}"` for the speed in the table
+   (the deadband offset is included in the speeds below), Ctrl-C after each reading:
+
+   | Commanded pulse (throttle) | Speed `S` to publish | duty_cycle written | Model predicts at the mux | ACCEPT if the mux reads |
+   |---|---|---|---|---|
+   | 1500 us (neutral) | 0.0 | 1528662 | 1502.5 | 1492 to 1508 |
+   | 1600 us | 0.5556 (= (1600 - 1550) x 5 / 450) | about 1630577 | 1594.5 | 1592 to 1608 |
+   | 2000 us | 5.0 | 2038217 | 1993.2 | 1992 to 2000, and `THR` NOT `OUT_OF_RANGE`; the mux forwards it as read |
+
+   And on steering, with speed 0: `steering_angle` 0.0 must read 1500 +- 8 us; full left
+   (0.4189) predicts 1088.6 us and full right (-0.4189) predicts 1870.5 us, each within 8 us of
+   the calibrated 1094 / 1875.
+4. **If a reading is outside its band, re-derive the achieved period from it; do not tune
+   around it.** For a reading of R us with the written duty D ns and requested period P ns
+   (4000000): the controller's count is `c = round(256 x D / P)` and the achieved period is
+   `R x 256 / c` us. Example: D = 1528662 gives c = 98, so a reading of 1495 us means
+   1495 x 256 / 98 = 3905.3 us. Take it from at least two pulses far apart (1500 and 2000),
+   average, write it into `actuation.steering_pwm_achieved_period_us` /
+   `throttle_pwm_achieved_period_us` with the date and readings in the comment, bump
+   `meta.schema_version`'s patch number, rebuild, and repeat this section.
+5. **Only once this passes on both channels:** the VESC centre goes back to 1.500 ms and its
+   PPM deadband shrinks to about 4 percent (20 us), and `actuation.throttle_deadband_us` must be
+   changed to match in the same session (see "What a keyboard tap does now" below and
+   `docs/notes/build-log.md` 2026-09-29). Until then leave the VESC at centre 1.4875 ms /
+   deadband 10 percent: it is what makes the two neutrals the ESC can see (the Jetson's and
+   the mux's CUT output of exactly 1500 us) both fall inside the deadband.
+
+Record the readings in `docs/notes/build-log.md`.
+
+### What a keyboard tap does now (2026-09-29)
+
+With the first-drive profile (`speed_step_mps:=0.25`, see step 15.3 or
+`car_teleop.launch.py`'s `FIRST_DRIVE_SPEED_STEP_MPS`), one tap of W commands 0.25 m/s, and
+racer_drivers maps it with the deadband offset (`actuation.throttle_deadband_us`, 50 us):
+
+| Taps | Commanded speed | Pulse commanded | Mux should read (model) | VESC (centre 1487.5, deadband 50 us) |
+|---|---|---|---|---|
+| 0 | 0.0 m/s | 1500 us exactly | 1502.5 | inside deadband: zero, safe start satisfied |
+| 1 | 0.25 m/s | 1572.5 us | 1579.2 | about 35 us past the deadband edge (1537.5): slow spin under the speed PID |
+| 2 | 0.50 m/s | 1595 us | about 1594.5 | faster |
+| 4 | 1.00 m/s | 1640 us | about 1640 | |
+| 20 | 5.00 m/s | 2000 us | 1993.2 | full scale (pid_max_erpm 6000) |
+
+Speed 0 is always exactly neutral, never neutral + deadband: SPACE, `q`, a teleop timeout and
+every safety_node brake all land on 1500 us. Holding W still ramps, one step per key-repeat
+event. Before 2026-09-29 each tap was 0.19 m/s = 19 us with no offset, so the first five or
+six taps sat inside the VESC deadband and nothing moved.
+
 ### Drive it from a browser on the Mac
 
 1. Same WiFi as the car. On the Mac, open <https://app.foxglove.dev> (or the desktop app).
@@ -687,6 +773,11 @@ The default Teleop panel binds the up button to `linear.x = 2.0 m/s`, which is j
 deadzone below -- deliberately, so the first click actually moves the car rather than clicking.
 
 ### The throttle start deadzone (expect this, it is not a fault)
+
+**HISTORICAL, 2026-09-21 (sensorless, Current No Reverse With Brake).** Since 2026-09-29 the
+motor is sensored (hall adapter fitted, detection done) and the VESC runs centred PID Speed
+Control, so a start no longer needs 1700 us: see "What a keyboard tap does now" above. The
+record below is kept because it is the measurement the change was made against.
 
 This drivetrain is **sensorless**, and it needs roughly **1700 us** (about 40 percent of the
 throttle range) to start turning from rest. Measured on the bench 2026-09-21: 1560 us did

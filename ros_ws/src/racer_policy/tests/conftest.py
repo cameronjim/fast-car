@@ -81,8 +81,11 @@ _TEMPLATE: dict[str, Any] = {
         # 0.4.0 -> 0.4.1 on 2026-09-27 when drivetrain.gear_ratio/pole_pairs/
         # motor_kv_rad_per_s_per_v/current_limit_a/brake_current_limit_a and
         # tires.nominal_radius_m were filled in from the vendor Hobbywing G3 spec sheet and the
-        # committed VESC config (no field added/removed, but rule 5 bumps on any change).
-        "schema_version": "0.4.1",
+        # committed VESC config (no field added/removed, but rule 5 bumps on any change),
+        # then 0.4.1 -> 0.5.0 on 2026-09-29 when three required actuation fields were added:
+        # the two measured *_pwm_achieved_period_us (GitHub issue #77) and
+        # throttle_deadband_us.
+        "schema_version": "0.5.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

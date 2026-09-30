@@ -296,7 +296,9 @@
         "command_to_torque_delay_s", "throttle_time_constant_s", "max_acceleration_mps2",
         "throttle_pwm_min_us", "throttle_pwm_max_us", "throttle_pwm_neutral_us",
         "throttle_full_scale_mps",
-        "steering_pwm_period_us", "throttle_pwm_period_us"
+        "steering_pwm_period_us", "throttle_pwm_period_us",
+        "steering_pwm_achieved_period_us", "throttle_pwm_achieved_period_us",
+        "throttle_deadband_us"
       ],
       "properties": {
         "command_to_torque_delay_s": {
@@ -345,6 +347,21 @@
           "type": "number", "minimum": 2500, "maximum": 20000,
           "units": "microseconds (raw PWM frame period; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
           "description": "PWM frame period racer_drivers/pwm_output_node writes to the Jetson's THROTTLE sysfs PWM channel. Same meaning, same grid arithmetic and same non-nullable stance as steering_pwm_period_us; kept per channel because the two channels are different pwmchips on this board (pwmchip0 and pwmchip2) and nothing forces them to share a frame. The VESC never sees this either -- the mux regenerates its own 50 Hz PPM output to the ESC."
+        },
+        "steering_pwm_achieved_period_us": {
+          "type": "number", "minimum": 2500, "maximum": 20000,
+          "units": "microseconds (raw PWM frame period; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "The frame period the Jetson's STEERING PWM channel ACTUALLY emits when steering_pwm_period_us is requested, MEASURED at the safety mux (GitHub issue #77). The Tegra driver (pwm-tegra.c tegra_pwm_config) converts the requested duty into an 8-bit count against the REQUESTED period, but the frame it emits is 256 x (PWM_SCALE + 1) cycles of whatever rate the PWM clock actually settled at, and no sysfs or debugfs attribute reports that frame (the driver has no get_state; sysfs and /sys/kernel/debug/pwm echo the request). When the two differ every pulse is scaled by achieved/requested. racer_drivers/pwm_output_node pre-scales each duty by requested/achieved so the pulse on the wire is the commanded one. Only valid for the requested period it was measured at: changing steering_pwm_period_us invalidates it. Non-nullable for the same reason as the requested period; set it equal to the requested period only if the bench shows no scaling. pwm_output_node refuses a value more than 5 percent from the requested period (a typo, not a measurement)."
+        },
+        "throttle_pwm_achieved_period_us": {
+          "type": "number", "minimum": 2500, "maximum": 20000,
+          "units": "microseconds (raw PWM frame period; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "The frame period the Jetson's THROTTLE PWM channel ACTUALLY emits when throttle_pwm_period_us is requested, MEASURED at the safety mux. Same meaning, same compensation and same refusal band as steering_pwm_achieved_period_us (GitHub issue #77); kept per channel because the two channels are different pwmchips with their own clocks."
+        },
+        "throttle_deadband_us": {
+          "type": "number", "minimum": 0, "maximum": 250,
+          "units": "microseconds (raw PWM pulse width offset; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
+          "description": "Offset from throttle_pwm_neutral_us at which racer_drivers/pwm_output_node's open-loop throttle map STARTS for any non-zero speed command: speed 0 maps to exactly throttle_pwm_neutral_us, a speed > 0 maps to neutral + this + a linear share of the rest of the range up to throttle_pwm_max_us at throttle_full_scale_mps (mirrored below neutral for a negative speed). It mirrors the ESC's own PPM deadband (VESC app_ppm_conf.hyst, a fraction of the 500 us half range) so the first non-zero command lands outside it instead of being swallowed. Must be re-set whenever the VESC deadband or centre changes. 0 disables the offset and restores a plain linear map."
         }
       }
     },

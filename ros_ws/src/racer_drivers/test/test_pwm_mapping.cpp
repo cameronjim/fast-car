@@ -9,6 +9,7 @@
 // the node only from the generated vehicle_params binding (CLAUDE.md invariant 2).
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -54,6 +55,14 @@ MappingConfig nominal_config() {
   // that kept one shared period, or crossed the two over, fails here (GitHub issue #66).
   config.steering_pwm_period_us = 5000.0;
   config.throttle_pwm_period_us = 8000.0;
+  // The achieved frame equals the requested one here, so no compensation applies and every
+  // duty below is simply pulse x 1000. The compensation has its own tests further down
+  // (GitHub issue #77).
+  config.steering_pwm_achieved_period_us = 5000.0;
+  config.throttle_pwm_achieved_period_us = 8000.0;
+  // No deadband offset in the generic fixture, so the plain linear-map tests keep testing the
+  // plain linear map. The committed 50 us offset has its own golden tests further down.
+  config.throttle_deadband_us = 0.0;
   return config;
 }
 
@@ -502,16 +511,27 @@ TEST(ValidateConfig, RejectsANonFiniteOrNonPositiveFramePeriod) {
 TEST(ValidateConfig, RejectsAFramePeriodTooShortForItsOwnLongestPulse) {
   // nominal_config()'s steering maximum is 2000 us, so anything under 4000 us is refused and
   // exactly 4000 us is accepted -- the committed configuration's own boundary.
+  //
+  // The achieved period moves with the requested one in each step (the hardware is assumed
+  // to hit it exactly), so the only check this exercises is the frame-length one.
   MappingConfig config = nominal_config();
   config.steering_pwm_period_us = 3999.0;
-  ASSERT_TRUE(racer_drivers::validate_config(config).has_value());
+  config.steering_pwm_achieved_period_us = 3999.0;
+  const auto steering_reason = racer_drivers::validate_config(config);
+  ASSERT_TRUE(steering_reason.has_value());
+  EXPECT_NE(steering_reason->find("shorter than twice"), std::string::npos);
   config.steering_pwm_period_us = 4000.0;
+  config.steering_pwm_achieved_period_us = 4000.0;
   EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
 
   // Throttle maximum is 1900 us in the fixture.
   config.throttle_pwm_period_us = 3799.0;
-  ASSERT_TRUE(racer_drivers::validate_config(config).has_value());
+  config.throttle_pwm_achieved_period_us = 3799.0;
+  const auto throttle_reason = racer_drivers::validate_config(config);
+  ASSERT_TRUE(throttle_reason.has_value());
+  EXPECT_NE(throttle_reason->find("shorter than twice"), std::string::npos);
   config.throttle_pwm_period_us = 3800.0;
+  config.throttle_pwm_achieved_period_us = 3800.0;
   EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
 }
 
@@ -631,12 +651,20 @@ TEST_F(DriverFixture, WritesEachChannelsConfiguredPeriodToItsOwnSink) {
 TEST_F(DriverFixture, ChangingTheFramePeriodDoesNotChangeTheDutiesWritten) {
   // Same commands, two different frame periods, identical duty writes: shortening the frame
   // buys resolution in the PERIPHERAL and changes nothing this node asks for.
+  //
+  // Both frames are assumed to be hit EXACTLY by the hardware (achieved == requested), which
+  // is the premise of this test; a frame the clock misses is the frame-compensation case, and
+  // that one is SUPPOSED to change the duty (GitHub issue #77, tests further down).
   MappingConfig slow = config;
   slow.steering_pwm_period_us = 20000.0;
   slow.throttle_pwm_period_us = 20000.0;
+  slow.steering_pwm_achieved_period_us = 20000.0;
+  slow.throttle_pwm_achieved_period_us = 20000.0;
   MappingConfig fast = config;
   fast.steering_pwm_period_us = 4000.0;
   fast.throttle_pwm_period_us = 4000.0;
+  fast.steering_pwm_achieved_period_us = 4000.0;
+  fast.throttle_pwm_achieved_period_us = 4000.0;
 
   CommandState state;
   state.has_command = true;
@@ -876,6 +904,369 @@ TEST(WaitUntil, ZeroAttemptsStillEvaluatesTheConditionExactlyOnce) {
       },
       0, 0));
   EXPECT_EQ(calls, 1);
+}
+
+// -- throttle deadband offset (actuation.throttle_deadband_us) ---------------------------------
+//
+// Speed 0 is exactly neutral; any non-zero speed starts at neutral +/- the deadband and
+// interpolates over what is left of the range, so full scale still lands on the channel end.
+// Added 2026-09-29 so the first keyboard tap clears the VESC's PPM deadband instead of five
+// taps disappearing into it (docs/notes/build-log.md).
+
+TEST(ValidateConfig, RejectsANonFiniteOrNegativeDeadband) {
+  for (const double bad : {kNaN, kInf, -kInf, -1.0, -kEps}) {
+    MappingConfig config = nominal_config();
+    config.throttle_deadband_us = bad;
+    const auto reason = racer_drivers::validate_config(config);
+    ASSERT_TRUE(reason.has_value()) << "deadband " << bad;
+    EXPECT_NE(reason->find("throttle_deadband_us"), std::string::npos);
+  }
+}
+
+TEST(ValidateConfig, AcceptsAZeroDeadbandAndOneThatLeavesASpan) {
+  MappingConfig config = nominal_config();  // throttle 1100/1500/1900
+  config.throttle_deadband_us = 0.0;
+  EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
+  config.throttle_deadband_us = 399.0;
+  EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
+}
+
+TEST(ValidateConfig, RejectsADeadbandThatLeavesNoLinearSpan) {
+  // Throttle 1100/1500/1900: 400 us on each side. Exactly 400 leaves nothing to interpolate
+  // over on either side, so the boundary itself is refused.
+  MappingConfig config = nominal_config();
+  config.throttle_deadband_us = 400.0;
+  auto reason = racer_drivers::validate_config(config);
+  ASSERT_TRUE(reason.has_value());
+  EXPECT_NE(reason->find("throttle_deadband_us"), std::string::npos);
+
+  // Asymmetric calibration: the REVERSE side is the short one. The mapping stays defined for
+  // negative speed even while teleop clamps at zero, so the reverse side is checked too.
+  config = nominal_config();
+  config.throttle.min_us = 1400.0;  // 100 us below neutral, 400 above
+  config.throttle_deadband_us = 150.0;
+  reason = racer_drivers::validate_config(config);
+  ASSERT_TRUE(reason.has_value());
+  EXPECT_NE(reason->find("throttle_deadband_us"), std::string::npos);
+}
+
+/// The committed throttle calibration (config/vehicle_params.yaml): 1000/1500/2000 us,
+/// throttle_full_scale_mps 5.0, global_speed_cap_mps 20.0, throttle_deadband_us 50.0. Typed in
+/// on purpose, like committed_steering_config() below: this is the L1 layer, and the L3 launch
+/// test ties it back to the real file.
+MappingConfig committed_throttle_config() {
+  MappingConfig config = nominal_config();
+  config.throttle.min_us = 1000.0;
+  config.throttle.neutral_us = 1500.0;
+  config.throttle.max_us = 2000.0;
+  config.speed_full_scale_mps = 5.0;
+  config.speed_cap_mps = 20.0;
+  config.throttle_deadband_us = 50.0;
+  return config;
+}
+
+TEST(SpeedToPulseDeadband, CommittedCalibrationGoldenValues) {
+  const MappingConfig config = committed_throttle_config();
+  ASSERT_FALSE(racer_drivers::validate_config(config).has_value());
+  struct Case {
+    const char* name;
+    double speed_mps;
+    double expected_us;
+  };
+  // Forward: 1550 + 450 x speed / 5. Reverse: 1450 - 450 x |speed| / 5.
+  const std::vector<Case> cases = {
+      {"one first-drive tap, 0.25 m/s", 0.25, 1572.5},
+      {"one derived tap, 9.51 / 50 m/s", 9.51 / 50.0, 1550.0 + 450.0 * (9.51 / 50.0) / 5.0},
+      {"1 m/s", 1.0, 1640.0},
+      {"half scale", 2.5, 1775.0},
+      {"full scale lands exactly on pwm_max", 5.0, 2000.0},
+      {"above full scale clamps at pwm_max", 7.0, 2000.0},
+      {"at the cap clamps at pwm_max", 20.0, 2000.0},
+      {"far over the cap clamps at pwm_max", 1e6, 2000.0},
+      {"smallest positive command jumps the deadband", 1e-9, 1550.0 + 450.0 * 1e-9 / 5.0},
+      {"reverse tap", -0.25, 1427.5},
+      {"full reverse lands exactly on pwm_min", -5.0, 1000.0},
+      {"far under the cap clamps at pwm_min", -1e6, 1000.0},
+  };
+  for (const Case& c : cases) {
+    EXPECT_NEAR(racer_drivers::speed_to_pulse_us(config, c.speed_mps), c.expected_us, 1e-6)
+        << c.name;
+  }
+}
+
+TEST(SpeedToPulseDeadband, ZeroIsExactlyNeutralNotNeutralPlusDeadband) {
+  const MappingConfig config = committed_throttle_config();
+  // EXPECT_EQ, not NEAR: neutral is the rest command and the fail-closed output, and must be
+  // bit-for-bit the calibrated value the mux also emits on a cut.
+  EXPECT_EQ(racer_drivers::speed_to_pulse_us(config, 0.0), 1500.0);
+  EXPECT_EQ(racer_drivers::speed_to_pulse_us(config, -0.0), 1500.0);
+  EXPECT_EQ(racer_drivers::speed_to_pulse_us(config, kNaN), 1500.0);
+  EXPECT_EQ(racer_drivers::speed_to_pulse_us(config, kInf), 1500.0);
+  EXPECT_EQ(racer_drivers::speed_to_pulse_us(config, -kInf), 1500.0);
+  EXPECT_EQ(racer_drivers::neutral_outputs(config).throttle_us, 1500.0);
+  CommandState stale;  // no command yet
+  EXPECT_EQ(racer_drivers::compute_outputs(config, stale).throttle_us, 1500.0);
+}
+
+TEST(SpeedToPulseDeadband, MonotonicNonDecreasingAndStrictlyInsideTheLinearSpan) {
+  const MappingConfig config = committed_throttle_config();
+  double previous = racer_drivers::speed_to_pulse_us(config, -30.0);
+  for (int i = -3000; i <= 3000; ++i) {
+    const double speed = static_cast<double>(i) * 0.01;
+    const double pulse = racer_drivers::speed_to_pulse_us(config, speed);
+    EXPECT_GE(pulse, previous) << "speed " << speed;
+    // Strictly increasing wherever the command is inside (0, full scale] or [-full, 0).
+    if (speed > 0.0 && speed <= config.speed_full_scale_mps && i > -3000) {
+      EXPECT_GT(pulse, previous) << "flat spot at speed " << speed;
+    }
+    previous = pulse;
+  }
+}
+
+TEST(SpeedToPulseDeadband, NeverBetweenNeutralAndTheDeadbandEdgeForANonZeroCommand) {
+  // The whole point: no non-zero command lands inside (neutral - deadband, neutral + deadband)
+  // where the ESC would swallow it.
+  const MappingConfig config = committed_throttle_config();
+  for (int i = -2000; i <= 2000; ++i) {
+    if (i == 0) {
+      continue;
+    }
+    const double speed = static_cast<double>(i) * 0.005;
+    const double pulse = racer_drivers::speed_to_pulse_us(config, speed);
+    if (speed > 0.0) {
+      EXPECT_GE(pulse, 1550.0) << "speed " << speed;
+    } else {
+      EXPECT_LE(pulse, 1450.0) << "speed " << speed;
+    }
+  }
+}
+
+TEST(SpeedToPulseDeadband, NeverLeavesTheCalibratedRange) {
+  const MappingConfig config = committed_throttle_config();
+  for (double speed = -100.0; speed <= 100.0; speed += 0.05) {
+    const double pulse = racer_drivers::speed_to_pulse_us(config, speed);
+    EXPECT_GE(pulse, config.throttle.min_us) << "speed " << speed;
+    EXPECT_LE(pulse, config.throttle.max_us) << "speed " << speed;
+  }
+}
+
+TEST(SpeedToPulseDeadband, ZeroDeadbandIsThePlainLinearMap) {
+  MappingConfig with = committed_throttle_config();
+  with.throttle_deadband_us = 0.0;
+  for (double speed = -6.0; speed <= 6.0; speed += 0.25) {
+    const double capped = std::clamp(speed, -5.0, 5.0);
+    EXPECT_NEAR(racer_drivers::speed_to_pulse_us(with, speed), 1500.0 + 100.0 * capped, 1e-6)
+        << "speed " << speed;
+  }
+}
+
+// -- frame compensation (GitHub issue #77) ------------------------------------------------------
+//
+// The Tegra driver computes the 8-bit duty count against the REQUESTED period but emits the
+// frame the PWM clock actually runs; measured 2026-09-29 at 4000 us requested, 1500 us read
+// 1475 us at the mux. The node pre-scales each duty by requested / achieved.
+
+constexpr unsigned long long kRequested4msNs = 4000000ULL;
+constexpr double kCommittedAchievedUs = 3925.0;  // actuation.*_pwm_achieved_period_us
+// Half a grid step of the ACHIEVED frame: the most the 8-bit rounding can displace a pulse.
+constexpr double kHalfAchievedStepUs = kCommittedAchievedUs / 256.0 / 2.0;
+
+TEST(FrameCompensation, EqualPeriodsIsExactlyTheUncompensatedDuty) {
+  for (const double pulse_us : {1000.0, 1094.0, 1500.0, 1572.5, 1875.0, 2000.0}) {
+    EXPECT_EQ(racer_drivers::frame_compensated_duty_ns(pulse_us, kRequested4msNs, 4000.0),
+              racer_drivers::pulse_us_to_duty_ns(pulse_us, kRequested4msNs))
+        << "pulse " << pulse_us;
+  }
+}
+
+TEST(FrameCompensation, CommittedValuesPreScaleByRequestedOverAchieved) {
+  // 1500 x 4000 / 3925 = 1528.662... us -> 1528662 ns.
+  EXPECT_EQ(racer_drivers::frame_compensated_duty_ns(1500.0, kRequested4msNs, kCommittedAchievedUs),
+            1528662ULL);
+  // 2000 x 4000 / 3925 = 2038.216... us -> 2038217 ns, still well inside the 4 ms period.
+  EXPECT_EQ(racer_drivers::frame_compensated_duty_ns(2000.0, kRequested4msNs, kCommittedAchievedUs),
+            2038217ULL);
+}
+
+TEST(FrameCompensation, InvalidAchievedPeriodWritesNoPulseRatherThanGuessing) {
+  for (const double bad : {kNaN, kInf, 0.0, -3925.0}) {
+    EXPECT_EQ(racer_drivers::frame_compensated_duty_ns(1500.0, kRequested4msNs, bad), 0ULL)
+        << "achieved " << bad;
+  }
+}
+
+TEST(FrameCompensation, StillClampedToTheRequestedPeriod) {
+  EXPECT_EQ(racer_drivers::frame_compensated_duty_ns(3990.0, kRequested4msNs, kCommittedAchievedUs),
+            kRequested4msNs);
+}
+
+TEST(TegraEmittedPulse, ReproducesBothBenchMeasurements) {
+  // 2026-09-21, 20 ms requested, clock exact: 1500 us read 1484 (19 steps of 78.125).
+  EXPECT_NEAR(racer_drivers::tegra_emitted_pulse_us(1500000ULL, 20000000ULL, 20000.0), 1484.375,
+              1e-9);
+  // 2026-09-29, 4 ms requested, uncompensated: 1500 us read 1475 at the mux. The model with the
+  // committed achieved period predicts 96 x 3925 / 256 = 1471.9 us: the bug, within 4 us of
+  // the reading and well outside the +-8 us acceptance band.
+  const double uncompensated =
+      racer_drivers::tegra_emitted_pulse_us(1500000ULL, kRequested4msNs, kCommittedAchievedUs);
+  EXPECT_NEAR(uncompensated, 96.0 * 3925.0 / 256.0, 1e-9);
+  EXPECT_NEAR(uncompensated, 1475.0, 4.0);
+  EXPECT_GT(std::fabs(uncompensated - 1500.0), 8.0);
+}
+
+TEST(TegraEmittedPulse, RoundsTheCountToNearestHalfUpLikeTheKernel) {
+  // 256 steps of a 256000 ns requested period are 1000 ns each; 500 ns is exactly half a step
+  // and DIV_ROUND_CLOSEST_ULL rounds it up.
+  EXPECT_NEAR(racer_drivers::tegra_emitted_pulse_us(500ULL, 256000ULL, 256.0), 1.0, 1e-12);
+  EXPECT_NEAR(racer_drivers::tegra_emitted_pulse_us(499ULL, 256000ULL, 256.0), 0.0, 1e-12);
+}
+
+TEST(TegraEmittedPulse, InvalidInputsReturnZero) {
+  EXPECT_EQ(racer_drivers::tegra_emitted_pulse_us(1500000ULL, 0ULL, 3925.0), 0.0);
+  EXPECT_EQ(racer_drivers::tegra_emitted_pulse_us(1500000ULL, kRequested4msNs, kNaN), 0.0);
+  EXPECT_EQ(racer_drivers::tegra_emitted_pulse_us(1500000ULL, kRequested4msNs, 0.0), 0.0);
+}
+
+TEST(FrameCompensation, EveryCommandablePulseLandsWithinHalfAGridStepOnTheWire) {
+  // The acceptance criterion of issue #77, end to end through the kernel model: for every
+  // whole-microsecond pulse across the widest channel range, the pulse the Tegra controller
+  // emits for the compensated duty is within half a step of the ACHIEVED grid (7.67 us) of
+  // what was commanded -- inside the bench's +-8 us band.
+  for (int pulse = 1000; pulse <= 2000; ++pulse) {
+    const double pulse_us = static_cast<double>(pulse);
+    const unsigned long long duty =
+        racer_drivers::frame_compensated_duty_ns(pulse_us, kRequested4msNs, kCommittedAchievedUs);
+    const double emitted =
+        racer_drivers::tegra_emitted_pulse_us(duty, kRequested4msNs, kCommittedAchievedUs);
+    EXPECT_NEAR(emitted, pulse_us, kHalfAchievedStepUs + 1e-6) << "pulse " << pulse;
+  }
+}
+
+TEST(FrameCompensation, TheRunbookAcceptancePulsesAreWithinEightMicroseconds) {
+  // docs/notes/first-boot-runbook.md "Bench verification of the frame compensation": the
+  // numbers the owner checks at the mux, and the ones the model predicts for them.
+  struct Case {
+    double commanded_us;
+    double predicted_us;
+  };
+  const std::vector<Case> cases = {
+      {1500.0, 98.0 * 3925.0 / 256.0},   // 1502.54
+      {1600.0, 104.0 * 3925.0 / 256.0},  // 1594.53
+      {2000.0, 130.0 * 3925.0 / 256.0},  // 1993.16, inside the mux's 1000-2000 window
+      {1572.5, 103.0 * 3925.0 / 256.0},  // one first-drive tap: 1579.20
+  };
+  for (const Case& c : cases) {
+    const unsigned long long duty = racer_drivers::frame_compensated_duty_ns(
+        c.commanded_us, kRequested4msNs, kCommittedAchievedUs);
+    const double emitted =
+        racer_drivers::tegra_emitted_pulse_us(duty, kRequested4msNs, kCommittedAchievedUs);
+    EXPECT_NEAR(emitted, c.predicted_us, 1e-9) << "commanded " << c.commanded_us;
+    EXPECT_NEAR(emitted, c.commanded_us, 8.0) << "commanded " << c.commanded_us;
+  }
+  // The full-throttle pulse must stay inside the mux's configured window so it is forwarded,
+  // not clamped or cut on.
+  const unsigned long long full =
+      racer_drivers::frame_compensated_duty_ns(2000.0, kRequested4msNs, kCommittedAchievedUs);
+  EXPECT_LE(racer_drivers::tegra_emitted_pulse_us(full, kRequested4msNs, kCommittedAchievedUs),
+            2000.0);
+}
+
+TEST(ValidateConfig, RejectsANonFiniteOrNonPositiveAchievedPeriod) {
+  for (const double bad : {kNaN, kInf, 0.0, -5000.0}) {
+    MappingConfig steering_bad = nominal_config();
+    steering_bad.steering_pwm_achieved_period_us = bad;
+    const auto steering_reason = racer_drivers::validate_config(steering_bad);
+    ASSERT_TRUE(steering_reason.has_value());
+    EXPECT_NE(steering_reason->find("steering_pwm_achieved_period_us"), std::string::npos);
+
+    MappingConfig throttle_bad = nominal_config();
+    throttle_bad.throttle_pwm_achieved_period_us = bad;
+    const auto throttle_reason = racer_drivers::validate_config(throttle_bad);
+    ASSERT_TRUE(throttle_reason.has_value());
+    EXPECT_NE(throttle_reason->find("throttle_pwm_achieved_period_us"), std::string::npos);
+  }
+}
+
+TEST(ValidateConfig, RejectsAnAchievedPeriodMoreThanFivePercentFromTheRequest) {
+  // Steering requests 5000 us in the fixture: 4751..5249 is inside the 5 percent band.
+  MappingConfig config = nominal_config();
+  for (const double ok : {4751.0, 4925.0, 5000.0, 5249.0}) {
+    config.steering_pwm_achieved_period_us = ok;
+    EXPECT_FALSE(racer_drivers::validate_config(config).has_value()) << "achieved " << ok;
+  }
+  for (const double bad : {4749.0, 5251.0, 2500.0, 10000.0}) {
+    config.steering_pwm_achieved_period_us = bad;
+    const auto reason = racer_drivers::validate_config(config);
+    ASSERT_TRUE(reason.has_value()) << "achieved " << bad;
+    EXPECT_NE(reason->find("steering_pwm_achieved_period_us"), std::string::npos);
+  }
+  // Throttle requests 8000 us.
+  config = nominal_config();
+  config.throttle_pwm_achieved_period_us = 8401.0;
+  const auto reason = racer_drivers::validate_config(config);
+  ASSERT_TRUE(reason.has_value());
+  EXPECT_NE(reason->find("throttle_pwm_achieved_period_us"), std::string::npos);
+}
+
+TEST(ValidateConfig, AcceptsTheCommittedFrameConfiguration) {
+  MappingConfig config = committed_throttle_config();
+  config.steering.min_us = 1094.0;
+  config.steering.neutral_us = 1500.0;
+  config.steering.max_us = 1875.0;
+  config.steering_pwm_period_us = 4000.0;
+  config.throttle_pwm_period_us = 4000.0;
+  config.steering_pwm_achieved_period_us = kCommittedAchievedUs;
+  config.throttle_pwm_achieved_period_us = kCommittedAchievedUs;
+  EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
+}
+
+TEST(DriverCompensation, EveryWriteIsCompensatedPerChannel) {
+  // Different achieved periods per channel, so a crossed-over or shared compensation fails.
+  MappingConfig config = committed_throttle_config();
+  config.steering_pwm_period_us = 5000.0;
+  config.steering_pwm_achieved_period_us = 4900.0;
+  config.throttle_pwm_period_us = 4000.0;
+  config.throttle_pwm_achieved_period_us = kCommittedAchievedUs;
+  ASSERT_FALSE(racer_drivers::validate_config(config).has_value());
+  InMemoryPwmChannel steering;
+  InMemoryPwmChannel throttle;
+  PwmOutputDriver driver(config, steering, throttle);
+
+  const auto steering_duty = [](double pulse_us) {
+    return racer_drivers::frame_compensated_duty_ns(pulse_us, 5000000ULL, 4900.0);
+  };
+  const auto throttle_duty = [](double pulse_us) {
+    return racer_drivers::frame_compensated_duty_ns(pulse_us, kRequested4msNs,
+                                                    kCommittedAchievedUs);
+  };
+
+  driver.start();
+  // The REQUESTED period is what reaches sysfs; only the duty is compensated.
+  EXPECT_EQ(steering.period_ns, 5000000ULL);
+  EXPECT_EQ(throttle.period_ns, kRequested4msNs);
+  EXPECT_EQ(steering.duty_writes.back(), steering_duty(config.steering.neutral_us));
+  EXPECT_EQ(throttle.duty_writes.back(), throttle_duty(1500.0));
+  EXPECT_EQ(driver.throttle_duty_ns(1500.0), throttle_duty(1500.0));
+
+  CommandState state;
+  state.has_command = true;
+  state.age_s = 0.0;
+  state.steering_angle_rad = 0.1;
+  state.speed_mps = 0.25;
+  const PulsePair pulses = driver.update(state);
+  EXPECT_NEAR(pulses.throttle_us, 1572.5, 1e-9);
+  EXPECT_EQ(steering.duty_writes.back(), steering_duty(pulses.steering_us));
+  EXPECT_EQ(throttle.duty_writes.back(), throttle_duty(1572.5));
+
+  driver.force_neutral();
+  EXPECT_EQ(steering.duty_writes.back(), steering_duty(config.steering.neutral_us));
+  EXPECT_EQ(throttle.duty_writes.back(), throttle_duty(1500.0));
+
+  driver.update(state);
+  driver.stop();
+  EXPECT_EQ(steering.duty_writes.back(), steering_duty(config.steering.neutral_us));
+  EXPECT_EQ(throttle.duty_writes.back(), throttle_duty(1500.0));
+  EXPECT_FALSE(throttle.enabled);
 }
 
 }  // namespace

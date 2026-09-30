@@ -81,6 +81,19 @@ std::optional<std::string> validate_config(const MappingConfig& config) {
   if (!finite(config.drive_timeout_s) || config.drive_timeout_s <= 0.0) {
     return std::string("drive_timeout_s must be finite and > 0");
   }
+  // The deadband offset must leave a non-empty linear span on BOTH sides of neutral: the
+  // forward side because that is what the map interpolates over, the reverse side because the
+  // mapping stays defined for negative speed even while every teleop source clamps at zero.
+  if (!finite(config.throttle_deadband_us) || config.throttle_deadband_us < 0.0) {
+    return std::string("actuation.throttle_deadband_us must be finite and >= 0");
+  }
+  if (!(config.throttle.neutral_us + config.throttle_deadband_us < config.throttle.max_us) ||
+      !(config.throttle.neutral_us - config.throttle_deadband_us > config.throttle.min_us)) {
+    return std::string(
+        "actuation.throttle_deadband_us leaves no linear span between neutral + deadband and a "
+        "channel end: it must satisfy throttle_pwm_min_us < neutral - deadband and "
+        "neutral + deadband < throttle_pwm_max_us");
+  }
   // The frame period has to be long enough to CONTAIN the longest pulse the channel can be
   // commanded to, with a low gap after it: a duty equal to or longer than the period is
   // EINVAL from the kernel, and a pulse that fills most of its frame leaves the mux's edge
@@ -110,6 +123,36 @@ std::optional<std::string> validate_config(const MappingConfig& config) {
   if (const std::optional<std::string> bad =
           check_period(config.throttle_pwm_period_us, config.throttle.max_us,
                        "throttle_pwm_period_us", "actuation.throttle_pwm_max_us")) {
+    return bad;
+  }
+  // The achieved period scales every duty this node writes (GitHub issue #77), so a value
+  // that is not plausibly a measurement of the requested frame refuses rather than drives.
+  // The band is relative, so it scales with whatever period is requested.
+  const auto check_achieved = [&finite](double achieved_us, double requested_us,
+                                        const char* field) -> std::optional<std::string> {
+    if (!finite(achieved_us) || achieved_us <= 0.0) {
+      return std::string("actuation.") + field + " must be finite and > 0";
+    }
+    if (std::fabs(achieved_us / requested_us - 1.0) > kMaxAchievedPeriodDeviation) {
+      std::ostringstream message;
+      message << "actuation." << field << " (" << achieved_us << " us) is more than "
+              << kMaxAchievedPeriodDeviation * 100.0 << " percent from the requested period ("
+              << requested_us
+              << " us). It is a bench measurement of the frame the Jetson actually emits for "
+                 "that request and scales every pulse on the channel, so a value this far off "
+                 "is treated as a typo; re-measure it (docs/notes/first-boot-runbook.md)";
+      return message.str();
+    }
+    return std::nullopt;
+  };
+  if (const std::optional<std::string> bad =
+          check_achieved(config.steering_pwm_achieved_period_us, config.steering_pwm_period_us,
+                         "steering_pwm_achieved_period_us")) {
+    return bad;
+  }
+  if (const std::optional<std::string> bad =
+          check_achieved(config.throttle_pwm_achieved_period_us, config.throttle_pwm_period_us,
+                         "throttle_pwm_achieved_period_us")) {
     return bad;
   }
   return std::nullopt;
@@ -175,16 +218,25 @@ double speed_to_pulse_us(const MappingConfig& config, double speed_mps) {
   // scale is normally the smaller of them, so a command between full scale and the cap
   // saturates at the channel end. The final std::clamp guarantees that whatever the two
   // values are, the pulse never leaves the calibrated channel range.
+  //
+  // Zero is EXACTLY neutral, not neutral + deadband: it is the rest command and the fail-closed
+  // output, and it must equal the pulse the mux itself emits on a cut. Any non-zero command
+  // starts at neutral +/- throttle_deadband_us (actuation.throttle_deadband_us) so that it
+  // clears the ESC's PPM deadband, then interpolates over what is left of the range, so full
+  // scale still lands exactly on the channel end.
   const double capped_mps = std::clamp(speed_mps, -config.speed_cap_mps, config.speed_cap_mps);
+  if (capped_mps == 0.0) {
+    return config.throttle.neutral_us;
+  }
   double pulse_us = 0.0;
-  if (capped_mps >= 0.0) {
+  if (capped_mps > 0.0) {
     const double speed = std::min(capped_mps, config.speed_full_scale_mps);
-    pulse_us = interpolate(config.throttle.neutral_us, config.throttle.max_us, speed,
-                           config.speed_full_scale_mps);
+    pulse_us = interpolate(config.throttle.neutral_us + config.throttle_deadband_us,
+                           config.throttle.max_us, speed, config.speed_full_scale_mps);
   } else {
     const double speed = std::min(-capped_mps, config.speed_full_scale_mps);
-    pulse_us = interpolate(config.throttle.neutral_us, config.throttle.min_us, speed,
-                           config.speed_full_scale_mps);
+    pulse_us = interpolate(config.throttle.neutral_us - config.throttle_deadband_us,
+                           config.throttle.min_us, speed, config.speed_full_scale_mps);
   }
   return std::clamp(pulse_us, config.throttle.min_us, config.throttle.max_us);
 }
@@ -210,6 +262,33 @@ unsigned long long pulse_us_to_duty_ns(double pulse_us, unsigned long long perio
     return period_ns;
   }
   return static_cast<unsigned long long>(duty_ns);
+}
+
+unsigned long long frame_compensated_duty_ns(double pulse_us,
+                                             unsigned long long requested_period_ns,
+                                             double achieved_period_us) {
+  if (!std::isfinite(achieved_period_us) || achieved_period_us <= 0.0) {
+    return 0ULL;
+  }
+  // requested_period_ns / 1000 is the requested period in us; the ratio requested / achieved
+  // is the inverse of the scaling the Tegra driver applies (GitHub issue #77).
+  const double requested_period_us = static_cast<double>(requested_period_ns) / 1000.0;
+  return pulse_us_to_duty_ns(pulse_us * (requested_period_us / achieved_period_us),
+                             requested_period_ns);
+}
+
+double tegra_emitted_pulse_us(unsigned long long duty_ns, unsigned long long requested_period_ns,
+                              double achieved_period_us) {
+  if (requested_period_ns == 0ULL || !std::isfinite(achieved_period_us) ||
+      achieved_period_us <= 0.0) {
+    return 0.0;
+  }
+  // pwm-tegra.c: c = DIV_ROUND_CLOSEST_ULL(duty_ns << PWM_DUTY_WIDTH, period_ns). Integer
+  // arithmetic, as in the kernel, so the rounding matches it exactly (round half up).
+  constexpr unsigned long long kDutySteps = 256ULL;  // 1 << PWM_DUTY_WIDTH, see pulse_grid_step_us
+  const unsigned long long count =
+      (duty_ns * kDutySteps + requested_period_ns / 2ULL) / requested_period_ns;
+  return static_cast<double>(count) * achieved_period_us / static_cast<double>(kDutySteps);
 }
 
 unsigned long long period_us_to_ns(double period_us) {

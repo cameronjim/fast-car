@@ -13,6 +13,7 @@ from racer_tools.keymap import (
     apply_key,
     build_teleop_config,
     decode_key,
+    derived_steps,
 )
 
 # --------------------------------------------------------------------------------------
@@ -119,6 +120,103 @@ def test_build_teleop_config_scales_with_rate():
 def test_build_teleop_config_rejects_non_positive_rate(bad_rate):
     with pytest.raises(ValueError):
         build_teleop_config(_fake_vehicle_params(), control_rate_hz=bad_rate)
+
+
+# --------------------------------------------------------------------------------------
+# tap-size overrides (GitHub issue #72)
+# --------------------------------------------------------------------------------------
+
+
+def test_derived_steps_are_the_default_when_no_override_is_given():
+    vp = _fake_vehicle_params()
+    steering_step, speed_step = derived_steps(vp, 50.0)
+    assert steering_step == pytest.approx(3.2 / 50.0)
+    assert speed_step == pytest.approx(9.51 / 50.0)
+    config = build_teleop_config(vp, 50.0, speed_step_mps=None, steering_step_rad=None)
+    assert config.steering_step_rad == steering_step
+    assert config.speed_step_mps == speed_step
+
+
+def test_speed_step_override_replaces_only_the_speed_step():
+    config = build_teleop_config(_fake_vehicle_params(), 50.0, speed_step_mps=0.25)
+    assert config.speed_step_mps == 0.25
+    assert config.steering_step_rad == pytest.approx(3.2 / 50.0)
+    # Ranges are untouched by an override.
+    assert config.speed_min_mps == 0.0
+    assert config.speed_max_mps == 20.0
+
+
+def test_steering_step_override_replaces_only_the_steering_step():
+    config = build_teleop_config(_fake_vehicle_params(), 50.0, steering_step_rad=0.1)
+    assert config.steering_step_rad == 0.1
+    assert config.speed_step_mps == pytest.approx(9.51 / 50.0)
+    assert config.steering_min_rad == -0.4189
+    assert config.steering_max_rad == 0.4189
+
+
+def test_overrides_are_independent_of_the_control_rate():
+    slow = build_teleop_config(_fake_vehicle_params(), 10.0, speed_step_mps=0.25)
+    fast = build_teleop_config(_fake_vehicle_params(), 100.0, speed_step_mps=0.25)
+    assert slow.speed_step_mps == fast.speed_step_mps == 0.25
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.25, float("nan"), float("inf"), float("-inf")])
+def test_speed_step_override_must_be_finite_and_positive(bad):
+    with pytest.raises(ValueError, match="speed_step_mps"):
+        build_teleop_config(_fake_vehicle_params(), 50.0, speed_step_mps=bad)
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.1, float("nan"), float("inf")])
+def test_steering_step_override_must_be_finite_and_positive(bad):
+    with pytest.raises(ValueError, match="steering_step_rad"):
+        build_teleop_config(_fake_vehicle_params(), 50.0, steering_step_rad=bad)
+
+
+def test_one_tap_with_the_first_drive_step_is_exactly_that_step():
+    config = build_teleop_config(_fake_vehicle_params(), 50.0, speed_step_mps=0.25)
+    state = apply_key(config, TeleopState(), "w")
+    assert state.speed_mps == 0.25
+
+
+def test_holding_the_key_still_ramps_one_step_per_event():
+    """Hold-to-ramp is kept: each key-repeat event adds exactly one step, no acceleration."""
+    config = build_teleop_config(_fake_vehicle_params(), 50.0, speed_step_mps=0.25)
+    state = TeleopState()
+    for n in range(1, 9):
+        state = apply_key(config, state, "w")
+        assert state.speed_mps == pytest.approx(0.25 * n)
+
+
+def test_a_large_speed_step_override_is_clamped_to_the_cap_and_the_floor():
+    config = build_teleop_config(_fake_vehicle_params(), 50.0, speed_step_mps=100.0)
+    state = apply_key(config, TeleopState(), "w")
+    assert state.speed_mps == 20.0  # limits.global_speed_cap_mps
+    state = apply_key(config, state, "s")
+    assert state.speed_mps == 0.0  # reverse disabled: floor is zero, never below
+
+
+def test_a_large_speed_step_override_with_reverse_clamps_at_min_velocity():
+    config = build_teleop_config(
+        _fake_vehicle_params(), 50.0, allow_reverse=True, speed_step_mps=100.0
+    )
+    state = apply_key(config, TeleopState(), "s")
+    assert state.speed_mps == -5.0  # limits.min_velocity_mps
+
+
+def test_a_large_steering_step_override_is_clamped_to_the_angle_limits():
+    config = build_teleop_config(_fake_vehicle_params(), 50.0, steering_step_rad=10.0)
+    state = apply_key(config, TeleopState(), "a")
+    assert state.steering_angle_rad == 0.4189
+    state = apply_key(config, state, "d")
+    state = apply_key(config, state, "d")
+    assert state.steering_angle_rad == -0.4189
+
+
+def test_speed_step_that_does_not_divide_the_cap_saturates_exactly_at_the_cap():
+    config = build_teleop_config(_fake_vehicle_params(), 50.0, speed_step_mps=0.3)
+    state = TeleopState(speed_mps=19.9)
+    state = apply_key(config, state, "w")
+    assert state.speed_mps == 20.0
 
 
 # --------------------------------------------------------------------------------------

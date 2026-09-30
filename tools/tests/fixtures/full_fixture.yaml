@@ -70,6 +70,10 @@ actuation:
   # exercise the per-channel path (GitHub issue #66).
   steering_pwm_period_us: 20000.0
   throttle_pwm_period_us: 4000.0
+  # Deliberately NOT the committed values, and different per channel (GitHub issue #77).
+  steering_pwm_achieved_period_us: 20000.0
+  throttle_pwm_achieved_period_us: 3925.0
+  throttle_deadband_us: 50.0
 
 sensors:
   imu:

@@ -20,6 +20,7 @@ in (CLAUDE.md invariant 2).
 
 from __future__ import annotations
 
+import math
 import os
 
 # Distinct DDS domain from every other launch_testing suite colcon runs concurrently
@@ -58,8 +59,26 @@ _PARAMS_PATH = _REPO_ROOT / "config" / "vehicle_params.yaml"
 
 with open(_PARAMS_PATH, "r", encoding="utf-8") as _handle:
     _PARAMS = yaml.safe_load(_handle)
-_STEERING_NEUTRAL_NS = round(_PARAMS["steering"]["pwm_neutral_us"] * 1000.0)
-_THROTTLE_NEUTRAL_NS = round(_PARAMS["actuation"]["throttle_pwm_neutral_us"] * 1000.0)
+
+
+def _compensated_duty_ns(pulse_us: float, period_us: float, achieved_us: float) -> int:
+    """The duty pwm_output_node writes so that `pulse_us` appears on the wire: pre-scaled by
+    the requested / MEASURED achieved frame period (GitHub issue #77). Same arithmetic, same
+    order, same half-away-from-zero rounding as racer_drivers::frame_compensated_duty_ns."""
+    return math.floor(pulse_us * (period_us / achieved_us) * 1000.0 + 0.5)
+
+
+_ACTUATION = _PARAMS["actuation"]
+_STEERING_NEUTRAL_NS = _compensated_duty_ns(
+    _PARAMS["steering"]["pwm_neutral_us"],
+    _ACTUATION["steering_pwm_period_us"],
+    _ACTUATION["steering_pwm_achieved_period_us"],
+)
+_THROTTLE_NEUTRAL_NS = _compensated_duty_ns(
+    _ACTUATION["throttle_pwm_neutral_us"],
+    _ACTUATION["throttle_pwm_period_us"],
+    _ACTUATION["throttle_pwm_achieved_period_us"],
+)
 
 _FAKE_SYSFS = tempfile.mkdtemp(prefix="racer_car_teleop_sysfs_")
 

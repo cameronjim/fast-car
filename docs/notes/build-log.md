@@ -5,6 +5,20 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-29 -- L3 launch tests run serially to stop the CI flake (GitHub issue #58)
+
+`test_pwm_output_node_clock_launch` failed once in the L3 job on PR #57 (tools/docs only) and
+passed on rerun; the Milestone 1 e2e job did the same once on PR #59. The failing log shows
+the `/drive` assertion "the node never acted on the /drive command at all" (throttle still at
+neutral) 2.2 s into the test, while racer_control's and racer_safety's launch tests ran in the
+same `colcon test`: DDS discovery of the test's publisher outlasted a fixed 0.5 s spin, so the
+0.5 s command burst was published to no subscriber. Fix: `ros_build_test.sh` now runs
+`colcon test --executor sequential`, and the flaky test waits on the publisher's subscription
+count instead of a fixed spin (a readiness wait only; no behaviour assertion changed). Two
+back-to-back local runs of the L3 script in the ros-dev image passed 373 of 373 tests. The
+e2e job is one package alone on its own runner, so this does not change it; it stays
+unexplained until a failing e2e log is captured.
+
 ## 2026-09-29 -- motor and VESC sensor port pinouts obtained from the manufacturers, adapter build started
 
 Closes the "motor sensor cable: adapter required, not a repin" open item from 2026-09-14

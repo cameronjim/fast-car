@@ -150,8 +150,11 @@ throttle start deadzone -- this drivetrain needs roughly 1700 us (about 40 perce
 throttle range) to start sensorless from rest, and the throttle map in `racer_drivers` /
 `vehicle_params` does not model it yet (2026-09-21 midday); mirror the VESC limits into
 `config/vehicle_params.yaml` per planning-docs/06 step 6 -- still TODO (2026-09-21 midday);
-sensored hall adapter for low-speed start, the proper fix for the throttle deadzone above
-(planned, not yet in hand); `tools/mux_diag/read_mux_diag.py`'s `--lines` budget counted raw
+sensored hall adapter for low-speed start, the proper fix for the throttle deadzone above --
+**pinout resolved 2026-09-29 from the manufacturers (Hobbywing and Flipsky, via the supplier);
+adapter is a straight-through splice, build in progress, not yet spliced or hall-detected --
+see `docs/notes/hardware-arrival-checklist.md`'s sensor cable item and
+`docs/notes/build-log.md`'s 2026-09-29 entry**; `tools/mux_diag/read_mux_diag.py`'s `--lines` budget counted raw
 serial lines instead of parseable verdict lines, which made it fail against the live device
 on a fresh attach (the four-line banner ate the single-line default budget) even though the
 raw serial stream was fine -- fixed in this PR (2026-09-21 midday; see

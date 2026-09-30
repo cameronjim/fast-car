@@ -81,29 +81,81 @@ UNVERIFIED Pico SDK glue layer, and a proposed pinout. Read
       every 5V PWM line into the Pico (FS-iA6B receiver channels, and the Jetson-side PWM
       if 5V) goes through the bidirectional level shifter, because RP2040 GPIO is 3.3V-only.
       Bench-verify shifted signal integrity on a scope before the first wheels-off test.
-- [ ] Motor sensor cable: an ADAPTER is required, not a repin. Researched 2026-09-14: the
-      Hobbywing motor uses JST ZH (1.5 mm pitch), the VESC SENSE port uses JST PH (2.0 mm
-      pitch), so the two housings do not mate and there is no way to plug it in wrong by
-      accident. Either buy a Hobbywing-to-VESC sensor adapter or build one. What matters when
-      building it: GROUND, +5V and TEMP must land correctly (5V onto a hall output can destroy
-      that hall IC; 5V shorted to ground stresses the VESC's sensor-supply regulator). HALL
-      ORDER DOES NOT MATTER: VESC Tool's hall detection rotates the motor and learns the table,
-      so any permutation of the three hall lines detects correctly.
-      No manufacturer pin table exists for the 3652SD G3 SKU specifically. The EFRA 2023
-      handbook App.4 s4.2 governs this motor class and gives black=GND, orange/white/green=
-      halls, blue=10k NTC thermistor, red=+5V; one forum source conflicts. So MEASURE, do not
-      trust a diagram. Procedure with a multimeter and a bench supply:
-        1. Continuity from each wire to the motor can: the one that beeps is probably GND.
-        2. Check resistance between suspected GND and suspected +5V: expect 1-10 kohm, never a
-           short. Apply 5 V with the supply current-limited to 20-50 mA; it should draw a few
-           mA. Sag or high current means the pair is wrong, disconnect immediately.
-        3. With 5 V applied, turn the shaft slowly by hand and measure each remaining wire
-           against GND: the three that toggle 0 V to 5 V are the halls.
-        4. The wire that does NOT change with rotation but reads about 10 kohm to GND, and
-           drops as the motor is warmed, is the thermistor.
+- [x] Motor sensor cable pinout RESOLVED 2026-09-29, from the manufacturers (via the supplier),
+      not measured or inferred. An ADAPTER is required, not a repin: the Hobbywing motor uses
+      JST ZH (1.5 mm pitch), the VESC SENSE port uses JST PH (2.0 mm pitch), so the two
+      housings do not mate and there is no way to plug it in wrong by accident.
+
+      **Hobbywing Xerun 3652SD-4500KV-G3 (HW30401064) sensor port**, JST 6P 1.5 mm (ZH), two
+      ports on the endbell wired in parallel:
+
+      | Pin | Signal |
+      |---|---|
+      | 1 | GND |
+      | 2 | Hall A (Phase A) |
+      | 3 | Hall B |
+      | 4 | Hall C |
+      | 5 | Temperature |
+      | 6 | +5V |
+
+      Pin 1 is the end marked in Hobbywing's drawing (pins numbered 1 to 6 left to right with
+      the housing latch orientation). That numbering must be transferred from the drawing to
+      the physical part, not assumed -- there is no printed pin-1 mark on the connector itself.
+      Source: Hobbywing via the supplier, 2026-09-29. The G3 user manual (HW-SMB569DUL00) does
+      not print the pinout at all; it does say the M3 mount holes are only 5 mm deep, the motor
+      must stay under 100 C, and mechanical timing is 20-40 degrees, default 30.
+
+      **Flipsky FSESC 6.7 SENSE port**, JST PH 2.0 mm, 6-pin, from Flipsky's own connector
+      diagram:
+
+      | Pin | Signal |
+      |---|---|
+      | 1 | - (GND) |
+      | 2 | H3 |
+      | 3 | H2 |
+      | 4 | H1 |
+      | 5 | TMP |
+      | 6 | 5V |
+
+      **The adapter is STRAIGHT-THROUGH: motor pin n to VESC pin n.** GND, TMP and 5V line up
+      directly. The three halls land in mirrored order (motor A -> VESC H3, B -> H2, C -> H1),
+      which is harmless: VESC Tool's sensored detection learns the hall table and any hall
+      permutation detects correctly. HALL ORDER DOES NOT MATTER, as before. **The only
+      dangerous mistake is flipping a connector end for end (5V onto GND).**
+
+      **Build procedure chosen:** cut one of the two Hobbywing harnesses in the middle (keep
+      the other intact as a spare), cut the Flipsky-supplied PH sensor cable in the middle,
+      splice wire to wire by pin number, heat shrink each joint, stagger the joints so they
+      don't short against each other. Alternative parts if a clean cut-and-splice is preferred
+      over the stock harnesses: DigiKey `A06ZR06ZR28H152B` (ZH 6-pin socket-to-socket jumper)
+      and `A06SR06SR30K152B` (PH 6-pin), about CAD 5.66 each, cut and spliced the same way.
+
+      **Verification before plugging in:** continuity motor GND (pin 1) to the PH plug's "-"
+      position, and motor +5V (pin 6) to the PH plug's 5V position. Only after that passes:
+      battery in, wheels off the ground, mux knob KILLED, then in VESC Tool: Setup Motors FOC,
+      sensored, Run Detection -- expect a hall table. "Hall detection failed" means swap any
+      two hall wires. Enable motor temperature sensing in VESC Tool (the thermistor is on
+      pin 5; the 85 C limit is already set in the committed config). After detection, re-export
+      the VESC XMLs into `config/vesc/` with a new date and commit them -- **next step, not yet
+      done as of 2026-09-29.**
+
+      **Lesson, recorded honestly.** An earlier attempt (2026-09-14, below) tried to infer this
+      pinout from multimeter resistance/diode readings on the unpowered sensor board, and it
+      produced a WRONG map: it placed 5V and GND on pins 2 and 6. Resistance fingerprinting of
+      a hall board with on-board pull-ups is ambiguous -- the manufacturer pinout had to be
+      obtained, and guessing from bench readings alone was the mistake. Keep the meter method
+      only as a fallback for confirming GND (the thermistor pair reads about 10 kohm symmetric
+      to GND and drops when warm); do not use it to place 5V.
+
+      Original 2026-09-14 research (kept for the record; superseded by the manufacturer
+      pinouts above): no manufacturer pin table was on hand for the 3652SD G3 SKU specifically,
+      so the EFRA 2023 handbook App.4 s4.2 (which governs this motor class generically) was
+      used as a hypothesis -- black=GND, orange/white/green=halls, blue=10k NTC thermistor,
+      red=+5V -- with one conflicting forum source. That hypothesis is now superseded by the
+      actual manufacturer pinout above and should not be used.
       FIRST SPIN CAN SKIP THIS ENTIRELY: running sensorless needs only the three phase wires,
       risks nothing, and costs only low-speed smoothness and startup torque below roughly
-      walking pace. Do the adapter as its own calm session afterwards.
+      walking pace. The adapter above is the calm follow-up session, now in progress.
 - [ ] VESC: the test build is proceeding on the FSESC 6.7 (2026-09-14, see
       `docs/notes/build-log.md`), knowingly out of its 14-60 V / 4S-minimum spec on this 3S
       pack -- most likely outcome is it boots and runs at light load, sustained load is the

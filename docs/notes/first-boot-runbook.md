@@ -425,6 +425,20 @@ diff against), and write what you chose into `docs/notes/build-log.md`.
 If you choose a different control type, write down that you did and why, because the words
 "brake" and "reverse" in this repo's code and docs are written against this one.
 
+**Sensored detection, once the hall adapter is built (2026-09-29).** The motor/VESC sensor
+pinouts and the straight-through adapter build are in
+`docs/notes/hardware-arrival-checklist.md`'s sensor cable item and
+`docs/notes/build-log.md`'s 2026-09-29 entry -- read those before wiring the SENSE port. Once
+the adapter is spliced and its continuity checked (motor GND to the PH plug's "-" position,
+motor +5V to the PH plug's 5V position), and with wheels off the ground and the mux knob
+killed: in VESC Tool, Setup Motors FOC, select sensored, Run Detection. Expect a hall table.
+"Hall detection failed" means swap any two hall wires, not re-check the pinout -- hall ORDER
+does not matter, only that GND/+5V/TEMP land correctly, which the continuity check already
+confirmed. At the same time, **enable motor temperature sensing in VESC Tool** (the thermistor
+is on sensor pin 5; the 85 C limit is already set in the committed config). After detection
+succeeds, re-export the VESC XMLs into `config/vesc/` with a new date and commit them -- not
+done as of 2026-09-29, named here as the next step rather than fabricated.
+
 ## 14. Power the ESC, wheels off the ground (UNVERIFIED)
 
 14.1 Only now connect the drive battery / ESC. Expect silence and no motor motion. **A

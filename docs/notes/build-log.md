@@ -1651,3 +1651,7 @@ Verification: `config/vehicle_params.yaml` validates against `config/vehicle_par
 run inside the `ros-dev` image via colima/docker) passes all 373 tests; `racer_policy`'s own
 pytest suite (27 tests, including the vehicle_params schema_version wiring and load-contract
 tests) passes.
+
+## 2026-09-29 -- throttle deadband 50 -> 20 us, to be merged after the VESC deadband change
+
+`actuation.throttle_deadband_us` 50 -> 20 in `config/vehicle_params.yaml`, schema 0.5.0 -> 0.5.1 (value-only, rule 5). It must equal the VESC PPM deadband, which drops from 10 to 4 percent when the centre returns to 1.500 ms after PR 81's frame compensation is verified at the mux. Merge only after that VESC change; until then the car still runs the 10 percent, 1.4875 ms config and 50 us is correct. The runbook and teleop launch comments still quote the 50 us tap arithmetic and need the same update once the VESC change lands.

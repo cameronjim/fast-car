@@ -84,8 +84,9 @@ _TEMPLATE: dict[str, Any] = {
         # committed VESC config (no field added/removed, but rule 5 bumps on any change),
         # then 0.4.1 -> 0.5.0 on 2026-09-29 when three required actuation fields were added:
         # the two measured *_pwm_achieved_period_us (GitHub issue #77) and
-        # throttle_deadband_us.
-        "schema_version": "0.5.0",
+        # throttle_deadband_us, then 0.5.0 -> 0.5.1 on 2026-09-29 when throttle_deadband_us
+        # went 50 -> 20 to match the VESC's 4 percent deadband (value-only).
+        "schema_version": "0.5.1",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

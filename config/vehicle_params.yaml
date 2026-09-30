@@ -90,6 +90,9 @@
 # fill of provisional fields with no key added/removed), a patch bump is required here too.
 # Consumers refuse on mismatch either way. See docs/notes/build-log.md's 2026-09-27 entry.
 #
+# schema_version bumped 0.5.0 -> 0.5.1 on 2026-09-29: actuation.throttle_deadband_us 50 -> 20,
+# a value-only change (no key added/removed), patch bump per rule 5. See the field's comment.
+#
 # schema_version bumped 0.4.1 -> 0.5.0 on 2026-09-29: three new REQUIRED actuation fields.
 # actuation.steering_pwm_achieved_period_us and actuation.throttle_pwm_achieved_period_us
 # carry the frame period the Jetson's PWM channels ACTUALLY emit when 4000 us is requested,
@@ -308,11 +311,13 @@ actuation:
   # CUT), and the 50 us deadband swallows both. A tap at 0.25 m/s is then
   # 1500 + 50 + 450 x 0.25 / 5.0 = 1572.5 us, 35 us past the VESC deadband edge (1537.5 us).
   #
-  # PROVISIONAL, NOT MEASURED: 50 us is the VESC setting copied across, not a bench
-  # measurement of where the wheels start. Once the frame compensation is verified at the
-  # bench and the VESC centre goes back to 1.500 ms with a deadband of about 4 percent
-  # (20 us), THIS VALUE MUST BE CHANGED TO MATCH (docs/notes/build-log.md 2026-09-29).
-  throttle_deadband_us: 50.0        # PROVISIONAL (mirrors VESC PPM deadband 10 percent) -- see above
+  # PROVISIONAL, NOT MEASURED: 20 us is the VESC setting copied across, not a bench
+  # measurement of where the wheels start. Provenance: after PR 81's frame compensation is
+  # verified at the mux, the VESC PPM app centre returns to 1.500 ms and its input deadband
+  # is reduced to 4 percent (20 us of the 500 us half-range). THIS FIELD MUST EQUAL THAT VESC
+  # DEADBAND. It was 50 us (10 percent, centre 1.4875 ms) until the VESC change; merge this
+  # change only after the VESC has been changed (docs/notes/build-log.md 2026-09-29).
+  throttle_deadband_us: 20.0        # PROVISIONAL (mirrors VESC PPM deadband 4 percent) -- see above
 
 sensors:
   imu:
@@ -377,6 +382,6 @@ meta:
   # no on-vehicle fit of any kind, and this file is less fitted than that name implies, not
   # more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.5.0"
+  schema_version: "0.5.1"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

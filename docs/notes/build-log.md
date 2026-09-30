@@ -5,6 +5,57 @@ what still has to be proven on the bench before the decision counts as correct. 
 say how things are meant to be; this file says when a choice was made and on what grounds.
 Nothing here is a test result unless it says it was observed.
 
+## 2026-09-29 -- motor and VESC sensor port pinouts obtained from the manufacturers, adapter build started
+
+Closes the "motor sensor cable: adapter required, not a repin" open item from 2026-09-14
+(below) and the "sensored hall adapter for low-speed start" open item from
+`docs/notes/bench-session-2026-09-20.md`. No hardware has been touched yet beyond continuity
+checks on the harnesses to be cut; nothing has been plugged into the motor or the VESC.
+
+**Both pinouts now come from the manufacturers, via the supplier, not from a handbook
+hypothesis or a bench measurement.** The 2026-09-14 entry below used the EFRA 2023 handbook's
+generic pinout for this motor class as a hypothesis, flagged one conflicting forum source, and
+said to measure before wiring. A first attempt to measure it (unpowered multimeter
+resistance/diode checks on the sensor board) produced a WRONG map -- it placed 5V and GND on
+pins 2 and 6. Resistance fingerprinting a hall board with on-board pull-ups is ambiguous; it is
+being recorded here rather than quietly dropped, because the fix was obtaining the real
+manufacturer pinout, not refining the measurement technique.
+
+**Hobbywing Xerun 3652SD-4500KV-G3 (HW30401064)**, JST 6P 1.5 mm (ZH), two ports on the
+endbell wired in parallel, numbered 1-6 left to right per Hobbywing's drawing with the housing
+latch orientation (this numbering has to be transferred from the drawing to the physical part,
+it is not marked on the connector): 1 GND, 2 Hall A (Phase A), 3 Hall B, 4 Hall C, 5
+Temperature, 6 +5V. The G3 user manual (HW-SMB569DUL00) does not print the pinout; it does
+give the M3 mount hole depth (5 mm), the motor's 100 C limit, and mechanical timing (20-40
+degrees, default 30).
+
+**Flipsky FSESC 6.7 SENSE port**, JST PH 2.0 mm, 6-pin, from Flipsky's own connector diagram:
+1 "-" (GND), 2 H3, 3 H2, 4 H1, 5 TMP, 6 5V.
+
+**Consequence: the adapter is STRAIGHT-THROUGH, motor pin n to VESC pin n.** GND, TMP and 5V
+line up directly; the three halls land in mirrored order (A->H3, B->H2, C->H1), which is
+harmless because VESC Tool's sensored detection learns the hall table from any permutation.
+The only dangerous mistake is flipping a connector end for end and putting 5V onto GND.
+
+**Build chosen:** cut one of the two Hobbywing harnesses in the middle (the other stays intact
+as a spare), cut the Flipsky-supplied PH sensor cable in the middle, splice wire to wire by pin
+number, heat shrink each joint, stagger joints. DigiKey `A06ZR06ZR28H152B` (ZH 6-pin
+socket-to-socket jumper) and `A06SR06SR30K152B` (PH 6-pin), about CAD 5.66 each, are the
+alternative if a clean jumper is preferred over the stock harnesses -- cut and spliced the same
+way.
+
+**Verification planned before first plug-in:** continuity motor GND (pin 1) to the PH plug's
+"-" position, and motor +5V (pin 6) to the PH plug's 5V position. Then, wheels off the ground,
+mux knob killed, battery in: VESC Tool Setup Motors FOC, sensored, Run Detection. A failed hall
+detection means swap any two hall wires, not re-check the pinout. Motor temperature sensing
+gets enabled in VESC Tool at the same time (thermistor on pin 5; 85 C limit already set in the
+committed config).
+
+**Not done yet, and named as the next step rather than fabricated here:** the splice itself,
+hall detection on the bench, and re-exporting the VESC XMLs into `config/vesc/` with a new date
+once detection succeeds. `docs/notes/hardware-arrival-checklist.md`'s sensor cable item and
+`docs/notes/first-boot-runbook.md` step 13 are updated with the same information.
+
 ## 2026-09-21 late -- Jetson PWM frame shortened to 4 ms: 15.6 us actuator resolution (issue #66)
 
 GitHub issue #66 recorded the measurement that started this: the Jetson commands a pulse and

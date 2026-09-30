@@ -130,6 +130,17 @@ class KeyboardTeleopNode(Node):
                 "vehicle_params speed range. Pass a float (0.25, not 1)."
             ),
         )
+        min_speed_descriptor = ParameterDescriptor(
+            description=(
+                "Minimum commanded speed while moving, m/s. Default 0.0 = disabled. When > 0, "
+                "a throttle tap from rest sets speed to max(min_speed_mps, speed_step_mps), "
+                "and a throttle-down that would land below it stops the car (exactly 0) "
+                "instead of leaving a crawl. With allow_reverse the same applies to |speed| "
+                "on the negative side. Must be finite, >= 0 and <= the maximum speed or the "
+                "node refuses to start. car_teleop.launch.py passes the first-drive profile. "
+                "Pass a float (0.8, not 1)."
+            ),
+        )
         steering_step_descriptor = ParameterDescriptor(
             description=(
                 "Steering change per steering key event, rad (GitHub issue #72). Default is "
@@ -148,12 +159,16 @@ class KeyboardTeleopNode(Node):
                 "steering_step_rad", derived_steering_step, steering_step_descriptor
             ).value
         )
+        min_speed_mps = float(
+            self.declare_parameter("min_speed_mps", 0.0, min_speed_descriptor).value
+        )
         self._config = build_teleop_config(
             vehicle_params,
             self.control_rate_hz,
             allow_reverse=self.allow_reverse,
             speed_step_mps=speed_step_mps,
             steering_step_rad=steering_step_rad,
+            min_speed_mps=min_speed_mps,
         )
         self._state = TeleopState()
 
@@ -165,8 +180,10 @@ class KeyboardTeleopNode(Node):
         self.get_logger().info(
             "keyboard_teleop up: WASD or arrows to steer/throttle, SPACE to stop, q to quit. "
             f"steering step {self._config.steering_step_rad:.4f} rad, speed step "
-            f"{self._config.speed_step_mps:.4f} m/s, publishing /drive_raw at "
-            f"{self.control_rate_hz:.1f} Hz. Speed range "
+            f"{self._config.speed_step_mps:.4f} m/s, minimum speed "
+            f"{self._config.min_speed_mps:.2f} m/s"
+            f"{' (disabled)' if self._config.min_speed_mps == 0.0 else ''}, "
+            f"publishing /drive_raw at {self.control_rate_hz:.1f} Hz. Speed range "
             f"[{self._config.speed_min_mps:.2f}, {self._config.speed_max_mps:.2f}] m/s "
             f"(reverse {'ENABLED' if self.allow_reverse else 'disabled'})."
         )

@@ -65,3 +65,36 @@ def test_keyboard_node_receives_the_speed_step_as_a_float_parameter():
     value = merged["speed_step_mps"].evaluate(context)
     assert isinstance(value, float)
     assert value == 0.25
+
+
+def test_first_drive_min_speed_is_the_documented_value():
+    assert _load_launch_module().FIRST_DRIVE_MIN_SPEED_MPS == 0.8
+
+
+def test_min_speed_argument_defaults_to_the_first_drive_profile():
+    module = _load_launch_module()
+    args = {e.name: e for e in _entities() if isinstance(e, DeclareLaunchArgument)}
+    assert "teleop_min_speed_mps" in args
+    context = LaunchContext()
+    default = "".join(s.perform(context) for s in args["teleop_min_speed_mps"].default_value)
+    assert float(default) == module.FIRST_DRIVE_MIN_SPEED_MPS
+
+
+def test_keyboard_node_receives_the_min_speed_as_a_float_parameter():
+    keyboard = [
+        e
+        for e in _entities()
+        if isinstance(e, Node) and e.node_executable == "keyboard_teleop_node"
+    ]
+    assert len(keyboard) == 1
+    context = LaunchContext()
+    context.launch_configurations["teleop_min_speed_mps"] = "0.8"
+    merged = {}
+    for entry in keyboard[0]._Node__parameters:
+        for key, value in entry.items():
+            name = "".join(k.perform(context) for k in key) if isinstance(key, tuple) else key
+            merged[name] = value
+    assert "min_speed_mps" in merged
+    value = merged["min_speed_mps"].evaluate(context)
+    assert isinstance(value, float)
+    assert value == 0.8

@@ -67,3 +67,42 @@ def test_a_non_positive_override_refuses_to_start():
     finally:
         if rclpy.ok():
             rclpy.shutdown()
+
+
+def test_min_speed_defaults_to_disabled():
+    node = _make_node([])
+    try:
+        assert node.get_parameter("min_speed_mps").value == 0.0
+        assert node._config.min_speed_mps == 0.0
+        node.handle_raw_input("w")
+        assert node._state.speed_mps == pytest.approx(node._config.speed_step_mps)
+    finally:
+        _teardown(node)
+
+
+def test_min_speed_override_reaches_the_key_handler():
+    node = _make_node(["-p", "min_speed_mps:=0.8", "-p", "speed_step_mps:=0.25"])
+    try:
+        assert node._config.min_speed_mps == 0.8
+        node.handle_raw_input("w")
+        assert node._state.speed_mps == 0.8
+        node.handle_raw_input("w")
+        assert node._state.speed_mps == pytest.approx(1.05)
+        node.handle_raw_input("s")
+        node.handle_raw_input("s")
+        assert node._state.speed_mps == 0.0
+    finally:
+        _teardown(node)
+
+
+@pytest.mark.parametrize("bad", ["-0.1", "1000.0"])
+def test_an_invalid_min_speed_refuses_to_start(bad):
+    if rclpy.ok():
+        rclpy.shutdown()
+    rclpy.init(args=["--ros-args", "-p", f"min_speed_mps:={bad}"])
+    try:
+        with pytest.raises(ValueError, match="min_speed_mps"):
+            KeyboardTeleopNode()
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()

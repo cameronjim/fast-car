@@ -471,18 +471,23 @@ or braking on this ESC.
      by the launch file):
 
 ```sh
-docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node --ros-args -p speed_step_mps:=0.25'
+docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node --ros-args -p min_speed_mps:=0.8 -p speed_step_mps:=0.25'
 ```
 
      `speed_step_mps:=0.25` is the first-drive tap size (GitHub issue #72; the rationale is
      `FIRST_DRIVE_SPEED_STEP_MPS` in `car_teleop.launch.py`). Without it the node uses the
-     derived 0.19 m/s. The startup line prints the step it is actually using.
+     derived 0.19 m/s. `min_speed_mps:=0.8` is the minimum commanded speed (owner-tested
+     2026-09-30, `FIRST_DRIVE_MIN_SPEED_MPS`): the first tap from rest commands 0.8 m/s, and a
+     throttle-down that would land below 0.8 stops the car. Without it (default 0.0) the
+     minimum is disabled. Both values must be floats. The startup line prints the step and
+     the minimum it is actually using.
 
 15.4 Smallest possible speed command first: ONE tap. Confirm: the motor spins the correct
      direction, releasing the key returns to neutral within the watchdog timeout, and the
-     kill switch stops it instantly at any point. Since 2026-09-29 one 0.25 m/s tap is
-     1572.5 us on the throttle channel (1500 + the 50 us deadband offset + 22.5 us; see
-     "Launch and drive" below). If the wheels do not turn on the first tap, compare the VESC
+     kill switch stops it instantly at any point. With the first-drive profile ONE tap now
+     commands 0.8 m/s (the minimum speed), not 0.25 m/s; see "What a keyboard tap does now"
+     below for the pulse. (The smaller 0.25 m/s first tap only exists with `min_speed_mps`
+     left at 0.) If the wheels do not turn on the first tap, compare the VESC
      PPM centre and deadband against `actuation.throttle_deadband_us` before touching
      anything else: the two must agree, and the fix goes in whichever one is wrong, recorded
      in the committed VESC config or in `config/vehicle_params.yaml`.
@@ -725,24 +730,34 @@ the acceptance is read off the mux diagnostic.
 
 Record the readings in `docs/notes/build-log.md`.
 
-### What a keyboard tap does now (2026-09-29)
+### What a keyboard tap does now (2026-09-30)
 
-With the first-drive profile (`speed_step_mps:=0.25`, see step 15.3 or
-`car_teleop.launch.py`'s `FIRST_DRIVE_SPEED_STEP_MPS`), one tap of W commands 0.25 m/s, and
-racer_drivers maps it with the deadband offset (`actuation.throttle_deadband_us`, 50 us):
+With the first-drive profile (`min_speed_mps:=0.8 -p speed_step_mps:=0.25`, see step 15.3 or
+`car_teleop.launch.py`'s `FIRST_DRIVE_MIN_SPEED_MPS` / `FIRST_DRIVE_SPEED_STEP_MPS`), the
+rule is: from rest, W commands max(0.8, 0.25) = 0.8 m/s; above that W adds 0.25; S subtracts
+0.25, and if the result would be below 0.8 it goes to exactly 0 (a clean stop, no crawl
+below the minimum). SPACE and `q` are unchanged (zero). Speeds between 0 and 0.8 are never
+commanded. Pulse arithmetic uses the deadband offset from `actuation.throttle_deadband_us`
+(see `config/vehicle_params.yaml` for the current value) and is checked in racer_drivers'
+gtests; speed 0 is always exactly 1500 us.
 
-| Taps | Commanded speed | Pulse commanded | Mux should read (model) | VESC (centre 1487.5, deadband 50 us) |
-|---|---|---|---|---|
-| 0 | 0.0 m/s | 1500 us exactly | 1502.5 | inside deadband: zero, safe start satisfied |
-| 1 | 0.25 m/s | 1572.5 us | 1579.2 | about 35 us past the deadband edge (1537.5): slow spin under the speed PID |
-| 2 | 0.50 m/s | 1595 us | about 1594.5 | faster |
-| 4 | 1.00 m/s | 1640 us | about 1640 | |
-| 20 | 5.00 m/s | 2000 us | 1993.2 | full scale (pid_max_erpm 6000) |
+| Key presses (from rest) | Commanded speed |
+|---|---|
+| none | 0.0 m/s (1500 us exactly) |
+| W | 0.80 m/s |
+| W W | 1.05 m/s |
+| W W W | 1.30 m/s |
+| W W W, then S | 1.05 m/s |
+| W, then S | 0.0 m/s (0.55 would be below the minimum, so it stops) |
+| W W, then S S | 0.0 m/s (1.05, 0.80, then 0) |
+| S from rest | 0.0 m/s (reverse is off by default) |
 
-Speed 0 is always exactly neutral, never neutral + deadband: SPACE, `q`, a teleop timeout and
-every safety_node brake all land on 1500 us. Holding W still ramps, one step per key-repeat
-event. Before 2026-09-29 each tap was 0.19 m/s = 19 us with no offset, so the first five or
-six taps sat inside the VESC deadband and nothing moved.
+Holding W still ramps, one step per key-repeat event. With `allow_reverse:=true` the same
+shape holds on the negative side for |speed|: S from rest commands -0.8, and crossing from
+forward to reverse always passes through 0 (W at -0.8 stops; it does not jump to +0.x).
+`min_speed_mps` must be >= 0 and <= the maximum speed (and <= the reverse limit when reverse
+is allowed) or the node refuses to start. The older 0.25 m/s-per-tap ladder of 2026-09-29
+(first tap 0.25 m/s) applies only when `min_speed_mps` is left at its default 0.0.
 
 ### Drive it from a browser on the Mac
 

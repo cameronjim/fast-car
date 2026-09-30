@@ -1655,3 +1655,9 @@ tests) passes.
 ## 2026-09-29 -- throttle deadband 50 -> 20 us, to be merged after the VESC deadband change
 
 `actuation.throttle_deadband_us` 50 -> 20 in `config/vehicle_params.yaml`, schema 0.5.0 -> 0.5.1 (value-only, rule 5). It must equal the VESC PPM deadband, which drops from 10 to 4 percent when the centre returns to 1.500 ms after PR 81's frame compensation is verified at the mux. Merge only after that VESC change; until then the car still runs the 10 percent, 1.4875 ms config and 50 us is correct. The runbook and teleop launch comments still quote the 50 us tap arithmetic and need the same update once the VESC change lands.
+
+## 2026-09-30 -- teleop minimum commanded speed (min_speed_mps)
+
+Owner request from the bench test: a tap from rest should start the car moving, not crawl through the VESC deadband. `keyboard_teleop_node` gains `min_speed_mps` (default 0.0 = disabled, the old behaviour), threaded through `build_teleop_config` into the pure keymap. From rest a throttle key sets max(min_speed_mps, speed_step_mps); above that it adds the step; throttle-down subtracts the step and goes to exactly 0 if the result would be below the minimum. SPACE and q are unchanged. With `allow_reverse` the same shape applies to |speed| on the negative side, always passing through 0. Validation: finite, >= 0, <= the maximum speed (and the reverse limit when reverse is allowed), else the node refuses to start.
+
+`car_teleop.launch.py` first-drive profile is now min speed 0.8 m/s (`FIRST_DRIVE_MIN_SPEED_MPS`, launch argument `teleop_min_speed_mps`) with step 0.25 m/s, the owner-tested values. The runbook's second-terminal command is `--ros-args -p min_speed_mps:=0.8 -p speed_step_mps:=0.25`, its tap table is rewritten, and the node startup line now prints the minimum. Tests: keymap unit tests for every branch, node parameter tests, launch profile tests; `ros_build_test.sh` in ros-dev passes (459 tests), ruff clean.

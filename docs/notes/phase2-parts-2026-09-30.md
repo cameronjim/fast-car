@@ -16,6 +16,31 @@ lines move weekly.
 Already built, do not buy: the Xerun-to-VESC hall sensor adapter (straight-through, done
 2026-09-29). The Traxxas RPM sensor is optional now that the VESC reports sensored ERPM.
 
+## Essentials only (2026-10-02)
+
+The owner has standoffs and wire already, so the minimum order to get LiDAR and cameras
+running is the lines below. Everything is plug-in: the RPLIDAR adapter goes into a Jetson USB
+port, CSI cameras clip into the two 22-pin sockets, USB cameras plug in. Nothing to solder.
+
+| Item | Store | Price | Link |
+|---|---|---|---|
+| RPLIDAR C1, 10 Hz | amazon.ca | $93.99 | https://www.amazon.ca/dp/B0CT31PH8S |
+| Yahboom IMX219 120 degree CSI camera with 22-pin cable, x2 | amazon.ca | $44.19 each plus $5.05 shipping | https://www.amazon.ca/dp/B0C5844MWQ |
+| ELP AR0234 global-shutter USB 3 camera, 120 fps | amazon.ca | $142.19 plus $5.32 shipping | https://www.amazon.ca/dp/B0H3F5RCS7 |
+
+Total about $340 before tax. The Yahboom boards include the 22-pin ribbon, so the separate
+15-to-22 cable pack is only needed with the Pi Camera V2 or Waveshare modules.
+
+Higher scan-rate LiDAR, priced 2026-10-02: the only verified real upgrade is the Hokuyo
+UST-10LX (40 Hz, 43 k samples/s, 0.25 degree, 10 m, 270 degree, Ethernet, 12 V), the
+standard F1TENTH sensor, USD 1,200 at Acroname (about CAD 1,650 plus duties, shipping to
+Canada UNVERIFIED). It is not plug-in: its AWG28 power leads get crimped to the 12 V rail,
+and it takes the Jetson's only Ethernet port, so the dev link moves to Wi-Fi or a USB
+Ethernet adapter. The RPLIDAR S3 ($689, 20 Hz at its maximum setting, delivery late October
+to mid November) is the middle option. The A3M1 and every YDLIDAR and LDROBOT unit checked stay
+under 20 Hz, so they are not upgrades over the C1. Neither digikey.ca nor amazon.ca carries
+Hokuyo; mouser.ca and robotshop blocked the check.
+
 ## A. LiDAR and cameras (roadmap 2.3; cameras optional)
 
 Researched 2026-09-30 from live amazon.ca product pages. Everything in this section is on

@@ -79,6 +79,33 @@ class TestBuildTrackFromRaceline(unittest.TestCase):
         self.assertGreater(len(track.centerline.xs), 0)
         self.assertGreater(len(track.raceline.vxs), 0)
 
+    def test_default_half_width_keeps_the_wall_free_map(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            raceline_path = f"{tmp_dir}/raceline.csv"
+            with open(raceline_path, "w") as f:
+                f.write(_SQUARE_RACELINE_CSV)
+            track = build_track_from_raceline(raceline_path)
+        self.assertTrue((track.occupancy_map == 255.0).all())
+
+    def test_positive_half_width_builds_a_walled_corridor(self):
+        """GitHub issue 26: walls for the reactive-controller L5 canary."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            raceline_path = f"{tmp_dir}/raceline.csv"
+            with open(raceline_path, "w") as f:
+                f.write(_SQUARE_RACELINE_CSV)
+            track = build_track_from_raceline(raceline_path, track_half_width_m=0.4)
+        occupancy = track.occupancy_map
+        self.assertTrue((occupancy == 0.0).any())
+        self.assertTrue((occupancy == 255.0).any())
+        res = track.spec.resolution
+        ox, oy, _ = track.spec.origin
+
+        def cell(x: float, y: float) -> float:
+            return occupancy[int((y - oy) / res), int((x - ox) / res)]
+
+        self.assertEqual(cell(1.0, 0.0), 255.0)  # on the raceline
+        self.assertEqual(cell(1.0, 1.0), 0.0)  # the infield is a wall
+
 
 @pytest.mark.launch_test
 def generate_test_description():

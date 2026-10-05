@@ -198,6 +198,25 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_tracker_lap_test.sh"
 
+  l5-reactive-lap:
+    name: L5 reactive lap canary (racer_gym_bridge walled corridor + gap_follow_node, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # GitHub issue 26: gap_follow_node drives the gym car around config/tracks/gym_oval from
+    # the bridge's /scan alone, inside a walled corridor (bridge_node track_half_width_m), and
+    # must complete two laps within a time budget without leaving the corridor. Same
+    # workspace-combination pattern as l5-tracker-lap (see
+    # .github/scripts/l5_reactive_lap_test.sh); a sibling job so the two canaries fail
+    # independently.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 reactive workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_reactive_lap_test.sh"
+
   e2e-sim-safety:
     name: Milestone 1 e2e (bridge_node + safety_node, real command path, ros-dev + gym)
     runs-on: ubuntu-latest

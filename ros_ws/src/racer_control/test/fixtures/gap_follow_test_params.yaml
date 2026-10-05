@@ -1,0 +1,8 @@
+# Test-only parameters for test_gap_follow_node_launch.py (GitHub issue 26). Loaded through
+# gap_follow.launch.py's params_file argument, so the launch test also covers that path.
+# A short watchdog and a slower control rate keep the silence test quick and the message
+# count small; they are not tuning advice.
+gap_follow_node:
+  ros__parameters:
+    control_rate_hz: 20.0
+    scan_timeout_s: 0.2

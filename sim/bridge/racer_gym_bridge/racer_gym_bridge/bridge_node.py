@@ -39,6 +39,8 @@ map, which would fetch from api.f1tenth.org on first use.
 
 from __future__ import annotations
 
+import dataclasses
+
 import gymnasium as gym
 import numpy as np
 import rclpy
@@ -59,7 +61,7 @@ from racer_gym_bridge.conversions import (
     build_scan_fields,
     drive_cmd_to_action,
 )
-from racer_gym_bridge.track_loader import load_raceline_xy_speed
+from racer_gym_bridge.track_loader import build_corridor_occupancy, load_raceline_xy_speed
 
 _MAP_FRAME_ID = "map"
 _BASE_LINK_FRAME_ID = "base_link"
@@ -93,7 +95,7 @@ def build_synthetic_track() -> Track:
     return Track.from_refline(x=xs, y=ys, velx=velxs)
 
 
-def build_track_from_raceline(raceline_path: str) -> Track:
+def build_track_from_raceline(raceline_path: str, track_half_width_m: float = 0.0) -> Track:
     """A closed-loop track from a committed raceline file (roadmap task S.2).
 
     Reuses the raceline's own x/y centerline and target-speed columns as the reference
@@ -105,12 +107,29 @@ def build_track_from_raceline(raceline_path: str) -> Track:
     ``tools/raceline`` for a closed-loop track (e.g. the committed ``config/tracks/gym_oval``)
     produces an actual closed loop, which is what f1tenth_gym's lap-counting (crossing the
     start/finish gate) needs to mean anything.
+
+    ``track_half_width_m`` (GitHub issue 26): 0 (the default) keeps ``Track.from_refline``'s
+    occupancy map, which is free EVERYWHERE: no walls, so ``/scan`` sees nothing but the
+    map edge and the gym's collision flag cannot fire. That is fine for the odometry-driven
+    tracker canary and is unchanged. A positive value replaces the map with a walled
+    corridor of that half width around the raceline
+    (``track_loader.build_corridor_occupancy``), at the same 0.05 m resolution
+    ``from_refline`` uses, so a LiDAR-driven controller has real walls to react to. The
+    corridor width is a property of the simulated TRACK, not of the vehicle, so it is a
+    bridge parameter rather than a vehicle_params field.
     """
     x, y, velx = load_raceline_xy_speed(raceline_path)
-    return Track.from_refline(x=x, y=y, velx=velx)
+    track = Track.from_refline(x=x, y=y, velx=velx)
+    if track_half_width_m > 0.0:
+        occupancy, origin = build_corridor_occupancy(
+            x, y, track_half_width_m, track.spec.resolution
+        )
+        track.occupancy_map = occupancy
+        track.spec = dataclasses.replace(track.spec, origin=origin)
+    return track
 
 
-def build_env(seed: int, raceline_path: str = "") -> gym.Env:
+def build_env(seed: int, raceline_path: str = "", track_half_width_m: float = 0.0) -> gym.Env:
     """Construct the pinned f1tenth_gym env: single ego agent, headless.
 
     ``raceline_path`` is optional: empty (the default) keeps this node's original
@@ -120,7 +139,11 @@ def build_env(seed: int, raceline_path: str = "") -> gym.Env:
     file instead via ``build_track_from_raceline``, giving a real closed-loop track a
     tracker can complete laps of.
     """
-    track = build_track_from_raceline(raceline_path) if raceline_path else build_synthetic_track()
+    track = (
+        build_track_from_raceline(raceline_path, track_half_width_m)
+        if raceline_path
+        else build_synthetic_track()
+    )
     return gym.make(
         _GYM_ENV_ID,
         config={
@@ -158,7 +181,19 @@ class BridgeNode(Node):
             self.declare_parameter("raceline_path", "", raceline_path_descriptor).value
         )
 
-        self.env = build_env(self._seed, self._raceline_path)
+        track_half_width_descriptor = ParameterDescriptor(
+            description=(
+                "GitHub issue 26: half width (m) of a walled corridor built around the "
+                "raceline so /scan sees real track walls. 0.0 (default) keeps the original "
+                "wall-free map. Only used with raceline_path."
+            ),
+            floating_point_range=[FloatingPointRange(from_value=0.0, to_value=50.0, step=0.0)],
+        )
+        self._track_half_width_m = float(
+            self.declare_parameter("track_half_width_m", 0.0, track_half_width_descriptor).value
+        )
+
+        self.env = build_env(self._seed, self._raceline_path, self._track_half_width_m)
 
         scan_sim = self.env.unwrapped.sim.agents[0].scan_simulator
         self._fov_rad = float(scan_sim.fov)

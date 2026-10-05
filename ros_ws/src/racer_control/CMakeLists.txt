@@ -14,6 +14,7 @@ find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(ackermann_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 # -- ROS-free core library (claude-docs/10-conventions.md: gate/decision logic separated
 #    from node plumbing) -------------------------------------------------------------------
@@ -22,6 +23,13 @@ add_library(racer_control_core
   src/pure_pursuit.cpp
   src/speed_rate_limiter.cpp
   src/float32_wire_margin.cpp
+  # Reactive controllers ported from the old Python reactive_control package (GitHub issue
+  # 26). Same ROS-free rule: none of these include rclcpp or the generated binding.
+  src/laser_scan.cpp
+  src/gap_follow.cpp
+  src/wall_follow.cpp
+  src/pid.cpp
+  src/reactive_speed.cpp
 )
 target_include_directories(racer_control_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -80,6 +88,20 @@ install(TARGETS tracker_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# -- Reactive controllers (GitHub issue 26): gap_follow_node and wall_follow_node. Both
+#    publish /drive_raw only (never /drive) and read physical constants from the generated
+#    binding, same as tracker_node. --------------------------------------------------------
+foreach(reactive_node gap_follow_node wall_follow_node)
+  add_executable(${reactive_node} src/${reactive_node}.cpp)
+  add_dependencies(${reactive_node} racer_control_generate_vehicle_params)
+  target_include_directories(${reactive_node} PRIVATE "${RACER_GENERATED_DIR}")
+  target_link_libraries(${reactive_node} racer_control_core)
+  ament_target_dependencies(${reactive_node} rclcpp rcl_interfaces sensor_msgs ackermann_msgs)
+  install(TARGETS ${reactive_node}
+    DESTINATION lib/${PROJECT_NAME}
+  )
+endforeach()
+
 # -- pure_pursuit_cli: tiny CLI harness for the S.3 cross-language base-controller
 #    divergence test (see src/pure_pursuit_cli.cpp's header comment). Built unconditionally
 #    (not gated behind BUILD_TESTING) -- it is a small, useful-on-its-own diagnostic binary,
@@ -106,6 +128,9 @@ if(BUILD_TESTING)
     test/test_raceline.cpp
     test/test_speed_rate_limiter.cpp
     test/test_float32_wire_margin.cpp
+    test/test_laser_scan.cpp
+    test/test_gap_follow.cpp
+    test/test_wall_follow.cpp
   )
   target_link_libraries(test_racer_control_core racer_control_core)
   target_compile_definitions(test_racer_control_core PRIVATE
@@ -115,6 +140,15 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_tracker_node_launch.py
     TARGET test_tracker_node_launch
+  )
+  # Reactive controllers (GitHub issue 26).
+  add_launch_test(test/test_gap_follow_node_launch.py
+    TARGET test_gap_follow_node_launch
+    TIMEOUT 120
+  )
+  add_launch_test(test/test_wall_follow_node_launch.py
+    TARGET test_wall_follow_node_launch
+    TIMEOUT 120
   )
   # /odom staleness clock-source regression (same root cause as racer_safety GitHub issue
   # #22). Its own launch file because `use_sim_time` is set at node construction.

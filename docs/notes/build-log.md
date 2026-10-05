@@ -1661,3 +1661,71 @@ tests) passes.
 Owner request from the bench test: a tap from rest should start the car moving, not crawl through the VESC deadband. `keyboard_teleop_node` gains `min_speed_mps` (default 0.0 = disabled, the old behaviour), threaded through `build_teleop_config` into the pure keymap. From rest a throttle key sets max(min_speed_mps, speed_step_mps); above that it adds the step; throttle-down subtracts the step and goes to exactly 0 if the result would be below the minimum. SPACE and q are unchanged. With `allow_reverse` the same shape applies to |speed| on the negative side, always passing through 0. Validation: finite, >= 0, <= the maximum speed (and the reverse limit when reverse is allowed), else the node refuses to start.
 
 `car_teleop.launch.py` first-drive profile is now min speed 0.8 m/s (`FIRST_DRIVE_MIN_SPEED_MPS`, launch argument `teleop_min_speed_mps`) with step 0.25 m/s, the owner-tested values. The runbook's second-terminal command is `--ros-args -p min_speed_mps:=0.8 -p speed_step_mps:=0.25`, its tap table is rewritten, and the node startup line now prints the minimum. Tests: keymap unit tests for every branch, node parameter tests, launch profile tests; `ros_build_test.sh` in ros-dev passes (459 tests), ruff clean.
+
+## 2026-10-05 -- LiDAR software ready for the RPLIDAR C1 (roadmap 2.3), bench not done
+
+The C1 arrives tonight. This entry is the software side only: nothing here has touched the
+head, and roadmap 2.3 stays unticked until `docs/notes/first-boot-runbook.md`'s new "LiDAR
+first power-up" section passes on the car.
+
+**Driver.** Slamtec's `sllidar_ros2`, built from source in `docker/car/Dockerfile` at commit
+`34300099fadfc772965962dec837bf436706188f` (main's HEAD today; the repo has no `humble`
+branch, main supports Humble and added the C1 in 32cf7755). Installed into
+`/opt/racer_thirdparty`, which the image puts on `AMENT_PREFIX_PATH`, so the usual two
+`source` lines find it. The apt `ros-humble-rplidar-ros` was not used: C1 support was not
+verified. It lives in the image rather than `ros_ws/src` because the repo's other third-party
+ROS packages come from the image too and CI's ros-dev has no use for Slamtec's SDK. The layer's
+commands were replayed in the ros-dev image (jammy, Humble, arm64): it builds and
+`ros2 pkg prefix sllidar_ros2` resolves after sourcing Humble and an overlay. The car image
+itself has not been rebuilt.
+
+Two facts read from the driver source that the rest depends on: with `angle_compensate` on,
+each revolution is binned into 360 x floor(sample rate / scan frequency / 360 + 1) beams, 720
+for the C1 at 5 kHz and 10 Hz, spanning exactly 2 pi; and the published scan is rotated by pi
+from the head's own 0 degree mark (`angle = pi - raw`). `/scan` is published reliable,
+KeepLast(10), which matches safety_node's best_effort subscriber.
+
+**Launch.** `racer_bringup/launch/lidar.launch.py` starts `sllidar_node` (serial_port
+/dev/ttyUSB0, 460800 baud, frame laser, angle_compensate true, scan_mode Standard, all launch
+arguments) and a `base_link -> laser` static transform taken from vehicle_params. It refuses
+to start while any mount field is null. `car_teleop.launch.py` gains `lidar` (default false)
+and `lidar_serial_port`; the recorder regex already had `/scan`.
+
+**Why `lidar` defaults to false.** Besides the bench not having happened: `/scan` arms
+safety_node's TTC gate. The TTC thresholds are NOT null (PROVISIONAL 0.5 s brake / 1.0 s warn
+since 2026-09-13), and safety_node takes the minimum valid range over the whole 360 degree
+scan with no forward cone and no self-return filter. At the 0.8 m/s first-tap speed any
+return within 0.4 m in any direction, the car's own mount, the person behind it, zeroes the
+throttle. Fails safe, but it would look like a broken throttle on the first drive with the
+LiDAR. A forward cone or self-filter in safety_node is a separate safety-layer change and was
+not made here.
+
+**vehicle_params 0.5.1 -> 0.6.0.** New required section `sensors.lidar_spec` with the C1's
+datasheet numbers in SI (10 Hz nominal, 8 Hz minimum, 5000 Hz samples, 0.012566 rad, 2 pi
+FOV, 0.05 to 12 m), so `lidar_check` and the launch file read them through the generated
+binding instead of hand-writing them. `sensors.lidar` mount went from null to PROVISIONAL
+placeholders (x 0.10, y 0.0, z 0.15 m, yaw 0.0 rad), NOT measured; the yaw may well turn out
+to be pi, which the runbook's orientation check settles. Minor bump because the required set
+changed. The racer_policy schema-version pins and the gen_params fixture (`lidar_spec` added
+with arbitrary values, as the fixture's own header requires) were updated to match.
+
+**Check tool.** `ros2 run racer_tools lidar_check` listens to `/scan` for `duration_s`
+(default 10 s) and reports rate from header stamps, largest gap, beam count, declared FOV,
+declared and observed range band and invalid fraction. Exit 0 PASS, 1 FAIL (rate below
+`min_scan_rate_hz`, a non-increasing stamp, beam count not 720, FOV off by more than one
+angular step, invalid fraction above 0.5, or no valid return at all), 2 no scans. Logic in
+`racer_tools/scan_check.py`, pure.
+
+**udev.** `tools/udev/99-racer-lidar.rules` adds `/dev/lidar` for the CP210x (10c4:ea60),
+group dialout. UNVERIFIED, and it matches any CP210x, so pin it to the adapter's serial if a
+second one is fitted.
+
+**Tests.** L1: `racer_tools/test/test_scan_check.py` (43 cases, 100 percent line and branch on
+`scan_check.py`), `racer_bringup/test/test_lidar_launch.py` (launch arguments, transform from
+vehicle_params and refusal on null, driver parameters and the /scan remap, the car_teleop
+include and its default). L3: `racer_tools/test/test_lidar_check_node_exit_codes.py` runs the
+installed `lidar_check` against a mocked /scan (healthy stream exits 0, a stream at half the
+minimum rate exits 1, silence exits 2). `ros_build_test.sh` in the ros-dev image: 518 tests,
+0 failures. `tools/` pytest 116, `racer_policy` 27, `sim/racer_gym` 67, ruff clean, hadolint
+clean with the repo config. Not run: anything on the Jetson or with a real C1, and a build of
+the car image itself.

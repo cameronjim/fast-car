@@ -13,7 +13,10 @@
     are the pure, L1-tested logic; the node itself is thin ROS plumbing). Milestone 5 adds
     twist_teleop_adapter_node: converts geometry_msgs/Twist (Foxglove's Teleop panel) to
     /drive_raw so the car can be driven from the browser, no terminal tty needed
-    (racer_tools/twist_teleop.py is the pure, L1-tested conversion/timeout logic).
+    (racer_tools/twist_teleop.py is the pure, L1-tested conversion/timeout logic). Roadmap
+    2.3 adds lidar_check: listens to /scan for a few seconds and fails on a low scan rate or a
+    beam count / field of view that disagrees with vehicle_params sensors.lidar_spec
+    (racer_tools/scan_check.py is the pure, L1-tested statistics and pass/fail logic).
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -25,6 +28,7 @@
   <depend>ackermann_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
   <!-- tools/gen_params.py's own dependencies (racer_tools/vehicle_params_loader.py loads it
        in-process on the system python3 ament_python nodes run under; see that module's
        docstring for why this differs from sim/racer_gym's approach). -->

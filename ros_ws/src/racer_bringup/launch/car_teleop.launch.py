@@ -43,6 +43,27 @@ starts a rosbag2 recorder AND rail_voltage_node by default, and a recorder that 
 the launch down with it -- see "THE RECORDER IS LOAD-BEARING" below. `record:=false` exists
 for bench work where nothing can move (pin-level checks, a neutral-output verification with
 the battery out); a DRIVE with `record:=false` is a bug, not a choice.
+
+LIDAR IS OFF BY DEFAULT (roadmap 2.3, 2026-10-05). `lidar:=true` includes lidar.launch.py
+(sllidar_node publishing /scan, plus the base_link -> laser static transform), and the
+recorder's regex already matches /scan, so the scan lands in the run's bag. It defaults to
+false, and claude-docs/04-architecture.md does not ask for a configured sensor to fail the
+launch when it is missing, so nothing argues for true yet. Two reasons for false:
+
+  * The bench has not happened: the C1 has never been plugged into this Jetson, the driver
+    has never run in the car image, and the mount pose in vehicle_params is a PROVISIONAL
+    placeholder. Defaulting a sensor that is not fitted to on would put a serial-port error
+    at the top of every teleop session (sllidar_node exits when it cannot open the port;
+    nothing shuts the rest of the launch down on that, unlike the recorder).
+  * /scan ARMS safety_node's TTC gate. limits.ttc_brake_s / ttc_warning_s are filled in
+    (PROVISIONAL 0.5 s / 1.0 s), and safety_node takes the minimum valid range over the WHOLE
+    scan, all 360 degrees, with no forward cone and no self-return filter. A C1 on the top
+    plate will see parts of the car itself, the person holding the kill switch, and anything
+    behind the car; at the 0.8 m/s first-tap speed, any return closer than 0.4 m in any
+    direction zeroes the throttle. That is the safe direction, but it would make a first drive
+    with the LiDAR look like a broken throttle. Turn this on for a drive only after the
+    returns have been looked at in Foxglove (docs/notes/first-boot-runbook.md "LiDAR first
+    power-up").
 """
 
 import datetime
@@ -55,6 +76,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
     ExecuteProcess,
+    IncludeLaunchDescription,
     LogInfo,
     OpaqueFunction,
     RegisterEventHandler,
@@ -62,11 +84,17 @@ from launch.actions import (
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 _FOXGLOVE_BRIDGE_PORT = 8765
+
+#: lidar.launch.py sits next to this file both in the source tree and in the installed share
+#: directory, so it is found relative to this file rather than through the ament index (which
+#: also keeps the L1 launch-description tests free of an installed racer_bringup).
+_LIDAR_LAUNCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lidar.launch.py")
 
 #: FIRST-DRIVE TELEOP PROFILE (GitHub issue #72). keyboard_teleop_node's tap sizes default to
 #: a derivation from vehicle_params (one 50 Hz control period at the vehicle's maximum
@@ -100,7 +128,7 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.8
 
 #: Everything a drive has to be reconstructable from (CLAUDE.md invariant 5). Passed to
 #: `ros2 bag record --regex`, not as a positional topic list, for two reasons: a topic that
-#: does not exist on this run (`/scan` -- no LiDAR is fitted yet, roadmap 2.x) is simply not
+#: does not exist on this run (`/scan` when lidar:=false, the default) is simply not
 #: matched instead of being waited on, and `/telemetry/.*` picks up every rail_voltage_node
 #: channel topic without this file having to know the board's INA3221 labels.
 #:
@@ -110,7 +138,7 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.8
 #:   /teleop/cmd_vel   the browser Teleop panel's raw input, upstream of /drive_raw
 #:   /telemetry/...    rail volts/amps -- invariant 5's second half, and the only way a
 #:                     brownout is distinguishable from a control fault after the fact
-#:   /scan             LiDAR, when one is fitted
+#:   /scan             LiDAR, with lidar:=true (roadmap 2.3)
 #:   /rosout           every node's log stream, in the same file as the data it explains
 #:   /parameter_events which parameters the run actually ran with
 _RECORDED_TOPIC_REGEX = (
@@ -429,6 +457,26 @@ def generate_launch_description() -> LaunchDescription:
         ),
     )
 
+    lidar_arg = DeclareLaunchArgument(
+        "lidar",
+        default_value="false",
+        description=(
+            "Include lidar.launch.py: sllidar_node publishing /scan (recorded in the bag) and "
+            "the base_link -> laser static transform from vehicle_params. Default false until "
+            "the bench check passes; NOTE that /scan arms safety_node's TTC gate over all 360 "
+            "degrees, so returns from the car itself can zero the throttle. See this file's "
+            "module docstring."
+        ),
+    )
+    lidar_serial_port_arg = DeclareLaunchArgument(
+        "lidar_serial_port",
+        default_value="/dev/ttyUSB0",
+        description=(
+            "Serial device of the LiDAR's USB-UART adapter, passed to lidar.launch.py as "
+            "serial_port. /dev/lidar with the udev rule in tools/udev/."
+        ),
+    )
+
     safety_node = Node(
         package="racer_safety",
         executable="safety_node",
@@ -519,6 +567,11 @@ def generate_launch_description() -> LaunchDescription:
     bag_recorder = OpaqueFunction(
         function=_bag_actions, condition=IfCondition(LaunchConfiguration("record"))
     )
+    lidar_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(_LIDAR_LAUNCH_FILE),
+        launch_arguments={"serial_port": LaunchConfiguration("lidar_serial_port")}.items(),
+        condition=IfCondition(LaunchConfiguration("lidar")),
+    )
     foxglove_bridge_node = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -549,12 +602,17 @@ def generate_launch_description() -> LaunchDescription:
             bag_storage_arg,
             rail_voltage_arg,
             ina3221_root_arg,
+            lidar_arg,
+            lidar_serial_port_arg,
             # rail_voltage_node BEFORE the recorder so its topics exist by the time
             # `ros2 bag record --regex` does its first discovery pass, and the recorder
             # before the command-path nodes for the same reason: rosbag2 does keep
             # discovering, but starting the log first is the ordering invariant 5 implies.
             rail_voltage_node,
             bag_recorder,
+            # After the recorder, like the command-path nodes: the log starts first, and the
+            # recorder keeps discovering, so /scan is picked up once sllidar_node publishes.
+            lidar_launch,
             safety_node,
             pwm_output_node,
             teleop_node,

@@ -22,6 +22,11 @@ if(BUILD_TESTING)
   # launch-description inspection, no processes started.
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_car_teleop_profile test/test_car_teleop_profile.py)
+  # L1 check of lidar.launch.py and car_teleop.launch.py's `lidar` argument (roadmap 2.3):
+  # launch arguments and defaults, the base_link -> laser transform taken from vehicle_params
+  # (and refused on a null mount field), the driver's /scan remap. Description inspection
+  # only, so sllidar_ros2, which only the car image builds, is never started.
+  ament_add_pytest_test(test_lidar_launch test/test_lidar_launch.py)
 
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_car_teleop_launch.py

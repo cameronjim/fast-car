@@ -51,6 +51,41 @@ and `docs/notes/first-boot-runbook.md` for the full reasoning. `docker/ros-dev/D
 deliberately does NOT set `ROS_DOMAIN_ID`, so the launch tests' own per-file
 `os.environ.setdefault("ROS_DOMAIN_ID", ...)` calls keep working.
 
+## LiDAR driver (added 2026-10-05, roadmap 2.3)
+
+The image builds Slamtec's `sllidar_ros2` (the RPLIDAR C1's ROS 2 driver) from source at a
+pinned commit, `34300099fadfc772965962dec837bf436706188f` (the repo has no `humble` branch;
+`main` supports Humble and lists the C1). It is installed into its own prefix,
+`/opt/racer_thirdparty`, which the image puts on `AMENT_PREFIX_PATH`, so after the usual
+`source /opt/ros/humble/setup.bash && source install/setup.bash` the package is found with no
+extra step. The apt `ros-humble-rplidar-ros` package is deliberately not used: nobody has
+verified it supports the C1. Why it lives in the image rather than `ros_ws/src` is in the
+`Dockerfile` comment. **The image has to be rebuilt to get this layer**, and `ros_ws` rebuilt
+for `lidar.launch.py` and `lidar_check`.
+
+**Running with the LiDAR.** The C1 talks over a CP210x USB-UART adapter, which shows up on the
+Jetson as `/dev/ttyUSB0` (group `dialout`). The unprivileged car container needs the device
+node and the group, nothing else:
+
+```sh
+  --device /dev/ttyUSB0 \
+  --group-add "$(getent group dialout | cut -d: -f3)" \
+```
+
+Or, with `tools/udev/99-racer-lidar.rules` installed on the host, use the stable symlink, so
+the LiDAR keeps its name once another USB serial device is plugged in:
+
+```sh
+  --device /dev/lidar \
+  --group-add "$(getent group dialout | cut -d: -f3)" \
+  ...  ros2 launch racer_bringup lidar.launch.py serial_port:=/dev/lidar
+```
+
+`docs/notes/first-boot-runbook.md`'s "LiDAR first power-up" has the full command lines, the
+`lidar_check` run and the expected numbers. With the whole teleop stack, add the same two
+flags to the "Start the stack" command and pass `lidar:=true` (read that launch argument's
+description first: `/scan` arms `safety_node`'s TTC gate).
+
 ## Base image tag vs. the device (decided 2026-09-13)
 
 The bench Jetson runs L4T R36.4.4 (JetPack 6.2.1); this image pins r36.4.0 (JetPack 6.1).
@@ -73,6 +108,7 @@ stack needs no CUDA, so it gates phase 5, not first boot.
 | ROS 2 Humble installs cleanly via apt on L4T r36.4.0's Ubuntu 22.04 userspace | **Yes** -- 2026-09-21, same build. `ros2 pkg list` works out of the image and `ROS_DOMAIN_ID=42` / `RMW_IMPLEMENTATION=rmw_fastrtps_cpp` are present in a login shell as intended. |
 | The image can actually run `car_teleop.launch.py` | **Yes** -- 2026-09-21, unprivileged and non-root, both PWM channels driven and confirmed at the mux. See `docs/notes/first-boot-runbook.md`'s "Launch and drive". |
 | A `colcon build` of `ros_ws` succeeds inside this image | **Yes** -- 2026-09-21, 6 packages in 68 s, after two fixes: `apt-get update` before `rosdep install` (the image deletes the apt lists), and `cmake -E env --unset=PYTHONPATH` around the vehicle_params codegen (this image's `ENV PYTHONPATH` was shadowing the `tools/` uv venv). |
+| The `sllidar_ros2` layer builds and is found by `ros2` | **Partly** -- the layer's exact commands were replayed in the `ros-dev` image (Ubuntu 22.04, Humble, arm64) on 2026-10-05: it builds, `ros2 pkg prefix sllidar_ros2` resolves after sourcing `/opt/ros/humble` and an overlay workspace, and `ldd` finds every library. The car image itself has not been rebuilt with it, and the driver has never talked to a real C1. |
 | The Jetson torch wheel installs and imports `torch` correctly | **No** -- and with the new default (`INSTALL_TORCH=skip`) it is not even attempted. Unchanged from before: no real `TORCH_WHEEL_URL` has ever been supplied. |
 | The `INSTALL_TORCH` skip/required/invalid branches behave as documented | Yes, for the shell logic only -- the RUN step's script was extracted and executed in a plain `ubuntu:22.04` container on 2026-09-13: `skip` prints the notice, writes the marker and exports `RACER_TORCH=absent` in a login shell; `required` with no URL exits 1; an invalid value exits 1. That is the branch logic, NOT a build of this image. |
 | `nvcr.io/nvidia/l4t-jetpack` has no tag matching the device's JetPack 6.2.1 | Yes -- registry tag list queried 2026-09-13, newest is `r36.4.0`. See "Base image tag vs. the device" above. |

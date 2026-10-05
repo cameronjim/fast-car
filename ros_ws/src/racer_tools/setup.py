@@ -16,7 +16,8 @@ setup(
     maintainer_email="64621038+cameronjim@users.noreply.github.com",
     description=(
         "Teleop, bag utilities, timing-gate reader (roadmap milestone 1: keyboard_teleop_node; "
-        "milestone 3: raceline_publisher_node; milestone 5: twist_teleop_adapter_node)."
+        "milestone 3: raceline_publisher_node; milestone 5: twist_teleop_adapter_node; "
+        "roadmap 2.3: lidar_check)."
     ),
     license="TODO: License declaration",
     tests_require=["pytest"],
@@ -25,6 +26,7 @@ setup(
             "keyboard_teleop_node = racer_tools.keyboard_teleop_node:main",
             "raceline_publisher_node = racer_tools.raceline_publisher_node:main",
             "twist_teleop_adapter_node = racer_tools.twist_teleop_adapter_node:main",
+            "lidar_check = racer_tools.lidar_check_node:main",
         ],
     },
 )

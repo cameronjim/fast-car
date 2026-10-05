@@ -88,6 +88,15 @@ sensors:
     mount_z_m: 0.1
     mount_yaw_rad: 0.0
     timestamp_offset_s: 0.002
+  lidar_spec:
+    model: "fixture-lidar"
+    nominal_scan_rate_hz: 15.0
+    min_scan_rate_hz: 12.0
+    sample_rate_hz: 16000.0
+    angular_resolution_rad: 0.0063
+    field_of_view_rad: 4.71
+    range_min_m: 0.1
+    range_max_m: 30.0
 
 limits:
   global_speed_cap_mps: 8.0

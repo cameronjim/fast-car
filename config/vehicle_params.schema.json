@@ -368,10 +368,61 @@
     "sensors": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["imu", "lidar"],
+      "required": ["imu", "lidar", "lidar_spec"],
       "properties": {
         "imu": {"$ref": "#/$defs/sensor_extrinsic", "description": "IMU is designed to mount at the CG (claude-docs/06-vehicle-params.md); exact offsets are null until Phase 2 ingest-board measurement."},
-        "lidar": {"$ref": "#/$defs/sensor_extrinsic", "description": "LiDAR mounting pose; null until Phase 2 (roadmap 2.3)."}
+        "lidar": {"$ref": "#/$defs/sensor_extrinsic", "description": "LiDAR mounting pose in base_link (roadmap 2.3). PROVISIONAL values until the mount is measured on the car; racer_bringup/launch/lidar.launch.py publishes the base_link -> laser static transform from these and refuses to start while any of the four pose fields is null."},
+        "lidar_spec": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Datasheet properties of the fitted 2D LiDAR head (roadmap 2.3). These are what racer_tools' lidar_check compares a live /scan against, and what lidar.launch.py hands the driver as its scan_frequency. Datasheet values, not measurements: a measured scan rate goes into a dated docs/notes entry, not here.",
+          "required": [
+            "model", "nominal_scan_rate_hz", "min_scan_rate_hz", "sample_rate_hz",
+            "angular_resolution_rad", "field_of_view_rad", "range_min_m", "range_max_m"
+          ],
+          "properties": {
+            "model": {
+              "type": "string", "maxLength": 63,
+              "units": "none (identifier)",
+              "description": "Vendor model of the LiDAR head, for reports and bag provenance."
+            },
+            "nominal_scan_rate_hz": {
+              "type": "number", "exclusiveMinimum": 0, "maximum": 100,
+              "units": "Hz (1/s)",
+              "description": "Typical full-revolution scan rate per the datasheet. Passed to the driver as scan_frequency, which sllidar_ros2 uses to size its angle-compensated beam array."
+            },
+            "min_scan_rate_hz": {
+              "type": "number", "exclusiveMinimum": 0, "maximum": 100,
+              "units": "Hz (1/s)",
+              "description": "Lowest scan rate the datasheet allows. lidar_check fails a scan stream measured below this."
+            },
+            "sample_rate_hz": {
+              "type": "number", "exclusiveMinimum": 0, "maximum": 1000000,
+              "units": "Hz (1/s), range samples per second",
+              "description": "Range samples per second per the datasheet."
+            },
+            "angular_resolution_rad": {
+              "type": "number", "exclusiveMinimum": 0, "maximum": 0.5,
+              "units": "rad",
+              "description": "Angular spacing between samples at the nominal scan rate, per the datasheet."
+            },
+            "field_of_view_rad": {
+              "type": "number", "exclusiveMinimum": 0, "maximum": 6.2832,
+              "units": "rad",
+              "description": "Horizontal field of view per the datasheet (2 pi for a 360 degree head)."
+            },
+            "range_min_m": {
+              "type": "number", "minimum": 0, "maximum": 10,
+              "units": "m",
+              "description": "Minimum measurable range per the datasheet."
+            },
+            "range_max_m": {
+              "type": "number", "exclusiveMinimum": 0, "maximum": 100,
+              "units": "m",
+              "description": "Maximum measurable range per the datasheet."
+            }
+          }
+        }
       }
     },
     "limits": {

@@ -135,6 +135,58 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rosdep update \
     && rm -rf /var/lib/apt/lists/*
 
+# --- LiDAR driver: sllidar_ros2 from source at a pinned commit (added 2026-10-05, 2.3) ---
+# The car's 2D LiDAR is a Slamtec RPLIDAR C1 (docs/notes/phase2-parts-2026-09-30.md section
+# A1). Its driver is Slamtec's own sllidar_ros2. There is no ros-humble-sllidar-ros2 apt
+# package, and the apt ros-humble-rplidar-ros package was NOT used because nobody verified it
+# speaks the C1's protocol; sllidar_ros2 lists the C1 as supported and ships the C1 launch
+# file racer_bringup/launch/lidar.launch.py copies its settings from.
+#
+# PINNED, same discipline as the digest above and the f1tenth_gym commit in
+# docker/sim-cpu/pyproject.toml. Slamtec's repo has no humble branch (only main and
+# dev-branch, checked with `git ls-remote` on 2026-10-05); main supports Humble. The pin is
+# main's HEAD on 2026-10-05, 34300099 "bugfix:set the minimum distance to 5cm" (2024-06-17),
+# which sits on top of 32cf7755 "RPLIDAR C1 support". The build refuses unless HEAD is exactly
+# this commit after checkout, so a moved or rewritten upstream cannot change what is built.
+#
+# WHY HERE AND NOT IN ros_ws/src. Every third-party ROS dependency in this repo so far comes
+# from the image (foxglove_bridge and the rosbag2 mcap plugin from apt), not from a vendored
+# copy, and the repo has no submodules or .repos files. Vendoring sllidar_ros2 into
+# ros_ws/src would also make CI's l3-and-cpp job (ros-dev, no LiDAR) compile Slamtec's SDK on
+# every push for nothing. So it is built once here, into its own merged prefix
+# /opt/racer_thirdparty.
+#
+# HOW ROS FINDS IT. AMENT_PREFIX_PATH is preset to that prefix. /opt/ros/humble/setup.bash
+# and a colcon workspace's install/setup.bash both PREPEND to AMENT_PREFIX_PATH rather than
+# reset it, so `ros2 launch` / `ros2 run` find sllidar_ros2 after the usual two `source`
+# lines in docs/notes/first-boot-runbook.md with no extra step. sllidar_node links only
+# against rclcpp/sensor_msgs/std_srvs from /opt/ros/humble (the Slamtec SDK is compiled into
+# the executable), so no LD_LIBRARY_PATH entry is needed. The RUN after the build checks the
+# lookup. These exact steps were replayed in the ros-dev image (jammy, Humble, arm64) on
+# 2026-10-05: the package builds, `ros2 pkg prefix sllidar_ros2` resolves after sourcing
+# /opt/ros/humble and an overlay workspace, and ldd finds every library. The car image itself
+# has still not been rebuilt with this layer.
+#
+# Build tools it needs (cmake, build-essential, git, colcon) are already in the layer above.
+# Built with set -e but not -u: ROS's setup.sh reads variables that are legitimately unset.
+# SC1091 is shellcheck saying it cannot follow /opt/ros/humble/setup.sh from here (it only
+# exists inside the image); sourcing it is the point, so it is ignored for this RUN only.
+ARG SLLIDAR_ROS2_REPO=https://github.com/Slamtec/sllidar_ros2.git
+ARG SLLIDAR_ROS2_COMMIT=34300099fadfc772965962dec837bf436706188f
+# hadolint ignore=SC1091
+RUN set -e; \
+    git clone --quiet --no-checkout "$SLLIDAR_ROS2_REPO" /tmp/thirdparty_ws/src/sllidar_ros2; \
+    git -C /tmp/thirdparty_ws/src/sllidar_ros2 checkout --quiet --detach "$SLLIDAR_ROS2_COMMIT"; \
+    test "$(git -C /tmp/thirdparty_ws/src/sllidar_ros2 rev-parse HEAD)" = "$SLLIDAR_ROS2_COMMIT"; \
+    . /opt/ros/humble/setup.sh; \
+    colcon --log-base /tmp/thirdparty_ws/log build --base-paths /tmp/thirdparty_ws/src \
+        --build-base /tmp/thirdparty_ws/build --merge-install --install-base /opt/racer_thirdparty \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release; \
+    rm -rf /tmp/thirdparty_ws
+ENV AMENT_PREFIX_PATH=/opt/racer_thirdparty
+# Refuse the build if a sourced ROS environment cannot see the driver.
+RUN bash -c 'source /opt/ros/humble/setup.bash && ros2 pkg prefix sllidar_ros2'
+
 # --- Jetson torch: OPTIONAL for the control-stack phase ---------------------------------
 # NVIDIA publishes JetPack-version-matched torch wheels at
 # https://developer.download.nvidia.com/compute/redist/jp/ (one subdirectory per JetPack

@@ -1,0 +1,22 @@
+# 99-racer-lidar.rules: a stable /dev/lidar symlink for the RPLIDAR C1's USB-UART adapter
+# (roadmap 2.3, docs/notes/first-boot-runbook.md "LiDAR first power-up").
+#
+# The C1 ships with a Silicon Labs CP210x adapter, USB ID 10c4:ea60. It enumerates as
+# /dev/ttyUSB0 when it is the only USB serial adapter on the Jetson, but the number follows
+# plug order, so once the ingest board or anything else serial is plugged in, "ttyUSB0" stops
+# meaning "the LiDAR". This rule adds /dev/lidar pointing at whichever ttyUSBn the adapter got,
+# group dialout, mode 0660, so the unprivileged car container reaches it with
+# `--device /dev/lidar --group-add <dialout gid>`.
+#
+# 10c4:ea60 is the generic CP210x ID: any other CP210x board would match too. If a second one
+# is ever fitted, pin this rule to the adapter's own serial number (read it with
+# `udevadm info -a -n /dev/ttyUSB0 | grep '{serial}'`) by adding ATTRS{serial}=="<that>".
+#
+# Install on the Jetson host (not in the container):
+#   sudo cp tools/udev/99-racer-lidar.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   ls -l /dev/lidar        # expect: /dev/lidar -> ttyUSB0
+#
+# UNVERIFIED: written before the C1 was ever plugged into the Jetson (2026-10-05).
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="lidar", GROUP="dialout", MODE="0660"

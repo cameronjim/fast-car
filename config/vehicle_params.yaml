@@ -103,6 +103,15 @@
 # exactly neutral and the first keyboard tap turns the wheels. New required fields change the
 # schema's required-field set, so this is a minor bump per rule 5. No existing value changed.
 # See the actuation section below and docs/notes/build-log.md's 2026-09-29 entry for #77.
+#
+# schema_version bumped 0.5.1 -> 0.6.0 on 2026-10-05 (roadmap 2.3, RPLIDAR C1): a new
+# REQUIRED section, sensors.lidar_spec, carries the LiDAR head's datasheet numbers (scan rate,
+# sample rate, resolution, field of view, range) that racer_tools' lidar_check compares a live
+# /scan against and that racer_bringup/launch/lidar.launch.py hands the driver. A new required
+# section changes the schema's required-field set, so this is a minor bump per rule 5. The
+# four sensors.lidar mount fields went from null to PROVISIONAL placeholders in the same
+# change so the base_link -> laser transform can be published at all; they are NOT measured.
+# See the sensors section below and docs/notes/build-log.md's 2026-10-05 entry.
 
 chassis:
   mass_kg: 3.74                    # gym: m
@@ -326,12 +335,39 @@ sensors:
     mount_z_m: null
     mount_yaw_rad: null
     timestamp_offset_s: null        # needs the sync design doc (roadmap 2.2)
+  # base_link -> laser, published as a static transform by racer_bringup/launch/lidar.launch.py
+  # (roadmap 2.3). Flat mount assumed: roll and pitch are zero, there is no field for them.
+  #
+  #   !! THE FOUR MOUNT VALUES BELOW ARE PROVISIONAL PLACEHOLDERS, NOT MEASURED. !!
+  #
+  # Written 2026-10-05, the day the RPLIDAR C1 arrived and before it was mounted, for a head
+  # centred on the top plate a little ahead of base_link. They exist so lidar.launch.py can
+  # publish a transform at all (it refuses while any of them is null). Replace them with tape
+  # measurements once the printed mount is on the car, and check the yaw on the bench with an
+  # object placed straight ahead of the car: in Foxglove it must appear on +x of base_link
+  # (docs/notes/first-boot-runbook.md "LiDAR first power-up"). sllidar_ros2 publishes its scan
+  # rotated by pi from the head's own 0 degree mark (sllidar_node.cpp publish_scan: angle =
+  # pi - raw angle), so 0.0 here may well turn out to be pi.
   lidar:
-    mount_x_m: null                 # needs Phase 2 mounting (roadmap 2.3)
-    mount_y_m: null
-    mount_z_m: null
-    mount_yaw_rad: null
+    mount_x_m: 0.10                 # PROVISIONAL (placeholder, NOT measured) -- see above
+    mount_y_m: 0.0                  # PROVISIONAL (placeholder, NOT measured) -- see above
+    mount_z_m: 0.15                 # PROVISIONAL (placeholder, NOT measured) -- see above
+    mount_yaw_rad: 0.0              # PROVISIONAL (placeholder, NOT measured; may be pi) -- see above
     timestamp_offset_s: null        # needs the sync design doc (roadmap 2.2)
+  # Datasheet numbers for the fitted head, Slamtec RPLIDAR C1 (docs/notes/phase2-parts-2026-09-30.md
+  # section A1: 0.05 to 12 m, 5 kHz sample rate, 8 to 12 Hz scan with 10 Hz typical, 0.72
+  # degree resolution, 360 degrees). Converted to SI at this boundary (CLAUDE.md invariant 4):
+  # 0.72 degree = 0.72 * pi / 180 = 0.012566 rad, 360 degree = 2 pi = 6.283185 rad. These are
+  # vendor figures, not measurements; the measured rate goes in a dated docs/notes entry.
+  lidar_spec:
+    model: "slamtec-rplidar-c1"
+    nominal_scan_rate_hz: 10.0      # datasheet: 10 Hz typical
+    min_scan_rate_hz: 8.0           # datasheet: 8 to 12 Hz; lidar_check fails below this
+    sample_rate_hz: 5000.0          # datasheet: 5 kHz
+    angular_resolution_rad: 0.012566  # datasheet: 0.72 degree
+    field_of_view_rad: 6.283185     # datasheet: 360 degree
+    range_min_m: 0.05               # datasheet: 0.05 m
+    range_max_m: 12.0               # datasheet: 12 m
 
 limits:
   global_speed_cap_mps: 20.0        # gym: v_max -- a dynamics-model validity bound, NOT a validated safety cap; must be
@@ -378,10 +414,11 @@ meta:
   # steering.pwm_left_bound are the exception as of 2026-09-21: they ARE measured (see the
   # steering section above). Added 2026-09-29: actuation.throttle_deadband_us is
   # PROVISIONAL (a copied VESC setting), and the two actuation.*_pwm_achieved_period_us
-  # fields are MEASURED at the mux. sysid_session_id stays "none-preliminary" -- there is still
-  # no on-vehicle fit of any kind, and this file is less fitted than that name implies, not
-  # more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
+  # fields are MEASURED at the mux. Added 2026-10-05: the four sensors.lidar mount fields are
+  # PROVISIONAL placeholders; sensors.lidar_spec is datasheet values. sysid_session_id stays
+  # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
+  # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.5.1"
+  schema_version: "0.6.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

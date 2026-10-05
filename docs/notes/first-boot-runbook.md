@@ -907,8 +907,8 @@ immutable).
 
 **What is recorded**, by regex, so a topic that does not exist yet is skipped rather than
 waited for: `/drive_raw`, `/drive`, `/safety/events`, `/teleop/cmd_vel`, everything under
-`/telemetry/` (the rail volts and amps), `/scan` when a LiDAR is finally fitted, plus
-`/rosout` and `/parameter_events`.
+`/telemetry/` (the rail volts and amps), `/scan` when the launch runs with `lidar:=true`
+(see "LiDAR first power-up" below), plus `/rosout` and `/parameter_events`.
 
 **Format: mcap on the car, sqlite3 elsewhere.** `bag_storage:=auto` (the default) picks mcap
 when `ros-humble-rosbag2-storage-mcap` is installed, which `docker/car/Dockerfile` does, and
@@ -955,6 +955,177 @@ rsync -av racer@10.0.0.226:~/car/data/bags/2026-09-21T19-42-20_car_teleop/ \
 `ros2 bag info <dir>` inside the `ros-dev` container (an mcap bag needs the mcap plugin, which
 `ros-dev` does not have -- `pip install mcap` and the `mcap` CLI, or re-record with
 `bag_storage:=sqlite3`, are the two ways round that until `ros-dev` gains the plugin).
+
+## LiDAR first power-up (roadmap 2.3; UNVERIFIED, written 2026-10-05 before the C1 arrived)
+
+**Nothing in this section has been run.** It is the procedure for the RPLIDAR C1's first
+session on the Jetson, written from the driver source and the datasheet. The car does not move
+in any step: no battery is needed, the VESC and servo can stay unpowered, and the LiDAR is
+started on its own, not with the teleop stack.
+
+What it proves when it passes: the C1 enumerates, the driver in the car image talks to it,
+`/scan` arrives at the datasheet rate with the expected shape, and the `base_link -> laser`
+transform points the right way. What it does not prove: the mount values (still PROVISIONAL
+in `config/vehicle_params.yaml` until measured), LiDAR timing against the other sensors
+(roadmap 2.2), or anything about driving with the LiDAR.
+
+### L1. Before you plug it in: rebuild the image and the workspace
+
+The `sllidar_ros2` driver is a new layer in `docker/car/Dockerfile`, and `lidar.launch.py` /
+`lidar_check` are new in `ros_ws`. On the Jetson, from `~/car`, after pulling this branch:
+
+```sh
+docker build -t car:local docker/car
+docker run --rm -v "$PWD":/workspace -w /workspace car:local bash -lc '
+  source /opt/ros/humble/setup.bash
+  apt-get update && rosdep install --from-paths ros_ws/src --ignore-src -r -y
+  cd ros_ws && colcon build --symlink-install
+  chown -R 1000:1000 build install log /workspace/tools/.venv'
+docker run --rm car:local bash -lc 'source /opt/ros/humble/setup.bash && ros2 pkg prefix sllidar_ros2'
+# expect: /opt/racer_thirdparty
+```
+
+### L2. Plug it in and confirm the serial device
+
+The C1 takes 5 V at about 260 mA from one Jetson USB-A port through its CP210x adapter (check
+the adapter is in the box; some listings ship the bare head). Plug the adapter into the head
+first, then into the Jetson. On the Jetson host:
+
+```sh
+lsusb | grep -i 10c4:ea60            # expect: Silicon Labs CP210x UART Bridge
+sudo dmesg | tail -n 5               # expect: cp210x converter now attached to ttyUSB0
+ls -l /dev/ttyUSB*                   # expect: crw-rw---- 1 root dialout ... /dev/ttyUSB0
+getent group dialout                 # note the GID (20 on stock Ubuntu)
+```
+
+The head's motor should spin up as soon as it has power. If there is no `ttyUSB0`: `lsmod |
+grep cp210x` (and `sudo modprobe cp210x` if the module is not loaded; if the module does not
+exist in this JetPack kernel, stop and record that, it is a finding). If `ttyUSB0` appears and
+then vanishes a second later in `dmesg`, something else grabbed it (on Ubuntu desktop images
+`brltty` is the usual culprit).
+
+Optional but recommended once another USB serial device (the ingest board) is around: install
+the udev rule so the LiDAR keeps a stable name, and use `/dev/lidar` everywhere below instead
+of `/dev/ttyUSB0`:
+
+```sh
+sudo cp tools/udev/99-racer-lidar.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+ls -l /dev/lidar                     # expect: /dev/lidar -> ttyUSB0
+```
+
+### L3. Start the driver on its own
+
+From `~/car`. Same unprivileged shape as "Start the stack" above, minus the PWM mounts, plus
+the serial device and the `dialout` group:
+
+```sh
+cd ~/car
+docker run --rm -it --name car-lidar --network host \
+  --user "$(id -u):$(id -g)" \
+  --device /dev/ttyUSB0 \
+  --group-add "$(getent group dialout | cut -d: -f3)" \
+  -e HOME=/tmp \
+  -v "$PWD":/workspace -w /workspace/ros_ws \
+  car:local bash -lc '
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    exec ros2 launch racer_bringup lidar.launch.py'
+```
+
+With the udev rule: `--device /dev/lidar` and `... lidar.launch.py serial_port:=/dev/lidar`.
+The other launch arguments (`serial_baudrate` 460800, `frame_id` laser, `angle_compensate`
+true, `scan_mode` Standard) default to the C1 values from Slamtec's own C1 launch file.
+
+Expect, from `sllidar_node`, the device's model, firmware and serial number, a health line,
+then:
+
+```
+current scan mode: Standard, sample rate: 5 Khz, max_distance: <about 12> m, scan frequency:10.0 Hz
+```
+
+`scan frequency` there is not measured: it is `sensors.lidar_spec.nominal_scan_rate_hz` handed
+to the driver, which uses it to size its 720-beam array. `max_distance` is what the head
+reports for the mode; record it. If the launch dies with `lidar.launch.py: ... sensors.lidar
+has null ...`, the mount fields in `config/vehicle_params.yaml` were blanked: fill them in, do
+not work around it. `Error, cannot bind to the specified serial port` means the device or the
+group did not reach the container: re-check `--device` and `--group-add`.
+
+### L4. Run the scan-rate check
+
+In a second shell on the Jetson, inside the same container:
+
+```sh
+docker exec -it car-lidar bash -lc '
+  source /opt/ros/humble/setup.bash && source install/setup.bash
+  ros2 run racer_tools lidar_check'
+```
+
+It listens to `/scan` for 10 s (`--ros-args -p duration_s:=30.0` for longer), prints a report
+and exits 0 on PASS, 1 on FAIL, 2 if fewer than two scans arrived. Expected for the C1 with
+the defaults (thresholds come from `sensors.lidar_spec`, not from this text):
+
+| Line | Expect | Fails when |
+|---|---|---|
+| scan rate | 8 to 12 Hz, about 10 Hz typical | below 8.000 Hz (`min_scan_rate_hz`) |
+| largest stamp gap | about 0.1 s | (reported only; a long gap is a dropped scan) |
+| beam count | exactly 720 every scan | anything else (`angle_compensate` true) |
+| field of view | 6.2832 rad (2 pi) | outside 6.2832 +- 0.0126 rad |
+| declared range band | 0.050 .. `max_distance` from L3 | (reported only) |
+| observed valid ranges | nearest and farthest real returns in the room | no valid return at all |
+| invalid fraction | low indoors (glass, black surfaces and open space past range add to it) | above 0.5 (`max_invalid_fraction`) |
+
+A cross-check that does not use this repo's code: `ros2 topic hz /scan` in the same container
+should agree with the rate line. Paste the whole report into the build log entry for this
+session.
+
+### L5. Look at it in Foxglove, and check the transform points the right way
+
+`lidar.launch.py` does not start `foxglove_bridge`. Start one in the same container:
+
+```sh
+docker exec -it car-lidar bash -lc '
+  source /opt/ros/humble/setup.bash && source install/setup.bash
+  exec ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765'
+```
+
+In Foxglove on the Mac: open a connection to `ws://10.0.0.226:8765`, add a 3D panel, set its
+display frame to `base_link`, and turn on `/scan` (and `/tf_static`, which carries
+`base_link -> laser`). The room's walls should draw as a ring of points around the car.
+
+Then the orientation check, which is the point of this step: put a box on the floor about
+0.5 m **straight ahead** of the car's nose.
+
+- The box shows up on the **+x** side of `base_link` (the red axis): the yaw is right.
+- It shows up **behind** the car: the head is mounted rotated by half a turn relative to what
+  `mount_yaw_rad` says. Set `sensors.lidar.mount_yaw_rad` to `3.141593` and repeat. The
+  driver itself already rotates its scan by pi from the head's 0 degree mark
+  (`sllidar_node.cpp`, `publish_scan`), so either answer is plausible before this check.
+- It shows up **to the side**, or a box placed to the car's LEFT shows up on its right: stop.
+  That is a mirrored scan (head upside down, or the wrong rotation sense), not a yaw error, and
+  must not be "fixed" with the yaw. Record it in the build log.
+
+While the 3D panel is up, look at the closest returns: anything that is part of the car
+(mount posts, the Jetson, cables, antenna) shows as points within a few tens of centimetres.
+Note how close the nearest self-return is. **That number matters before any drive with
+`lidar:=true`**: `safety_node` takes the minimum valid range over the whole 360 degree scan
+for its TTC gate (PROVISIONAL `limits.ttc_brake_s` 0.5 s), so at the 0.8 m/s first-tap speed
+any return closer than 0.4 m in any direction, including the car itself and the person behind
+it, zeroes the throttle. That is why `car_teleop.launch.py`'s `lidar` argument defaults to
+false.
+
+### L6. Measure the mount and write everything down
+
+With the mount on the car: measure the head's optical centre from the `base_link` origin
+(x forward, y left, z up, metres) and its yaw from L5, put them in `config/vehicle_params.yaml`
+`sensors.lidar` replacing the PROVISIONAL placeholders (bump `meta.schema_version`'s patch
+number), and record in a dated `docs/notes/build-log.md` entry: the `lidar_check` report, the
+driver's startup lines (model, firmware, `max_distance`), the nearest self-return, and which
+way the yaw came out. Then roadmap 2.3 can be ticked.
+
+To record a bag of the LiDAR with the rest of the stack, start "Start the stack" above with
+the two extra flags (`--device ...` and `--group-add` for `dialout`) and `lidar:=true` (plus
+`lidar_serial_port:=/dev/lidar` with the udev rule). The recorder's regex already includes
+`/scan`.
 
 ## Afterwards
 

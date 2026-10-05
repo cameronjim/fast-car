@@ -1,0 +1,113 @@
+# Reactive controllers ported to C++, 2026-10-05
+
+GitHub issue 26. The old Python reactive controllers from the Foxy project
+(`f1tenth-autonomous-racing/reactive_control/`, moving to `legacy/f1tenth-autonomous-racing/`
+with the same contents) are now C++ in `ros_ws/src/racer_control`. The owner asked for
+corrections and improvements rather than a literal translation, so the maths changes below
+are deliberate. The old folder is untouched.
+
+## What was ported
+
+| Old Python | New C++ |
+|---|---|
+| `gap_logic.py` | `include/racer_control/gap_follow.hpp`, `src/gap_follow.cpp` |
+| `wall_logic.py` | `include/racer_control/wall_follow.hpp`, `src/wall_follow.cpp` |
+| `pid.py` | `include/racer_control/pid.hpp`, `src/pid.cpp` (wall follower only) |
+| `gap_follow_node.py` | `src/gap_follow_node.cpp`, `launch/gap_follow.launch.py` |
+| `wall_follow_node.py` | `src/wall_follow_node.cpp`, `launch/wall_follow.launch.py` |
+| `test_gap_logic.py`, `test_wall_logic.py` | `test/test_gap_follow.cpp`, `test/test_wall_follow.cpp` |
+
+Shared pieces: `laser_scan.hpp` (scan geometry, bearing lookup, invalid-return policy, LiDAR
+yaw resolution) and `reactive_speed.hpp` (speed laws). All of it is ROS-free and gtest-covered;
+the nodes are thin plumbing.
+
+Both nodes subscribe `/scan` (KeepLast 10, best_effort) and publish `/drive_raw` (KeepLast 10,
+reliable) at 50 Hz from a fixed timer, never `/drive`. They use tracker_node's clock policy
+(steady clock for elapsed time, ROS clock only for stamps), its float32 wire margin, and its
+watchdog rule: on `/scan` silence they stop publishing and safety_node brakes.
+
+Physical constants come only from the generated vehicle_params binding: half width is
+`chassis.width_m / 2` (0.155 m; the old code hard-coded 0.5 m), steering clamp is
+`steering.max_angle_rad`, speed is capped by `limits.global_speed_cap_mps` (the `max_speed_mps`
+parameter is range-limited below it) and ramped through `SpeedRateLimiter` from
+`actuation.max_acceleration_mps2`. The LiDAR yaw comes from `sensors.lidar.mount_yaw_rad` once
+it is measured; until then a `laser_yaw_offset_rad` parameter (default 0) is used, and a
+parameter that disagrees with a measured binding value refuses to start.
+
+## What was dropped, and why
+
+- `safety_node.py` and `safety_logic.py`: racer_safety/safety_node already owns TTC braking,
+  the kill latch and the `/drive_raw` to `/drive` gate. A second safety node would duplicate
+  layer 3.
+- `cv_node.py`: out of scope for this issue.
+- The `/kys` and `/speed` topics: they were the old safety node's kill latch and speed
+  command. Kill is layer 1 (the mux) and layer 3 (safety_node); speed is now computed by each
+  controller (below).
+- Publishing `/drive` directly: forbidden by CLAUDE.md invariant 1.
+- The SIGINT wind-down (coast for 2 s, then publish a zero): on shutdown the nodes just stop
+  publishing and safety_node brakes on `/drive_raw` silence.
+- The `/odom` subscription: the old nodes read it only for the wall follower's speed * dt
+  lookahead, which is gone.
+
+## Maths changes
+
+a. **Forward ray and cone.** The old code took ray `num_rays / 2` as straight ahead and defined
+   the cone and corner sectors as fractions of the ray count. That is wrong for a 360 degree
+   RPLIDAR C1 (`angle_min = -pi`) and for any scan not centred on forward. The forward ray is
+   now the ray nearest vehicle bearing 0, from `angle_min` and `angle_increment`; the cone is a
+   half-angle in radians (`cone_half_angle_rad`, default 1.57) and wraps across the seam of a
+   full-circle scan; corner sectors are radians too. `laser_yaw_offset_rad` handles a LiDAR
+   mounted backwards (pi).
+b. **Invalid returns.** inf and above-`range_max` are free space, clipped to
+   `clip_max_range_m`. NaN, -inf, zero and below-`range_min` are invalid and filled from the
+   nearest valid ray (smaller range on a tie). The RPLIDAR driver reports no-return as inf; the
+   old Hokuyo path reported 0. A scan with no valid returns produces no command. No NaN reaches
+   the output; the nodes also re-check before publishing.
+c. **Disparity extension.** The bubble is `ceil(atan2(half_width + safety_margin_m, near) /
+   angle_increment)` rays starting at the first ray on the far side of the edge. The old
+   `int()` truncation is replaced by `ceil` because the real edge lies somewhere inside the
+   near ray's angular bin; `near == 0` is guarded (a quarter turn); `safety_margin_m` defaults
+   to 0.1 m. Edges are found on the input ranges, so the result does not depend on edge
+   order. Work is O(n + total bubble length).
+d. **Gap selection.** Still the widest free gap in the cone, tie-broken toward forward, aimed
+   at its centre. `target_deepest_ray` (default off) aims at the gap's deepest ray instead,
+   tie-broken toward forward. Both are tested.
+e. **Steering.** A PID on a target bearing is not meaningful (its I term winds up on any
+   steady curve), so it is gone: `steering = clamp(steering_gain * bearing, +/- max_angle)`,
+   then a first-order low-pass (`steering_time_constant_s`, default 0.1 s) at the 50 Hz
+   command rate. The corner override is kept with its sector in radians, and its side is
+   fixed: the old code checked the last sixth of the rays for a right turn, but in LaserScan
+   ordering those are on the LEFT, so it guarded the wrong side.
+f. **Speed.** `speed = clamp(k_speed * range along the target ray, min_speed, max_speed)`,
+   times `1 - k_steer * |steering| / max_angle`, then `SpeedRateLimiter`. The wall follower uses
+   `max(min_speed, max_speed * (1 - k_steer * |steering| / max_angle))`.
+g. **Wall follow.** Same two-ray geometry (alpha, D, D + L sin alpha). L was speed * dt, one
+   timestep of travel, which is near zero; it is now `lookahead_m` (default 0.5 m). Deadband
+   is a parameter. Ray bearings are parameters in the vehicle frame: negative follows the
+   right wall, positive the left wall, and the steering sign flips with the side. Too far from
+   the right wall steers right (negative), pinned in a test. A ray outside the scan's coverage
+   now gives no measurement instead of silently reading the end ray; with no measurement the
+   node steers straight and resets the PID. The PID has no magic first-step dt, skips the
+   derivative on the first sample, takes its integral clamp as a parameter, and gets its dt
+   from the steady clock between scans.
+
+## L5 canary
+
+`tests/l5_reactive_lap` runs `bridge_node` and `gap_follow_node` (which sees only `/scan`) on
+`config/tracks/gym_oval` and asserts two laps inside a time band without leaving the track.
+The bridge's raceline tracks had no walls (`Track.from_refline` builds a map that is free
+everywhere), so `bridge_node` gained a `track_half_width_m` parameter. The default 0 keeps the
+old map for every existing caller; a positive value builds a walled corridor around the
+raceline. The canary uses 0.8 m (a 1.6 m wide track) and `max_speed_mps` 3.0. Measured locally
+in the ros-dev image: about 26.0 s for two laps on three runs, with the car never more than
+0.163 m from the raceline (the limit before the chassis touches a wall is 0.645 m). The
+committed band is 20 s (physical floor at the speed cap) to 60 s. Same test-only shim as the
+tracker canary: `/drive_raw` is remapped to `/drive`, no safety_node in the loop.
+
+## Not done here
+
+- The roadmap note: `claude-docs/01-roadmap.md` is gitignored, so it is not updated in this PR.
+- No hardware run. The usual L6 wheels-off-ground sweep applies before either node drives the
+  car, and the tuning defaults are sim values.
+- The canary only covers gap_follow_node. wall_follow_node has L1 and L3 coverage but no lap
+  test.

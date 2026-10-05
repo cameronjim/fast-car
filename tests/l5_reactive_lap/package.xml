@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>l5_reactive_lap</name>
+  <version>0.1.0</version>
+  <description>
+    L5 sim-in-loop lap canary for the reactive controllers (GitHub issue 26,
+    claude-docs/12-testing.md): runs racer_gym_bridge with a walled corridor around the
+    committed config/tracks/gym_oval raceline (track_half_width_m) and racer_control's
+    gap_follow_node driving from the bridge's /scan only, and asserts the car completes laps
+    within a time budget without leaving the corridor. Same shape as tests/l5_tracker_lap; a
+    separate package so the tracker canary stays untouched. No library code of its own.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>racer_gym_bridge</test_depend>
+  <test_depend>racer_control</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

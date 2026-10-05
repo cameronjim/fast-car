@@ -244,7 +244,7 @@ ENV PYTHONPATH="/car-runtime/.venv/lib/python3.10/site-packages:${PYTHONPATH}"
 # RMW_IMPLEMENTATION=rmw_fastrtps_cpp: this is already Humble's default RMW, so this line
 # changes no behavior today -- it exists so the default can never silently drift out from
 # under this image if some future apt layer pulls in rmw_cyclonedds_cpp (see
-# f1tenth-autonomous-racing/README.md's own note about needing to force cyclonedds on Foxy;
+# legacy/f1tenth-autonomous-racing/README.md's own note about needing to force cyclonedds on Foxy;
 # pinning explicitly here means that class of surprise cannot recur without editing this
 # line).
 #

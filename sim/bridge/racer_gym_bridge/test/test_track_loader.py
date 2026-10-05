@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from racer_gym_bridge.track_loader import RacelineLoadError, load_raceline_xy_speed
+from racer_gym_bridge.track_loader import (
+    RacelineLoadError,
+    build_corridor_occupancy,
+    load_raceline_xy_speed,
+)
 
 _FIXTURE_CSV = """\
 # raceline for track_id=test_track (claude-docs/02-repo-layout.md)
@@ -56,3 +60,61 @@ def test_raises_on_non_numeric_field(tmp_path):
     )
     with pytest.raises(RacelineLoadError):
         load_raceline_xy_speed(path)
+
+
+# -- build_corridor_occupancy (GitHub issue 26: walls for the reactive-controller L5 canary) --
+
+_SQUARE_X = np.array([0.0, 4.0, 4.0, 0.0])
+_SQUARE_Y = np.array([0.0, 0.0, 4.0, 4.0])
+
+
+def _cell_value(occupancy, origin, resolution, x, y):
+    col = int((x - origin[0]) / resolution)
+    row = int((y - origin[1]) / resolution)
+    return occupancy[row, col]
+
+
+def test_corridor_is_free_on_the_centerline_and_walled_outside_it():
+    res = 0.05
+    occ, origin = build_corridor_occupancy(_SQUARE_X, _SQUARE_Y, 0.5, res)
+    # On the centerline, including the closing segment (0, 4) -> (0, 0).
+    assert _cell_value(occ, origin, res, 2.0, 0.0) == 255.0
+    assert _cell_value(occ, origin, res, 0.0, 2.0) == 255.0
+    # Just inside and just outside the half width.
+    assert _cell_value(occ, origin, res, 2.0, 0.45) == 255.0
+    assert _cell_value(occ, origin, res, 2.0, 0.6) == 0.0
+    # The infield and the outside are walls.
+    assert _cell_value(occ, origin, res, 2.0, 2.0) == 0.0
+    assert _cell_value(occ, origin, res, 2.0, -0.8) == 0.0
+
+
+def test_corridor_layout_is_rows_y_columns_x():
+    """f1tenth_gym's xy_2_rc reads map[row = y, col = x]. A wide, short loop must give a
+    map with more columns than rows."""
+    x = np.array([0.0, 10.0, 10.0, 0.0])
+    y = np.array([0.0, 0.0, 2.0, 2.0])
+    occ, origin = build_corridor_occupancy(x, y, 0.4, 0.1, border_m=0.5)
+    rows, cols = occ.shape
+    assert cols > rows
+    assert origin == pytest.approx((-0.9, -0.9, 0.0))
+
+
+def test_corridor_border_is_wall():
+    occ, _ = build_corridor_occupancy(_SQUARE_X, _SQUARE_Y, 0.5, 0.05)
+    assert np.all(occ[0, :] == 0.0)
+    assert np.all(occ[-1, :] == 0.0)
+    assert np.all(occ[:, 0] == 0.0)
+    assert np.all(occ[:, -1] == 0.0)
+
+
+@pytest.mark.parametrize("half_width, resolution", [(0.0, 0.05), (0.5, 0.0), (-1.0, 0.05)])
+def test_corridor_rejects_non_positive_sizes(half_width, resolution):
+    with pytest.raises(ValueError):
+        build_corridor_occupancy(_SQUARE_X, _SQUARE_Y, half_width, resolution)
+
+
+def test_corridor_rejects_bad_shapes():
+    with pytest.raises(ValueError):
+        build_corridor_occupancy(np.array([0.0]), np.array([0.0]), 0.5, 0.05)
+    with pytest.raises(ValueError):
+        build_corridor_occupancy(np.array([0.0, 1.0]), np.array([0.0]), 0.5, 0.05)

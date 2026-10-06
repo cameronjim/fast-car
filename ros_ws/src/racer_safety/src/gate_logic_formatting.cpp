@@ -53,12 +53,30 @@ std::string rate_limit_detail(double dt_s) {
 
 std::string ttc_brake_detail(double ttc_s, double brake_threshold_s) {
   return "time-to-collision " + std::to_string(ttc_s) + "s <= brake threshold " +
-         std::to_string(brake_threshold_s) + "s; braking";
+         std::to_string(brake_threshold_s) + "s at the requested speed; braking (latched)";
 }
 
 std::string ttc_warning_detail(double ttc_s, double warning_threshold_s) {
   return "time-to-collision " + std::to_string(ttc_s) + "s <= warning threshold " +
          std::to_string(warning_threshold_s) + "s (advisory only, no command change)";
+}
+
+std::string clearance_brake_detail(double range_m, double min_clearance_m) {
+  return "forward clearance " + std::to_string(range_m) + "m < minimum " +
+         std::to_string(min_clearance_m) + "m; braking (latched)";
+}
+
+std::string ttc_latch_held_detail() {
+  return "ttc brake latch held (release needs requested-speed TTC above the release threshold "
+         "and forward clearance above the release clearance)";
+}
+
+std::string ttc_release_detail(double ttc_s, double release_ttc_s, double range_m,
+                               double release_clearance_m) {
+  return "ttc brake released: requested-speed TTC " + std::to_string(ttc_s) +
+         "s > release threshold " + std::to_string(release_ttc_s) + "s, forward clearance " +
+         std::to_string(range_m) + "m > release clearance " + std::to_string(release_clearance_m) +
+         "m (nan = that half of the gate is disabled)";
 }
 
 std::string covariance_detail(double speed_fraction) {
@@ -68,6 +86,10 @@ std::string covariance_detail(double speed_fraction) {
 std::string release_detail(double duration_s) {
   return "gate released after " + std::to_string(duration_s) +
          "s engaged (see PHASE_ENGAGE record for what tripped it)";
+}
+
+std::string release_detail_with_reason(double duration_s, const std::string& reason) {
+  return reason + "; engaged for " + std::to_string(duration_s) + "s";
 }
 
 }  // namespace formatting

@@ -26,8 +26,13 @@ std::string bounds_clamp_detail(double steering_min_rad, double steering_max_rad
 std::string rate_limit_detail(double dt_s);
 std::string ttc_brake_detail(double ttc_s, double brake_threshold_s);
 std::string ttc_warning_detail(double ttc_s, double warning_threshold_s);
+std::string clearance_brake_detail(double range_m, double min_clearance_m);
+std::string ttc_latch_held_detail();
+std::string ttc_release_detail(double ttc_s, double release_ttc_s, double range_m,
+                               double release_clearance_m);
 std::string covariance_detail(double speed_fraction);
 std::string release_detail(double duration_s);
+std::string release_detail_with_reason(double duration_s, const std::string& reason);
 
 }  // namespace racer_safety::formatting
 

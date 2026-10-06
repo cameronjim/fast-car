@@ -55,15 +55,16 @@ launch when it is missing, so nothing argues for true yet. Two reasons for false
     placeholder. Defaulting a sensor that is not fitted to on would put a serial-port error
     at the top of every teleop session (sllidar_node exits when it cannot open the port;
     nothing shuts the rest of the launch down on that, unlike the recorder).
-  * /scan ARMS safety_node's TTC gate. limits.ttc_brake_s / ttc_warning_s are filled in
-    (PROVISIONAL 0.5 s / 1.0 s), and safety_node takes the minimum valid range over the WHOLE
-    scan, all 360 degrees, with no forward cone and no self-return filter. A C1 on the top
-    plate will see parts of the car itself, the person holding the kill switch, and anything
-    behind the car; at the 0.8 m/s first-tap speed, any return closer than 0.4 m in any
-    direction zeroes the throttle. That is the safe direction, but it would make a first drive
-    with the LiDAR look like a broken throttle. Turn this on for a drive only after the
-    returns have been looked at in Foxglove (docs/notes/first-boot-runbook.md "LiDAR first
-    power-up").
+  * /scan ARMS safety_node's obstacle gate. Since 2026-10-06 (docs/notes/
+    ttc-limit-cycle-2026-10-06.md) it looks only at a forward sector (+/-
+    limits.ttc_forward_sector_half_angle_rad, after sensors.lidar.mount_yaw_rad), brakes on the
+    REQUESTED speed's TTC (PROVISIONAL limits.ttc_brake_s 1.0 s, released above ttc_warning_s
+    2.0 s) and on a distance floor (PROVISIONAL limits.min_forward_clearance_m 0.30 m), and
+    latches: once braked, forward throttle stays at zero until the obstacle is clear. At the
+    0.8 m/s first-tap speed anything within about 0.8 m ahead holds the car, which is the safe
+    direction but looks like a dead throttle if you do not expect it. Turn this on for a drive
+    only after the returns have been looked at in Foxglove (docs/notes/first-boot-runbook.md
+    "LiDAR first power-up").
 """
 
 import datetime
@@ -463,9 +464,9 @@ def generate_launch_description() -> LaunchDescription:
         description=(
             "Include lidar.launch.py: sllidar_node publishing /scan (recorded in the bag) and "
             "the base_link -> laser static transform from vehicle_params. Default false until "
-            "the bench check passes; NOTE that /scan arms safety_node's TTC gate over all 360 "
-            "degrees, so returns from the car itself can zero the throttle. See this file's "
-            "module docstring."
+            "the bench check passes; NOTE that /scan arms safety_node's latched obstacle gate "
+            "(TTC brake + distance floor over a forward sector), so anything close ahead holds "
+            "the throttle at zero. See this file's module docstring."
         ),
     )
     lidar_serial_port_arg = DeclareLaunchArgument(

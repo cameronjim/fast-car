@@ -53,8 +53,13 @@ colcon test-result --verbose
 
 GATE_LOGIC_CPP="$(pwd)/src/racer_safety/src/gate_logic.cpp"
 GATE_LOGIC_HPP="$(pwd)/src/racer_safety/include/racer_safety/gate_logic.hpp"
+# forward_sector.cpp/.hpp (2026-10-06): the forward-sector minimum range the obstacle gate
+# brakes on is decision logic too (which returns count, which bearings are "ahead"), so it
+# sits under the same 100% gate. Adding files to the filter only widens the gate.
+FORWARD_SECTOR_CPP="$(pwd)/src/racer_safety/src/forward_sector.cpp"
+FORWARD_SECTOR_HPP="$(pwd)/src/racer_safety/include/racer_safety/forward_sector.hpp"
 
-echo "Computing branch coverage for gate_logic.cpp/.hpp (gcovr, scoped to those files)..."
+echo "Computing branch coverage for gate_logic.cpp/.hpp and forward_sector.cpp/.hpp (gcovr, scoped to those files)..."
 # Search root is narrowed to racer_safety_core's own object directory (not the whole
 # build/racer_safety tree): safety_node.cpp and the gtest binary itself are also
 # --coverage-instrumented (racer_safety_core's PUBLIC compile options propagate to anything
@@ -65,6 +70,8 @@ gcovr \
   --root . \
   --filter "${GATE_LOGIC_CPP}" \
   --filter "${GATE_LOGIC_HPP}" \
+  --filter "${FORWARD_SECTOR_CPP}" \
+  --filter "${FORWARD_SECTOR_HPP}" \
   --exclude-unreachable-branches \
   --exclude-throw-branches \
   --print-summary \

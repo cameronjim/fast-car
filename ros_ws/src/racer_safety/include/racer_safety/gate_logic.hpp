@@ -49,17 +49,77 @@
 // At startup `previous_output` is {0, 0}, so a node that has never commanded anything still
 // emits exactly {0, 0} -- the runbook's "verify /drive is neutral with no input" step and its
 // L3 test are unaffected.
-//   3. Otherwise: absolute bounds clamp (steering angle, speed) against vehicle_params
-//      limits, then a rate-limit clamp against the PREVIOUS cycle's output (steering rate,
-//      and speed increase only -- braking/decelerating is never rate-limited), then the TTC
-//      gate (claude-docs/05-safety.md: "TTC braking from /scan"), which can override the
-//      (already-clamped) output speed to zero on a hard TTC-brake threshold or emit an
-//      advisory-only warning event in the warning zone with no command change.
+//   3. Otherwise, in this order:
+//      3a. absolute bounds clamp (steering angle, speed) against vehicle_params limits. The
+//          result is the REQUESTED command.
+//      3b. the obstacle gate (claude-docs/05-safety.md: "TTC braking from /scan"): a TTC
+//          brake evaluated on the REQUESTED forward speed, plus a distance floor, sharing one
+//          latch. While latched, forward speed is forced to zero. In the warning zone, with
+//          no latch, it emits an advisory-only event with no command change. See "THE
+//          OBSTACLE GATE AND ITS LATCH" below.
+//      3c. a rate-limit clamp against the PREVIOUS cycle's output (steering rate, and speed
+//          increase only -- braking/decelerating is never rate-limited), applied to whatever
+//          3b left, so the rate limit holds on everything that is finally output.
 //   4. Covariance gate: STUB. No /pose source exists yet (roadmap task 2.6); see
 //      `evaluate_covariance_gate` below. Per this milestone's instructions, the stub must
 //      fail SAFE, meaning absent pose input must not disable any of the other gates above --
 //      it is evaluated independently and never gates whether steps 1-3 run (see
 //      test_gate_logic.cpp's "covariance stub does not disable other gates" cases).
+//
+// THE OBSTACLE GATE AND ITS LATCH (rewritten 2026-10-06; read before changing step 3b).
+//
+// The bug. Until 2026-10-06 the order was bounds clamp, then rate limit, then TTC, and the
+// TTC check divided the range by the rate-limited OUTPUT speed. On the car that evening
+// (wheels off the ground, gap_follow_node requesting a steady ~0.48 m/s, an obstacle ~0.22 m
+// ahead, 50 Hz, max_acceleration_mps2 9.51 so the limiter allows +0.19 m/s per cycle) the
+// output cycled 0.00 -> 0.19 -> 0.38 -> 0.00 -> ... : TTC braked the output to 0; on the next
+// cycle the limiter ramped it from 0 to 0.19 (TTC 1.16 s, passes), then 0.38 (TTC 0.58 s,
+// passes), and the next step to 0.57 (TTC 0.39 s) braked again. A 3-cycle limit cycle, 780
+// brake/release flips in 286 s, the motor pulsing at about 17 Hz. The gate was judging the
+// command it had itself shrunk, not the command it had been asked to pass.
+// docs/notes/ttc-limit-cycle-2026-10-06.md has the bag evidence.
+//
+// The fix, three parts:
+//   * TTC is computed from the REQUESTED forward speed (the bounds-clamped input), before
+//     the rate limiter, so a request that violates TTC is rejected on every cycle rather
+//     than every third. The rate limiter then runs on whatever the obstacle gate leaves, so
+//     the output is still rate-limited. This is also the conservative choice: for a forward
+//     command the output speed never exceeds the request (the limiter only slows increases,
+//     and decreases pass at once), so request-TTC <= output-TTC.
+//   * A latch with hysteresis. Once the gate brakes it stays braked (forward speed 0) until
+//     the request's TTC EXCEEDS a release threshold above the brake threshold: ttc_warning_s
+//     when it is set and larger than ttc_brake_s, otherwise ttc_brake_s *
+//     SafetyLimits::ttc_release_hysteresis_factor (>= 2, set in the gate config, not here).
+//     Without hysteresis a noisy range near the threshold would still flicker the brake.
+//     Release emits a "ttc brake released" note (GateResult::releases) that becomes the
+//     detail of the PHASE_RELEASE record.
+//   * A distance floor (SafetyLimits::min_forward_clearance_m, vehicle_params
+//     limits.min_forward_clearance_m). If the forward-sector minimum range is below it and
+//     the request is forward at any speed, the gate brakes, on the same latch, and does not
+//     release until the range exceeds floor * SafetyLimits::clearance_release_factor. TTC
+//     alone cannot do this: a crawl-speed request makes TTC large however close the
+//     obstacle is.
+//
+// Latch details, each one deliberate:
+//   * Trip always wins: a cycle whose request trips TTC or the floor is latched whatever the
+//     release test says, so a misconfigured release factor can never produce an output pulse.
+//   * Only FORWARD speed is held at zero. A zero or reverse request passes (bounds- and
+//     rate-limited as usual): backing away from an obstacle is not moving toward it, and it
+//     is the one thing an operator needs to be able to do while latched. A non-forward
+//     request also clears the TTC half of the release test (its TTC is infinite); the floor
+//     half still holds while the obstacle is inside the release clearance.
+//   * Garbage range (NaN, zero, negative) never trips, and never RELEASES a latch either:
+//     fail closed. +infinity is not garbage, it is "nothing in the forward sector" and counts
+//     as clear.
+//   * The latch is state, but evaluate() stays a pure function: the previous cycle's latch
+//     comes in on GateInput::ttc_brake_latched and the new one goes out on
+//     GateResult::ttc_brake_latched, threaded by safety_node exactly like previous_output.
+//     The watchdog, command-sanity and internal-fault paths HOLD the latch (they do not run
+//     the gate, so they cannot judge a release) and keep reporting its activation so the
+//     engagement is not split by an unrelated short-circuit.
+//   * The forward-sector minimum range itself is computed by forward_sector.hpp (safety_node
+//     calls it per scan): returns within +/- limits.ttc_forward_sector_half_angle_rad of the
+//     vehicle's +x axis, after sensors.lidar.mount_yaw_rad, invalid returns ignored.
 //
 // Every field that would naturally come from `config/vehicle_params.yaml` is threaded in
 // through `SafetyLimits`, populated ONLY from the generated vehicle_params C++ binding by
@@ -94,6 +154,20 @@ struct SafetyLimits {
   double max_acceleration_mps2 = 0.0;  // vehicle_params actuation.max_acceleration_mps2
   std::optional<double> ttc_warning_s;
   std::optional<double> ttc_brake_s;
+  // vehicle_params limits.min_forward_clearance_m (schema 0.7.0, required there, so
+  // safety_node always sets it). std::nullopt disables the floor; only tests do that, to
+  // exercise the TTC half of the gate on its own.
+  std::optional<double> min_forward_clearance_m;
+  // Hysteresis of the obstacle-gate latch (see "THE OBSTACLE GATE AND ITS LATCH" above).
+  // These are gate tuning, not vehicle physics, so they live here rather than in
+  // vehicle_params; safety_node does not override them.
+  //   * TTC release threshold when ttc_warning_s is unset (or not above ttc_brake_s):
+  //     ttc_brake_s * ttc_release_hysteresis_factor. Must be >= 2 (task requirement,
+  //     2026-10-06) and is checked by test_gate_logic.cpp. A non-finite value makes the
+  //     threshold NaN, which never releases: fail closed.
+  //   * Floor release clearance: min_forward_clearance_m * clearance_release_factor.
+  double ttc_release_hysteresis_factor = 2.0;
+  double clearance_release_factor = 1.5;
   int watchdog_missed_cycles = 3;
   double control_period_s = 0.02;  // 1 / 50 Hz, claude-docs/04-architecture.md
 };
@@ -162,10 +236,14 @@ struct SafetyEventRecord {
 // command or throw -- see evaluate()'s handling of each (test_gate_logic.cpp's "garbage
 // input" cases cover every one).
 struct GateInput {
-  DriveCommand command;           // latest received /drive_raw (or the last cached one, if stale)
-  double drive_raw_age_s = 0.0;   // seconds since /drive_raw was last received
-  double dt_s = 0.0;              // seconds since evaluate() was last called (for rate limits)
-  double min_scan_range_m = 0.0;  // nearest valid /scan return; +inf if none this cycle
+  DriveCommand command;          // latest received /drive_raw (or the last cached one, if stale)
+  double drive_raw_age_s = 0.0;  // seconds since /drive_raw was last received
+  double dt_s = 0.0;             // seconds since evaluate() was last called (for rate limits)
+  // Nearest valid /scan return in the FORWARD SECTOR (forward_sector.hpp); +inf if none.
+  double min_scan_range_m = 0.0;
+  // The obstacle-gate latch as the previous cycle left it (GateResult::ttc_brake_latched).
+  // false at startup. See "THE OBSTACLE GATE AND ITS LATCH".
+  bool ttc_brake_latched = false;
   // Covariance gate stub inputs (TODO roadmap task 2.6: wire from /pose once it exists).
   // `has_pose_input` is always false until then; `pose_covariance_trace` is unused while it
   // is.
@@ -190,13 +268,21 @@ struct GateInput {
 // commanded zero", with the same caveat.
 struct GateResult {
   DriveCommand output;
-  // true iff this cycle's output was forced to zero speed by a gate (watchdog, command
-  // sanity, TTC) rather than being a passthrough/clamped command. See the note above: this
-  // is a zero-throttle command, not a claim about deceleration.
+  // true iff a gate is holding the throttle at zero this cycle (watchdog, command sanity,
+  // or the obstacle-gate latch) rather than passing a clamped command. The latch holds only
+  // FORWARD throttle, so while it is set a reverse request can still come out negative. See
+  // the note above: this is a zero-throttle command, not a claim about deceleration.
   bool zero_throttle = false;
   // Which gates are engaged THIS cycle (not what gets published -- see GateActivation and
   // GateEventTracker). A gate that stays engaged appears here every cycle.
   std::vector<GateActivation> activations;
+  // The obstacle-gate latch after this cycle; safety_node feeds it back in as next cycle's
+  // GateInput::ttc_brake_latched.
+  bool ttc_brake_latched = false;
+  // Why an engagement ended, for gates that know (today only the obstacle gate's "ttc brake
+  // released" note). Not an engagement: GateEventTracker::update uses a matching
+  // (source, severity) entry here as the detail of that engagement's PHASE_RELEASE record.
+  std::vector<GateActivation> releases;
 };
 
 // Covariance gate stub (roadmap task 2.6: no /pose source exists yet). Returns the speed-cap
@@ -234,6 +320,12 @@ class SafetyGateLogic {
   DriveCommand clamp_to_bounds(const DriveCommand& cmd) const;
   DriveCommand rate_limit(const DriveCommand& cmd, const DriveCommand& previous_output,
                           double dt_s) const;
+  // Step 3b. Reads the REQUESTED command, may zero `target`'s forward speed, and records the
+  // latch, activations and release note in `result`.
+  void apply_obstacle_gate(const DriveCommand& requested, const GateInput& input,
+                           DriveCommand& target, GateResult& result) const;
+  // TTC the request must exceed to release the latch. Only called when ttc_brake_s is set.
+  double ttc_release_threshold_s() const;
 
   SafetyLimits limits_;
 };
@@ -268,8 +360,14 @@ class GateEventTracker {
   // see that file's CLOCK POLICY); it is only ever used as the two ends of a subtraction,
   // and a non-finite or backwards interval is reported as a 0.0 duration rather than
   // propagating garbage into an evaluation metric.
+  //
+  // `release_notes` (GateResult::releases) carries a reason for an engagement that ends this
+  // cycle; when one matches a releasing (source, severity) its detail is appended to that
+  // PHASE_RELEASE record's detail. A note for something that is not releasing is ignored, so
+  // a note can never create a record.
   std::vector<SafetyEventRecord> update(const std::vector<GateActivation>& activations,
-                                        double now_s);
+                                        double now_s,
+                                        const std::vector<GateActivation>& release_notes = {});
 
  private:
   struct Engagement {

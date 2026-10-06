@@ -90,8 +90,10 @@ _TEMPLATE: dict[str, Any] = {
         # datasheet numbers) was added and the sensors.lidar mount got provisional values,
         # then 0.6.0 -> 0.6.1 on 2026-10-06 when the lidar mount was measured, then 0.6.1 ->
         # 0.7.0 on 2026-10-06 when the required limits.min_forward_clearance_m and
-        # limits.ttc_forward_sector_half_angle_rad were added (racer_safety TTC limit cycle).
-        "schema_version": "0.7.2",
+        # limits.ttc_forward_sector_half_angle_rad were added (racer_safety TTC limit cycle),
+        # then 0.7.2 -> 0.7.3 the same night when limits.obstacle_steering_hold_after_s was
+        # added and the TTC release line and forward sector were retuned.
+        "schema_version": "0.7.3",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

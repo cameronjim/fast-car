@@ -23,7 +23,7 @@ from racer_policy.verify import verify_against_environment
 def test_accepts_when_contract_matches_the_real_committed_params(
     tmp_path: Path, valid_manifest: dict[str, Any], real_vehicle_params: Any
 ) -> None:
-    # config/vehicle_params.yaml currently has meta.schema_version = "0.7.2" (0.1.0 ->
+    # config/vehicle_params.yaml currently has meta.schema_version = "0.7.3" (0.1.0 ->
     # 0.2.0 for milestone 4, roadmap task 1.3; 0.2.0 -> 0.2.1 when that file's safety_mux
     # PWM/watchdog fields were given PROVISIONAL values; 0.2.1 -> 0.2.2 when
     # actuation.throttle_full_scale_mps was added and the TTC thresholds were filled in,
@@ -37,7 +37,8 @@ def test_accepts_when_contract_matches_the_real_committed_params(
     # throttle_deadband_us went 50 -> 20, value-only; 0.5.1 -> 0.6.0 on 2026-10-05 when the
     # required sensors.lidar_spec section was added for the RPLIDAR C1, roadmap 2.3; 0.6.0 ->
     # 0.6.1 on 2026-10-06 when the lidar mount was measured; 0.6.1 -> 0.7.0 the same day when
-    # limits.min_forward_clearance_m and limits.ttc_forward_sector_half_angle_rad were added) and
+    # limits.min_forward_clearance_m and limits.ttc_forward_sector_half_angle_rad were added;
+    # 0.7.2 -> 0.7.3 the same night when limits.obstacle_steering_hold_after_s was added) and
     # meta.sysid_session_id = "none-preliminary" -- the same values `_TEMPLATE` in conftest.py records under
     # `vehicle_params`, by construction.
     assert (

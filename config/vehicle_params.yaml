@@ -111,6 +111,19 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.7.2 -> 0.7.3 on 2026-10-06 (late, third bench pass, wheels off the
+# ground with gap_follow_node): limits.ttc_warning_s 0.6 -> 0.45 (it is the latch's release
+# line) and limits.ttc_forward_sector_half_angle_rad 1.0 -> 0.6. On the stand, a person beside
+# the front corner sat inside the 1.0 rad sector and held the latch, and the 0.6 s release at a
+# 1.0 m/s request needed 0.6 m of clear road. ttc_brake_s 0.35 and min_forward_clearance_m 0.20
+# are unchanged. Plus one new REQUIRED field, limits.obstacle_steering_hold_after_s
+# (PROVISIONAL 0.5 s): once the obstacle latch has held the output speed at zero that long,
+# racer_safety freezes the steering output until the latch releases, so a car parked against an
+# obstacle stops hunting its servo (the owner watched it do that on the stand). Rule 5 bumps on
+# any change; the number is 0.7.3 as the owner specified, although earlier additions of a
+# required field took the minor digit (0.6.1 -> 0.7.0). Consumers refuse on mismatch either
+# way. All three values are PROVISIONAL.
+#
 # schema_version bumped 0.7.1 -> 0.7.2 on 2026-10-06 (second bench pass): ttc_brake_s 0.5 -> 0.35,
 # ttc_warning_s 0.8 -> 0.6, min_forward_clearance_m 0.25 -> 0.20. With gap_follow_node at
 # 0.8 to 1.0 m/s on the stand the latch engaged whenever a person came within about half a
@@ -439,7 +452,7 @@ limits:
   # bug, fixed in racer_safety, but the threshold was also too small. Release of the latched
   # brake needs the requested speed's TTC to exceed ttc_warning_s, so the warning value is
   # also the brake's release point.
-  ttc_warning_s: 0.6                # PROVISIONAL (bench-tuned 2026-10-06, second pass: release line, see 0.7.2 note)
+  ttc_warning_s: 0.45               # PROVISIONAL (bench-tuned 2026-10-06, third pass: release line, see 0.7.3 note)
   ttc_brake_s: 0.35                 # PROVISIONAL (bench-tuned 2026-10-06, second pass, see 0.7.2 note)
   # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
   # nearest valid return inside the forward sector below is closer than this, forward throttle
@@ -458,7 +471,18 @@ limits:
   # this car). PROVISIONAL, NOT tuned: 1.0 rad (about 57 deg each side) covers the car's
   # swept width at full steering lock over the first metre or so; replace when there is
   # driving data to tune against.
-  ttc_forward_sector_half_angle_rad: 1.0  # PROVISIONAL (NOT tuned) -- see above
+  ttc_forward_sector_half_angle_rad: 0.6  # PROVISIONAL (bench-tuned 2026-10-06, third pass, about 34 deg each side; see 0.7.3 note)
+  # Steering hold on the obstacle latch (added 2026-10-06 late, schema 0.7.3). A TTC or
+  # clearance brake zeroes forward throttle and keeps steering live, because a car braking at
+  # speed must keep steering authority. Once the latch has held the OUTPUT speed at exactly
+  # zero for this long, racer_safety's gate freezes the steering output at the angle it had
+  # when the hold started, until the latch releases (or a reverse request moves the car
+  # again). Reason: on the 2026-10-06 stand run a car parked against an obstacle kept hunting
+  # its servo as gap_follow_node's steering request wandered. Caveat: zero speed on /drive is
+  # a coast, and safety_node has no /odom, so this time stands in for "the car has stopped".
+  # PROVISIONAL, NOT measured: replace with a value from measured coast-down time at teleop
+  # speeds (roadmap phase 2). See racer_safety/gate_logic.hpp "STEERING HOLD".
+  obstacle_steering_hold_after_s: 0.5  # PROVISIONAL (bench choice 2026-10-06, NOT measured) -- see above
   envelope_fraction_speed: null     # needs Phase 5 tuning (claude-docs/08-learning.md)
   envelope_fraction_lateral_accel: null  # needs Phase 5 tuning (claude-docs/08-learning.md)
   # PROVISIONAL, NOT measured or tuned: 100 ms is roughly five missed frames of a 50 Hz
@@ -484,10 +508,11 @@ meta:
   # fields are MEASURED at the mux. Added 2026-10-05: the four sensors.lidar mount fields are
   # PROVISIONAL placeholders; sensors.lidar_spec is datasheet values. Added 2026-10-06:
   # limits.min_forward_clearance_m and limits.ttc_forward_sector_half_angle_rad are
-  # PROVISIONAL, and the two limits.ttc_*_s were raised (still PROVISIONAL). sysid_session_id stays
+  # PROVISIONAL, and the two limits.ttc_*_s were raised (still PROVISIONAL). Added 2026-10-06
+  # late: limits.obstacle_steering_hold_after_s is PROVISIONAL. sysid_session_id stays
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.7.2"
+  schema_version: "0.7.3"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

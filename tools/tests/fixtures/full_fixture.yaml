@@ -109,6 +109,7 @@ limits:
   mux_kill_switch_threshold_us: 1500.0
   min_forward_clearance_m: 0.4
   ttc_forward_sector_half_angle_rad: 0.8
+  obstacle_steering_hold_after_s: 0.75
 
 meta:
   schema_version: "0.2.0"

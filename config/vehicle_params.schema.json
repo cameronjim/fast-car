@@ -432,7 +432,8 @@
         "global_speed_cap_mps", "min_velocity_mps", "ttc_warning_s", "ttc_brake_s",
         "envelope_fraction_speed", "envelope_fraction_lateral_accel",
         "mux_watchdog_timeout_s", "mux_kill_switch_threshold_us",
-        "min_forward_clearance_m", "ttc_forward_sector_half_angle_rad"
+        "min_forward_clearance_m", "ttc_forward_sector_half_angle_rad",
+        "obstacle_steering_hold_after_s"
       ],
       "properties": {
         "global_speed_cap_mps": {
@@ -467,6 +468,11 @@
           "units": "rad",
           "sign_convention": "symmetric about the vehicle's +x axis (base_link, REP-103); the sector is [-value, +value] in VEHICLE bearing, i.e. after sensors.lidar.mount_yaw_rad is applied to each laser bearing",
           "description": "Half angle of the forward sector over which racer_safety/safety_node takes the minimum LiDAR range for the TTC gate and the distance floor (added 2026-10-06, schema 0.7.0; before that it used the whole 360 degree scan, so self-returns and anything beside or behind the car braked a forward command). The committed value is PROVISIONAL, not tuned."
+        },
+        "obstacle_steering_hold_after_s": {
+          "type": "number", "minimum": 0, "maximum": 10,
+          "units": "s",
+          "description": "Steering hold on racer_safety/safety_node's layer-3 obstacle latch (added 2026-10-06, schema 0.7.3). Once the latch (TTC brake or distance floor) has held the gated output speed at exactly zero for this long, the gate freezes the steering output at the angle it had when the hold started, until the latch releases or a reverse request moves the car. Before that, steering passes as usual (rate-limited), because a car braking at speed must keep steering authority. Zero speed on /drive is a coast and safety_node has no /odom, so this time stands in for 'the car has stopped'. The committed value is PROVISIONAL, not measured."
         },
         "envelope_fraction_speed": {
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1,

@@ -9,6 +9,11 @@ remaps /drive_raw onto /drive.
 Every tuning parameter is a declared ROS parameter with a default (see
 src/gap_follow_node.cpp). `max_speed_mps` is exposed here because it is the one most often
 changed per session; `params_file` takes a ROS parameter YAML for the rest.
+
+laser_yaw_from_vehicle_params (default true) must stay true on the real car, where the LiDAR
+yaw comes only from vehicle_params sensors.lidar.mount_yaw_rad. Set it false (in the params
+file) ONLY for the simulator and synthetic-scan tests, whose /scan is aligned to the vehicle
+(yaw 0); the node then uses laser_yaw_offset_rad as given and logs that it ignored the binding.
 """
 
 from launch import LaunchDescription

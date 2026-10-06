@@ -157,11 +157,11 @@ std::size_t sanitize_ranges(const ScanInput& scan, double clip_max_range_m,
 }
 
 std::optional<double> resolve_laser_yaw_offset(std::optional<double> binding_rad,
-                                               double parameter_rad) {
+                                               double parameter_rad, bool from_vehicle_params) {
   if (!std::isfinite(parameter_rad)) {
     return std::nullopt;
   }
-  if (!binding_rad.has_value()) {
+  if (!from_vehicle_params || !binding_rad.has_value()) {
     return parameter_rad;
   }
   if (!std::isfinite(*binding_rad)) {

@@ -58,6 +58,11 @@
 // actuation.max_acceleration_mps2 via SpeedRateLimiter. LiDAR yaw comes from
 // sensors.lidar.mount_yaw_rad once measured (see resolve_laser_yaw_offset). Everything else
 // is a tuning parameter with a default and a description.
+//
+// laser_yaw_from_vehicle_params (default true) is the one exception to the yaw rule above:
+// false ignores the binding and uses laser_yaw_offset_rad as given. It exists ONLY for scans
+// that are not the real car's LiDAR, i.e. the simulator (racer_gym_bridge publishes /scan
+// aligned to the vehicle, yaw 0) and synthetic-scan tests. Never set it false on the car.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
 #include <chrono>
@@ -175,15 +180,32 @@ class GapFollowNode : public rclcpp::Node {
         "Steering is zeroed when every ray in the turn-in sector is closer than this (m).");
     const double yaw_param = declare_ranged_double(
         *this, "laser_yaw_offset_rad", 0.0, -M_PI, M_PI,
-        "LiDAR mounting yaw in base_link (rad, CCW positive; pi = facing backwards). Only "
-        "used while vehicle_params sensors.lidar.mount_yaw_rad is null; once that is "
-        "measured it wins and a disagreeing non-zero value here refuses to start.");
-    const auto yaw =
-        resolve_laser_yaw_offset(VEHICLE_PARAMS.sensors.lidar.mount_yaw_rad, yaw_param);
+        "LiDAR mounting yaw in base_link (rad, CCW positive; pi = facing backwards). With "
+        "laser_yaw_from_vehicle_params true, only used while vehicle_params "
+        "sensors.lidar.mount_yaw_rad is null; once that is measured it wins and a disagreeing "
+        "non-zero value here refuses to start. With it false, used as given.");
+    // false is for the simulator and synthetic-scan tests ONLY (their /scan is aligned to the
+    // vehicle, yaw 0, not mounted like the real car's LiDAR). The real car keeps the default
+    // true so its yaw comes only from the binding (CLAUDE.md invariant 2).
+    const bool yaw_from_vehicle_params = declare_described_bool(
+        *this, "laser_yaw_from_vehicle_params", true,
+        "true (default, the real car): LiDAR yaw comes from vehicle_params "
+        "sensors.lidar.mount_yaw_rad when set. false: SIMULATOR AND SYNTHETIC-SCAN TESTS ONLY, "
+        "ignore the binding and use laser_yaw_offset_rad as given.");
+    if (!yaw_from_vehicle_params) {
+      RCLCPP_INFO(this->get_logger(),
+                  "gap_follow_node: laser_yaw_from_vehicle_params is false, ignoring "
+                  "vehicle_params sensors.lidar.mount_yaw_rad and using laser_yaw_offset_rad "
+                  "= %.6f rad (sim or synthetic-scan fixture only)",
+                  yaw_param);
+    }
+    const auto yaw = resolve_laser_yaw_offset(VEHICLE_PARAMS.sensors.lidar.mount_yaw_rad, yaw_param,
+                                              yaw_from_vehicle_params);
     if (!yaw) {
       throw std::invalid_argument(
           "gap_follow_node: laser_yaw_offset_rad disagrees with vehicle_params "
-          "sensors.lidar.mount_yaw_rad (or is not finite); refusing to start");
+          "sensors.lidar.mount_yaw_rad with laser_yaw_from_vehicle_params true (or is not "
+          "finite); refusing to start");
     }
     c.laser_yaw_offset_rad = *yaw;
     return c;

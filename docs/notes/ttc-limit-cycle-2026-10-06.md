@@ -159,3 +159,67 @@ separate tuning decision.
 Floor check still to do: the same backpack track at the same speeds, check that bags beside
 the path no longer produce `ttc` engage records and that a bag placed in the path still
 latches the car.
+
+## Arc corridor (2026-10-06, late floor test)
+
+Second floor run on the same backpack track, about 1 m wide, gap_follow_node at 0.8 to
+1.0 m/s, vehicle_params 0.9.1. Bag `2026-10-06T22-12-40_car_teleop` (on the Jetson).
+
+What the bag shows:
+
+- The obstacle gate braked correctly three times, each at TTC 0.33 s with the wall about
+  0.33 m ahead.
+- Each latch then lasted 20 to 37 s.
+- The car was at full steering lock for 85 percent of the run.
+
+Mechanism: the corridor was straight ahead in the vehicle frame and ignored the requested
+steering. A car stopped against a wall and asking for full lock away from it still had the
+wall in its straight corridor, so the release test never passed. Once the latch had held the
+speed at zero for 0.5 s the steering hold froze the output steering too, so nothing changed
+until the planner happened to ask for something else.
+
+Change (racer_safety, vehicle_params 0.9.2, not yet run on the car):
+
+- The corridor follows the arc the requested steering sweeps. The request's steering angle,
+  clamped to `steering.max_angle_rad`, gives a rear-axle turn radius R = L / tan(delta) with
+  L = `chassis.wheelbase_m`. Below 1e-3 rad the old straight corridor is used unchanged.
+- A return is moved from the LiDAR head to the rear-axle frame with
+  `sensors.lidar.mount_x_m` / `mount_y_m`. It is in the path if its distance from the turn
+  centre is within `chassis.width_m` / 2 + `limits.obstacle_corridor_margin_m` (0.205 m) of |R|,
+  and its arc angle from the rear axle is between 0 and pi/2 (nothing behind the car, nothing
+  past a quarter turn). The outer sector bound still applies first.
+- The distance for TTC, the floor and the release clearance is the arc length from the LiDAR
+  head (the same reference as the straight corridor's x and the clearance floor, not the
+  bumper), never the straight-line range. At full lock R is about 0.74 m, the swept band runs
+  0.54 to 0.95 m from the turn centre, and a quarter turn is about 0.89 m of arc ahead of the
+  head.
+- Which steering: the REQUEST's, not the gate's output. The output lags the request through
+  the steering rate limiter, and while parked it is frozen by the steering hold; judging the
+  path on the output would keep a latched car latched for exactly the reason seen in the bag.
+- Where it is computed: `safety_node` used to reduce each scan once, in the scan callback. It
+  now keeps the last scan and reduces it on every gate cycle with that cycle's requested
+  steering, then hands the distance to the gate as before. The gate logic is unchanged: latch,
+  hysteresis, floor and steering hold are as they were. `test_arc_corridor.cpp` composes the
+  two exactly that way, and the L3 launch test checks it through the node.
+- `limits.ttc_warning_s` (the release line) 0.45 -> 0.36 s, just above the 0.35 s brake; the
+  owner wants the car released as soon as its path is clear. At 1.0 m/s that is 0.36 m of
+  clear arc (and the floor's own release, 1.5 x 0.20 = 0.30 m, binds below about 0.83 m/s).
+
+The L1 suite reproduces the bag: latched on a wall 0.33 m ahead at 1.0 m/s, parked past the
+steering hold, then the request goes to full lock away with a scan whose arc is clear. The
+latch releases on the first such cycle with one "ttc brake released" record and one "steering
+hold released" record, and the output ramps out of the latch rate-limited. A straight request,
+or full lock into the wall, stays latched for the bag's full 37 s. A return further round the
+arc at 0.355 m (TTC 0.355 s, between brake and release) holds the latch; at 0.40 m it releases.
+
+Two things to know. The arc assumes the car follows the requested steering at once; in the
+first tenth of a second after a release the wheels are still slewing toward it (3.2 rad/s
+rate limit, about 0.13 s centre to lock) while the speed ramps from zero, so the car is slow
+while it catches up. And the simulator's scan comes from the vehicle reference point, while
+the node places the head 0.285 m ahead of the rear axle from the binding; the sim tests pass,
+but sim arc distances are off by that offset.
+
+Floor check still to do: same track, same speeds. Park the car on a wall with gap_follow_node
+running and check that it releases and drives off as soon as the planner steers away from the
+wall, with one "ttc brake released" record; check that a bag on the inside of a turn still
+latches it.

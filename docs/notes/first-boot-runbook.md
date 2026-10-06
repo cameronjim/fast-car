@@ -1110,28 +1110,33 @@ Note how close the nearest self-return is. **That number matters before any driv
 `lidar:=true`**. Since 2026-10-06 (`docs/notes/ttc-limit-cycle-2026-10-06.md`) `safety_node`'s
 obstacle gate works like this:
 
-- It looks only at returns in the car's path: a straight corridor ahead of the LiDAR head,
-  `chassis.width_m` / 2 + `limits.obstacle_corridor_margin_m` (0.155 + PROVISIONAL 0.05 =
-  0.205 m) each side of the centreline, since vehicle_params 0.9.0 ("corridor, not wedge":
-  on the first floor test a bag 0.3 m beside the path braked the car like one straight ahead).
-  Each laser bearing is first turned into a vehicle bearing with `sensors.lidar.mount_yaw_rad`
-  (pi on this car). The forward sector of +/- `limits.ttc_forward_sector_half_angle_rad`
-  (PROVISIONAL 0.6 rad, about 34 deg each side) is kept as an outer bound only, so nothing
-  behind or far beside the car is ever considered. Close in, that bound is the tighter one:
-  nearer than about 0.30 m from the head, a return at the very edge of the corridor (a front
-  corner) is outside 0.6 rad and is not seen. Returns that are NaN, inf, zero, below
-  `range_min` or above `range_max` are ignored. The person holding the kill switch behind the
-  car does not count.
-- The distance used below is the along-track distance to the return (how far ahead of the
-  head it is), not its straight-line range.
+- It looks only at returns in the car's path: a corridor `chassis.width_m` / 2 +
+  `limits.obstacle_corridor_margin_m` (0.155 + PROVISIONAL 0.05 = 0.205 m) each side of the
+  path, since vehicle_params 0.9.0 ("corridor, not wedge": on the first floor test a bag 0.3 m
+  beside the path braked the car like one straight ahead). Since vehicle_params 0.9.2 ("arc
+  corridor", late floor test) the path BENDS with the REQUESTED steering: straight ahead for a
+  straight request, otherwise the arc the car would drive at that steering (from
+  `chassis.wheelbase_m`, `steering.max_angle_rad` and the LiDAR mount), up to a quarter turn.
+  It is re-judged on every gate cycle with the current request, so a car latched on a wall
+  releases as soon as the planner (or the operator) steers away from the wall and that arc is
+  clear, even while the steering hold below has frozen `/drive`'s steering. Before 0.9.2 the
+  corridor stayed straight whatever the steering, and on the floor a car at full lock away from
+  a wall stayed latched for 20 to 37 s. Each laser bearing is first turned into a vehicle
+  bearing with `sensors.lidar.mount_yaw_rad` (pi on this car). The forward sector of +/-
+  `limits.ttc_forward_sector_half_angle_rad` (PROVISIONAL 1.2 rad since 0.9.1, about 69 deg
+  each side) is kept as an outer bound only, so nothing behind or far beside the car is ever
+  considered. Returns that are NaN, inf, zero, below `range_min` or above `range_max` are
+  ignored. The person holding the kill switch behind the car does not count.
+- The distance used below is the distance along the path from the LiDAR head to the return
+  (along-track for a straight request, arc length on a turn), not its straight-line range.
 - TTC is the nearest in-path distance divided by the REQUESTED speed (not the speed the gate
   last output). At or below `limits.ttc_brake_s` (PROVISIONAL 0.35 s) it zeroes the forward
   throttle; at the 0.8 m/s first-tap speed that is anything within 0.28 m ahead.
 - A distance floor, `limits.min_forward_clearance_m` (PROVISIONAL 0.20 m from the LiDAR head),
   zeroes the forward throttle for any forward request, however slow.
 - Both LATCH. Once braked, forward throttle stays at zero until the request's TTC is above
-  `limits.ttc_warning_s` (PROVISIONAL 0.45 s, 0.36 m at 0.8 m/s) AND the nearest forward return
-  is beyond 1.5 times the floor (0.30 m). Letting go of the throttle can clear the TTC half
+  `limits.ttc_warning_s` (PROVISIONAL 0.36 s since 0.9.2, just above the brake, 0.29 m at
+  0.8 m/s) AND the nearest return in the path is beyond 1.5 times the floor (0.30 m). Letting go of the throttle can clear the TTC half
   (a zero request has no TTC), but pressing it again re-trips on the same cycle, so no forward
   throttle reaches the motor while the obstacle is still there. Reverse still works while
   latched.
@@ -1147,7 +1152,7 @@ obstacle gate works like this:
   after `/drive` goes to zero the servo should stop moving, and it should follow the request
   again as soon as the obstacle is moved away.
 
-So a self-return inside the path corridor and closer than about 0.30 m would hold the car at
+So a self-return inside the path and closer than about 0.30 m would hold the car at
 zero throttle indefinitely. That is why `car_teleop.launch.py`'s `lidar` argument defaults to
 false.
 

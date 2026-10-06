@@ -1809,3 +1809,22 @@ instead of the slant range. The 0.6 rad sector stays as an outer bound. vehicle_
 
 Open: rerun the backpack track and check that bags beside the path no longer brake the car
 and a bag in the path still does.
+
+## 2026-10-06, late floor test: obstacle corridor follows the steering arc (vehicle_params 0.9.2)
+
+Second run on the backpack track, gap_follow_node at 0.8 to 1.0 m/s (bag
+2026-10-06T22-12-40_car_teleop, on the Jetson). The obstacle gate braked correctly three times
+(TTC 0.33 s at about 0.33 m), but each latch then lasted 20 to 37 s. The corridor was straight
+ahead and ignored the requested steering, so a stopped car steering hard away from the wall
+still saw the wall and never released, and the steering hold then froze it. The car was at
+full lock 85 percent of the run.
+
+Software change, NOT yet run on the car: the corridor now follows the arc of the requested
+steering (wheelbase, steering lock and LiDAR mount from vehicle_params, no new fields), the
+distance is the arc length from the LiDAR head, and safety_node recomputes it from the last
+scan on every gate cycle with the current request, so a latched car releases by steering away.
+`limits.ttc_warning_s` (the release line) 0.45 -> 0.36 s. vehicle_params 0.9.1 -> 0.9.2.
+Details in the "Arc corridor" section of `docs/notes/ttc-limit-cycle-2026-10-06.md`.
+
+Open: rerun the track and check that a car parked on a wall drives off once the planner
+steers away from it, and that a bag on the inside of a turn still latches it.

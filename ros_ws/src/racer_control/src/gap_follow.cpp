@@ -235,6 +235,83 @@ double steering_from_bearing(double bearing_rad, double gain, double max_steerin
   return std::min(std::max(gain * bearing_rad, -max_steering_rad), max_steering_rad);
 }
 
+namespace {
+
+bool is_valid_return(float range_m, const ScanInput& scan) {
+  const double r = static_cast<double>(range_m);
+  return std::isfinite(r) && r > 0.0 && r >= scan.range_min && r <= scan.range_max;
+}
+
+}  // namespace
+
+SweptPathClamp clamp_steering_to_swept_path(const ScanInput& scan, double laser_yaw_offset_rad,
+                                            double steering_rad, const SweptPathGeometry& g) {
+  SweptPathClamp out;
+  out.steering_rad = steering_rad;
+  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  if (!std::isfinite(steering_rad) || steering_rad == 0.0 || std::abs(steering_rad) >= M_PI_2 ||
+      !is_usable(scan) || !std::isfinite(laser_yaw_offset_rad) || !positive(g.wheelbase_m) ||
+      !positive(g.half_width_m) || !positive(g.lookahead_m) || !std::isfinite(g.margin_m) ||
+      g.margin_m < 0.0 || !std::isfinite(g.body_front_x_m) || !std::isfinite(g.lidar_mount_x_m) ||
+      !std::isfinite(g.lidar_mount_y_m)) {
+    return out;
+  }
+  // Everything below is worked as a LEFT turn; a right turn mirrors y.
+  const double side = steering_rad > 0.0 ? 1.0 : -1.0;
+  const double c = g.half_width_m + g.margin_m;
+  const double wanted_k = std::tan(std::abs(steering_rad)) / g.wheelbase_m;
+  double k = wanted_k;
+  // Each pass either finds no violator (done) or strictly lowers k past some return's k_max,
+  // after which that return can never violate again: at most one pass per return.
+  for (std::size_t pass = 0; pass <= scan.ranges.size(); ++pass) {
+    if (k <= 0.0) {
+      break;
+    }
+    const double radius = 1.0 / k;
+    const double outer = std::hypot(g.body_front_x_m, radius + c);
+    double next_k = k;
+    for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
+      if (!is_valid_return(scan.ranges[i], scan)) {
+        continue;
+      }
+      const double r = static_cast<double>(scan.ranges[i]);
+      const double bearing = laser_bearing_of_index(scan, i) + laser_yaw_offset_rad;
+      const double x = r * std::cos(bearing) + g.lidar_mount_x_m;
+      const double y = side * (r * std::sin(bearing) + g.lidar_mount_y_m);
+      if (!(y > g.half_width_m)) {
+        continue;  // other side, or inside the car's width (the TTC gate's job)
+      }
+      // Ahead along the turn: arc angle in (0, pi/2), i.e. x > 0 and y < R, and within the
+      // lookahead of rear-axle arc length.
+      if (!(x > 0.0) || !(y < radius)) {
+        continue;
+      }
+      const double phi = std::atan2(x, radius - y);
+      if (radius * phi > g.lookahead_m) {
+        continue;
+      }
+      // Clear on the inside of the inner flank circle, or outside the outer corner circle.
+      const double k_max = y > c ? 2.0 * (y - c) / (x * x + y * y - c * c) : 0.0;
+      if (k <= k_max) {
+        continue;
+      }
+      if (std::hypot(x, radius - y) > outer) {
+        continue;
+      }
+      next_k = std::min(next_k, k_max);
+    }
+    if (next_k == k) {
+      break;
+    }
+    k = next_k;
+  }
+  if (k < wanted_k) {
+    out.clamped = true;
+    out.steering_rad = side * std::atan(k * g.wheelbase_m);
+  }
+  return out;
+}
+
 double FirstOrderLowPass::update(double input, double dt_s) {
   if (!std::isfinite(input) || !std::isfinite(dt_s) || dt_s <= 0.0) {
     return output_;
@@ -279,6 +356,16 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
   result.target_range_m = extended_[selection->target_index];
   result.steering_rad = steering_from_bearing(
       selection->target_vehicle_bearing_rad, config_.steering_gain, config_.max_steering_angle_rad);
+  result.wanted_steering_rad = result.steering_rad;
+  if (config_.swept_path_clamp) {
+    SweptPathGeometry geometry = config_.swept_path;
+    geometry.half_width_m = config_.half_width_m;
+    geometry.margin_m = config_.safety_margin_m;
+    const SweptPathClamp clamp = clamp_steering_to_swept_path(scan, config_.laser_yaw_offset_rad,
+                                                              result.steering_rad, geometry);
+    result.swept_path_clamped = clamp.clamped;
+    result.steering_rad = clamp.steering_rad;
+  }
   result.corner_blocked =
       corner_blocked(scan, sanitized_, result.steering_rad, config_.corner_sector_inner_rad,
                      config_.corner_sector_outer_rad, config_.corner_min_clearance_m,

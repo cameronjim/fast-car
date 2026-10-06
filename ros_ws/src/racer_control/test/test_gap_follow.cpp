@@ -1168,5 +1168,249 @@ TEST(GapFollower, AllFreeScanDrivesStraight) {
   EXPECT_DOUBLE_EQ(r.target_range_m, 3.5);
 }
 
+// -- Swept-path clamp (2026-10-06 floor finding) ----------------------------------------------
+
+// The real C1: 360 degrees from angle_min -pi, mounted backwards (yaw pi), 0.5 degree rays.
+// Objects are segments in the vehicle-axis frame centred on the LiDAR HEAD (x forward, y left,
+// laser yaw already applied); everything else reads inf (no return).
+constexpr double kC1Yaw = M_PI;
+constexpr double kWheelbase = 0.3302;  // vehicle_params chassis.wheelbase_m
+constexpr double kMountX = 0.285;      // vehicle_params sensors.lidar.mount_x_m
+constexpr double kFullLeft = 0.4189;   // vehicle_params steering.max_angle_rad
+
+ScanInput c1_scan_with(const std::vector<Segment>& segments) {
+  ScanInput scan = make_scan(720, -M_PI, 2.0 * M_PI / 720.0, 0.0f, 12.0);
+  for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
+    const double vehicle_bearing = laser_bearing_of_index(scan, i) + kC1Yaw;
+    scan.ranges[i] = static_cast<float>(ray_cast(vehicle_bearing, segments));
+  }
+  return scan;
+}
+
+SweptPathGeometry swept_geometry(double lookahead_m = 1.0) {
+  SweptPathGeometry g;
+  g.wheelbase_m = kWheelbase;
+  g.half_width_m = 0.155;
+  g.margin_m = 0.05;
+  g.body_front_x_m = 0.17145 + 0.58 / 2.0;  // cg_to_rear_axle_m + length_m / 2
+  g.lidar_mount_x_m = kMountX;
+  g.lidar_mount_y_m = 0.0;
+  g.lookahead_m = lookahead_m;
+  return g;
+}
+
+// Object 0.5 m to the left (side = +1) or right (side = -1) of the head, x 0.1 to 0.4 m.
+std::vector<Segment> side_object(double side) { return {{0.1, side * 0.5, 0.4, side * 0.5}}; }
+
+struct RearAxlePoint {
+  double x, y;
+};
+
+std::vector<RearAxlePoint> rear_axle_returns(const ScanInput& scan) {
+  std::vector<RearAxlePoint> points;
+  for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
+    const double r = scan.ranges[i];
+    if (!std::isfinite(r) || r <= 0.0) {
+      continue;
+    }
+    const double b = laser_bearing_of_index(scan, i) + kC1Yaw;
+    points.push_back({r * std::cos(b) + kMountX, r * std::sin(b)});
+  }
+  return points;
+}
+
+// Smallest (inside flank radius - margin) - (distance from the turn centre) over the points,
+// for a left turn of steering delta. >= 0 means the inside flank misses every point by at
+// least the margin.
+double inside_clearance_m(const std::vector<RearAxlePoint>& points, double delta) {
+  const double radius = kWheelbase / std::tan(delta);
+  const double inner = radius - 0.155 - 0.05;
+  double worst = std::numeric_limits<double>::infinity();
+  for (const RearAxlePoint& p : points) {
+    worst = std::min(worst, inner - std::hypot(p.x, radius - p.y));
+  }
+  return worst;
+}
+
+TEST(SweptPathClamp, ObjectBesideTheCarClampsALeftTurnToClearItByTheMargin) {
+  const ScanInput scan = c1_scan_with(side_object(+1.0));
+  const std::vector<RearAxlePoint> points = rear_axle_returns(scan);
+  ASSERT_GT(points.size(), 10u);
+  // Full left would sweep the inside flank across the object.
+  ASSERT_LT(inside_clearance_m(points, kFullLeft), 0.0);
+
+  const SweptPathClamp clamp =
+      clamp_steering_to_swept_path(scan, kC1Yaw, kFullLeft, swept_geometry());
+  EXPECT_TRUE(clamp.clamped);
+  EXPECT_GT(clamp.steering_rad, 0.1);
+  EXPECT_LT(clamp.steering_rad, kFullLeft);
+  // The inside flank circle misses every return by the margin, and the binding return by
+  // exactly the margin (the clamp is the largest such turn).
+  EXPECT_GE(inside_clearance_m(points, clamp.steering_rad), -1e-9);
+  EXPECT_NEAR(inside_clearance_m(points, clamp.steering_rad), 0.0, 1e-9);
+  EXPECT_LT(inside_clearance_m(points, clamp.steering_rad + 1e-3), 0.0);
+  // Closed form against the corner of the object that binds, (0.685, 0.5) in the rear-axle
+  // frame: k = 2 (y - c) / (x^2 + y^2 - c^2), delta = atan(k L), about 0.28 rad. The nearest
+  // ray to that corner sits a little inside it, hence the tolerance.
+  const double c = 0.205;
+  const double x = 0.4 + kMountX;
+  const double y = 0.5;
+  const double k = 2.0 * (y - c) / (x * x + y * y - c * c);
+  EXPECT_NEAR(clamp.steering_rad, std::atan(k * kWheelbase), 5e-3);
+}
+
+TEST(SweptPathClamp, ObjectOnTheOtherSideDoesNotClamp) {
+  const ScanInput right = c1_scan_with(side_object(-1.0));
+  const SweptPathClamp left_turn =
+      clamp_steering_to_swept_path(right, kC1Yaw, kFullLeft, swept_geometry());
+  EXPECT_FALSE(left_turn.clamped);
+  EXPECT_EQ(left_turn.steering_rad, kFullLeft);
+  // It does clamp a right turn, as the mirror image of the left case.
+  const SweptPathClamp right_turn =
+      clamp_steering_to_swept_path(right, kC1Yaw, -kFullLeft, swept_geometry());
+  const SweptPathClamp mirror = clamp_steering_to_swept_path(c1_scan_with(side_object(+1.0)),
+                                                             kC1Yaw, kFullLeft, swept_geometry());
+  EXPECT_TRUE(right_turn.clamped);
+  EXPECT_NEAR(right_turn.steering_rad, -mirror.steering_rad, 1e-6);
+}
+
+TEST(SweptPathClamp, NoObjectLeavesTheSteeringBitForBit) {
+  const ScanInput empty = c1_scan_with({});
+  for (const double steering : {kFullLeft, 0.1234567, -0.3, -kFullLeft, 0.0}) {
+    const SweptPathClamp clamp =
+        clamp_steering_to_swept_path(empty, kC1Yaw, steering, swept_geometry());
+    EXPECT_FALSE(clamp.clamped);
+    EXPECT_EQ(clamp.steering_rad, steering);
+  }
+}
+
+TEST(SweptPathClamp, ObjectBeyondTheLookaheadIsIgnored) {
+  // Wanted 0.2 rad left: R = 1.629 m. An object 0.5 m left of the head at x 0.715 to 1.015 m
+  // ahead of the head (rear axle x 1.0 to 1.3 m) is inside the swept annulus, but the rear
+  // axle only reaches it after more than 1.0 m of arc (R * atan2(1.0, R - 0.5) = 1.18 m).
+  const ScanInput scan = c1_scan_with({{0.715, 0.5, 1.015, 0.5}});
+  const SweptPathClamp within_1m =
+      clamp_steering_to_swept_path(scan, kC1Yaw, 0.2, swept_geometry());
+  EXPECT_FALSE(within_1m.clamped);
+  EXPECT_EQ(within_1m.steering_rad, 0.2);
+  // With a 2 m lookahead the same object constrains the turn.
+  const SweptPathClamp within_2m =
+      clamp_steering_to_swept_path(scan, kC1Yaw, 0.2, swept_geometry(2.0));
+  EXPECT_TRUE(within_2m.clamped);
+  EXPECT_LT(within_2m.steering_rad, 0.2);
+}
+
+TEST(SweptPathClamp, ObjectStraightAheadInsideTheCarsWidthIsIgnored) {
+  // Straight ahead of the head, |y| <= 0.1 m < half width: the TTC gate's job, not this one.
+  const ScanInput scan = c1_scan_with({{0.4, -0.1, 0.4, 0.1}});
+  ASSERT_GT(rear_axle_returns(scan).size(), 5u);
+  for (const double steering : {0.3, -0.3, kFullLeft}) {
+    const SweptPathClamp clamp =
+        clamp_steering_to_swept_path(scan, kC1Yaw, steering, swept_geometry());
+    EXPECT_FALSE(clamp.clamped);
+    EXPECT_EQ(clamp.steering_rad, steering);
+  }
+}
+
+TEST(SweptPathClamp, ReturnWithinTheMarginBesideTheCarForbidsTheTurn) {
+  // 0.18 m left of the centreline: outside the half width (0.155) but inside half width +
+  // margin (0.205), alongside the car just behind the head. No left turn clears it.
+  const ScanInput scan = c1_scan_with({{-0.1, 0.18, 0.1, 0.18}});
+  const SweptPathClamp clamp = clamp_steering_to_swept_path(scan, kC1Yaw, 0.3, swept_geometry());
+  EXPECT_TRUE(clamp.clamped);
+  EXPECT_EQ(clamp.steering_rad, 0.0);
+}
+
+TEST(SweptPathClamp, InvalidReturnsAreIgnored) {
+  const ScanInput scan = c1_scan_with(side_object(+1.0));
+  // 0.01 is below range_min (0.05), 20 above range_max (12).
+  for (const float bad : {kNaNF, -kInfF, 0.0f, -1.0f, 0.01f, 20.0f}) {
+    ScanInput s = scan;
+    for (float& r : s.ranges) {
+      r = std::isfinite(r) ? bad : r;
+    }
+    const SweptPathClamp clamp =
+        clamp_steering_to_swept_path(s, kC1Yaw, kFullLeft, swept_geometry());
+    EXPECT_FALSE(clamp.clamped) << bad;
+    EXPECT_EQ(clamp.steering_rad, kFullLeft) << bad;
+  }
+  // Invalid rays between valid ones are not filled from their neighbours: knocking out every
+  // other ray of the object leaves a clamp set only by the remaining rays, never tighter.
+  ScanInput sparse = scan;
+  for (std::size_t i = 0; i < sparse.ranges.size(); i += 2) {
+    if (std::isfinite(sparse.ranges[i])) {
+      sparse.ranges[i] = kNaNF;
+    }
+  }
+  const SweptPathClamp full =
+      clamp_steering_to_swept_path(scan, kC1Yaw, kFullLeft, swept_geometry());
+  const SweptPathClamp thinned =
+      clamp_steering_to_swept_path(sparse, kC1Yaw, kFullLeft, swept_geometry());
+  EXPECT_TRUE(thinned.clamped);
+  EXPECT_GE(thinned.steering_rad, full.steering_rad);
+  EXPECT_GE(inside_clearance_m(rear_axle_returns(sparse), thinned.steering_rad), -1e-9);
+}
+
+TEST(SweptPathClamp, UnusableGeometryLeavesTheSteeringAlone) {
+  const ScanInput scan = c1_scan_with(side_object(+1.0));
+  std::vector<SweptPathGeometry> bad(7, swept_geometry());
+  bad[0].wheelbase_m = 0.0;
+  bad[1].half_width_m = std::numeric_limits<double>::quiet_NaN();
+  bad[2].margin_m = -0.01;
+  bad[3].lookahead_m = 0.0;
+  bad[4].lidar_mount_x_m = std::numeric_limits<double>::infinity();
+  bad[5].lidar_mount_y_m = std::numeric_limits<double>::quiet_NaN();
+  bad[6].body_front_x_m = std::numeric_limits<double>::quiet_NaN();
+  for (const SweptPathGeometry& g : bad) {
+    const SweptPathClamp clamp = clamp_steering_to_swept_path(scan, kC1Yaw, kFullLeft, g);
+    EXPECT_FALSE(clamp.clamped);
+    EXPECT_EQ(clamp.steering_rad, kFullLeft);
+  }
+  const SweptPathClamp nan_steering = clamp_steering_to_swept_path(
+      scan, kC1Yaw, std::numeric_limits<double>::quiet_NaN(), swept_geometry());
+  EXPECT_FALSE(nan_steering.clamped);
+}
+
+// End to end: a gap to the front left with the apex object beside the car on the left.
+GapFollowConfig c1_follower_config(bool swept_path_clamp) {
+  GapFollowConfig c = floor_config(0.0);
+  c.swept_path_clamp = swept_path_clamp;
+  c.swept_path = swept_geometry();
+  return c;
+}
+
+ScanInput c1_left_gap_with_apex_object() {
+  // A wall 1.2 m ahead of the head across the right and centre, a wall 0.6 m to the right,
+  // open to the front left, and the apex object 0.5 m left of the head.
+  return c1_scan_with({{1.2, -3.0, 1.2, 0.3}, {0.1, 0.5, 0.4, 0.5}, {-3.0, -0.6, 1.2, -0.6}});
+}
+
+TEST(SweptPathClamp, GapFollowerClampsAndDisabledReproducesTheOldOutput) {
+  const ScanInput scan = c1_left_gap_with_apex_object();
+  GapFollower on(c1_follower_config(true));
+  GapFollower off(c1_follower_config(false));
+  const GapFollowResult a = on.process(scan);
+  const GapFollowResult b = off.process(scan);
+  ASSERT_TRUE(a.valid);
+  ASSERT_TRUE(b.valid);
+  ASSERT_TRUE(b.gap_found);
+  ASSERT_GT(b.target_vehicle_bearing_rad, 0.0);
+  // Disabled: exactly the old pipeline (steering_from_bearing, then the corner override,
+  // which does not fire here).
+  EXPECT_FALSE(b.swept_path_clamped);
+  EXPECT_FALSE(b.corner_blocked);
+  EXPECT_EQ(b.steering_rad, steering_from_bearing(b.target_vehicle_bearing_rad, 1.0, 0.4189));
+  EXPECT_EQ(b.wanted_steering_rad, b.steering_rad);
+  // Enabled: same target, steering reduced, flag set.
+  EXPECT_EQ(a.target_vehicle_bearing_rad, b.target_vehicle_bearing_rad);
+  EXPECT_EQ(a.wanted_steering_rad, b.steering_rad);
+  EXPECT_TRUE(a.swept_path_clamped);
+  EXPECT_GT(a.steering_rad, 0.0);
+  EXPECT_LT(a.steering_rad, b.steering_rad);
+  EXPECT_EQ(a.steering_rad,
+            clamp_steering_to_swept_path(scan, M_PI, a.wanted_steering_rad, swept_geometry())
+                .steering_rad);
+}
+
 }  // namespace
 }  // namespace racer_control

@@ -16,6 +16,11 @@ for floor tuning. Their launch defaults are empty, meaning "not set here": the n
 (0.0, off) or the params file value applies. A value given here is passed as a float and
 overrides the params file. The node range-checks them and refuses to start outside [0, 1].
 
+`swept_path_clamp` (true/false) and `swept_path_lookahead_m` (the swept-path steering clamp,
+see include/racer_control/gap_follow.hpp clamp_steering_to_swept_path) follow the same rule:
+empty leaves the node default (on, 1.0 m) or the params file value. The node refuses to start
+while vehicle_params sensors.lidar.mount_x_m / mount_y_m is null.
+
 laser_yaw_from_vehicle_params (default true) must stay true on the real car, where the LiDAR
 yaw comes only from vehicle_params sensors.lidar.mount_yaw_rad. Set it false (in the params
 file) ONLY for the simulator and synthetic-scan tests, whose /scan is aligned to the vehicle
@@ -40,6 +45,17 @@ _OPTIONAL_FLOAT_ARGS = {
         "Gap switching hysteresis fraction, [0, 1]. Empty (default) leaves the node default "
         "0.0 (off) or the params file value."
     ),
+    "swept_path_lookahead_m": (
+        "Arc length (m) within which returns constrain the swept-path clamp. Empty (default) "
+        "leaves the node default 1.0 or the params file value."
+    ),
+}
+_OPTIONAL_BOOL_ARGS = {
+    "swept_path_clamp": (
+        "true or false: reduce the steering so the car's swept area clears returns beside it "
+        "on the turn-in side. Empty (default) leaves the node default (true) or the params "
+        "file value."
+    ),
 }
 
 
@@ -55,6 +71,12 @@ def _make_node(context: LaunchContext) -> list[Node]:
             # float() so "0" or "1" is not handed to the node as an integer, which a double
             # parameter would reject.
             overrides[name] = float(value)
+    for name in _OPTIONAL_BOOL_ARGS:
+        value = LaunchConfiguration(name).perform(context).strip().lower()
+        if value:
+            if value not in ("true", "false"):
+                raise ValueError(f"{name} must be true or false, got {value!r}")
+            overrides[name] = value == "true"
     parameters.append(overrides)
     return [
         Node(
@@ -80,7 +102,7 @@ def generate_launch_description() -> LaunchDescription:
     )
     optional_args = [
         DeclareLaunchArgument(name, default_value="", description=description)
-        for name, description in _OPTIONAL_FLOAT_ARGS.items()
+        for name, description in {**_OPTIONAL_FLOAT_ARGS, **_OPTIONAL_BOOL_ARGS}.items()
     ]
     return LaunchDescription(
         [max_speed_arg, params_file_arg, *optional_args, OpaqueFunction(function=_make_node)]

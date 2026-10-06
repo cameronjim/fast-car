@@ -15,6 +15,9 @@
 //      default to off, which is the plain widest gap. Target its centre ray (default) or its
 //      deepest ray.
 //   4. steering_from_bearing: steering = clamp(gain * target_bearing, +/- max_angle).
+//   4b. clamp_steering_to_swept_path (optional, default on): reduce |steering| until the
+//      car's swept area over the next swept_path_lookahead_m of arc is clear of every return
+//      beside and ahead of it on the turn-in side (2026-10-06 floor finding, see below).
 //   5. corner_blocked: zero the steering if the whole side sector the car would turn into is
 //      within min_clearance (the car is hugging that wall and would clip it).
 // The node then low-pass filters the steering (FirstOrderLowPass) and derives speed from the
@@ -142,6 +145,68 @@ bool corner_blocked(const ScanInput& geometry, const std::vector<double>& ranges
 // Step 4: clamp(gain * bearing, +/- max_steering_rad). Non-finite input returns 0.
 double steering_from_bearing(double bearing_rad, double gain, double max_steering_rad);
 
+// Swept-path steering clamp (step 4b). Added after the 2026-10-06 floor test (bag
+// 2026-10-06T22-12-40_car_teleop, counter-clockwise loop with loose objects on the inside of
+// every left corner): the follower steered to a geometrically correct gap, but the car's
+// inside flank swept across the apex object (62 of 63 replayed scans chose a gap whose turn
+// passed within the car's width of an object beside the car). The disparity bubble only
+// inflates obstacle edges angularly inside the search cone; an object alongside the car, 60
+// to 100 degrees off the LiDAR's forward axis, never constrains the turn.
+//
+// GEOMETRY. Rear-axle frame, x forward, y left (REP-103). For a steering delta != 0 the rear
+// axle follows a circle of signed radius R = L / tan(delta), L = wheelbase, about the turn
+// centre (0, R), the same model racer_safety's arc corridor uses. The working below is for a
+// LEFT turn; a right turn is its mirror image (y -> -y), so with c = half_width + margin:
+//   * inside flank: the body point nearest the centre is (0, half_width) (the rear axle lies
+//     inside the body), so the inside of the swept area is the circle of radius R - c.
+//   * outside front corner: (body_front_x, -half_width) sweeps the outer circle,
+//     R_out = hypot(body_front_x, R + c) (margin on this side too, which is conservative).
+//   * a return at (x, y) (head-relative x, y from range and VEHICLE bearing, then shifted by
+//     the LiDAR mount: x += lidar_mount_x, y += lidar_mount_y) is considered only if it is on
+//     the turn-in side and outside the car's width, y > half_width (a return straight ahead
+//     inside the car's width is the TTC gate's job, not this clamp's), and ahead of the car
+//     along the turn: arc angle phi = atan2(x, R - y) in (0, pi/2), with the rear axle's arc
+//     length R * phi <= lookahead_m.
+//   * it is in the swept area if its distance from the centre rho = hypot(x, R - y) satisfies
+//     R - c < rho <= R_out.
+//   * it is clear on the INSIDE (rho <= R - c) exactly when the curvature k = 1 / R satisfies
+//         k <= k_max = 2 (y - c) / (x^2 + y^2 - c^2)     (y > c; k_max = 0 when y <= c)
+//     (square rho <= R - c and solve for R: R >= (x^2 + y^2 - c^2) / (2 (y - c))). A return
+//     within the margin of the car's side (half_width < y <= c) therefore forbids any turn
+//     toward it.
+// ALGORITHM. Start from the wanted curvature k = tan(|delta|) / L. Every return in the
+// swept area at k (with the window above evaluated at k) is a violator; set k to the
+// smallest k_max among the violators and repeat until there are none. Each pass strictly
+// lowers k and a return is never a violator again once k <= its k_max, so this ends in at
+// most one pass per return (usually one or two). The result is delta = sign * atan(k L): the
+// inside flank circle passes every considered return at a distance of at least the margin
+// (exactly the margin for the binding return). The wanted steering is returned unchanged,
+// bit for bit, when it is zero or non-finite, when nothing violates, or when the geometry is
+// unusable (non-positive or non-finite wheelbase, half width or lookahead; negative or
+// non-finite margin; non-finite mount or front x; unusable scan).
+//
+// Invalid returns (non-finite, <= 0, below range_min or above range_max) are ignored, never
+// filled from neighbours: this reads the RAW scan, not the sanitised or extended ranges.
+// When the clamp drives the steering to (near) zero while the target bearing is large, that
+// is intended: the corner override and the safety node take it from there.
+struct SweptPathGeometry {
+  double wheelbase_m = 0.0;      // chassis.wheelbase_m
+  double half_width_m = 0.0;     // chassis.width_m / 2
+  double margin_m = 0.0;         // the follower's safety_margin_m
+  double body_front_x_m = 0.0;   // rear axle to the front of the body, for the outer circle
+  double lidar_mount_x_m = 0.0;  // sensors.lidar.mount_x_m (rear axle to head, forward)
+  double lidar_mount_y_m = 0.0;  // sensors.lidar.mount_y_m (left)
+  double lookahead_m = 0.0;      // swept_path_lookahead_m, rear-axle arc length
+};
+
+struct SweptPathClamp {
+  double steering_rad = 0.0;
+  bool clamped = false;  // true only when |steering| was reduced
+};
+
+SweptPathClamp clamp_steering_to_swept_path(const ScanInput& scan, double laser_yaw_offset_rad,
+                                            double steering_rad, const SweptPathGeometry& geometry);
+
 // Discrete first-order low-pass y += dt / (tau + dt) * (x - y), stable for any dt > 0. A
 // non-finite or non-positive dt holds the previous output (same "no elapsed time, no change"
 // convention as SpeedRateLimiter), so the first sample after construction or reset() holds
@@ -177,6 +242,13 @@ struct GapFollowConfig {
   double corner_sector_inner_rad = 0.0;
   double corner_sector_outer_rad = 0.0;
   double corner_min_clearance_m = 0.0;
+  // Swept-path clamp (step 4b). Off in a default-constructed config, so the core's default is
+  // the pipeline without it; gap_follow_node's swept_path_clamp parameter defaults to true.
+  // The geometry's half width and margin are taken from half_width_m and safety_margin_m
+  // above (whatever swept_path holds for them is ignored); the node fills the rest from the
+  // binding.
+  bool swept_path_clamp = false;
+  SweptPathGeometry swept_path;
 };
 
 struct GapFollowResult {
@@ -187,7 +259,10 @@ struct GapFollowResult {
   bool corner_blocked = false;
   double target_vehicle_bearing_rad = 0.0;
   double target_range_m = 0.0;  // extended range along the target ray (input to speed)
-  double steering_rad = 0.0;    // after clamp and corner override, BEFORE low-pass
+  // steering_from_bearing's output, before the swept-path clamp and the corner override.
+  double wanted_steering_rad = 0.0;
+  bool swept_path_clamped = false;  // the swept-path clamp reduced |steering|
+  double steering_rad = 0.0;        // after clamps and corner override, BEFORE low-pass
 };
 
 class GapFollower {

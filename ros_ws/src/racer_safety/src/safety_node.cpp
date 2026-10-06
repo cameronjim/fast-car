@@ -184,7 +184,7 @@ class SafetyNode : public rclcpp::Node {
 
     // ttc_warning_s / ttc_brake_s are vehicle_params.yaml's limits.ttc_warning_s/ttc_brake_s
     // (CLAUDE.md invariant 2: this is their ONE source of truth). Since 2026-09-13 the
-    // committed file holds PROVISIONAL values (2.0 s warn / 1.0 s brake since 2026-10-06,
+    // committed file holds PROVISIONAL values (0.45 s warn / 0.35 s brake since 2026-10-06,
     // raised from 1.0 / 0.5 after the bench limit cycle; NOT tuned against this car's
     // measured braking distance -- see that file's comments and GitHub issue #36), so the TTC
     // gate is ARMED whenever a /scan is present rather than the documented no-op it used to be.

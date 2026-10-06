@@ -90,7 +90,7 @@ _BAG_RANGE_M = 0.22
 # 80 percent of the threshold. At the original 0.5 s this is the bag's own 0.48 m/s.
 _MIN_FORWARD_CLEARANCE_M = _VEHICLE_PARAMS["limits"]["min_forward_clearance_m"]
 _SCENARIO_REQUEST_MPS = max(_BAG_REQUEST_MPS, _BAG_RANGE_M / (0.8 * _TTC_BRAKE_S))
-# Steering hold on the obstacle latch (schema 0.7.3, gate_logic.hpp "STEERING HOLD WHILE PARKED
+# Steering hold on the obstacle latch (schema 0.8.0, gate_logic.hpp "STEERING HOLD WHILE PARKED
 # ON THE OBSTACLE LATCH"): read from the committed yaml like the thresholds above, so the test
 # proves the number the car boots with.
 _STEERING_HOLD_AFTER_S = _VEHICLE_PARAMS["limits"]["obstacle_steering_hold_after_s"]

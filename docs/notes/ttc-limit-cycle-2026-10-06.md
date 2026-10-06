@@ -99,7 +99,7 @@ zero throttle as intended, but the steering servo kept hunting back and forth: t
 steering live while latched, and gap_follow_node's steering request wandered while it looked
 for a gap it could not take.
 
-Change (racer_safety, vehicle_params 0.7.3, not yet run on the car):
+Change (racer_safety, vehicle_params 0.8.0, not yet run on the car):
 
 - Steering stays live while the latch is fresh, because a car braking at speed must keep
   steering authority. Once the latch has held the gated output speed at exactly zero for

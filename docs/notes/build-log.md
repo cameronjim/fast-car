@@ -1777,7 +1777,7 @@ floor look at a forward sector only (`limits.ttc_forward_sector_half_angle_rad`,
 Open: repeat the wheels-off check described at the end of the note before `lidar:=true` is
 used while driving.
 
-## 2026-10-06 late: steering hold on the obstacle latch, release retuned (vehicle_params 0.7.3)
+## 2026-10-06 late: steering hold on the obstacle latch, release retuned (vehicle_params 0.8.0)
 
 Third wheels-off pass with gap_follow_node on 0.7.2. Two things the owner saw on the stand:
 the servo kept hunting while the latch held the car at zero throttle, and a person standing

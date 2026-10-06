@@ -1111,7 +1111,7 @@ Note how close the nearest self-return is. **That number matters before any driv
 obstacle gate works like this:
 
 - It looks only at returns inside a forward sector of +/- `limits.ttc_forward_sector_half_angle_rad`
-  (PROVISIONAL 0.6 rad since vehicle_params 0.7.3, about 34 deg each side; it was 1.0 rad, and
+  (PROVISIONAL 0.6 rad since vehicle_params 0.8.0, about 34 deg each side; it was 1.0 rad, and
   a person beside the front corner held the latch) of the car's nose, after turning each laser
   bearing into a vehicle bearing with `sensors.lidar.mount_yaw_rad` (pi on this car). Returns
   that are NaN, inf, zero, below `range_min` or above `range_max` are ignored. Things behind
@@ -1131,7 +1131,7 @@ obstacle gate works like this:
   starting "ttc brake released" when it clears.
 - Steering stays live while the car brakes, so it can still be steered while it coasts. Once
   the latch has held `/drive` speed at zero for `limits.obstacle_steering_hold_after_s`
-  (PROVISIONAL 0.5 s, since vehicle_params 0.7.3), the steering is FROZEN at the angle it had
+  (PROVISIONAL 0.5 s, since vehicle_params 0.8.0), the steering is FROZEN at the angle it had
   then, until the latch releases: a car parked against an obstacle stops hunting its servo
   however the planner's steering request wanders. Reversing while latched unfreezes it. Expect
   one `ttc` INFO engage record "steering held while obstacle-latched" (with the held angle) and

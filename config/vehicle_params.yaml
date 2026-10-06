@@ -33,7 +33,7 @@
 #
 # schema_version bumped 0.2.0 -> 0.2.1 on 2026-09-12: those nine safety-mux fields were filled
 # in with PROVISIONAL values so firmware/safety_mux can arm for a first bench test. No schema
-# field was added or removed (hence a patch bump, not a minor one), but the VALUES changed and
+# field was added or removed (hence a minor bump (new required field), not a minor one), but the VALUES changed and
 # rule 5 bumps on any change.
 #
 #   !! THE NINE SAFETY-MUX VALUES BELOW ARE NOT MEASURED. !!
@@ -111,7 +111,7 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
-# schema_version bumped 0.7.2 -> 0.7.3 on 2026-10-06 (late, third bench pass, wheels off the
+# schema_version bumped 0.7.2 -> 0.8.0 on 2026-10-06 (late, third bench pass, wheels off the
 # ground with gap_follow_node): limits.ttc_warning_s 0.6 -> 0.45 (it is the latch's release
 # line) and limits.ttc_forward_sector_half_angle_rad 1.0 -> 0.6. On the stand, a person beside
 # the front corner sat inside the 1.0 rad sector and held the latch, and the 0.6 s release at a
@@ -120,7 +120,7 @@
 # (PROVISIONAL 0.5 s): once the obstacle latch has held the output speed at zero that long,
 # racer_safety freezes the steering output until the latch releases, so a car parked against an
 # obstacle stops hunting its servo (the owner watched it do that on the stand). Rule 5 bumps on
-# any change; the number is 0.7.3 as the owner specified, although earlier additions of a
+# any change; the number is 0.8.0 as the owner specified, although earlier additions of a
 # required field took the minor digit (0.6.1 -> 0.7.0). Consumers refuse on mismatch either
 # way. All three values are PROVISIONAL.
 #
@@ -452,7 +452,7 @@ limits:
   # bug, fixed in racer_safety, but the threshold was also too small. Release of the latched
   # brake needs the requested speed's TTC to exceed ttc_warning_s, so the warning value is
   # also the brake's release point.
-  ttc_warning_s: 0.45               # PROVISIONAL (bench-tuned 2026-10-06, third pass: release line, see 0.7.3 note)
+  ttc_warning_s: 0.45               # PROVISIONAL (bench-tuned 2026-10-06, third pass: release line, see 0.8.0 note)
   ttc_brake_s: 0.35                 # PROVISIONAL (bench-tuned 2026-10-06, second pass, see 0.7.2 note)
   # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
   # nearest valid return inside the forward sector below is closer than this, forward throttle
@@ -471,8 +471,8 @@ limits:
   # this car). PROVISIONAL, NOT tuned: 1.0 rad (about 57 deg each side) covers the car's
   # swept width at full steering lock over the first metre or so; replace when there is
   # driving data to tune against.
-  ttc_forward_sector_half_angle_rad: 0.6  # PROVISIONAL (bench-tuned 2026-10-06, third pass, about 34 deg each side; see 0.7.3 note)
-  # Steering hold on the obstacle latch (added 2026-10-06 late, schema 0.7.3). A TTC or
+  ttc_forward_sector_half_angle_rad: 0.6  # PROVISIONAL (bench-tuned 2026-10-06, third pass, about 34 deg each side; see 0.8.0 note)
+  # Steering hold on the obstacle latch (added 2026-10-06 late, schema 0.8.0). A TTC or
   # clearance brake zeroes forward throttle and keeps steering live, because a car braking at
   # speed must keep steering authority. Once the latch has held the OUTPUT speed at exactly
   # zero for this long, racer_safety's gate freezes the steering output at the angle it had
@@ -513,6 +513,6 @@ meta:
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.7.3"
+  schema_version: "0.8.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

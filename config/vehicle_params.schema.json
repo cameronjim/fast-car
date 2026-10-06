@@ -472,7 +472,7 @@
         "obstacle_steering_hold_after_s": {
           "type": "number", "minimum": 0, "maximum": 10,
           "units": "s",
-          "description": "Steering hold on racer_safety/safety_node's layer-3 obstacle latch (added 2026-10-06, schema 0.7.3). Once the latch (TTC brake or distance floor) has held the gated output speed at exactly zero for this long, the gate freezes the steering output at the angle it had when the hold started, until the latch releases or a reverse request moves the car. Before that, steering passes as usual (rate-limited), because a car braking at speed must keep steering authority. Zero speed on /drive is a coast and safety_node has no /odom, so this time stands in for 'the car has stopped'. The committed value is PROVISIONAL, not measured."
+          "description": "Steering hold on racer_safety/safety_node's layer-3 obstacle latch (added 2026-10-06, schema 0.8.0). Once the latch (TTC brake or distance floor) has held the gated output speed at exactly zero for this long, the gate freezes the steering output at the angle it had when the hold started, until the latch releases or a reverse request moves the car. Before that, steering passes as usual (rate-limited), because a car braking at speed must keep steering authority. Zero speed on /drive is a coast and safety_node has no /odom, so this time stands in for 'the car has stopped'. The committed value is PROVISIONAL, not measured."
         },
         "envelope_fraction_speed": {
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1,

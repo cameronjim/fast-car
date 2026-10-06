@@ -124,3 +124,38 @@ corner sat inside the 1.0 rad sector and held the latch, and releasing at 0.6 s 
 Bench check still to do: park the car on an obstacle with gap_follow_node running, check that
 the servo stops moving about 0.5 s after `/drive` goes to zero and that it steers again when
 the obstacle is moved away; stand beside the front corner and check the latch no longer holds.
+
+## Corridor, not wedge (2026-10-06, floor test)
+
+First floor run, on a tight track of backpacks about 1 m wide, gap_follow_node at 0.8 to
+1.0 m/s, vehicle_params 0.8.0. The obstacle gate took the nearest return anywhere in the
++/- 0.6 rad wedge ahead of the car, so a bag 0.3 m to the side of the car's path, which the
+car would pass cleanly, tripped the TTC brake (0.35 s) and the clearance floor (0.20 m)
+exactly like a bag straight ahead. The owner found the safety node far too aggressive on that
+track.
+
+Change (racer_safety, vehicle_params 0.9.0, not yet run on the car):
+
+- A return at vehicle bearing theta and range r becomes x = r cos(theta) ahead and
+  y = r sin(theta) left (same mount yaw conversion as before). It counts as in the path only
+  if x > 0 and |y| <= `chassis.width_m` / 2 + `limits.obstacle_corridor_margin_m` (new required
+  field, PROVISIONAL 0.05 m, so 0.155 + 0.05 = 0.205 m). The corridor is the primary filter.
+- The distance handed to the gate, for TTC and for the floor and its release clearance, is x,
+  the along-track distance, not r.
+- `limits.ttc_forward_sector_half_angle_rad` (0.6 rad) stays as an outer bound only: nothing
+  outside it is ever considered, whatever the margin.
+- Invalid returns are ignored as before, and garbage scan geometry or a garbage corridor
+  width still falls back to the whole-scan minimum slant range. The latch, hysteresis,
+  steering hold and release line are unchanged.
+
+Two things to know. The corridor is straight along +x; it does not bend with the steering,
+so in a corner it is a short-horizon approximation of the swept path. And with these values
+the 0.6 rad sector, not the corridor, is the limit closer than 0.205 / tan(0.6), about 0.30 m
+from the head: a return right at a front corner that close (for example x 0.20 m, y 0.15 m)
+is outside the sector and is not seen. Widening the sector would close that gap without
+bringing back the wedge problem, because the corridor now does the filtering; that is a
+separate tuning decision.
+
+Floor check still to do: the same backpack track at the same speeds, check that bags beside
+the path no longer produce `ttc` engage records and that a bag placed in the path still
+latches the car.

@@ -1792,3 +1792,20 @@ releases. Braking at speed still keeps live steering. `ttc_warning_s` (the relea
 `docs/notes/ttc-limit-cycle-2026-10-06.md`.
 
 Open: the bench check at the end of that section before `lidar:=true` is used while driving.
+
+## 2026-10-06 floor test: obstacle gate uses a car-width corridor, not a wedge (vehicle_params 0.9.0)
+
+First floor run on a backpack track about 1 m wide, gap_follow_node at 0.8 to 1.0 m/s. A bag
+0.3 m to the side of the car's path sat inside the +/- 0.6 rad wedge and braked the car (TTC
+0.35 s and the 0.20 m floor) like a bag straight ahead; the owner found the safety node far too
+aggressive.
+
+Software change, NOT yet run on the car: a return now counts only if it is ahead of the head
+and within `chassis.width_m` / 2 + `limits.obstacle_corridor_margin_m` (new required field,
+PROVISIONAL 0.05 m) of the car's centreline, and the gate uses the along-track distance x
+instead of the slant range. The 0.6 rad sector stays as an outer bound. vehicle_params
+0.8.0 -> 0.9.0. Details, including the close-in corner gap the 0.6 rad sector leaves, in the
+"Corridor, not wedge" section of `docs/notes/ttc-limit-cycle-2026-10-06.md`.
+
+Open: rerun the backpack track and check that bags beside the path no longer brake the car
+and a bag in the path still does.

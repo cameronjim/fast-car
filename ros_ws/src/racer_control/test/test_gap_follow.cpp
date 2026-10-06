@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -17,6 +18,7 @@
 
 #include "racer_control/gap_follow.hpp"
 #include "racer_control/reactive_speed.hpp"
+#include "racer_control/speed_rate_limiter.hpp"
 
 namespace racer_control {
 namespace {
@@ -1090,6 +1092,245 @@ TEST(ReactiveSpeed, SteeringSlowdown) {
   EXPECT_DOUBLE_EQ(apply_steering_slowdown(std::nan(""), 0.0, 0.5, 0.4), 0.0);
   EXPECT_DOUBLE_EQ(apply_steering_slowdown(2.0, std::nan(""), 0.5, 0.4), 0.0);
   EXPECT_DOUBLE_EQ(apply_steering_slowdown(2.0, 0.1, 0.5, 0.0), 0.0);
+}
+
+// -- speed smoothing (2026-10-06 floor checkpoint) ---------------------------------------------
+
+TEST(RollingMedian, WindowOfOneIsABitExactPassThrough) {
+  RollingMedian m(1);
+  for (const double v : {0.3, 2.7, 1e-9, 0.1 + 0.2, 4.0}) {
+    EXPECT_EQ(m.push(v), v);
+  }
+  EXPECT_EQ(m.size(), 1u);
+}
+
+TEST(RollingMedian, ZeroWindowIsTreatedAsOne) {
+  RollingMedian m(0);
+  EXPECT_EQ(m.window(), 1u);
+  EXPECT_EQ(m.push(1.5), 1.5);
+  EXPECT_EQ(m.push(0.5), 0.5);
+}
+
+TEST(RollingMedian, SingleScanSpikesAreRejected) {
+  // The floor complaint: the target range jumps for one scan and comes back.
+  RollingMedian m(5);
+  EXPECT_DOUBLE_EQ(m.push(1.0), 1.0);
+  EXPECT_DOUBLE_EQ(m.push(1.0), 1.0);
+  EXPECT_DOUBLE_EQ(m.push(3.0), 1.0);  // {1, 1, 3}
+  EXPECT_DOUBLE_EQ(m.push(1.0), 1.0);
+  EXPECT_DOUBLE_EQ(m.push(0.2), 1.0);  // {1, 1, 3, 1, 0.2}
+  EXPECT_DOUBLE_EQ(m.push(1.0), 1.0);  // {1, 3, 1, 0.2, 1}
+  // Two spikes in a window of five are still outvoted.
+  EXPECT_DOUBLE_EQ(m.push(3.0), 1.0);  // {3, 1, 0.2, 1, 3}
+}
+
+TEST(RollingMedian, WarmUpUsesWhatIsHeldAndAveragesAnEvenCount) {
+  RollingMedian m(5);
+  EXPECT_DOUBLE_EQ(m.push(1.0), 1.0);
+  EXPECT_DOUBLE_EQ(m.push(3.0), 2.0);   // {1, 3}
+  EXPECT_DOUBLE_EQ(m.push(2.0), 2.0);   // {1, 3, 2}
+  EXPECT_DOUBLE_EQ(m.push(10.0), 2.5);  // {1, 3, 2, 10}
+  EXPECT_EQ(m.size(), 4u);
+}
+
+TEST(RollingMedian, OldestValueLeavesTheWindow) {
+  RollingMedian m(3);
+  m.push(1.0);
+  m.push(2.0);
+  EXPECT_DOUBLE_EQ(m.push(3.0), 2.0);    // {1, 2, 3}
+  EXPECT_DOUBLE_EQ(m.push(10.0), 3.0);   // {2, 3, 10}
+  EXPECT_DOUBLE_EQ(m.push(10.0), 10.0);  // {3, 10, 10}
+  EXPECT_EQ(m.size(), 3u);
+}
+
+TEST(RollingMedian, NonFiniteValuesAreNotStored) {
+  RollingMedian m(5);
+  EXPECT_TRUE(std::isnan(m.push(std::nan(""))));  // nothing held: passed through
+  EXPECT_EQ(m.size(), 0u);
+  m.push(1.0);
+  m.push(2.0);
+  EXPECT_DOUBLE_EQ(m.push(std::nan("")), 1.5);
+  EXPECT_DOUBLE_EQ(m.push(std::numeric_limits<double>::infinity()), 1.5);
+  EXPECT_EQ(m.size(), 2u);
+}
+
+TEST(RollingMedian, ResetEmptiesTheWindow) {
+  RollingMedian m(3);
+  m.push(5.0);
+  m.push(6.0);
+  m.reset();
+  EXPECT_EQ(m.size(), 0u);
+  EXPECT_DOUBLE_EQ(m.push(1.0), 1.0);
+}
+
+TEST(RollingMedian, MatchesASortedReferenceOnRandomSequences) {
+  std::mt19937 rng(20261006);
+  std::uniform_real_distribution<double> range(0.0, 5.0);
+  for (std::size_t window = 1; window <= 15; ++window) {
+    RollingMedian m(window);
+    std::vector<double> history;
+    for (int i = 0; i < 200; ++i) {
+      const double v = range(rng);
+      history.push_back(v);
+      const std::size_t n = std::min(window, history.size());
+      std::vector<double> last(history.end() - static_cast<std::ptrdiff_t>(n), history.end());
+      std::sort(last.begin(), last.end());
+      const double expected = n % 2 == 1 ? last[n / 2] : 0.5 * (last[n / 2 - 1] + last[n / 2]);
+      ASSERT_EQ(m.push(v), expected) << "window " << window << " step " << i;
+    }
+  }
+}
+
+namespace {
+
+constexpr double kControlDt = 0.02;  // 50 Hz, gap_follow_node's default control rate
+
+// The 2026-10-06 floor profile's speed law, with vehicle_params-like steering and acceleration
+// numbers typed in (this suite is ROS-free and never reads the binding).
+ReactiveSpeedConfig floor_speed_config(double speed_time_constant_s, double max_accel_mps2) {
+  ReactiveSpeedConfig s;
+  s.k_speed_per_s = 1.0;
+  s.min_speed_mps = 0.5;
+  s.max_speed_mps = 0.9;
+  s.k_steer = 0.4;
+  s.max_steering_rad = 0.4189;
+  s.speed_time_constant_s = speed_time_constant_s;
+  s.max_acceleration_mps2 = max_accel_mps2;
+  return s;
+}
+
+}  // namespace
+
+TEST(ReactiveSpeedCommand, ZeroTimeConstantIsBitIdenticalToTheUnfilteredChain) {
+  const ReactiveSpeedConfig s = floor_speed_config(0.0, 0.951);
+  ReactiveSpeedCommand command(s);
+  SpeedRateLimiter reference(s.max_acceleration_mps2);
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<double> range(0.0, 4.0);
+  std::uniform_real_distribution<double> steer(-0.5, 0.5);
+  for (int i = 0; i < 2000; ++i) {
+    const double r = range(rng);
+    const double st = steer(rng);
+    const double dt = i == 0 ? 0.0 : kControlDt;
+    const double expected =
+        reference.limit(apply_steering_slowdown(
+                            range_based_speed(r, s.k_speed_per_s, s.min_speed_mps, s.max_speed_mps),
+                            st, s.k_steer, s.max_steering_rad),
+                        dt);
+    ASSERT_EQ(command.update(r, st, dt), expected) << "cycle " << i;
+  }
+}
+
+TEST(ReactiveSpeedCommand, AStepInTargetRangeGivesASmoothSpeed) {
+  // Acceleration limit high enough never to bind, so only the low-pass shapes the step.
+  const double tau = 0.5;
+  ReactiveSpeedCommand smoothed(floor_speed_config(tau, 100.0));
+  ReactiveSpeedCommand unsmoothed(floor_speed_config(0.0, 100.0));
+  smoothed.update(0.5, 0.0, 0.0);
+  unsmoothed.update(0.5, 0.0, 0.0);
+  for (int i = 0; i < 2000; ++i) {
+    smoothed.update(0.5, 0.0, kControlDt);
+    unsmoothed.update(0.5, 0.0, kControlDt);
+  }
+  double previous = smoothed.update(0.5, 0.0, kControlDt);
+  ASSERT_NEAR(previous, 0.5, 1e-9);
+
+  // Target range 0.5 m -> 3 m: the raw speed steps 0.5 -> 0.9 m/s in one cycle.
+  EXPECT_DOUBLE_EQ(unsmoothed.update(3.0, 0.0, kControlDt), 0.9);
+  const double max_step = kControlDt / (tau + kControlDt) * (0.9 - 0.5);
+  const int one_tau_cycles = static_cast<int>(tau / kControlDt);
+  for (int i = 1; i <= 400; ++i) {
+    const double v = smoothed.update(3.0, 0.0, kControlDt);
+    EXPECT_GT(v, previous - 1e-12) << "speed went backwards at cycle " << i;
+    EXPECT_LE(v - previous, max_step + 1e-12) << "speed jumped at cycle " << i;
+    if (i == one_tau_cycles) {
+      // About 63 percent of the step after one time constant (discrete: 1 - (tau/(tau+dt))^n).
+      EXPECT_NEAR((v - 0.5) / 0.4, 1.0 - std::exp(-1.0), 0.02);
+    }
+    previous = v;
+  }
+  EXPECT_NEAR(previous, 0.9, 1e-6);
+
+  // And back down: the rate limiter never limits deceleration, so without the filter the speed
+  // drops in one cycle; with it the drop is spread out too.
+  EXPECT_DOUBLE_EQ(unsmoothed.update(0.5, 0.0, kControlDt), 0.5);
+  const double first_drop = previous - smoothed.update(0.5, 0.0, kControlDt);
+  EXPECT_GT(first_drop, 0.0);
+  EXPECT_LE(first_drop, max_step + 1e-12);
+}
+
+TEST(ReactiveSpeedCommand, LowPassRunsBeforeTheRateLimiter) {
+  // Both stages binding: a fast-ish filter and a tight acceleration limit.
+  const ReactiveSpeedConfig s = floor_speed_config(0.1, 0.951);
+  ReactiveSpeedCommand command(s);
+  FirstOrderLowPass filter_first(s.speed_time_constant_s);
+  SpeedRateLimiter limiter_second(s.max_acceleration_mps2);
+  FirstOrderLowPass filter_last(s.speed_time_constant_s);
+  SpeedRateLimiter limiter_first(s.max_acceleration_mps2);
+  // Target range sequence: start, step up, step down, step up (raw speeds 0.5, 0.9, 0.5, 0.9).
+  bool orders_differ = false;
+  double previous = 0.0;
+  for (int i = 0; i < 300; ++i) {
+    const double r = i < 50 ? 0.5 : (i < 150 ? 3.0 : (i < 200 ? 0.5 : 3.0));
+    const double dt = i == 0 ? 0.0 : kControlDt;
+    const double raw = range_based_speed(r, 1.0, 0.5, 0.9);
+    const double expected = limiter_second.limit(filter_first.update(raw, dt), dt);
+    const double reversed = filter_last.update(limiter_first.limit(raw, dt), dt);
+    const double v = command.update(r, 0.0, dt);
+    ASSERT_EQ(v, expected) << "cycle " << i;
+    orders_differ = orders_differ || std::abs(expected - reversed) > 1e-6;
+    // The limiter is last, so its bound holds on the output whatever the filter does.
+    EXPECT_LE(v - previous, s.max_acceleration_mps2 * dt + 1e-12) << "cycle " << i;
+    previous = v;
+  }
+  EXPECT_TRUE(orders_differ) << "test sequence cannot tell the two orders apart";
+}
+
+TEST(ReactiveSpeedCommand, ResetReturnsToRest) {
+  for (const double tau : {0.0, 0.5}) {
+    ReactiveSpeedCommand command(floor_speed_config(tau, 0.951));
+    command.update(3.0, 0.0, 0.0);
+    for (int i = 0; i < 500; ++i) {
+      command.update(3.0, 0.0, kControlDt);
+    }
+    ASSERT_NEAR(command.update(3.0, 0.0, kControlDt), 0.9, 1e-6);
+    command.reset();
+    // First cycle after a reset has dt 0 in the node: nothing may be added from rest.
+    EXPECT_DOUBLE_EQ(command.update(3.0, 0.0, 0.0), 0.0) << "tau " << tau;
+    EXPECT_LE(command.update(3.0, 0.0, kControlDt), 0.951 * kControlDt + 1e-12) << "tau " << tau;
+  }
+}
+
+TEST(ReactiveSpeedCommand, MedianAndLowPassDampAFlickeringTargetRange) {
+  // 10 Hz scans whose target range flickers between the lane (1.6 m, well above the 0.9 m/s
+  // cap) and a near return (0.6 m) on about one scan in five (synthetic, the shape of the
+  // 2026-10-06 floor complaint, not a replay of it); 50 Hz control. Speed peak-to-peak over
+  // the last two seconds, with and without the floor profile's smoothing (median of 5 scans,
+  // tau 0.5 s).
+  auto peak_to_peak = [](std::size_t median_scans, double tau) {
+    RollingMedian median(median_scans);
+    ReactiveSpeedCommand command(floor_speed_config(tau, 0.951));
+    std::mt19937 rng(3);
+    std::bernoulli_distribution near_return(0.2);
+    double target = 0.0;
+    double lo = 1e9;
+    double hi = -1e9;
+    for (int cycle = 0; cycle < 50 * 10; ++cycle) {
+      if (cycle % 5 == 0) {
+        target = median.push(near_return(rng) ? 0.6 : 1.6);
+      }
+      const double v = command.update(target, 0.0, cycle == 0 ? 0.0 : kControlDt);
+      if (cycle >= 50 * 8) {
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+      }
+    }
+    return hi - lo;
+  };
+  const double raw = peak_to_peak(1, 0.0);
+  const double smoothed = peak_to_peak(5, 0.5);
+  EXPECT_GT(raw, 0.2);  // the surging the owner saw: 0.6 <-> 0.9 m/s
+  EXPECT_LT(smoothed, 0.25 * raw);
 }
 
 // -- GapFollower end to end --------------------------------------------------------------------

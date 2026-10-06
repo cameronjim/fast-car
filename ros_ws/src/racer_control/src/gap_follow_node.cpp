@@ -19,6 +19,13 @@
 // steering); the timer runs the smoothing half (low-pass, speed law, rate limit) at the
 // command rate, which also turns 10 Hz steering steps into a smooth 50 Hz command.
 //
+// Speed smoothing (2026-10-06 floor checkpoint, both off by default): the scan callback can
+// replace each scan's target range with the median of the last `target_range_median_scans`
+// scans' target ranges, and the timer can low-pass the speed command with
+// `speed_time_constant_s` BEFORE the rate limiter, so the limiter still bounds acceleration
+// (ReactiveSpeedCommand in reactive_speed.hpp). On a /scan watchdog trip both are reset with
+// the rate limiter.
+//
 // Watchdog behaviour on /scan silence: this node STOPS PUBLISHING /drive_raw, exactly like
 // tracker_node does on /odom silence, for the same reason (see tracker_node.cpp's header):
 // claude-docs/04-architecture.md assigns the staleness watchdog to safety_node ("missing
@@ -41,7 +48,7 @@
 //     NTP) or sit at zero (use_sim_time:=true with no /clock), either of which would disable
 //     a ROS-clock watchdog (GitHub issue 22).
 //   * `this->now()` (the ROS clock) is used ONLY to stamp the outgoing /drive_raw header.
-//   * The low-pass filter and the speed rate limiter advance by the CONFIGURED control period
+//   * The low-pass filters and the speed rate limiter advance by the CONFIGURED control period
 //     per cycle, not a measured dt, for the reason tracker_node gives for its rate limiter:
 //     safety_node checks the same acceleration bound on its own independently-clocked timer,
 //     and two noisy measured dts disagreeing around a bound is a false gate trip.
@@ -69,6 +76,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
@@ -93,23 +101,12 @@ class GapFollowNode : public rclcpp::Node {
         steering_filter_(declare_ranged_double(
             *this, "steering_time_constant_s", 0.1, 0.0, 10.0,
             "First-order low-pass time constant on the steering command (s). 0 disables "
-            "the filter. Smoothness over speed: larger is smoother but lags the gap.")),
-        speed_limiter_(build_speed_rate_limiter()) {
-    max_speed_mps_ = declare_ranged_double(
-        *this, "max_speed_mps", 2.0, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
-        "Upper speed bound (m/s). Range-limited to vehicle_params limits.global_speed_cap_mps.");
-    min_speed_mps_ = declare_ranged_double(
-        *this, "min_speed_mps", 0.5, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
-        "Lower bound of the range-based speed (m/s), before the steering slowdown.");
-    if (min_speed_mps_ > max_speed_mps_) {
-      throw std::invalid_argument("gap_follow_node: min_speed_mps must not exceed max_speed_mps");
-    }
-    k_speed_per_s_ = declare_ranged_double(
-        *this, "k_speed_per_s", 1.0, 0.0, 100.0,
-        "Speed gain (1/s): speed = clamp(k_speed * range along the target bearing, min, max).");
-    k_steer_ = declare_ranged_double(
-        *this, "k_steer", 0.5, 0.0, 1.0,
-        "Steering slowdown: speed *= 1 - k_steer * |steering| / steering.max_angle_rad.");
+            "the filter. Smoothness over speed: larger is smoother but lags the gap.")) {
+    speed_command_ = ReactiveSpeedCommand(build_speed_config());
+    target_range_median_ = RollingMedian(static_cast<std::size_t>(declare_ranged_int(
+        *this, "target_range_median_scans", 1, 1, 15,
+        "The speed law uses the median of the last N scans' target ranges instead of this "
+        "scan's. 1 (default) = off. Damps the scan-to-scan flicker of the target range.")));
     const double control_rate_hz = declare_ranged_double(
         *this, "control_rate_hz", 50.0, 1.0, 1000.0,
         "/drive_raw publish rate (Hz); claude-docs/04-architecture.md specifies 50 Hz.");
@@ -136,12 +133,15 @@ class GapFollowNode : public rclcpp::Node {
                 "gap_follow_node up: %.1f Hz, half width %.3f m + margin %.3f m, cone +/- %.3f "
                 "rad, laser yaw %.3f rad, %s target, forward preference %.3f, gap switch "
                 "margin %.3f, swept-path clamp %s (lookahead %.2f m, wheelbase %.4f m, "
-                "LiDAR at x %.3f y %.3f m, body front x %.3f m), max speed %.2f m/s",
+                "LiDAR at x %.3f y %.3f m, body front x %.3f m), max speed %.2f m/s, speed "
+                "time constant %.3f s, target range median over %zu scans",
                 control_rate_hz, c.half_width_m, c.safety_margin_m, c.cone_half_angle_rad,
                 c.laser_yaw_offset_rad, c.target == GapTarget::kDeepest ? "deepest" : "centre",
                 c.forward_preference, c.gap_switch_margin, c.swept_path_clamp ? "on" : "off",
                 c.swept_path.lookahead_m, c.swept_path.wheelbase_m, c.swept_path.lidar_mount_x_m,
-                c.swept_path.lidar_mount_y_m, c.swept_path.body_front_x_m, max_speed_mps_);
+                c.swept_path.lidar_mount_y_m, c.swept_path.body_front_x_m,
+                speed_command_.config().max_speed_mps,
+                speed_command_.config().speed_time_constant_s, target_range_median_.window());
   }
 
  private:
@@ -254,13 +254,36 @@ class GapFollowNode : public rclcpp::Node {
     return c;
   }
 
-  SpeedRateLimiter build_speed_rate_limiter() {
-    margin_fraction_ = declare_ranged_double(
+  ReactiveSpeedConfig build_speed_config() {
+    ReactiveSpeedConfig s;
+    const double margin_fraction = declare_ranged_double(
         *this, "speed_rate_limit_margin_fraction", 0.5, 0.01, 1.0,
         "Fraction of vehicle_params actuation.max_acceleration_mps2 this node ramps speed at "
         "(headroom against safety_node's independently clocked copy of the same bound, see "
         "tracker_node.cpp).");
-    return SpeedRateLimiter(VEHICLE_PARAMS.actuation.max_acceleration_mps2 * margin_fraction_);
+    s.max_acceleration_mps2 = VEHICLE_PARAMS.actuation.max_acceleration_mps2 * margin_fraction;
+    s.max_speed_mps = declare_ranged_double(
+        *this, "max_speed_mps", 2.0, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
+        "Upper speed bound (m/s). Range-limited to vehicle_params limits.global_speed_cap_mps.");
+    s.min_speed_mps = declare_ranged_double(
+        *this, "min_speed_mps", 0.5, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
+        "Lower bound of the range-based speed (m/s), before the steering slowdown.");
+    if (s.min_speed_mps > s.max_speed_mps) {
+      throw std::invalid_argument("gap_follow_node: min_speed_mps must not exceed max_speed_mps");
+    }
+    s.k_speed_per_s = declare_ranged_double(
+        *this, "k_speed_per_s", 1.0, 0.0, 100.0,
+        "Speed gain (1/s): speed = clamp(k_speed * range along the target bearing, min, max).");
+    s.k_steer = declare_ranged_double(
+        *this, "k_steer", 0.5, 0.0, 1.0,
+        "Steering slowdown: speed *= 1 - k_steer * |steering| / steering.max_angle_rad.");
+    s.max_steering_rad = VEHICLE_PARAMS.steering.max_angle_rad;
+    s.speed_time_constant_s = declare_ranged_double(
+        *this, "speed_time_constant_s", 0.0, 0.0, 5.0,
+        "First-order low-pass time constant on the speed command (s), applied before the "
+        "acceleration rate limit so the limit still bounds what is published. 0 (default) = "
+        "off.");
+    return s;
   }
 
   void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
@@ -284,6 +307,8 @@ class GapFollowNode : public rclcpp::Node {
                             result.target_vehicle_bearing_rad);
     }
     latest_ = result;
+    // Once per scan, not per control cycle: the window spans N scans (window 1 = this scan).
+    target_range_m_ = target_range_median_.push(result.target_range_m);
     // Steady clock, never this->now(): see CLOCK POLICY.
     last_scan_steady_ = steady_clock_.now();
     has_scan_ = true;
@@ -302,9 +327,10 @@ class GapFollowNode : public rclcpp::Node {
         watchdog_active_ = true;
       }
       has_last_command_time_ = false;
-      // safety_node brakes the car during the silence, so ramp from rest on resume.
-      speed_limiter_ =
-          SpeedRateLimiter(VEHICLE_PARAMS.actuation.max_acceleration_mps2 * margin_fraction_);
+      // safety_node brakes the car during the silence, so ramp from rest on resume, and do
+      // not let target ranges from before the gap into the median.
+      speed_command_.reset();
+      target_range_median_.reset();
       return;
     }
     if (watchdog_active_) {
@@ -316,10 +342,8 @@ class GapFollowNode : public rclcpp::Node {
     const double dt_s = has_last_command_time_ ? control_period_s_ : 0.0;
     has_last_command_time_ = true;
     const double steering = steering_filter_.update(latest_.steering_rad, dt_s);
-    const double raw_speed = apply_steering_slowdown(
-        range_based_speed(latest_.target_range_m, k_speed_per_s_, min_speed_mps_, max_speed_mps_),
-        steering, k_steer_, max_angle);
-    const double speed = speed_limiter_.limit(raw_speed, dt_s);
+    // Range speed -> steering slowdown -> speed low-pass -> rate limiter (reactive_speed.hpp).
+    const double speed = speed_command_.update(target_range_m_, steering, dt_s);
     if (!std::isfinite(steering) || !std::isfinite(speed)) {
       RCLCPP_ERROR(this->get_logger(),
                    "gap_follow_node: non-finite command computed; not publishing it.");
@@ -330,22 +354,19 @@ class GapFollowNode : public rclcpp::Node {
     drive_msg.header.stamp = now;
     drive_msg.header.frame_id = "base_link";
     drive_msg.drive.steering_angle = clamp_for_float32_publish(steering, -max_angle, max_angle);
-    drive_msg.drive.speed = clamp_for_float32_publish(
-        speed, VEHICLE_PARAMS.limits.min_velocity_mps,
-        std::min(max_speed_mps_, VEHICLE_PARAMS.limits.global_speed_cap_mps));
+    drive_msg.drive.speed =
+        clamp_for_float32_publish(speed, VEHICLE_PARAMS.limits.min_velocity_mps,
+                                  std::min(speed_command_.config().max_speed_mps,
+                                           VEHICLE_PARAMS.limits.global_speed_cap_mps));
     drive_pub_->publish(drive_msg);
   }
 
-  // Declared before speed_limiter_: build_speed_rate_limiter() writes it during member
-  // initialisation, and a later-declared default initialiser would overwrite that value.
-  double margin_fraction_{0.5};
   GapFollower follower_;
   FirstOrderLowPass steering_filter_;
-  SpeedRateLimiter speed_limiter_;
-  double max_speed_mps_{0.0};
-  double min_speed_mps_{0.0};
-  double k_speed_per_s_{0.0};
-  double k_steer_{0.0};
+  // Placeholders until the constructor body has declared their parameters.
+  ReactiveSpeedCommand speed_command_{ReactiveSpeedConfig{}};
+  RollingMedian target_range_median_{1};
+  double target_range_m_{0.0};
   double control_period_s_{0.02};
   double scan_timeout_s_{0.3};
 

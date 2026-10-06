@@ -88,7 +88,7 @@ _TEMPLATE: dict[str, Any] = {
         # went 50 -> 20 to match the VESC's 4 percent deadband (value-only), then 0.5.1 ->
         # 0.6.0 on 2026-10-05 when the required sensors.lidar_spec section (RPLIDAR C1
         # datasheet numbers) was added and the sensors.lidar mount got provisional values.
-        "schema_version": "0.6.0",
+        "schema_version": "0.6.1",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

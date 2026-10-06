@@ -72,6 +72,8 @@ _TRACK_HALF_WIDTH_M = 0.8
 # gap_follow_node tuning for this canary. Everything else is the node's default.
 _GAP_FOLLOW_PARAMS = {
     "max_speed_mps": 3.0,
+    # racer_gym_bridge's /scan is aligned to the vehicle (yaw 0), not the real car's mount.
+    "laser_yaw_from_vehicle_params": False,
 }
 
 # Wall-clock band for _TARGET_LAPS laps.

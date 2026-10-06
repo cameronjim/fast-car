@@ -86,13 +86,19 @@ std::size_t sanitize_ranges(const ScanInput& scan, double clip_max_range_m,
 
 // LiDAR mounting yaw, resolved against the generated vehicle_params binding (CLAUDE.md
 // invariant 2: sensors.lidar.mount_yaw_rad is the one source of truth once it is measured).
-//   * binding unset (null, pending roadmap 2.3): the node's laser_yaw_offset_rad parameter is
-//     used, so a rear-facing bench mount can be driven before the measurement lands.
-//   * binding set: the binding wins. The parameter must be left at its default of 0 or equal
-//     the binding (within 1e-9 rad); anything else returns nullopt and the node refuses to
-//     start rather than silently picking one of two disagreeing values.
+// `from_vehicle_params` is the node's laser_yaw_from_vehicle_params parameter (default true):
+//   * true, binding unset (null): the node's laser_yaw_offset_rad parameter is used, so a
+//     rear-facing bench mount can be driven before the measurement lands.
+//   * true, binding set: the binding wins. The parameter must be left at its default of 0 or
+//     equal the binding (within 1e-9 rad); anything else returns nullopt and the node refuses
+//     to start rather than silently picking one of two disagreeing values.
+//   * false: the binding is ignored and the parameter is used as given. This is ONLY for
+//     scans that are not the real car's LiDAR: the simulator (racer_gym_bridge publishes
+//     /scan aligned to the vehicle, yaw 0) and synthetic-scan tests. The real car always runs
+//     with true.
+// A non-finite parameter returns nullopt in every mode.
 std::optional<double> resolve_laser_yaw_offset(std::optional<double> binding_rad,
-                                               double parameter_rad);
+                                               double parameter_rad, bool from_vehicle_params);
 
 }  // namespace racer_control
 

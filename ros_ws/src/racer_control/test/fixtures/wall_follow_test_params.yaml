@@ -6,3 +6,6 @@ wall_follow_node:
   ros__parameters:
     control_rate_hz: 20.0
     scan_timeout_s: 0.2
+    # Synthetic scans here are centred on the vehicle's forward axis (yaw 0), not the real
+    # car's mount, so the vehicle_params mount yaw must not be applied.
+    laser_yaw_from_vehicle_params: false

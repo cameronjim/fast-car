@@ -239,17 +239,30 @@ TEST(SanitizeRanges, ReusesOutputBuffer) {
   EXPECT_EQ(out.data(), data);
 }
 
+// laser_yaw_from_vehicle_params true (the real car's default).
 TEST(ResolveLaserYawOffset, ParameterUsedWhileBindingIsUnmeasured) {
-  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(std::nullopt, 0.0).value(), 0.0);
-  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(std::nullopt, M_PI).value(), M_PI);
-  EXPECT_FALSE(resolve_laser_yaw_offset(std::nullopt, kNaN).has_value());
+  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(std::nullopt, 0.0, true).value(), 0.0);
+  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(std::nullopt, M_PI, true).value(), M_PI);
+  EXPECT_FALSE(resolve_laser_yaw_offset(std::nullopt, kNaN, true).has_value());
 }
 
 TEST(ResolveLaserYawOffset, BindingWinsAndConflictsRefuse) {
-  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(M_PI, 0.0).value(), M_PI);   // default param
-  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(M_PI, M_PI).value(), M_PI);  // agreeing param
-  EXPECT_FALSE(resolve_laser_yaw_offset(M_PI, 0.5).has_value());         // disagreement
-  EXPECT_FALSE(resolve_laser_yaw_offset(kNaN, 0.0).has_value());
+  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(M_PI, 0.0, true).value(), M_PI);   // default param
+  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(M_PI, M_PI, true).value(), M_PI);  // agreeing param
+  EXPECT_FALSE(resolve_laser_yaw_offset(M_PI, 0.5, true).has_value());         // disagreement
+  EXPECT_FALSE(resolve_laser_yaw_offset(M_PI, kNaN, true).has_value());
+  EXPECT_FALSE(resolve_laser_yaw_offset(kNaN, 0.0, true).has_value());
+}
+
+// laser_yaw_from_vehicle_params false (simulator and synthetic-scan tests only): the
+// parameter is used as given, the binding is ignored, and there is no conflict to refuse.
+TEST(ResolveLaserYawOffset, ParameterWinsWhenBindingIsIgnored) {
+  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(M_PI, 0.0, false).value(), 0.0);
+  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(M_PI, 0.5, false).value(), 0.5);
+  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(std::nullopt, 0.5, false).value(), 0.5);
+  EXPECT_DOUBLE_EQ(resolve_laser_yaw_offset(kNaN, 0.0, false).value(), 0.0);
+  EXPECT_FALSE(resolve_laser_yaw_offset(M_PI, kNaN, false).has_value());
+  EXPECT_FALSE(resolve_laser_yaw_offset(std::nullopt, kNaN, false).has_value());
 }
 
 }  // namespace

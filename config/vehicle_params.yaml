@@ -104,6 +104,13 @@
 # schema's required-field set, so this is a minor bump per rule 5. No existing value changed.
 # See the actuation section below and docs/notes/build-log.md's 2026-09-29 entry for #77.
 #
+# schema_version bumped 0.6.0 -> 0.6.1 on 2026-10-06: the four sensors.lidar mount fields went
+# from PROVISIONAL placeholders to MEASURED values from the first LiDAR bench run (roadmap 2.3,
+# docs/notes/build-log.md 2026-10-06). No field added or removed, so a patch bump; rule 5 bumps
+# on any value change. mount_yaw_rad is pi: a box held straight ahead of the car read at a
+# laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
+# + pi gives the vehicle bearing with LEFT positive and no mirroring.
+#
 # schema_version bumped 0.5.1 -> 0.6.0 on 2026-10-05 (roadmap 2.3, RPLIDAR C1): a new
 # REQUIRED section, sensors.lidar_spec, carries the LiDAR head's datasheet numbers (scan rate,
 # sample rate, resolution, field of view, range) that racer_tools' lidar_check compares a live
@@ -349,10 +356,14 @@ sensors:
   # rotated by pi from the head's own 0 degree mark (sllidar_node.cpp publish_scan: angle =
   # pi - raw angle), so 0.0 here may well turn out to be pi.
   lidar:
-    mount_x_m: 0.10                 # PROVISIONAL (placeholder, NOT measured) -- see above
-    mount_y_m: 0.0                  # PROVISIONAL (placeholder, NOT measured) -- see above
-    mount_z_m: 0.15                 # PROVISIONAL (placeholder, NOT measured) -- see above
-    mount_yaw_rad: 0.0              # PROVISIONAL (placeholder, NOT measured; may be pi) -- see above
+    # MEASURED 2026-10-06 on the car with a phone measuring app, about +/- 0.02 m, on the
+    # temporary cardboard top plate. base_link origin taken as the rear axle centre at ground
+    # level (REP-105 leaves the origin to the project; nothing else in this repo has pinned it
+    # yet, so this is the first place that does). Re-measure after the permanent mount.
+    mount_x_m: 0.285                # MEASURED 2026-10-06: rear axle centre to head centre, forward
+    mount_y_m: 0.0                  # MEASURED 2026-10-06: head on the centreline
+    mount_z_m: 0.20                 # MEASURED 2026-10-06: floor to the middle of the scan window
+    mount_yaw_rad: 3.141593         # MEASURED 2026-10-06: pi, see the 0.6.1 header note
     timestamp_offset_s: null        # needs the sync design doc (roadmap 2.2)
   # Datasheet numbers for the fitted head, Slamtec RPLIDAR C1 (docs/notes/phase2-parts-2026-09-30.md
   # section A1: 0.05 to 12 m, 5 kHz sample rate, 8 to 12 Hz scan with 10 Hz typical, 0.72
@@ -419,6 +430,6 @@ meta:
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.6.0"
+  schema_version: "0.6.1"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

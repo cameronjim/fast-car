@@ -1729,3 +1729,31 @@ minimum rate exits 1, silence exits 2). `ros_build_test.sh` in the ros-dev image
 0 failures. `tools/` pytest 116, `racer_policy` 27, `sim/racer_gym` 67, ruff clean, hadolint
 clean with the repo config. Not run: anything on the Jetson or with a real C1, and a build of
 the car image itself.
+
+## 2026-10-06: RPLIDAR C1 first power-up, bench PASS (roadmap 2.3)
+
+C1 on the Jetson's USB (CP210x at /dev/ttyUSB0), car image rebuilt with the pinned sllidar_ros2
+layer (about 45 min on the Jetson, first time), workspace rebuilt, `lidar.launch.py` on its own
+in container `car-lidar`. Driver reported S/N 6F51FC8B..., firmware 1.02, hardware rev 18,
+health OK, scan mode Standard, 5 kHz, 10 Hz. `lidar_check` result:
+
+    scans received        101 over 10.008 s
+    scan rate             9.992 Hz (minimum 8.000 Hz)
+    largest stamp gap     0.1029 s
+    beam count            720..720
+    field of view         6.2832 rad
+    observed valid ranges 0.401 m .. 5.341 m
+    invalid fraction      0.066
+    RESULT: PASS
+
+Direction check: box straight ahead of the nose read at laser bearing 177 deg, 0.51 m; box on
+the driver's left read at -100 deg, 0.37 m. So vehicle bearing = laser bearing + pi, LEFT
+positive, no mirror. Mount measured with a phone app on the temporary cardboard top plate
+(nylon standoffs from the kit, legs raised so the window clears the Jetson): 0.285 m ahead of
+the rear axle, centred, window 0.20 m above the floor. vehicle_params 0.6.0 -> 0.6.1 with those
+values MEASURED. Nothing of the car is inside 0.40 m of the head. Mount is temporary: the plate
+is cardboard. The FlySky kept alarming during the session: RX battery High was 5.0 V and the
+UBEC feeds the receiver about 5.3 V; set High to 6.0 V.
+
+Open: permanent plate, re-measure after it, pin the udev rule to this adapter's serial, and the
+safety node's TTC over the full 360 degrees before `lidar:=true` is used while driving.

@@ -82,6 +82,12 @@ _STEERING_MAX_RAD = 0.4189  # vehicle_params.yaml steering.max_angle_rad
 # (docs/notes/ttc-limit-cycle-2026-10-06.md).
 _BAG_REQUEST_MPS = 0.48
 _BAG_RANGE_M = 0.22
+# The scenario must keep violating the CONFIGURED brake threshold as limits.ttc_brake_s is
+# tuned down (0.5 -> 0.35 on 2026-10-06): keep the bag's range (above the clearance floor,
+# so the TTC half of the gate is what engages) and raise the request until its TTC sits at
+# 80 percent of the threshold. At the original 0.5 s this is the bag's own 0.48 m/s.
+_MIN_FORWARD_CLEARANCE_M = _VEHICLE_PARAMS["limits"]["min_forward_clearance_m"]
+_SCENARIO_REQUEST_MPS = max(_BAG_REQUEST_MPS, _BAG_RANGE_M / (0.8 * _TTC_BRAKE_S))
 
 
 def _reliable_qos() -> QoSProfile:
@@ -529,8 +535,9 @@ class TestSafetyNode(unittest.TestCase):
         scan_pub = self.node.create_publisher(LaserScan, "/scan", _best_effort_qos())
         self._spin_for(0.3)
 
-        request = _make_drive(steering=0.0, speed=_BAG_REQUEST_MPS)
-        self.assertLess(_BAG_RANGE_M / _BAG_REQUEST_MPS, _TTC_BRAKE_S)
+        request = _make_drive(steering=0.0, speed=_SCENARIO_REQUEST_MPS)
+        self.assertLess(_BAG_RANGE_M / _SCENARIO_REQUEST_MPS, _TTC_BRAKE_S)
+        self.assertGreater(_BAG_RANGE_M, _MIN_FORWARD_CLEARANCE_M)
         bag_scan = _make_scan(range_m=_BAG_RANGE_M)
         # Settle: the brake engages within a cycle or two of the scan arriving.
         self._publish_steadily(

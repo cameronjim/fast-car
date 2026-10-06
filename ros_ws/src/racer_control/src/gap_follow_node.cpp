@@ -56,8 +56,10 @@
 // this car), steering clamp = steering.max_angle_rad, speed cap = limits.global_speed_cap_mps
 // (the `max_speed_mps` parameter is range-limited below it), acceleration =
 // actuation.max_acceleration_mps2 via SpeedRateLimiter. LiDAR yaw comes from
-// sensors.lidar.mount_yaw_rad once measured (see resolve_laser_yaw_offset). Everything else
-// is a tuning parameter with a default and a description.
+// sensors.lidar.mount_yaw_rad once measured (see resolve_laser_yaw_offset). The swept-path
+// clamp takes chassis.wheelbase_m, chassis.length_m, chassis.cg_to_rear_axle_m and
+// sensors.lidar.mount_x_m / mount_y_m (the node refuses to start while the mount is null).
+// Everything else is a tuning parameter with a default and a description.
 //
 // laser_yaw_from_vehicle_params (default true) is the one exception to the yaw rule above:
 // false ignores the binding and uses laser_yaw_offset_rad as given. It exists ONLY for scans
@@ -133,10 +135,13 @@ class GapFollowNode : public rclcpp::Node {
     RCLCPP_INFO(this->get_logger(),
                 "gap_follow_node up: %.1f Hz, half width %.3f m + margin %.3f m, cone +/- %.3f "
                 "rad, laser yaw %.3f rad, %s target, forward preference %.3f, gap switch "
-                "margin %.3f, max speed %.2f m/s",
+                "margin %.3f, swept-path clamp %s (lookahead %.2f m, wheelbase %.4f m, "
+                "LiDAR at x %.3f y %.3f m, body front x %.3f m), max speed %.2f m/s",
                 control_rate_hz, c.half_width_m, c.safety_margin_m, c.cone_half_angle_rad,
                 c.laser_yaw_offset_rad, c.target == GapTarget::kDeepest ? "deepest" : "centre",
-                c.forward_preference, c.gap_switch_margin, max_speed_mps_);
+                c.forward_preference, c.gap_switch_margin, c.swept_path_clamp ? "on" : "off",
+                c.swept_path.lookahead_m, c.swept_path.wheelbase_m, c.swept_path.lidar_mount_x_m,
+                c.swept_path.lidar_mount_y_m, c.swept_path.body_front_x_m, max_speed_mps_);
   }
 
  private:
@@ -219,6 +224,33 @@ class GapFollowNode : public rclcpp::Node {
           "finite); refusing to start");
     }
     c.laser_yaw_offset_rad = *yaw;
+
+    // Swept-path clamp (gap_follow.hpp clamp_steering_to_swept_path). The LiDAR position
+    // relative to the rear axle comes only from the binding; like lidar.launch.py and
+    // safety_node, refuse to start while it is unmeasured (null).
+    c.swept_path_clamp = declare_described_bool(
+        *this, "swept_path_clamp", true,
+        "Reduce the steering until the car's swept area (inside flank to outside front "
+        "corner, plus safety_margin_m) over swept_path_lookahead_m of arc is clear of every "
+        "return beside and ahead of the car on the turn-in side. See gap_follow.hpp.");
+    c.swept_path.lookahead_m = declare_ranged_double(
+        *this, "swept_path_lookahead_m", 1.0, 0.01, 10.0,
+        "Rear-axle arc length (m) ahead of the car within which returns constrain the "
+        "swept-path clamp.");
+    if (!VEHICLE_PARAMS.sensors.lidar.mount_x_m.has_value() ||
+        !VEHICLE_PARAMS.sensors.lidar.mount_y_m.has_value()) {
+      throw std::invalid_argument(
+          "gap_follow_node: vehicle_params sensors.lidar.mount_x_m / mount_y_m is null; the "
+          "swept-path clamp needs the LiDAR position relative to the rear axle. Refusing to "
+          "start");
+    }
+    c.swept_path.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
+    c.swept_path.lidar_mount_x_m = *VEHICLE_PARAMS.sensors.lidar.mount_x_m;
+    c.swept_path.lidar_mount_y_m = *VEHICLE_PARAMS.sensors.lidar.mount_y_m;
+    // The front of the body relative to the rear axle: chassis.length_m is a bounding box,
+    // taken as centred on the CG (the f1tenth_gym convention its values come from).
+    c.swept_path.body_front_x_m =
+        VEHICLE_PARAMS.chassis.cg_to_rear_axle_m + VEHICLE_PARAMS.chassis.length_m / 2.0;
     return c;
   }
 
@@ -243,6 +275,13 @@ class GapFollowNode : public rclcpp::Node {
                            "gap_follow_node: /scan rejected (unusable geometry, no valid "
                            "returns, or forward not covered); treating as no scan.");
       return;
+    }
+    if (result.swept_path_clamped) {
+      RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                            "gap_follow_node: swept-path clamp reduced steering %.3f -> %.3f rad "
+                            "(target bearing %.3f rad)",
+                            result.wanted_steering_rad, result.steering_rad,
+                            result.target_vehicle_bearing_rad);
     }
     latest_ = result;
     // Steady clock, never this->now(): see CLOCK POLICY.

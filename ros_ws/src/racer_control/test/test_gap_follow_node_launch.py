@@ -1,9 +1,9 @@
 """L3 node tests for gap_follow_node (claude-docs/12-testing.md, GitHub issue 26).
 
-Launched through the real launch/gap_follow.launch.py (max_speed_mps, forward_preference and
-gap_switch_margin launch arguments plus the test/fixtures/gap_follow_test_params.yaml params
-file), so the launch file is exercised too, following test_tracker_node_launch.py's
-structure. Out-of-range values for the two gap selection parameters are covered by
+Launched through the real launch/gap_follow.launch.py (max_speed_mps, forward_preference,
+gap_switch_margin, swept_path_clamp and swept_path_lookahead_m launch arguments plus the
+test/fixtures/gap_follow_test_params.yaml params file), so the launch file is exercised too,
+following test_tracker_node_launch.py's structure. Out-of-range values for the two gap selection parameters are covered by
 test_gap_follow_node_params_launch.py.
 
 Checklist covered:
@@ -84,6 +84,10 @@ def generate_test_description():
             # which the steering assertions below rely on.
             "forward_preference": "0",
             "gap_switch_margin": "0",
+            # The swept-path clamp's node defaults, passed explicitly so the launch file's
+            # forwarding of both is exercised ("1" must reach the node as a float).
+            "swept_path_clamp": "true",
+            "swept_path_lookahead_m": "1",
         }.items(),
     )
     return launch.LaunchDescription([gap_follow, launch_testing.actions.ReadyToTest()])

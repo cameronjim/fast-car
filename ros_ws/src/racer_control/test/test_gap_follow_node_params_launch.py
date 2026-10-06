@@ -1,13 +1,14 @@
-"""L3 parameter range checks for gap_follow_node's gap selection parameters.
+"""L3 parameter range checks for gap_follow_node's gap selection and swept-path parameters.
 
 forward_preference and gap_switch_margin (include/racer_control/gap_follow.hpp,
 GapPreference) are declared with a [0, 1] floating point range. A value outside it must stop
 the node from starting (rclcpp rejects it at declaration, gap_follow_node's main catches the
 exception, logs it as FATAL and exits 1), never be clamped or warned about. Both are passed
 through the real launch/gap_follow.launch.py launch arguments, so this also covers the
-launch file forwarding them as floats.
+launch file forwarding them as floats. swept_path_lookahead_m (range [0.01, 10] m) gets the
+same check with 0.
 
-Each node runs in its own scoped group so the two includes' launch arguments do not leak into
+Each node runs in its own scoped group so the includes' launch arguments do not leak into
 each other. They share the node name; neither gets far enough to matter.
 """
 
@@ -48,7 +49,7 @@ def _include(**launch_arguments: str) -> GroupAction:
     )
 
 
-# keep_alive: both nodes are EXPECTED to exit at once. Without it the launch service shuts
+# keep_alive: every node is EXPECTED to exit at once. Without it the launch service shuts
 # down as soon as they do, before the active test has finished, and launch_testing reports
 # that as a failure.
 @pytest.mark.launch_test
@@ -58,6 +59,7 @@ def generate_test_description():
         [
             _include(forward_preference="1.5"),
             _include(gap_switch_margin="-0.1"),
+            _include(swept_path_lookahead_m="0"),
             launch_testing.actions.ReadyToTest(),
         ]
     )
@@ -68,10 +70,11 @@ class TestGapFollowNodeParameterRanges(unittest.TestCase):
         # The FATAL line carries rclcpp's exception text, which names the parameter.
         proc_output.assertWaitFor("forward_preference", timeout=30, stream="stderr")
         proc_output.assertWaitFor("gap_switch_margin", timeout=30, stream="stderr")
-        # Let both processes exit on their own before this test returns; otherwise launch
+        proc_output.assertWaitFor("swept_path_lookahead_m", timeout=30, stream="stderr")
+        # Let every process exit on their own before this test returns; otherwise launch
         # shuts them down with SIGINT and the exit code check below sees -2, not 1.
         processes = proc_info.processes()
-        self.assertEqual(len(processes), 2)
+        self.assertEqual(len(processes), 3)
         for process in processes:
             proc_info.assertWaitForShutdown(process=process, timeout=30)
 

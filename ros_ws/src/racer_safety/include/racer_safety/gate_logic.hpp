@@ -121,14 +121,21 @@
 //     The watchdog, command-sanity and internal-fault paths HOLD the latch (they do not run
 //     the gate, so they cannot judge a release) and keep reporting its activation so the
 //     engagement is not split by an unrelated short-circuit.
-//   * The in-path distance itself is computed by forward_sector.hpp (safety_node calls it
-//     per scan). Since the 2026-10-06 floor test it is a CORRIDOR, not a wedge: a return
-//     counts only if it is ahead of the car and within chassis.width_m / 2 +
-//     limits.obstacle_corridor_margin_m of the car's +x axis (the primary filter), and within
-//     +/- limits.ttc_forward_sector_half_angle_rad of it after sensors.lidar.mount_yaw_rad
-//     (an outer bound only), invalid returns ignored. The distance is the along-track x, not
-//     the slant range. Nothing in this file changed for that: the gate still just reads
-//     GateInput::min_scan_range_m.
+//   * The in-path distance itself is computed by forward_sector.hpp. Since the 2026-10-06
+//     floor test it is a CORRIDOR, not a wedge: a return counts only if it is ahead of the
+//     car and within chassis.width_m / 2 + limits.obstacle_corridor_margin_m of the path
+//     (the primary filter), and within +/- limits.ttc_forward_sector_half_angle_rad of the
+//     car's +x axis after sensors.lidar.mount_yaw_rad (an outer bound only), invalid returns
+//     ignored. Since the late floor test the path is the ARC the REQUESTED steering sweeps
+//     (straight only for a straight request) and the distance is the arc length from the
+//     LiDAR head, never the slant range. Because that distance depends on the request,
+//     safety_node reduces the last /scan on EVERY gate cycle with that cycle's requested
+//     steering and passes the result in GateInput::min_scan_range_m: so even while latched,
+//     and while the steering hold has frozen the output, the obstacle check is judged on the
+//     path the car is being asked to take, which is what lets a latched car release by
+//     steering away (bag 2026-10-06T22-12-40_car_teleop). Nothing in this file changed for
+//     that: the gate still just reads GateInput::min_scan_range_m, and
+//     test_arc_corridor.cpp composes the two exactly the way safety_node does.
 //
 // STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH (added 2026-10-06 late; read before
 // changing step 3d).
@@ -302,8 +309,9 @@ struct GateInput {
   DriveCommand command;          // latest received /drive_raw (or the last cached one, if stale)
   double drive_raw_age_s = 0.0;  // seconds since /drive_raw was last received
   double dt_s = 0.0;             // seconds since evaluate() was last called (for rate limits)
-  // Along-track distance to the nearest valid /scan return in the path corridor
-  // (forward_sector.hpp min_corridor_distance_m); +inf if none.
+  // Distance to the nearest valid /scan return in the path corridor, along the arc of THIS
+  // cycle's requested steering (forward_sector.hpp min_path_distance_m, recomputed by
+  // safety_node every cycle from the last scan); +inf if none.
   double min_scan_range_m = 0.0;
   // The obstacle-gate latch as the previous cycle left it (GateResult::ttc_brake_latched).
   // false at startup. See "THE OBSTACLE GATE AND ITS LATCH".

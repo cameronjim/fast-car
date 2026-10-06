@@ -65,6 +65,19 @@
 // limits.obstacle_corridor_margin_m, both from the generated binding, and the distance the gate
 // sees is the along-track x, not the slant range. A bag beside the path no longer brakes the
 // car. The sector half angle is kept as an outer bound only. forward_sector.hpp has the rule.
+// Since the arc corridor below, that straight corridor applies to a straight request only.
+//
+// ARC CORRIDOR, RECOMPUTED EVERY GATE CYCLE (2026-10-06, late floor test). The corridor now
+// follows the arc the REQUESTED steering sweeps (forward_sector.hpp "ARC CORRIDOR"), using
+// chassis.wheelbase_m, steering.max_angle_rad and sensors.lidar.mount_x_m / mount_y_m from the
+// generated binding (the node refuses to start if a mount offset is null). Because the in-path
+// distance now depends on the request, it is no longer reduced once per scan: on_scan only
+// keeps the latest LaserScan, and on_timer reduces that scan on EVERY cycle with the cached
+// /drive_raw steering, right before the gate runs. That is what lets a latched car release by
+// steering away: the gate sees the path the car is being asked to take on this cycle, even
+// while the steering hold has frozen the output. (Bag 2026-10-06T22-12-40_car_teleop: with the
+// straight corridor a car stopped against a wall at full lock away from it stayed latched for
+// 20 to 37 s.) Before the first scan the distance is +infinity, as before.
 //
 // STEERING HOLD (2026-10-06 late). Once the obstacle latch has held the /drive speed at zero
 // for vehicle_params limits.obstacle_steering_hold_after_s, the gate freezes the steering
@@ -105,7 +118,6 @@ class SafetyNode : public rclcpp::Node {
   SafetyNode()
       : Node("safety_node"),
         previous_output_(DriveCommand{0.0, 0.0}),
-        min_scan_range_m_(std::numeric_limits<double>::infinity()),
         has_received_command_(false),
         has_evaluated_before_(false) {
     const rclcpp::QoS command_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
@@ -146,20 +158,23 @@ class SafetyNode : public rclcpp::Node {
     timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
                                      std::bind(&SafetyNode::on_timer, this));
 
-    RCLCPP_INFO(this->get_logger(),
-                "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
-                "%.3f m, path corridor +/-%.3f m inside a +/-%.3f rad outer sector, "
-                "laser yaw %.6f rad, steering hold after %.3f s on the obstacle latch, "
-                "ttc_brake_s=%s, ttc_warning_s=%s",
-                control_rate_hz, gate_limits_.watchdog_missed_cycles,
-                *gate_limits_.min_forward_clearance_m, corridor_half_width_m_,
-                sector_half_angle_rad_, laser_yaw_rad_, gate_limits_.obstacle_steering_hold_after_s,
-                gate_limits_.ttc_brake_s.has_value()
-                    ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
-                    : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
-                gate_limits_.ttc_warning_s.has_value()
-                    ? std::to_string(*gate_limits_.ttc_warning_s).c_str()
-                    : "unset");
+    RCLCPP_INFO(
+        this->get_logger(),
+        "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
+        "%.3f m, path corridor +/-%.3f m along the requested steering arc (wheelbase "
+        "%.4f m, lidar at x %.3f m y %.3f m from the rear axle) inside a +/-%.3f rad "
+        "outer sector, laser yaw %.6f rad, steering hold after %.3f s on the obstacle "
+        "latch, "
+        "ttc_brake_s=%s, ttc_warning_s=%s",
+        control_rate_hz, gate_limits_.watchdog_missed_cycles, *gate_limits_.min_forward_clearance_m,
+        corridor_half_width_m_, path_geometry_.wheelbase_m, path_geometry_.lidar_mount_x_m,
+        path_geometry_.lidar_mount_y_m, sector_half_angle_rad_, laser_yaw_rad_,
+        gate_limits_.obstacle_steering_hold_after_s,
+        gate_limits_.ttc_brake_s.has_value()
+            ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
+            : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
+        gate_limits_.ttc_warning_s.has_value() ? std::to_string(*gate_limits_.ttc_warning_s).c_str()
+                                               : "unset");
   }
 
  private:
@@ -192,7 +207,7 @@ class SafetyNode : public rclcpp::Node {
 
     // ttc_warning_s / ttc_brake_s are vehicle_params.yaml's limits.ttc_warning_s/ttc_brake_s
     // (CLAUDE.md invariant 2: this is their ONE source of truth). Since 2026-09-13 the
-    // committed file holds PROVISIONAL values (0.45 s warn / 0.35 s brake since 2026-10-06,
+    // committed file holds PROVISIONAL values (0.36 s warn / 0.35 s brake since 2026-10-06,
     // raised from 1.0 / 0.5 after the bench limit cycle; NOT tuned against this car's
     // measured braking distance -- see that file's comments and GitHub issue #36), so the TTC
     // gate is ARMED whenever a /scan is present rather than the documented no-op it used to be.
@@ -253,14 +268,28 @@ class SafetyNode : public rclcpp::Node {
     return limits;
   }
 
-  // In-path test for the obstacle gate: outer sector half angle and corridor half width from
-  // vehicle_params, LiDAR yaw resolved against the binding (see this file's "/scan ->
-  // FORWARD-SECTOR MINIMUM RANGE" and "CORRIDOR, NOT WEDGE" notes). Throws (the node refuses
-  // to start) when the yaw parameter disagrees with the binding.
+  // In-path test for the obstacle gate: outer sector half angle, corridor half width and the
+  // arc path model from vehicle_params, LiDAR yaw resolved against the binding (see this
+  // file's "/scan -> FORWARD-SECTOR MINIMUM RANGE", "CORRIDOR, NOT WEDGE" and "ARC CORRIDOR"
+  // notes). Throws (the node refuses to start) when the yaw parameter disagrees with the
+  // binding or the LiDAR mount is null.
   void configure_scan_sector() {
     sector_half_angle_rad_ = VEHICLE_PARAMS.limits.ttc_forward_sector_half_angle_rad;
     corridor_half_width_m_ = corridor_half_width_m(
         VEHICLE_PARAMS.chassis.width_m, VEHICLE_PARAMS.limits.obstacle_corridor_margin_m);
+    // The arc corridor's path model (forward_sector.hpp "ARC CORRIDOR"). The LiDAR mount is
+    // nullable in the schema; without it the arc cannot be placed, so refuse to start rather
+    // than guess an offset (CLAUDE.md invariant 2).
+    if (!VEHICLE_PARAMS.sensors.lidar.mount_x_m.has_value() ||
+        !VEHICLE_PARAMS.sensors.lidar.mount_y_m.has_value()) {
+      throw std::invalid_argument(
+          "safety_node: vehicle_params sensors.lidar.mount_x_m / mount_y_m is null; the arc "
+          "corridor needs the LiDAR position relative to the rear axle; refusing to start");
+    }
+    path_geometry_.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
+    path_geometry_.max_steering_angle_rad = VEHICLE_PARAMS.steering.max_angle_rad;
+    path_geometry_.lidar_mount_x_m = *VEHICLE_PARAMS.sensors.lidar.mount_x_m;
+    path_geometry_.lidar_mount_y_m = *VEHICLE_PARAMS.sensors.lidar.mount_y_m;
 
     rcl_interfaces::msg::ParameterDescriptor yaw_descriptor;
     yaw_descriptor.description =
@@ -309,14 +338,24 @@ class SafetyNode : public rclcpp::Node {
     has_received_command_ = true;
   }
 
-  void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+  // Keeps the latest scan only; it is reduced to an in-path distance on every gate cycle with
+  // that cycle's requested steering (in_path_distance_m), not here. See "ARC CORRIDOR,
+  // RECOMPUTED EVERY GATE CYCLE" at the top of this file.
+  void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg) { last_scan_ = msg; }
+
+  // The in-path distance the obstacle gate sees this cycle: the last scan, reduced along the
+  // arc `requested_steering_rad` sweeps (forward_sector.hpp). +infinity before the first scan.
+  double in_path_distance_m(double requested_steering_rad) const {
+    if (!last_scan_) {
+      return std::numeric_limits<double>::infinity();
+    }
     ScanGeometry geometry;
-    geometry.angle_min_rad = static_cast<double>(msg->angle_min);
-    geometry.angle_increment_rad = static_cast<double>(msg->angle_increment);
-    geometry.range_min_m = static_cast<double>(msg->range_min);
-    geometry.range_max_m = static_cast<double>(msg->range_max);
-    min_scan_range_m_ = min_corridor_distance_m(geometry, msg->ranges, laser_yaw_rad_,
-                                                sector_half_angle_rad_, corridor_half_width_m_);
+    geometry.angle_min_rad = static_cast<double>(last_scan_->angle_min);
+    geometry.angle_increment_rad = static_cast<double>(last_scan_->angle_increment);
+    geometry.range_min_m = static_cast<double>(last_scan_->range_min);
+    geometry.range_max_m = static_cast<double>(last_scan_->range_max);
+    return min_path_distance_m(geometry, last_scan_->ranges, laser_yaw_rad_, sector_half_angle_rad_,
+                               corridor_half_width_m_, path_geometry_, requested_steering_rad);
   }
 
   void publish_event(const SafetyEventRecord& record, const rclcpp::Time& stamp) {
@@ -390,7 +429,8 @@ class SafetyNode : public rclcpp::Node {
                                   : std::numeric_limits<double>::infinity();
       input.dt_s =
           has_evaluated_before_ ? (steady_now - last_eval_steady_).seconds() : control_period_s_;
-      input.min_scan_range_m = min_scan_range_m_;
+      // Reduced HERE, every cycle, with this cycle's requested steering (the arc corridor).
+      input.min_scan_range_m = in_path_distance_m(input.command.steering_angle_rad);
       input.ttc_brake_latched = ttc_brake_latched_;
       input.obstacle_hold_timer_s = obstacle_hold_timer_s_;
       input.has_pose_input = false;  // TODO(roadmap 2.6): wire from /pose once it exists.
@@ -455,7 +495,8 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
   rclcpp::Time last_drive_raw_steady_{0, 0, RCL_STEADY_TIME};
   rclcpp::Time last_eval_steady_{0, 0, RCL_STEADY_TIME};
-  double min_scan_range_m_;
+  // Latest /scan, reduced per gate cycle (in_path_distance_m). Null until the first scan.
+  sensor_msgs::msg::LaserScan::SharedPtr last_scan_;
   // Obstacle-gate latch, threaded through evaluate() like previous_output_ (gate_logic.hpp).
   bool ttc_brake_latched_{false};
   // Steering-hold timer on that latch, threaded the same way (gate_logic.hpp).
@@ -464,6 +505,7 @@ class SafetyNode : public rclcpp::Node {
   double sector_half_angle_rad_{0.0};
   double corridor_half_width_m_{0.0};
   double laser_yaw_rad_{0.0};
+  PathGeometry path_geometry_;
   bool has_received_command_;
   bool has_evaluated_before_;
 

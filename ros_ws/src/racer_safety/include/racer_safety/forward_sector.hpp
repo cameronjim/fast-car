@@ -2,8 +2,8 @@
 //
 // ROS-free, like gate_logic.hpp, so it is gtest-unit-testable with no ROS install and sits
 // under the same 100% branch-coverage gate (.github/scripts/racer_safety_coverage.sh).
-// safety_node.cpp copies a sensor_msgs/LaserScan's geometry into `ScanGeometry` and calls
-// `min_corridor_distance_m` once per scan.
+// safety_node.cpp keeps the last sensor_msgs/LaserScan and calls `min_path_distance_m` with it
+// once per GATE CYCLE, with that cycle's requested steering (see "WHICH STEERING" below).
 //
 // WHY A FORWARD SECTOR (2026-10-06). safety_node used to take the minimum valid range over the
 // WHOLE scan. On the car the RPLIDAR C1 sees 360 degrees, so the car's own mount, the person
@@ -29,16 +29,47 @@
 //
 // The sector half angle stays, as an OUTER bound only: a return outside +/-
 // half_angle_rad is never considered, even if a huge margin is configured, so nothing behind
-// or far to the side of the car can ever enter the corridor test. With the committed values
-// (0.6 rad, half width 0.155 + 0.05 = 0.205 m) the sector, not the corridor, is the binding
-// limit for x below 0.205 / tan(0.6), about 0.30 m from the head: a return at the edge of the
-// corridor that close is at a bearing wider than 0.6 rad and is not seen. That is a property
-// of the committed sector value, stated here rather than hidden.
+// or far to the side of the car can ever enter the corridor test. At 0.6 rad (schema 0.9.0)
+// the sector, not the corridor, was the binding limit for x below 0.205 / tan(0.6), about
+// 0.30 m from the head; schema 0.9.1 widened it to 1.2 rad, which moves that edge in to
+// 0.205 / tan(1.2), about 0.08 m. Close in, a front-corner return wider than the sector is
+// still not seen; that is a property of the committed sector value, stated here rather than
+// hidden.
 //
-// The corridor is straight (along +x). It does not bend with the steering angle, so on a
-// curve it is a short-horizon approximation of the swept path. The LiDAR sits on the
-// centreline (sensors.lidar.mount_y_m 0.0), so the corridor is centred on the head; x is
-// measured from the head, the same origin the clearance floor has always used.
+// ARC CORRIDOR (2026-10-06, late floor test). The straight corridor above ignored the steering,
+// so a car stopped against a wall and steering hard away from it still had the wall in its
+// corridor and never released (bag 2026-10-06T22-12-40_car_teleop: three correct brakes, each
+// latched for 20 to 37 s, the car at full lock 85 percent of the run). The corridor now follows
+// the REQUESTED steering arc (min_path_distance_m below):
+//   * delta = the request's steering angle clamped to +/- steering.max_angle_rad. If
+//     |delta| < kStraightSteeringEpsilonRad the path is straight and the straight corridor
+//     above is used unchanged (centred on the car's centreline, which with the head on the
+//     centreline is the head's +x axis, exactly as before).
+//   * Otherwise the rear axle follows a circle of signed radius R = L / tan(delta), L =
+//     chassis.wheelbase_m, centred at (0, R) in the rear-axle frame (left turn R > 0).
+//   * A return at head-relative (x, y) moves to the rear-axle frame with the LiDAR mount
+//     (sensors.lidar.mount_x_m, mount_y_m): xr = x + mount_x, yr = y + mount_y. Its distance
+//     from the turn centre is rho = hypot(xr, yr - R). It is in the swept band if
+//     |rho - |R|| <= corridor_half_width_m (the same half width as the straight corridor).
+//   * Its arc angle from the car's position, measured around the turn centre in the direction
+//     of travel, is phi = atan2(xr, |R| - sign(R) yr). It counts only if 0 < phi < pi/2:
+//     nothing behind the rear axle and nothing beyond a quarter turn.
+//   * The distance handed to the gate is the ARC LENGTH the rear axle travels until the head
+//     reaches the return's angle, |R| (phi - phi_head), phi_head being the head's own arc
+//     angle, and it must be > 0 (the return is ahead of the head along the arc). REFERENCE:
+//     like the straight corridor's x, and the clearance floor, this is measured from the LiDAR
+//     HEAD, not from the bumper; as R grows it tends to the straight corridor's x. It is never
+//     the straight-line range.
+// The outer sector bound applies before either corridor, unchanged.
+//
+// WHICH STEERING. The path is the one the car is being ASKED to drive, the bounds-clamped
+// /drive_raw steering, not the gate's rate-limited or held output. That is what lets a latched
+// car release by steering away from what it braked for, even while the steering hold has
+// frozen the output (gate_logic.hpp). safety_node therefore keeps the last /scan and recomputes
+// this distance on EVERY gate cycle with the current request's steering, instead of reducing
+// each scan once in the scan callback. The output steering lags the request by the steering
+// rate limiter (steering.max_rate_rad_per_s, about 0.13 s from centre to full lock); the speed
+// ramps up from zero at the same time, so the car is still slow while the wheels catch up.
 //
 // LASER BEARING vs VEHICLE BEARING. A LaserScan's ray i has laser bearing
 // angle_min + i * angle_increment in the laser frame. The head is mounted rotated relative to
@@ -89,19 +120,44 @@ bool is_usable_return(float range_m, const ScanGeometry& geometry);
 // vehicle_params binding (CLAUDE.md invariant 2); nothing here holds a vehicle dimension.
 double corridor_half_width_m(double chassis_width_m, double margin_m);
 
-// Along-track distance x to the nearest usable return (see is_usable_return) that is in the
-// path: vehicle bearing within [-half_angle_rad, +half_angle_rad] (the outer bound), x > 0,
-// and |y| <= corridor_half_width_m (the primary filter). See "CORRIDOR, NOT WEDGE" above.
-// Returns +infinity if there is none ("nothing in the path this scan", which the gate treats
-// as clear, not as garbage).
+// The swept-path model the arc corridor needs besides the scan (SI). safety_node fills it from
+// the generated vehicle_params binding (CLAUDE.md invariant 2); nothing here holds a vehicle
+// dimension.
+struct PathGeometry {
+  double wheelbase_m = 0.0;             // chassis.wheelbase_m
+  double max_steering_angle_rad = 0.0;  // steering.max_angle_rad (the request is clamped to +/-)
+  double lidar_mount_x_m = 0.0;         // sensors.lidar.mount_x_m: head ahead of the rear axle
+  double lidar_mount_y_m = 0.0;         // sensors.lidar.mount_y_m: head left of the centreline
+};
+
+// Below this |clamped steering| the path is treated as straight (a numerical guard, not a
+// vehicle constant: at 1e-3 rad and a 0.33 m wheelbase R is 330 m, and the arc is within 2 mm
+// of the straight line over the first metre).
+inline constexpr double kStraightSteeringEpsilonRad = 1e-3;
+
+// Distance to the nearest usable return (see is_usable_return) that is in the path the
+// requested steering sweeps: vehicle bearing within [-half_angle_rad, +half_angle_rad] (the
+// outer bound), then the straight corridor (|delta| < kStraightSteeringEpsilonRad: x > 0,
+// |y + mount_y| <= corridor_half_width_m, distance x) or the arc corridor (see "ARC CORRIDOR"
+// above, distance = arc length from the head). Returns +infinity if there is none ("nothing in
+// the path this scan", which the gate treats as clear, not as garbage).
 //
-// Fails CONSERVATIVE on garbage geometry: if angle_min/angle_increment are non-finite,
+// Fails CONSERVATIVE on garbage input: if angle_min/angle_increment are non-finite,
 // angle_increment is not positive, laser_yaw_rad/half_angle_rad are non-finite or
-// half_angle_rad is not positive, or corridor_half_width_m is non-finite or not positive, the
+// half_angle_rad is not positive, corridor_half_width_m is non-finite or not positive, the
+// wheelbase is non-finite or not positive, the max steering angle is non-finite, negative or
+// not below pi/2, a mount offset is non-finite, or the requested steering is non-finite, the
 // in-path test cannot be trusted, so the result is the minimum slant range r over EVERY usable
-// return (the pre-2026-10-06 whole-scan behaviour). That sees every return the corridor could
-// have counted, never fewer. (Without trustworthy bearings x cannot be computed, so r is the
-// only distance available there.)
+// return (the pre-2026-10-06 whole-scan behaviour). That sees every return either corridor
+// could have counted, never fewer.
+double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
+                           double laser_yaw_rad, double half_angle_rad,
+                           double corridor_half_width_m, const PathGeometry& path,
+                           double requested_steering_rad);
+
+// The straight corridor on its own: min_path_distance_m with a straight request and the head
+// on the centreline (mount_y 0). The arc corridor reduces to this as the steering goes to
+// zero; kept as the named reference the L1 suite pins the straight case against.
 double min_corridor_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
                                double laser_yaw_rad, double half_angle_rad,
                                double corridor_half_width_m);

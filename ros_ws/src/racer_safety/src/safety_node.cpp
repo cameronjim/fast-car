@@ -60,6 +60,12 @@
 // the simulator (racer_gym_bridge's /scan is aligned to the vehicle, yaw 0) and synthetic-scan
 // tests. forward_sector.hpp documents which returns count.
 //
+// CORRIDOR, NOT WEDGE (2026-10-06, floor test). Inside that sector a return now counts only if
+// it lies in a straight corridor ahead of the car, |y| <= chassis.width_m / 2 +
+// limits.obstacle_corridor_margin_m, both from the generated binding, and the distance the gate
+// sees is the along-track x, not the slant range. A bag beside the path no longer brakes the
+// car. The sector half angle is kept as an outer bound only. forward_sector.hpp has the rule.
+//
 // STEERING HOLD (2026-10-06 late). Once the obstacle latch has held the /drive speed at zero
 // for vehicle_params limits.obstacle_steering_hold_after_s, the gate freezes the steering
 // output until the latch releases (a car parked against an obstacle stops hunting its servo).
@@ -140,18 +146,20 @@ class SafetyNode : public rclcpp::Node {
     timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
                                      std::bind(&SafetyNode::on_timer, this));
 
-    RCLCPP_INFO(
-        this->get_logger(),
-        "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
-        "%.3f m, forward sector +/-%.3f rad, laser yaw %.6f rad, steering hold after "
-        "%.3f s on the obstacle latch, ttc_brake_s=%s, ttc_warning_s=%s",
-        control_rate_hz, gate_limits_.watchdog_missed_cycles, *gate_limits_.min_forward_clearance_m,
-        sector_half_angle_rad_, laser_yaw_rad_, gate_limits_.obstacle_steering_hold_after_s,
-        gate_limits_.ttc_brake_s.has_value()
-            ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
-            : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
-        gate_limits_.ttc_warning_s.has_value() ? std::to_string(*gate_limits_.ttc_warning_s).c_str()
-                                               : "unset");
+    RCLCPP_INFO(this->get_logger(),
+                "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
+                "%.3f m, path corridor +/-%.3f m inside a +/-%.3f rad outer sector, "
+                "laser yaw %.6f rad, steering hold after %.3f s on the obstacle latch, "
+                "ttc_brake_s=%s, ttc_warning_s=%s",
+                control_rate_hz, gate_limits_.watchdog_missed_cycles,
+                *gate_limits_.min_forward_clearance_m, corridor_half_width_m_,
+                sector_half_angle_rad_, laser_yaw_rad_, gate_limits_.obstacle_steering_hold_after_s,
+                gate_limits_.ttc_brake_s.has_value()
+                    ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
+                    : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
+                gate_limits_.ttc_warning_s.has_value()
+                    ? std::to_string(*gate_limits_.ttc_warning_s).c_str()
+                    : "unset");
   }
 
  private:
@@ -245,11 +253,14 @@ class SafetyNode : public rclcpp::Node {
     return limits;
   }
 
-  // Forward sector for the obstacle gate: half angle from vehicle_params, LiDAR yaw resolved
-  // against the binding (see this file's "/scan -> FORWARD-SECTOR MINIMUM RANGE" note).
-  // Throws (the node refuses to start) when the yaw parameter disagrees with the binding.
+  // In-path test for the obstacle gate: outer sector half angle and corridor half width from
+  // vehicle_params, LiDAR yaw resolved against the binding (see this file's "/scan ->
+  // FORWARD-SECTOR MINIMUM RANGE" and "CORRIDOR, NOT WEDGE" notes). Throws (the node refuses
+  // to start) when the yaw parameter disagrees with the binding.
   void configure_scan_sector() {
     sector_half_angle_rad_ = VEHICLE_PARAMS.limits.ttc_forward_sector_half_angle_rad;
+    corridor_half_width_m_ = corridor_half_width_m(
+        VEHICLE_PARAMS.chassis.width_m, VEHICLE_PARAMS.limits.obstacle_corridor_margin_m);
 
     rcl_interfaces::msg::ParameterDescriptor yaw_descriptor;
     yaw_descriptor.description =
@@ -304,8 +315,8 @@ class SafetyNode : public rclcpp::Node {
     geometry.angle_increment_rad = static_cast<double>(msg->angle_increment);
     geometry.range_min_m = static_cast<double>(msg->range_min);
     geometry.range_max_m = static_cast<double>(msg->range_max);
-    min_scan_range_m_ =
-        min_forward_range_m(geometry, msg->ranges, laser_yaw_rad_, sector_half_angle_rad_);
+    min_scan_range_m_ = min_corridor_distance_m(geometry, msg->ranges, laser_yaw_rad_,
+                                                sector_half_angle_rad_, corridor_half_width_m_);
   }
 
   void publish_event(const SafetyEventRecord& record, const rclcpp::Time& stamp) {
@@ -449,8 +460,9 @@ class SafetyNode : public rclcpp::Node {
   bool ttc_brake_latched_{false};
   // Steering-hold timer on that latch, threaded the same way (gate_logic.hpp).
   std::optional<double> obstacle_hold_timer_s_;
-  // Forward sector (configure_scan_sector).
+  // In-path test (configure_scan_sector).
   double sector_half_angle_rad_{0.0};
+  double corridor_half_width_m_{0.0};
   double laser_yaw_rad_{0.0};
   bool has_received_command_;
   bool has_evaluated_before_;

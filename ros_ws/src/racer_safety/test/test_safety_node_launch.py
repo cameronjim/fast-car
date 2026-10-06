@@ -32,6 +32,7 @@ import os
 # clobbered.
 os.environ.setdefault("ROS_DOMAIN_ID", "78")
 
+import math
 import pathlib
 import signal
 import time
@@ -124,6 +125,26 @@ def _make_scan(range_m: float, num_beams: int = 100) -> LaserScan:
     msg.range_min = 0.0
     msg.range_max = 30.0
     msg.ranges = [float(range_m)] * num_beams
+    return msg
+
+
+def _make_wall_scan(distance_m: float, num_beams: int = 100) -> LaserScan:
+    """A flat wall across the path, `distance_m` ahead along the vehicle's +x axis.
+
+    Since schema 0.9.0 ("corridor, not wedge", forward_sector.hpp) safety_node brakes on the
+    ALONG-TRACK distance x of returns inside a car-width corridor, not on the slant range of
+    anything in the sector. A uniform _make_scan(r) is a circle around the head, whose
+    in-corridor returns sit at x < r; this wall puts every return ahead at exactly
+    x = distance_m, so a scenario can pin the distance the gate sees. Beams that never reach
+    the wall (pointing sideways or back) are +inf, an invalid return the node ignores.
+    """
+    msg = _make_scan(range_m=0.0, num_beams=num_beams)
+    ranges = []
+    for i in range(num_beams):
+        cos_bearing = math.cos(msg.angle_min + i * msg.angle_increment)
+        slant_m = distance_m / cos_bearing if cos_bearing > 0.0 else math.inf
+        ranges.append(slant_m if slant_m <= msg.range_max else math.inf)
+    msg.ranges = ranges
     return msg
 
 
@@ -545,7 +566,10 @@ class TestSafetyNode(unittest.TestCase):
         request = _make_drive(steering=0.0, speed=_SCENARIO_REQUEST_MPS)
         self.assertLess(_BAG_RANGE_M / _SCENARIO_REQUEST_MPS, _TTC_BRAKE_S)
         self.assertGreater(_BAG_RANGE_M, _MIN_FORWARD_CLEARANCE_M)
-        bag_scan = _make_scan(range_m=_BAG_RANGE_M)
+        # A flat wall at the bag's distance, not a uniform circle: with the corridor (schema
+        # 0.9.0) a circle of radius 0.22 m reads as x = 0.22 cos(0.6) = 0.18 m at the sector
+        # edge, under the clearance floor, so the floor rather than TTC would engage.
+        bag_scan = _make_wall_scan(distance_m=_BAG_RANGE_M)
         # Settle: the brake engages within a cycle or two of the scan arriving, and the steering
         # hold (a ttc INFO engage, 2026-10-06 late) follows limits.obstacle_steering_hold_after_s
         # later. Both must be engaged before the window opens, so that "no ttc engage inside the

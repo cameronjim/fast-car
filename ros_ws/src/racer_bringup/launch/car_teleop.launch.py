@@ -56,8 +56,10 @@ launch when it is missing, so nothing argues for true yet. Two reasons for false
     at the top of every teleop session (sllidar_node exits when it cannot open the port;
     nothing shuts the rest of the launch down on that, unlike the recorder).
   * /scan ARMS safety_node's obstacle gate. Since 2026-10-06 (docs/notes/
-    ttc-limit-cycle-2026-10-06.md) it looks only at a forward sector (+/-
-    limits.ttc_forward_sector_half_angle_rad, after sensors.lidar.mount_yaw_rad), brakes on the
+    ttc-limit-cycle-2026-10-06.md) it looks only at returns in a car-width corridor ahead
+    (chassis.width_m / 2 + limits.obstacle_corridor_margin_m, inside an outer sector of +/-
+    limits.ttc_forward_sector_half_angle_rad, after sensors.lidar.mount_yaw_rad; schema 0.9.0,
+    "corridor, not wedge"), uses the along-track distance, brakes on the
     REQUESTED speed's TTC (PROVISIONAL limits.ttc_brake_s 0.35 s, released above ttc_warning_s
     0.45 s) and on a distance floor (PROVISIONAL limits.min_forward_clearance_m 0.20 m), and
     latches: once braked, forward throttle stays at zero until the obstacle is clear. At the
@@ -465,7 +467,8 @@ def generate_launch_description() -> LaunchDescription:
             "Include lidar.launch.py: sllidar_node publishing /scan (recorded in the bag) and "
             "the base_link -> laser static transform from vehicle_params. Default false until "
             "the bench check passes; NOTE that /scan arms safety_node's latched obstacle gate "
-            "(TTC brake + distance floor over a forward sector), so anything close ahead holds "
+            "(TTC brake + distance floor over a car-width corridor ahead), so anything close "
+            "ahead holds "
             "the throttle at zero. See this file's module docstring."
         ),
     )

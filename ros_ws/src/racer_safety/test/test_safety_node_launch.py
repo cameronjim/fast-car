@@ -91,7 +91,11 @@ _BAG_RANGE_M = 0.22
 # so the TTC half of the gate is what engages) and raise the request until its TTC sits at
 # 80 percent of the threshold. At the original 0.5 s this is the bag's own 0.48 m/s.
 _MIN_FORWARD_CLEARANCE_M = _VEHICLE_PARAMS["limits"]["min_forward_clearance_m"]
-_SCENARIO_REQUEST_MPS = max(_BAG_REQUEST_MPS, _BAG_RANGE_M / (0.8 * _TTC_BRAKE_S))
+# The clearance floor moved from 0.20 m to 0.40 m on 2026-10-06 (crawl-speed pass), above the
+# bag's 0.22 m. Keep the wall 20 percent beyond the configured floor so the TTC half of the
+# gate is still what engages, and raise the request so its TTC stays under the threshold.
+_SCENARIO_RANGE_M = max(_BAG_RANGE_M, 1.2 * _MIN_FORWARD_CLEARANCE_M)
+_SCENARIO_REQUEST_MPS = max(_BAG_REQUEST_MPS, _SCENARIO_RANGE_M / (0.8 * _TTC_BRAKE_S))
 # Steering hold on the obstacle latch (schema 0.8.0, gate_logic.hpp "STEERING HOLD WHILE PARKED
 # ON THE OBSTACLE LATCH"): read from the committed yaml like the thresholds above, so the test
 # proves the number the car boots with.
@@ -591,12 +595,12 @@ class TestSafetyNode(unittest.TestCase):
         self._spin_for(0.3)
 
         request = _make_drive(steering=0.0, speed=_SCENARIO_REQUEST_MPS)
-        self.assertLess(_BAG_RANGE_M / _SCENARIO_REQUEST_MPS, _TTC_BRAKE_S)
-        self.assertGreater(_BAG_RANGE_M, _MIN_FORWARD_CLEARANCE_M)
+        self.assertLess(_SCENARIO_RANGE_M / _SCENARIO_REQUEST_MPS, _TTC_BRAKE_S)
+        self.assertGreater(_SCENARIO_RANGE_M, _MIN_FORWARD_CLEARANCE_M)
         # A flat wall at the bag's distance, not a uniform circle: with the corridor (schema
         # 0.9.0) a circle of radius 0.22 m reads as x = 0.22 cos(0.6) = 0.18 m at the sector
         # edge, under the clearance floor, so the floor rather than TTC would engage.
-        bag_scan = _make_wall_scan(distance_m=_BAG_RANGE_M)
+        bag_scan = _make_wall_scan(distance_m=_SCENARIO_RANGE_M)
         # Settle: the brake engages within a cycle or two of the scan arriving, and the steering
         # hold (a ttc INFO engage, 2026-10-06 late) follows limits.obstacle_steering_hold_after_s
         # later. Both must be engaged before the window opens, so that "no ttc engage inside the
@@ -761,7 +765,11 @@ class TestSafetyNode(unittest.TestCase):
         self._spin_for(0.3)
 
         request_mps = 1.0
-        wall_m = 0.33
+        # The bag's wall was 0.33 m ahead; keep it 15 percent beyond the configured clearance
+        # floor (0.40 m since the crawl-speed pass) so TTC, not the floor, engages. Further
+        # out the full-lock-LEFT arc clears the segment by more, not less.
+        wall_m = max(0.33, 1.15 * _MIN_FORWARD_CLEARANCE_M)
+        self.assertLess(wall_m / request_mps, _TTC_BRAKE_S)
         # 0.33 m ahead, from 2 cm right of the centreline out to 0.6 m right: in the straight
         # corridor, clear of the full-lock-LEFT arc (its outer edge passes about 3 cm off the
         # wall's inner end with the committed wheelbase, lock, mount and corridor width).

@@ -2,7 +2,8 @@
 
 Checklist covered: nominal passthrough on a fresh, in-bounds command; watchdog brake on
 /drive_raw silence; TTC brake on a synthetic close-obstacle /scan, its latch and its "ttc brake
-released" record; the 2026-10-06 limit-cycle scenario held at zero; the steering hold while
+released" record; the 2026-10-06 limit-cycle scenario held at zero; the arc corridor (a latch
+on a wall releases once the request steers away and its arc is clear); the steering hold while
 parked on the obstacle latch (steering stops following /drive_raw after
 limits.obstacle_steering_hold_after_s and resumes once the obstacle clears); fail-closed (and clean
 recovery) on an injected internal fault; a bounds_clamp /safety/events record on an
@@ -144,6 +145,32 @@ def _make_wall_scan(distance_m: float, num_beams: int = 100) -> LaserScan:
         cos_bearing = math.cos(msg.angle_min + i * msg.angle_increment)
         slant_m = distance_m / cos_bearing if cos_bearing > 0.0 else math.inf
         ranges.append(slant_m if slant_m <= msg.range_max else math.inf)
+    msg.ranges = ranges
+    return msg
+
+
+def _make_segment_scan(
+    x_m: float, y_from_m: float, y_to_m: float, num_beams: int = 100
+) -> LaserScan:
+    """A wall segment across the path at `x_m` ahead of the head, from `y_from_m` to `y_to_m`
+    (left positive), in a vehicle-aligned scan like _make_scan. Rays that miss it are +inf.
+
+    Used by the arc-corridor test (forward_sector.hpp "ARC CORRIDOR", 2026-10-06 late floor
+    test): unlike a flat wall across the whole path, a segment can be in the straight corridor
+    and clear of a full-lock arc at the same time.
+    """
+    msg = _make_scan(range_m=0.0, num_beams=num_beams)
+    lo_m, hi_m = min(y_from_m, y_to_m), max(y_from_m, y_to_m)
+    ranges = []
+    for i in range(num_beams):
+        bearing = msg.angle_min + i * msg.angle_increment
+        cos_bearing = math.cos(bearing)
+        hit = math.inf
+        if cos_bearing > 0.0:
+            y_m = x_m * math.tan(bearing)
+            if lo_m <= y_m <= hi_m:
+                hit = x_m / cos_bearing
+        ranges.append(hit)
     msg.ranges = ranges
     return msg
 
@@ -712,6 +739,99 @@ class TestSafetyNode(unittest.TestCase):
             if e.severity == SafetyEvent.SEVERITY_INFO and "steering hold released" in e.detail
         ]
         self.assertEqual(len(hold_releases), 1, "expected one 'steering hold released' record")
+
+    def test_latch_releases_when_the_request_steers_away_and_the_arc_is_clear(self):
+        """2026-10-06 late floor test (bag 2026-10-06T22-12-40_car_teleop, forward_sector.hpp
+        "ARC CORRIDOR"). The gate braked correctly on a wall about 0.33 m ahead at 1.0 m/s
+        (TTC 0.33 s), then stayed latched for 20 to 37 s while gap_follow_node steered at full
+        lock away from the wall: the straight corridor still had the wall in it. Now the node
+        reduces the last /scan on every cycle along the REQUESTED steering arc, so the same
+        wall, with the request at full lock away from it, releases the latch (even though the
+        steering hold has frozen the /drive steering) and the car drives off on the arc."""
+        drive_out = []
+        self.node.create_subscription(
+            AckermannDriveStamped, "/drive", drive_out.append, _reliable_qos()
+        )
+        events = []
+        self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        drive_raw_pub = self.node.create_publisher(
+            AckermannDriveStamped, "/drive_raw", _reliable_qos()
+        )
+        scan_pub = self.node.create_publisher(LaserScan, "/scan", _best_effort_qos())
+        self._spin_for(0.3)
+
+        request_mps = 1.0
+        wall_m = 0.33
+        # 0.33 m ahead, from 2 cm right of the centreline out to 0.6 m right: in the straight
+        # corridor, clear of the full-lock-LEFT arc (its outer edge passes about 3 cm off the
+        # wall's inner end with the committed wheelbase, lock, mount and corridor width).
+        wall_scan = _make_segment_scan(x_m=wall_m, y_from_m=-0.02, y_to_m=-0.60)
+        self.assertLess(wall_m / request_mps, _TTC_BRAKE_S)
+        self.assertGreater(wall_m, _MIN_FORWARD_CLEARANCE_M)
+        far_scan = _make_scan(range_m=100.0)
+
+        # Clear road first (also releases any latch a previous test left behind).
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=0.0, speed=request_mps),
+            seconds=1.0,
+            scan_pub=scan_pub,
+            scan=far_scan,
+        )
+
+        # Straight at the wall: latched, and parked past the steering-hold time.
+        events.clear()
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=0.0, speed=request_mps),
+            seconds=0.5 + _STEERING_HOLD_AFTER_S + 0.5,
+            scan_pub=scan_pub,
+            scan=wall_scan,
+        )
+        self.assertEqual(drive_out[-1].drive.speed, 0.0, "the wall did not latch the brake")
+        self.assertGreaterEqual(
+            len([e for e in _engages(events, "ttc") if e.severity == SafetyEvent.SEVERITY_BRAKE]),
+            1,
+            "no ttc brake engage record for the wall",
+        )
+
+        # Full lock away from the wall, same scan: the arc is clear, so the latch releases.
+        drive_out.clear()
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=_STEERING_MAX_RAD, speed=request_mps),
+            seconds=1.5,
+            scan_pub=scan_pub,
+            scan=wall_scan,
+        )
+        ttc_brake_releases = [
+            e for e in _releases(events, "ttc") if e.severity == SafetyEvent.SEVERITY_BRAKE
+        ]
+        self.assertGreaterEqual(
+            len(ttc_brake_releases),
+            1,
+            "the latch never released with the request at full lock away from the wall (the "
+            "straight-corridor bug from the 2026-10-06 late floor test)",
+        )
+        self.assertIn("ttc brake released", ttc_brake_releases[-1].detail)
+        self.assertGreater(
+            drive_out[-1].drive.speed, 0.5, "speed did not come back after the release"
+        )
+        self.assertAlmostEqual(
+            drive_out[-1].drive.steering_angle,
+            _STEERING_MAX_RAD,
+            places=3,
+            msg="the /drive steering did not follow the request after the release",
+        )
+
+        # Clear the obstacle so later tests start from a released latch.
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=0.0, speed=request_mps),
+            seconds=1.0,
+            scan_pub=scan_pub,
+            scan=far_scan,
+        )
 
     def test_drive_raw_subscription_is_reliable_not_best_effort(self):
         """A best_effort /drive_raw publisher must be QoS-incompatible with safety_node's

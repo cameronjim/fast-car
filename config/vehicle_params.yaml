@@ -119,9 +119,9 @@
 # are unchanged. Plus one new REQUIRED field, limits.obstacle_steering_hold_after_s
 # (PROVISIONAL 0.5 s): once the obstacle latch has held the output speed at zero that long,
 # racer_safety freezes the steering output until the latch releases, so a car parked against an
-# obstacle stops hunting its servo (the owner watched it do that on the stand). Rule 5 bumps on
-# any change; the number is 0.8.0 as the owner specified, although earlier additions of a
-# required field took the minor digit (0.6.1 -> 0.7.0). Consumers refuse on mismatch either
+# obstacle stops hunting its servo (the owner watched it do that on the stand). A new required
+# field changes the schema's required-field set, so this is a minor bump per rule 5, the same
+# as 0.6.1 -> 0.7.0. Consumers refuse on mismatch either
 # way. All three values are PROVISIONAL.
 #
 # schema_version bumped 0.7.1 -> 0.7.2 on 2026-10-06 (second bench pass): ttc_brake_s 0.5 -> 0.35,

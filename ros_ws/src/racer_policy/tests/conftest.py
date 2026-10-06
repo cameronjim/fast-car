@@ -94,8 +94,10 @@ _TEMPLATE: dict[str, Any] = {
         # then 0.7.2 -> 0.8.0 the same night when limits.obstacle_steering_hold_after_s was
         # added and the TTC release line and forward sector were retuned, then 0.8.0 ->
         # 0.9.0 the same night when limits.obstacle_corridor_margin_m was added (the obstacle
-        # gate's path corridor, first floor test).
-        "schema_version": "0.9.1",
+        # gate's path corridor, first floor test), then 0.9.0 -> 0.9.1 (sector bound widened)
+        # and 0.9.1 -> 0.9.2 (ttc_warning_s release line 0.45 -> 0.36, arc corridor floor
+        # test), both value-only.
+        "schema_version": "0.9.2",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

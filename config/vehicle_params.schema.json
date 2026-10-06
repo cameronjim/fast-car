@@ -433,7 +433,7 @@
         "envelope_fraction_speed", "envelope_fraction_lateral_accel",
         "mux_watchdog_timeout_s", "mux_kill_switch_threshold_us",
         "min_forward_clearance_m", "ttc_forward_sector_half_angle_rad",
-        "obstacle_steering_hold_after_s"
+        "obstacle_steering_hold_after_s", "obstacle_corridor_margin_m"
       ],
       "properties": {
         "global_speed_cap_mps": {
@@ -461,13 +461,19 @@
         "min_forward_clearance_m": {
           "type": "number", "exclusiveMinimum": 0, "maximum": 5,
           "units": "m",
-          "description": "Distance floor for racer_safety/safety_node's layer-3 obstacle gate (added 2026-10-06, schema 0.7.0). If the nearest valid LiDAR return inside the forward sector (ttc_forward_sector_half_angle_rad) is closer than this, measured from the LiDAR head, forward throttle is held at zero regardless of the requested speed, latched with the TTC brake and released once that return is farther than this times the gate's release factor (racer_safety/gate_logic.hpp). Catches the crawl-speed case TTC cannot. The committed value is PROVISIONAL, not measured."
+          "description": "Distance floor for racer_safety/safety_node's layer-3 obstacle gate (added 2026-10-06, schema 0.7.0). If the along-track distance to the nearest valid LiDAR return in the path corridor (obstacle_corridor_margin_m, bounded by ttc_forward_sector_half_angle_rad; schema 0.9.0, before that the whole forward sector and the slant range) is less than this, measured from the LiDAR head, forward throttle is held at zero regardless of the requested speed, latched with the TTC brake and released once that return is farther than this times the gate's release factor (racer_safety/gate_logic.hpp). Catches the crawl-speed case TTC cannot. The committed value is PROVISIONAL, not measured."
         },
         "ttc_forward_sector_half_angle_rad": {
           "type": "number", "exclusiveMinimum": 0, "maximum": 3.141593,
           "units": "rad",
           "sign_convention": "symmetric about the vehicle's +x axis (base_link, REP-103); the sector is [-value, +value] in VEHICLE bearing, i.e. after sensors.lidar.mount_yaw_rad is applied to each laser bearing",
-          "description": "Half angle of the forward sector over which racer_safety/safety_node takes the minimum LiDAR range for the TTC gate and the distance floor (added 2026-10-06, schema 0.7.0; before that it used the whole 360 degree scan, so self-returns and anything beside or behind the car braked a forward command). The committed value is PROVISIONAL, not tuned."
+          "description": "Half angle of the forward sector that bounds racer_safety/safety_node's in-path test for the TTC gate and the distance floor (added 2026-10-06, schema 0.7.0; before that it used the whole 360 degree scan, so self-returns and anything beside or behind the car braked a forward command). Since schema 0.9.0 it is only the OUTER bound: no return outside it is ever considered, whatever obstacle_corridor_margin_m says, and the corridor (obstacle_corridor_margin_m) is the primary filter. The committed value is PROVISIONAL, not tuned."
+        },
+        "obstacle_corridor_margin_m": {
+          "type": "number", "minimum": 0, "maximum": 1,
+          "units": "m",
+          "sign_convention": "symmetric about the vehicle's +x axis (base_link, REP-103); applied to |y| of each return after sensors.lidar.mount_yaw_rad",
+          "description": "Lateral margin of racer_safety/safety_node's obstacle-gate path corridor (added 2026-10-06, schema 0.9.0). A LiDAR return at vehicle bearing theta and range r (x = r cos theta ahead, y = r sin theta left) counts for the TTC brake and the distance floor only if x > 0, |theta| <= ttc_forward_sector_half_angle_rad (the outer bound) and |y| <= chassis.width_m / 2 + this margin (the primary filter); the distance used is x, not r. Added after the first floor test, where a bag 0.3 m beside the car's path braked it like a bag straight ahead. The committed value is PROVISIONAL, not tuned."
         },
         "obstacle_steering_hold_after_s": {
           "type": "number", "minimum": 0, "maximum": 10,

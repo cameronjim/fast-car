@@ -91,7 +91,7 @@ _TEMPLATE: dict[str, Any] = {
         # then 0.6.0 -> 0.6.1 on 2026-10-06 when the lidar mount was measured, then 0.6.1 ->
         # 0.7.0 on 2026-10-06 when the required limits.min_forward_clearance_m and
         # limits.ttc_forward_sector_half_angle_rad were added (racer_safety TTC limit cycle).
-        "schema_version": "0.7.1",
+        "schema_version": "0.7.2",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

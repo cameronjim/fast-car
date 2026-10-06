@@ -63,9 +63,12 @@ struct Cone {
 
 std::optional<GapSelection> select_gap(const ScanInput& geometry, const std::vector<double>& ranges,
                                        double free_space_threshold_m, double cone_half_angle_rad,
-                                       double laser_yaw_offset_rad, GapTarget target) {
+                                       double laser_yaw_offset_rad, GapTarget target,
+                                       const GapPreference& preference) {
+  const auto unit_fraction = [](double v) { return std::isfinite(v) && v >= 0.0 && v <= 1.0; };
   if (!is_usable(geometry) || ranges.size() != geometry.ranges.size() ||
-      !std::isfinite(cone_half_angle_rad) || cone_half_angle_rad < 0.0) {
+      !std::isfinite(cone_half_angle_rad) || cone_half_angle_rad < 0.0 ||
+      !unit_fraction(preference.forward_preference) || !unit_fraction(preference.switch_margin)) {
     return std::nullopt;
   }
   const auto forward = index_for_vehicle_bearing(geometry, 0.0, laser_yaw_offset_rad);
@@ -99,13 +102,48 @@ std::optional<GapSelection> select_gap(const ScanInput& geometry, const std::vec
   result.gap_last = *forward;
   result.target_vehicle_bearing_rad = bearing_of(*forward);
 
-  // Widest run of free rays; ties go to the run whose centre is nearest forward.
   const std::size_t m = cone.length();
+  const double inc = geometry.angle_increment;
+  // Vehicle bearing of cone position j, unwrapped: forward_bearing + offset_of(j) * inc.
+  const double forward_bearing = result.target_vehicle_bearing_rad;
+  const double p = preference.forward_preference;
+  // Score (see GapPreference in the header). With p == 0 this is exactly the angular width,
+  // which orders gaps exactly as their ray counts do, so the choice matches the old
+  // integer "widest run" comparison bit for bit.
+  const auto score_of = [&](std::size_t start, std::size_t end) {
+    const double width = static_cast<double>(end - start + 1) * inc;
+    if (p == 0.0) {
+      return width;
+    }
+    const double mid_offset =
+        0.5 * static_cast<double>(cone.offset_of(start) + cone.offset_of(end));
+    const double centre_bearing = forward_bearing + mid_offset * inc;
+    return width * std::max(0.0, 1.0 - p * (1.0 - std::cos(centre_bearing)));
+  };
+
+  // Cone position of the ray nearest the previous target bearing, if hysteresis is on and
+  // that bearing is inside the cone.
+  std::optional<std::size_t> previous_j;
+  if (preference.switch_margin > 0.0 && preference.previous_target_vehicle_bearing_rad &&
+      std::isfinite(*preference.previous_target_vehicle_bearing_rad)) {
+    const double rel =
+        wrap_angle(*preference.previous_target_vehicle_bearing_rad - forward_bearing);
+    const std::int64_t pj = static_cast<std::int64_t>(std::llround(rel / inc)) - cone.offset_lo;
+    if (pj >= 0 && pj < static_cast<std::int64_t>(m)) {
+      previous_j = static_cast<std::size_t>(pj);
+    }
+  }
+
+  // Best-scoring run of free rays; ties go to the run whose centre is nearest forward.
   bool found = false;
   std::size_t best_start = 0;
   std::size_t best_end = 0;
-  std::size_t best_len = 0;
+  double best_score = 0.0;
   std::int64_t best_centre_dist = 0;
+  bool incumbent_found = false;
+  std::size_t incumbent_start = 0;
+  std::size_t incumbent_end = 0;
+  double incumbent_score = 0.0;
   std::size_t j = 0;
   while (j < m) {
     if (!(ranges[cone.index_of(j)] > free_space_threshold_m)) {
@@ -117,19 +155,31 @@ std::optional<GapSelection> select_gap(const ScanInput& geometry, const std::vec
       ++j;
     }
     const std::size_t end = j - 1;
-    const std::size_t len = end - start + 1;
+    const double score = score_of(start, end);
     const std::size_t centre_j = (start + end) / 2;
     const std::int64_t centre_dist = std::abs(cone.offset_of(centre_j));
-    if (!found || len > best_len || (len == best_len && centre_dist < best_centre_dist)) {
+    if (!found || score > best_score || (score == best_score && centre_dist < best_centre_dist)) {
       found = true;
       best_start = start;
       best_end = end;
-      best_len = len;
+      best_score = score;
       best_centre_dist = centre_dist;
+    }
+    if (previous_j && *previous_j >= start && *previous_j <= end) {
+      incumbent_found = true;
+      incumbent_start = start;
+      incumbent_end = end;
+      incumbent_score = score;
     }
   }
   if (!found) {
     return result;
+  }
+  // Hysteresis: keep the gap that still contains last cycle's target unless the best gap
+  // beats it by more than the margin.
+  if (incumbent_found && !(best_score > incumbent_score * (1.0 + preference.switch_margin))) {
+    best_start = incumbent_start;
+    best_end = incumbent_end;
   }
 
   std::size_t target_j = (best_start + best_end) / 2;
@@ -208,11 +258,20 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
   extend_disparities(sanitized_, config_.disparity_threshold_m,
                      config_.half_width_m + config_.safety_margin_m, scan.angle_increment,
                      extended_);
+  GapPreference preference;
+  preference.forward_preference = config_.forward_preference;
+  preference.switch_margin = config_.gap_switch_margin;
+  preference.previous_target_vehicle_bearing_rad = previous_target_vehicle_bearing_rad_;
   const auto selection =
       select_gap(scan, extended_, config_.free_space_threshold_m, config_.cone_half_angle_rad,
-                 config_.laser_yaw_offset_rad, config_.target);
+                 config_.laser_yaw_offset_rad, config_.target, preference);
   if (!selection) {
     return result;
+  }
+  if (selection->gap_found) {
+    previous_target_vehicle_bearing_rad_ = selection->target_vehicle_bearing_rad;
+  } else {
+    previous_target_vehicle_bearing_rad_.reset();
   }
   result.valid = true;
   result.gap_found = selection->gap_found;

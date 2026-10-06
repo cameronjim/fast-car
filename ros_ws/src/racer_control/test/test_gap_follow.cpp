@@ -2,11 +2,17 @@
 // old Python test_gap_logic.py are marked "Ported"; where the expected value changed, the
 // comment says why. New cases cover the maths fixes a (forward ray and cone in radians), b
 // (invalid returns), c (disparity bubble), d (deepest-ray target), and e (steering law and
-// low-pass filter).
+// low-pass filter). The forward-preference and gap-switch-margin cases (2026-10-06 floor
+// test) have their own section after select_gap's.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <optional>
+#include <random>
+#include <utility>
 #include <vector>
 
 #include "racer_control/gap_follow.hpp"
@@ -327,6 +333,640 @@ TEST(SelectGap, WiderGapBeatsNearerNarrowerGap) {
   const auto sel = select_gap(scan, to_double(scan), 1.2, 1.0, 0.0, GapTarget::kCentre);
   ASSERT_TRUE(sel);
   EXPECT_EQ(sel->target_index, 16u);
+}
+
+// -- select_gap forward preference and gap switch margin (2026-10-06 floor test) -----------
+
+// Copy of select_gap as it was before forward_preference existed (main at 26f2503), kept here
+// as the reference for the "preference 0 is bit-identical" tests. Do not edit it to match the
+// production code; it is the old behaviour.
+std::optional<GapSelection> legacy_select_gap(const ScanInput& geometry,
+                                              const std::vector<double>& ranges,
+                                              double free_space_threshold_m,
+                                              double cone_half_angle_rad,
+                                              double laser_yaw_offset_rad, GapTarget target) {
+  if (!is_usable(geometry) || ranges.size() != geometry.ranges.size() ||
+      !std::isfinite(cone_half_angle_rad) || cone_half_angle_rad < 0.0) {
+    return std::nullopt;
+  }
+  const auto forward = index_for_vehicle_bearing(geometry, 0.0, laser_yaw_offset_rad);
+  if (!forward) {
+    return std::nullopt;
+  }
+  const std::size_t n = ranges.size();
+  const auto nn = static_cast<std::int64_t>(n);
+  const auto f = static_cast<std::int64_t>(*forward);
+  auto half_rays =
+      static_cast<std::int64_t>(std::floor(cone_half_angle_rad / geometry.angle_increment + 1e-9));
+  const bool wraps = is_full_circle(geometry);
+  std::int64_t lo = 0;
+  std::int64_t hi = 0;
+  if (wraps) {
+    half_rays = std::min(half_rays, (nn - 1) / 2);
+    lo = -half_rays;
+    hi = half_rays;
+  } else {
+    lo = std::max(-half_rays, -f);
+    hi = std::min(half_rays, nn - 1 - f);
+  }
+  const auto offset_of = [&](std::size_t j) { return lo + static_cast<std::int64_t>(j); };
+  const auto index_of = [&](std::size_t j) {
+    std::int64_t idx = f + offset_of(j);
+    if (wraps) {
+      idx = ((idx % nn) + nn) % nn;
+    }
+    return static_cast<std::size_t>(idx);
+  };
+  const auto bearing_of = [&](std::size_t index) {
+    return wrap_angle(laser_bearing_of_index(geometry, index) + laser_yaw_offset_rad);
+  };
+  GapSelection result;
+  result.target_index = *forward;
+  result.gap_first = *forward;
+  result.gap_last = *forward;
+  result.target_vehicle_bearing_rad = bearing_of(*forward);
+  const auto m = static_cast<std::size_t>(hi - lo + 1);
+  bool found = false;
+  std::size_t best_start = 0;
+  std::size_t best_end = 0;
+  std::size_t best_len = 0;
+  std::int64_t best_centre_dist = 0;
+  std::size_t j = 0;
+  while (j < m) {
+    if (!(ranges[index_of(j)] > free_space_threshold_m)) {
+      ++j;
+      continue;
+    }
+    const std::size_t start = j;
+    while (j < m && ranges[index_of(j)] > free_space_threshold_m) {
+      ++j;
+    }
+    const std::size_t end = j - 1;
+    const std::size_t len = end - start + 1;
+    const std::int64_t centre_dist = std::abs(offset_of((start + end) / 2));
+    if (!found || len > best_len || (len == best_len && centre_dist < best_centre_dist)) {
+      found = true;
+      best_start = start;
+      best_end = end;
+      best_len = len;
+      best_centre_dist = centre_dist;
+    }
+  }
+  if (!found) {
+    return result;
+  }
+  std::size_t target_j = (best_start + best_end) / 2;
+  if (target == GapTarget::kDeepest) {
+    double best_range = -1.0;
+    std::int64_t best_dist = 0;
+    for (std::size_t k = best_start; k <= best_end; ++k) {
+      const double r = ranges[index_of(k)];
+      const std::int64_t dist = std::abs(offset_of(k));
+      if (r > best_range || (r == best_range && dist < best_dist)) {
+        best_range = r;
+        best_dist = dist;
+        target_j = k;
+      }
+    }
+  }
+  result.gap_found = true;
+  result.gap_first = index_of(best_start);
+  result.gap_last = index_of(best_end);
+  result.target_index = index_of(target_j);
+  result.target_vehicle_bearing_rad = bearing_of(result.target_index);
+  return result;
+}
+
+// Exact equality on every field, bearing included (bit-identical, not "near").
+void expect_identical(const std::optional<GapSelection>& a, const std::optional<GapSelection>& b) {
+  ASSERT_EQ(a.has_value(), b.has_value());
+  if (!a) {
+    return;
+  }
+  EXPECT_EQ(a->gap_found, b->gap_found);
+  EXPECT_EQ(a->target_index, b->target_index);
+  EXPECT_EQ(a->gap_first, b->gap_first);
+  EXPECT_EQ(a->gap_last, b->gap_last);
+  EXPECT_EQ(a->target_vehicle_bearing_rad, b->target_vehicle_bearing_rad);
+}
+
+struct SelectCase {
+  ScanInput scan;
+  double free_space_threshold_m;
+  double cone_half_angle_rad;
+  double laser_yaw_offset_rad;
+};
+
+// The scans of the select_gap tests above, rebuilt with the same arguments.
+std::vector<SelectCase> existing_select_gap_fixtures() {
+  std::vector<SelectCase> cases;
+  {
+    ScanInput s = old_twelve_ray_scan();
+    s.ranges[3] = 2.0f;
+    s.ranges[5] = s.ranges[6] = s.ranges[7] = 2.0f;
+    cases.push_back({s, 1.0, 0.3, 0.0});
+  }
+  {
+    ScanInput s = old_twelve_ray_scan();
+    s.ranges[3] = s.ranges[4] = 2.0f;
+    s.ranges[7] = s.ranges[8] = 2.0f;
+    cases.push_back({s, 1.0, 0.3, 0.0});
+  }
+  cases.push_back({old_twelve_ray_scan(), 1.0, 0.3, 0.0});
+  {
+    ScanInput s = bridge_scan(1.0f);
+    set_bearings(s, 30.0 * kDeg, 40.0 * kDeg, 5.0f);
+    cases.push_back({s, 1.2, 1.57, 0.0});
+  }
+  {
+    ScanInput s = bridge_scan(1.0f);
+    set_bearings(s, -40.0 * kDeg, -30.0 * kDeg, 5.0f);
+    cases.push_back({s, 1.2, 1.57, 0.0});
+  }
+  {
+    ScanInput s = make_scan(360, -M_PI, 2.0 * M_PI / 360.0, 1.0f, 12.0);
+    set_bearings(s, 30.0 * kDeg, 40.0 * kDeg, 5.0f);
+    set_bearings(s, 150.0 * kDeg, M_PI, 5.0f);
+    set_bearings(s, -M_PI, -150.0 * kDeg, 5.0f);
+    cases.push_back({s, 1.2, 1.57, 0.0});
+  }
+  {
+    ScanInput s = make_scan(360, -M_PI, 2.0 * M_PI / 360.0, 1.0f, 12.0);
+    for (std::size_t i = 355; i < 360; ++i) {
+      s.ranges[i] = 5.0f;
+    }
+    for (std::size_t i = 0; i <= 5; ++i) {
+      s.ranges[i] = 5.0f;
+    }
+    cases.push_back({s, 1.2, 1.57, M_PI});
+  }
+  {
+    ScanInput s = make_scan(360, -M_PI, 2.0 * M_PI / 360.0, 1.0f, 12.0);
+    for (std::size_t i = 10; i <= 20; ++i) {
+      s.ranges[i] = 5.0f;
+    }
+    cases.push_back({s, 1.2, 1.57, M_PI});
+  }
+  {
+    ScanInput s = make_scan(181, -M_PI / 2.0, kDeg, 1.0f);
+    set_bearings(s, -10.0 * kDeg, 10.0 * kDeg, 5.0f);
+    cases.push_back({s, 1.2, 1.57, 0.0});
+  }
+  {
+    ScanInput s = make_scan(200, -0.2, 0.01, 1.0f);
+    set_bearings(s, -0.1, 0.1, 5.0f);
+    cases.push_back({s, 1.2, 1.57, 0.0});
+  }
+  {
+    ScanInput s = bridge_scan(1.0f);
+    set_bearings(s, 1.8, 2.0, 5.0f);
+    cases.push_back({s, 1.2, 1.57, 0.0});
+    cases.push_back({s, 1.2, 2.1, 0.0});
+  }
+  cases.push_back({make_scan(100, 0.5, 0.01), 1.2, 1.57, 0.0});
+  {
+    ScanInput s = make_scan(21, -1.0, 0.1, 0.5f);
+    const float gap[] = {2.0f, 2.0f, 3.0f, 3.0f, 3.0f, 6.0f, 2.0f};
+    for (std::size_t k = 0; k < 7; ++k) {
+      s.ranges[8 + k] = gap[k];
+    }
+    cases.push_back({s, 1.2, 1.0, 0.0});
+  }
+  {
+    ScanInput s = make_scan(21, -1.0, 0.1, 0.5f);
+    for (std::size_t i = 6; i <= 14; ++i) {
+      s.ranges[i] = 2.0f;
+    }
+    s.ranges[7] = 4.0f;
+    s.ranges[12] = 4.0f;
+    cases.push_back({s, 1.2, 1.0, 0.0});
+  }
+  {
+    ScanInput s = make_scan(21, -1.0, 0.1, 0.5f);
+    s.ranges[10] = 3.0f;
+    for (std::size_t i = 14; i <= 18; ++i) {
+      s.ranges[i] = 3.0f;
+    }
+    cases.push_back({s, 1.2, 1.0, 0.0});
+  }
+  return cases;
+}
+
+TEST(SelectGapForwardPreference, ZeroIsBitIdenticalToTheOldCodeOnTheExistingFixtures) {
+  const auto cases = existing_select_gap_fixtures();
+  ASSERT_EQ(cases.size(), 16u);
+  for (std::size_t c = 0; c < cases.size(); ++c) {
+    const SelectCase& sc = cases[c];
+    const auto r = to_double(sc.scan);
+    for (const GapTarget target : {GapTarget::kCentre, GapTarget::kDeepest}) {
+      SCOPED_TRACE(c);
+      const auto legacy =
+          legacy_select_gap(sc.scan, r, sc.free_space_threshold_m, sc.cone_half_angle_rad,
+                            sc.laser_yaw_offset_rad, target);
+      // Default argument, and explicit zeros with a previous bearing set (ignored while the
+      // margin is 0): both must be the old behaviour.
+      expect_identical(select_gap(sc.scan, r, sc.free_space_threshold_m, sc.cone_half_angle_rad,
+                                  sc.laser_yaw_offset_rad, target),
+                       legacy);
+      GapPreference zero;
+      zero.previous_target_vehicle_bearing_rad = 0.7;
+      expect_identical(select_gap(sc.scan, r, sc.free_space_threshold_m, sc.cone_half_angle_rad,
+                                  sc.laser_yaw_offset_rad, target, zero),
+                       legacy);
+    }
+  }
+}
+
+TEST(SelectGapForwardPreference, ZeroIsBitIdenticalToTheOldCodeOnRandomScans) {
+  // Seeded, so deterministic. Blocky random scans over the geometries the fixtures use, both
+  // yaws, both targets: many gaps per scan, including equal-width ties.
+  std::mt19937 rng(20261006u);
+  std::uniform_real_distribution<double> range(0.2, 4.0);
+  std::uniform_int_distribution<int> block(1, 12);
+  struct Geometry {
+    std::size_t n;
+    double angle_min;
+    double inc;
+  };
+  const Geometry geometries[] = {
+      {1080, -2.35, 4.7 / 1079.0}, {360, -M_PI, 2.0 * M_PI / 360.0},
+      {720, -M_PI, M_PI / 360.0},  {181, -M_PI / 2.0, kDeg},
+      {200, -0.2, 0.01},
+  };
+  int compared = 0;
+  for (const Geometry& g : geometries) {
+    for (int trial = 0; trial < 40; ++trial) {
+      ScanInput s = make_scan(g.n, g.angle_min, g.inc, 1.0f);
+      std::size_t i = 0;
+      while (i < g.n) {
+        const auto len = static_cast<std::size_t>(block(rng));
+        const auto value = static_cast<float>(range(rng));
+        for (std::size_t k = i; k < std::min(g.n, i + len); ++k) {
+          s.ranges[k] = value;
+        }
+        i += len;
+      }
+      const auto r = to_double(s);
+      for (const double yaw : {0.0, M_PI}) {
+        for (const GapTarget target : {GapTarget::kCentre, GapTarget::kDeepest}) {
+          SCOPED_TRACE(::testing::Message() << g.n << " rays, trial " << trial << ", yaw " << yaw);
+          expect_identical(select_gap(s, r, 1.5, 1.57, yaw, target),
+                           legacy_select_gap(s, r, 1.5, 1.57, yaw, target));
+          ++compared;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(compared, 5 * 40 * 2 * 2);
+}
+
+// The floor geometry, idealised: the real C1's 360 degree scan (angle_min -pi, mounted
+// backwards, yaw pi). The car sits in a 1.2 m lane (walls at y = +/- 0.6 m in the vehicle
+// frame, x forward). One wall is continuous; the other has a 2 m opening whose centre is at
+// 70 degrees from the car (x from -0.78 m to 1.22 m on the wall line), through which the room
+// is open (no return). Ray-cast against the wall segments; misses read as inf.
+constexpr double kLaneHalfWidth = 0.6;
+constexpr double kTan70Deg = 2.7474774194546216;
+constexpr double kOpeningCentreX = kLaneHalfWidth / kTan70Deg;
+constexpr double kOpeningHalfLength = 1.0;
+
+struct Segment {
+  double x0, y0, x1, y1;
+};
+
+double ray_cast(double bearing, const std::vector<Segment>& segments) {
+  const double dx = std::cos(bearing);
+  const double dy = std::sin(bearing);
+  double best = std::numeric_limits<double>::infinity();
+  for (const Segment& s : segments) {
+    const double ex = s.x1 - s.x0;
+    const double ey = s.y1 - s.y0;
+    const double denom = dx * ey - dy * ex;
+    if (std::abs(denom) < 1e-12) {
+      continue;
+    }
+    const double t = (s.x0 * ey - s.y0 * ex) / denom;  // along the ray
+    const double u = (s.x0 * dy - s.y0 * dx) / denom;  // along the segment
+    if (t > 0.0 && u >= 0.0 && u <= 1.0) {
+      best = std::min(best, t);
+    }
+  }
+  return best;
+}
+
+// side = +1: opening on the LEFT; side = -1: mirrored, opening on the RIGHT.
+ScanInput lane_with_side_opening(double side) {
+  const double yaw = M_PI;
+  ScanInput scan = make_scan(720, -M_PI, 2.0 * M_PI / 720.0, 0.0f, 12.0);
+  const double y_open = side * kLaneHalfWidth;
+  const double y_wall = -side * kLaneHalfWidth;
+  const std::vector<Segment> segments{
+      {-3.0, y_wall, 20.0, y_wall},                                  // continuous wall
+      {-3.0, y_open, kOpeningCentreX - kOpeningHalfLength, y_open},  // behind the opening
+      {kOpeningCentreX + kOpeningHalfLength, y_open, 20.0, y_open},  // lane ahead
+  };
+  for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
+    const double vehicle_bearing = laser_bearing_of_index(scan, i) + yaw;
+    scan.ranges[i] = static_cast<float>(ray_cast(vehicle_bearing, segments));
+  }
+  return scan;
+}
+
+GapFollowConfig floor_config(double forward_preference) {
+  GapFollowConfig c;
+  c.half_width_m = 0.155;
+  c.max_steering_angle_rad = 0.4189;
+  c.safety_margin_m = 0.05;
+  c.clip_max_range_m = 3.5;
+  c.disparity_threshold_m = 0.5;
+  c.free_space_threshold_m = 1.5;  // gap_follow_node's default
+  c.cone_half_angle_rad = 1.57;    // gap_follow_node's default
+  c.laser_yaw_offset_rad = M_PI;
+  c.steering_gain = 1.0;
+  c.corner_sector_inner_rad = M_PI / 2.0;
+  c.corner_sector_outer_rad = 3.0 * M_PI / 4.0;
+  c.corner_min_clearance_m = 0.2;
+  c.forward_preference = forward_preference;
+  return c;
+}
+
+TEST(SelectGapForwardPreference, FloorLaneVersusLeftOpening) {
+  const ScanInput scan = lane_with_side_opening(+1.0);
+  // Today's behaviour: the opening (about 35 to 90 degrees after the disparity bubble, about
+  // 55 degrees wide) beats the lane (about +/- 23.6 degrees, about 47 degrees wide).
+  GapFollower widest(floor_config(0.0));
+  const GapFollowResult today = widest.process(scan);
+  ASSERT_TRUE(today.valid);
+  ASSERT_TRUE(today.gap_found);
+  EXPECT_GT(today.target_vehicle_bearing_rad, 50.0 * kDeg);
+  EXPECT_GT(today.steering_rad, 0.0);
+  // With forward_preference 0.6 the opening's centre near 62 degrees costs it about 32
+  // percent and the lane ahead wins.
+  GapFollower forward(floor_config(0.6));
+  const GapFollowResult lane = forward.process(scan);
+  ASSERT_TRUE(lane.valid);
+  ASSERT_TRUE(lane.gap_found);
+  EXPECT_NEAR(lane.target_vehicle_bearing_rad, 0.0, 2.0 * kDeg);
+  EXPECT_NEAR(lane.steering_rad, 0.0, 2.0 * kDeg);
+}
+
+TEST(SelectGapForwardPreference, FloorLaneVersusRightOpening) {
+  const ScanInput scan = lane_with_side_opening(-1.0);
+  GapFollower widest(floor_config(0.0));
+  const GapFollowResult today = widest.process(scan);
+  ASSERT_TRUE(today.valid);
+  ASSERT_TRUE(today.gap_found);
+  EXPECT_LT(today.target_vehicle_bearing_rad, -50.0 * kDeg);
+  EXPECT_LT(today.steering_rad, 0.0);
+  GapFollower forward(floor_config(0.6));
+  const GapFollowResult lane = forward.process(scan);
+  ASSERT_TRUE(lane.valid);
+  ASSERT_TRUE(lane.gap_found);
+  EXPECT_NEAR(lane.target_vehicle_bearing_rad, 0.0, 2.0 * kDeg);
+  EXPECT_NEAR(lane.steering_rad, 0.0, 2.0 * kDeg);
+}
+
+TEST(SelectGapForwardPreference, LeftAndRightAreMirrorImages) {
+  for (const double p : {0.0, 0.3, 0.6, 1.0}) {
+    GapFollower left(floor_config(p));
+    GapFollower right(floor_config(p));
+    const GapFollowResult l = left.process(lane_with_side_opening(+1.0));
+    const GapFollowResult r = right.process(lane_with_side_opening(-1.0));
+    ASSERT_TRUE(l.valid && r.valid);
+    EXPECT_NEAR(l.target_vehicle_bearing_rad, -r.target_vehicle_bearing_rad, 1.0 * kDeg) << p;
+  }
+}
+
+// Synthetic ranges straight into select_gap (no disparity extension) so the scores are exact:
+// 61 rays at 0.1 rad from -3.0 rad, forward is ray 30 (ray k has bearing (k - 30) / 10), cone
+// +/- 3.0 rad.
+ScanInput scoring_scan() { return make_scan(61, -3.0, 0.1, 0.5f); }
+
+void free_rays(ScanInput& scan, std::size_t first, std::size_t last) {
+  for (std::size_t i = first; i <= last; ++i) {
+    scan.ranges[i] = 3.0f;
+  }
+}
+
+std::optional<GapSelection> select_scoring(const ScanInput& scan, GapTarget target,
+                                           const GapPreference& pref) {
+  return select_gap(scan, to_double(scan), 1.0, 3.0, 0.0, target, pref);
+}
+
+GapPreference with_forward_preference(double p) {
+  GapPreference pref;
+  pref.forward_preference = p;
+  return pref;
+}
+
+TEST(SelectGapForwardPreference, ScoreFollowsTheDocumentedFormula) {
+  // Gap A: rays 28..32, width 0.5 rad, centred dead ahead, factor 1.
+  // Gap B: rays 36..44, width 0.9 rad, centred at 1.0 rad, factor 1 - p (1 - cos 1.0)
+  //        = 1 - 0.4597 p. B wins while 0.9 (1 - 0.4597 p) > 0.5, i.e. p < 0.9668.
+  ScanInput scan = scoring_scan();
+  free_rays(scan, 28, 32);
+  free_rays(scan, 36, 44);
+  for (const auto& [p, expected] : std::vector<std::pair<double, std::size_t>>{
+           {0.0, 40u}, {0.5, 40u}, {0.95, 40u}, {0.98, 30u}, {1.0, 30u}}) {
+    const auto sel = select_scoring(scan, GapTarget::kCentre, with_forward_preference(p));
+    ASSERT_TRUE(sel && sel->gap_found) << p;
+    EXPECT_EQ(sel->target_index, expected) << p;
+  }
+}
+
+TEST(SelectGapForwardPreference, FullPreferenceAlmostZeroesASideGap) {
+  // Rays 41..49 are centred at 1.5 rad (86 degrees): with p = 1 the factor is cos(1.5) =
+  // 0.071, so the 0.9 rad gap scores 0.064 and loses to a single free ray dead ahead (0.1).
+  ScanInput scan = scoring_scan();
+  scan.ranges[30] = 3.0f;
+  free_rays(scan, 41, 49);
+  const auto sel = select_scoring(scan, GapTarget::kCentre, with_forward_preference(1.0));
+  ASSERT_TRUE(sel && sel->gap_found);
+  EXPECT_EQ(sel->target_index, 30u);
+}
+
+TEST(SelectGapForwardPreference, FactorClampsAtZeroPastNinetyDegrees) {
+  // Two gaps behind the car's side, centred at 2.1 rad and 2.75 rad (the second wider). With
+  // p = 1 both factors would be negative; clamped, both score 0 and the tie goes toward
+  // forward, so the wider, further-back gap does not win.
+  ScanInput scan = scoring_scan();
+  free_rays(scan, 50, 52);
+  free_rays(scan, 55, 60);
+  const auto sel = select_scoring(scan, GapTarget::kCentre, with_forward_preference(1.0));
+  ASSERT_TRUE(sel && sel->gap_found);
+  EXPECT_EQ(sel->target_index, 51u);
+}
+
+TEST(SelectGapForwardPreference, TieBreakTowardForwardStillHolds) {
+  // Equal widths centred at -0.5 rad (rays 24..26) and +0.3 rad (rays 32..34). The scores tie
+  // only at p = 0, where the tie-break must pick the gap nearer forward; with p > 0 that gap
+  // also scores higher.
+  ScanInput scan = scoring_scan();
+  free_rays(scan, 24, 26);
+  free_rays(scan, 32, 34);
+  for (const double p : {0.0, 0.5, 1.0}) {
+    const auto sel = select_scoring(scan, GapTarget::kCentre, with_forward_preference(p));
+    ASSERT_TRUE(sel && sel->gap_found) << p;
+    EXPECT_EQ(sel->target_index, 33u) << p;
+  }
+  // Mirror-image gaps of different widths (rays 18..22 at -1.0 rad, rays 37..43 at +1.0 rad)
+  // get the same factor for any p, so the wider one wins at every p.
+  ScanInput mirrored = scoring_scan();
+  free_rays(mirrored, 18, 22);
+  free_rays(mirrored, 37, 43);
+  for (const double p : {0.0, 0.5, 1.0}) {
+    const auto sel = select_scoring(mirrored, GapTarget::kCentre, with_forward_preference(p));
+    ASSERT_TRUE(sel && sel->gap_found) << p;
+    EXPECT_EQ(sel->target_index, 40u) << p;
+  }
+}
+
+TEST(SelectGapForwardPreference, DeepestTargetIsChosenInsideThePreferredGap) {
+  // With p = 1: forward gap 0.5 vs side gap 0.9 * cos(1.0) = 0.486, forward wins, and the
+  // target is the deepest ray of the forward gap, not of the side gap.
+  ScanInput scan = scoring_scan();
+  free_rays(scan, 28, 32);
+  scan.ranges[29] = 4.0f;
+  free_rays(scan, 36, 44);
+  scan.ranges[43] = 5.0f;
+  const auto sel = select_scoring(scan, GapTarget::kDeepest, with_forward_preference(1.0));
+  ASSERT_TRUE(sel && sel->gap_found);
+  EXPECT_EQ(sel->gap_first, 28u);
+  EXPECT_EQ(sel->gap_last, 32u);
+  EXPECT_EQ(sel->target_index, 29u);
+}
+
+TEST(SelectGapForwardPreference, OutOfRangeFieldsAreRejected) {
+  ScanInput scan = scoring_scan();
+  free_rays(scan, 28, 32);
+  for (const double bad : {-0.01, 1.01, std::nan(""), std::numeric_limits<double>::infinity()}) {
+    EXPECT_FALSE(select_scoring(scan, GapTarget::kCentre, with_forward_preference(bad))) << bad;
+    GapPreference margin;
+    margin.switch_margin = bad;
+    EXPECT_FALSE(select_scoring(scan, GapTarget::kCentre, margin)) << bad;
+  }
+  for (const double ok : {0.0, 1.0}) {
+    GapPreference pref;
+    pref.forward_preference = ok;
+    pref.switch_margin = ok;
+    EXPECT_TRUE(select_scoring(scan, GapTarget::kCentre, pref)) << ok;
+  }
+  // GapFollower passes the config through, so a bad value gives an invalid result (no
+  // command), never a silently clamped one.
+  GapFollower bad_preference(floor_config(1.5));
+  EXPECT_FALSE(bad_preference.process(lane_with_side_opening(+1.0)).valid);
+  GapFollowConfig c = floor_config(0.0);
+  c.gap_switch_margin = -0.5;
+  GapFollower bad_margin(c);
+  EXPECT_FALSE(bad_margin.process(lane_with_side_opening(+1.0)).valid);
+}
+
+// Two gaps: A = rays 20..24 (5 rays, centre ray 22 at -0.8 rad), B = rays 36..41 (6 rays,
+// centre ray 38 at +0.8 rad). At p = 0, B's score beats A's by 20 percent.
+ScanInput near_tie_scan() {
+  ScanInput scan = scoring_scan();
+  free_rays(scan, 20, 24);
+  free_rays(scan, 36, 41);
+  return scan;
+}
+
+std::optional<GapSelection> select_with_margin(const ScanInput& scan, double margin,
+                                               std::optional<double> previous) {
+  GapPreference pref;
+  pref.switch_margin = margin;
+  pref.previous_target_vehicle_bearing_rad = previous;
+  return select_scoring(scan, GapTarget::kCentre, pref);
+}
+
+TEST(SelectGapSwitchMargin, KeepsThePreviousGapOnANearTie) {
+  // Previous target -1.0 rad is ray 20, inside A. B is only 20 percent better, inside a 25
+  // percent margin, so A is kept and its own centre is targeted.
+  const auto kept = select_with_margin(near_tie_scan(), 0.25, -1.0);
+  ASSERT_TRUE(kept && kept->gap_found);
+  EXPECT_EQ(kept->gap_first, 20u);
+  EXPECT_EQ(kept->gap_last, 24u);
+  EXPECT_EQ(kept->target_index, 22u);
+}
+
+TEST(SelectGapSwitchMargin, SwitchesOnAClearWin) {
+  // A 10 percent margin lets the 20 percent better gap through.
+  const auto switched = select_with_margin(near_tie_scan(), 0.1, -1.0);
+  ASSERT_TRUE(switched && switched->gap_found);
+  EXPECT_EQ(switched->gap_first, 36u);
+  // A much wider B (rays 36..47, 2.4x A) beats even the largest margin.
+  ScanInput wide = scoring_scan();
+  free_rays(wide, 20, 24);
+  free_rays(wide, 36, 47);
+  const auto clear = select_with_margin(wide, 1.0, -1.0);
+  ASSERT_TRUE(clear && clear->gap_found);
+  EXPECT_EQ(clear->gap_first, 36u);
+}
+
+TEST(SelectGapSwitchMargin, IsOffWithZeroMarginOrNoContainingGap) {
+  const ScanInput scan = near_tie_scan();
+  // Margin 0: the previous bearing is ignored and the best gap wins.
+  const auto off = select_with_margin(scan, 0.0, -1.0);
+  ASSERT_TRUE(off && off->gap_found);
+  EXPECT_EQ(off->gap_first, 36u);
+  // Previous target on a blocked ray (ray 30): no incumbent, plain best score.
+  const auto stale = select_with_margin(scan, 0.5, 0.0);
+  ASSERT_TRUE(stale && stale->gap_found);
+  EXPECT_EQ(stale->gap_first, 36u);
+  // No previous target: plain best score.
+  const auto none = select_with_margin(scan, 0.5, std::nullopt);
+  ASSERT_TRUE(none && none->gap_found);
+  EXPECT_EQ(none->gap_first, 36u);
+  // A previous target on a gap's edge ray (ray 24) still counts as inside it.
+  const auto edge = select_with_margin(scan, 0.25, -0.6);
+  ASSERT_TRUE(edge && edge->gap_found);
+  EXPECT_EQ(edge->gap_first, 20u);
+}
+
+TEST(SelectGapSwitchMargin, WorksWithForwardPreference) {
+  // The margin compares preference-weighted scores. Gap A: rays 26..30, midpoint -0.2 rad,
+  // width 0.5. Gap B: rays 32..37, midpoint +0.45 rad, width 0.6. With p = 1:
+  // A = 0.5 cos(0.2) = 0.490, B = 0.6 cos(0.45) = 0.540, so B is better by 10.2 percent.
+  ScanInput scan = scoring_scan();
+  free_rays(scan, 26, 30);
+  free_rays(scan, 32, 37);
+  GapPreference pref = with_forward_preference(1.0);
+  pref.previous_target_vehicle_bearing_rad = -0.2;  // ray 28, inside A
+  pref.switch_margin = 0.15;
+  auto sel = select_scoring(scan, GapTarget::kCentre, pref);
+  ASSERT_TRUE(sel && sel->gap_found);
+  EXPECT_EQ(sel->gap_first, 26u);
+  pref.switch_margin = 0.05;
+  sel = select_scoring(scan, GapTarget::kCentre, pref);
+  ASSERT_TRUE(sel && sel->gap_found);
+  EXPECT_EQ(sel->gap_first, 32u);
+}
+
+TEST(SelectGapSwitchMargin, GapFollowerRemembersTheLastTargetAcrossScans) {
+  // Scan 1: only A is open, so A is chosen. Scan 2: both open, B 20 percent better. With a
+  // 25 percent margin the follower stays in A; without one it moves to B.
+  ScanInput first = scoring_scan();
+  free_rays(first, 20, 24);
+  const ScanInput second = near_tie_scan();
+  GapFollowConfig c;
+  c.half_width_m = 0.0;  // no disparity extension: the gaps stay exactly as built
+  c.max_steering_angle_rad = 0.4189;
+  c.clip_max_range_m = 10.0;
+  c.disparity_threshold_m = 100.0;
+  c.free_space_threshold_m = 1.0;
+  c.cone_half_angle_rad = 3.0;
+  c.steering_gain = 1.0;
+  c.gap_switch_margin = 0.25;
+  GapFollower sticky(c);
+  ASSERT_TRUE(sticky.process(first).valid);
+  const GapFollowResult stayed = sticky.process(second);
+  ASSERT_TRUE(stayed.valid);
+  EXPECT_NEAR(stayed.target_vehicle_bearing_rad, -0.8, 1e-9);  // ray 22
+  c.gap_switch_margin = 0.0;
+  GapFollower plain(c);
+  ASSERT_TRUE(plain.process(first).valid);
+  const GapFollowResult moved = plain.process(second);
+  ASSERT_TRUE(moved.valid);
+  EXPECT_NEAR(moved.target_vehicle_bearing_rad, 0.8, 1e-9);  // ray 38
 }
 
 // -- corner_blocked (item e) ------------------------------------------------------------------

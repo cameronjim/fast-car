@@ -8,9 +8,12 @@
 //      overwrite the rays on the FAR side with the near range over the angle the car's half
 //      width (plus a safety margin) subtends at that near range, so a gap that survives is
 //      wide enough for the car.
-//   3. select_gap: the widest run of rays above free_space_threshold_m inside a cone of
-//      +/- cone_half_angle_rad around the VEHICLE's forward direction, tie-broken toward
-//      forward. Target its centre ray (default) or its deepest ray.
+//   3. select_gap: the best-scoring run of rays above free_space_threshold_m inside a cone
+//      of +/- cone_half_angle_rad around the VEHICLE's forward direction, tie-broken toward
+//      forward. The score is the gap's angular width, optionally weighted toward forward
+//      (forward_preference) and with optional switching hysteresis (gap_switch_margin); both
+//      default to off, which is the plain widest gap. Target its centre ray (default) or its
+//      deepest ray.
 //   4. steering_from_bearing: steering = clamp(gain * target_bearing, +/- max_angle).
 //   5. corner_blocked: zero the steering if the whole side sector the car would turn into is
 //      within min_clearance (the car is hugging that wall and would clip it).
@@ -64,6 +67,47 @@ struct GapSelection {
   double target_vehicle_bearing_rad = 0.0;  // left positive, wrapped to [-pi, pi)
 };
 
+// Gap scoring and switching (step 3). Added after the 2026-10-06 floor test (bag
+// 2026-10-06T22-12-40_car_teleop): on a lane with a continuous wall on one side and
+// scattered objects on the other, "widest run of free rays" picked a gap between the
+// objects, into the open room, in 62 of 63 scans under every parameter set tried, because a
+// side opening close to the car subtends a wider angle than the lane ahead.
+//
+// forward_preference p in [0, 1]. Each candidate gap scores
+//     score = angular_width_rad * max(0, 1 - p * (1 - cos(centre_bearing)))
+// where angular_width_rad = (ray count) * angle_increment and centre_bearing is the VEHICLE
+// frame bearing of the gap's midpoint (laser yaw applied, left positive). The highest score
+// wins; exact ties still go to the gap whose centre is nearest forward. Why this weighting:
+//   * p = 0 makes the factor exactly 1, so the score is the angular width and the choice is
+//     bit-identical to the plain widest gap (pinned in test/test_gap_follow.cpp against a
+//     copy of the old code).
+//   * p = 1 makes the factor cos(bearing): a gap at 90 degrees scores zero, one at 60
+//     degrees counts half its width.
+//   * The factor is even in the bearing (left and right are treated alike) and does not
+//     increase with |bearing| on [0, pi], so for a fixed width a gap nearer forward always
+//     scores at least as well.
+//   * 1 - cos is quadratic near 0, so a lane that is only a few degrees off axis is barely
+//     penalised (10 degrees costs p * 1.5 percent), while side openings are penalised hard.
+//   * The clamp at 0 only matters for p > 0.5 and bearings past 90 degrees (a cone wider
+//     than +/- pi/2), where 1 - p * (1 - cos) would go negative; those gaps all score 0 and
+//     the forward tie-break picks among them.
+// A side opening still wins when it is wide enough: with p = 0.6, a gap centred at 60
+// degrees must be 1 / 0.7 = 1.43 times wider than a gap dead ahead to beat it.
+//
+// gap_switch_margin m in [0, 1] (0 = off). If a gap's span contains the previous cycle's
+// target bearing (the ray nearest that bearing lies inside the gap), that gap is kept unless
+// the best-scoring gap's score exceeds its score by more than the fraction m, i.e. unless
+// best_score > incumbent_score * (1 + m). This stops the target flipping between two
+// similar gaps on alternate scans. With m = 0, or no previous target, or no gap containing
+// it, selection is the plain best score above.
+struct GapPreference {
+  double forward_preference = 0.0;
+  double switch_margin = 0.0;
+  // Vehicle-frame bearing of the previous cycle's target, when the previous cycle found a
+  // gap. Ignored when switch_margin is 0.
+  std::optional<double> previous_target_vehicle_bearing_rad;
+};
+
 enum class GapTarget {
   kCentre,   // centre ray of the chosen gap (the old behaviour, default)
   kDeepest,  // deepest ray of the chosen gap, ties broken toward forward
@@ -72,12 +116,15 @@ enum class GapTarget {
 // Gap selection (step 3). `geometry` supplies angle_min / angle_increment / ray count;
 // `ranges` are the extended ranges (same length). The cone is +/- cone_half_angle_rad around
 // VEHICLE bearing 0 (laser bearing -laser_yaw_offset_rad), wrapping around the seam of a full
-// circle scan and clipped to the scan's coverage otherwise. Ties between equally wide gaps
-// go to the gap whose centre is nearest forward. Returns nullopt when the forward direction
-// itself is outside the scan (nothing sensible to aim at) or the scan is unusable.
+// circle scan and clipped to the scan's coverage otherwise. Gaps are scored and chosen as
+// described above GapPreference; the default preference is the plain widest gap. Ties go to
+// the gap whose centre is nearest forward. Returns nullopt when the forward direction itself
+// is outside the scan (nothing sensible to aim at), the scan is unusable, or a preference
+// field is outside [0, 1] or not finite.
 std::optional<GapSelection> select_gap(const ScanInput& geometry, const std::vector<double>& ranges,
                                        double free_space_threshold_m, double cone_half_angle_rad,
-                                       double laser_yaw_offset_rad, GapTarget target);
+                                       double laser_yaw_offset_rad, GapTarget target,
+                                       const GapPreference& preference = {});
 
 // Corner override (step 5). True when steering is non-zero and every ray whose VEHICLE
 // bearing lies in the turn-in side sector has range < min_clearance_m. The sector is
@@ -124,6 +171,8 @@ struct GapFollowConfig {
   double cone_half_angle_rad = 0.0;
   double laser_yaw_offset_rad = 0.0;
   GapTarget target = GapTarget::kCentre;
+  double forward_preference = 0.0;  // [0, 1], see GapPreference; 0 = plain widest gap
+  double gap_switch_margin = 0.0;   // [0, 1], see GapPreference; 0 = off
   double steering_gain = 1.0;
   double corner_sector_inner_rad = 0.0;
   double corner_sector_outer_rad = 0.0;
@@ -149,6 +198,9 @@ class GapFollower {
 
  private:
   GapFollowConfig config_;
+  // Target bearing of the last scan that found a gap, for gap_switch_margin. Cleared when a
+  // processed scan finds no gap; kept across scans process() rejects as unusable.
+  std::optional<double> previous_target_vehicle_bearing_rad_;
   std::vector<double> sanitized_;
   std::vector<double> extended_;
 };

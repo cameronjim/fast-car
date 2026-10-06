@@ -95,7 +95,7 @@ _TEMPLATE: dict[str, Any] = {
         # added and the TTC release line and forward sector were retuned, then 0.8.0 ->
         # 0.9.0 the same night when limits.obstacle_corridor_margin_m was added (the obstacle
         # gate's path corridor, first floor test).
-        "schema_version": "0.9.0",
+        "schema_version": "0.9.1",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

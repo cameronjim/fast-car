@@ -111,6 +111,12 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.9.0 -> 0.9.1 on 2026-10-06: limits.ttc_forward_sector_half_angle_rad
+# 0.6 -> 1.2. With the corridor gate the sector is only an outer bound, and at 0.6 rad it hid
+# anything inside about 0.30 m of the head that sat near a front corner (the corridor half
+# width 0.205 m over tan 0.6). At 1.2 rad the corridor is fully covered out past 0.08 m. Value
+# change only: patch bump per rule 5.
+#
 # schema_version bumped 0.8.0 -> 0.9.0 on 2026-10-06 (night, first floor test): one new
 # REQUIRED field, limits.obstacle_corridor_margin_m (PROVISIONAL 0.05 m). On a tight track of
 # backpacks about 1 m wide with gap_follow_node at 0.8 to 1.0 m/s, racer_safety's obstacle gate
@@ -490,7 +496,7 @@ limits:
   # this car). PROVISIONAL, NOT tuned: 1.0 rad (about 57 deg each side) covers the car's
   # swept width at full steering lock over the first metre or so; replace when there is
   # driving data to tune against.
-  ttc_forward_sector_half_angle_rad: 0.6  # PROVISIONAL (bench-tuned 2026-10-06, third pass, about 34 deg each side; see 0.8.0 note)
+  ttc_forward_sector_half_angle_rad: 1.2   # PROVISIONAL (widened 2026-10-06 with the corridor gate, see 0.9.1 note)
   # Lateral margin of the obstacle gate's path corridor (added 2026-10-06, schema 0.9.0). A LiDAR
   # return at vehicle bearing theta and range r (x = r cos theta ahead, y = r sin theta left)
   # counts for the TTC brake and the distance floor only if x > 0 and
@@ -544,6 +550,6 @@ meta:
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.9.0"
+  schema_version: "0.9.1"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

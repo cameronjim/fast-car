@@ -1,7 +1,8 @@
 """L3 node tests for safety_node (claude-docs/12-testing.md).
 
 Checklist covered: nominal passthrough on a fresh, in-bounds command; watchdog brake on
-/drive_raw silence; TTC brake on a synthetic close-obstacle /scan; fail-closed (and clean
+/drive_raw silence; TTC brake on a synthetic close-obstacle /scan, its latch and its "ttc brake
+released" record; the 2026-10-06 limit-cycle scenario held at zero; fail-closed (and clean
 recovery) on an injected internal fault; a bounds_clamp /safety/events record on an
 out-of-bounds command; correct QoS (the /drive_raw subscription is genuinely `reliable`, not
 accidentally `best_effort`; the TTC test's /scan publisher is deliberately `best_effort`,
@@ -76,6 +77,12 @@ assert _TTC_WARNING_S is not None and _TTC_WARNING_S > 0.0, (
 
 _STEERING_MAX_RAD = 0.4189  # vehicle_params.yaml steering.max_angle_rad
 
+# The 2026-10-06 bench run (bag 2026-10-06T18-51-39_car_teleop): a steady ~0.48 m/s request
+# with an obstacle ~0.22 m ahead made the pre-fix gate cycle 0 -> 0.19 -> 0.38 -> 0 m/s
+# (docs/notes/ttc-limit-cycle-2026-10-06.md).
+_BAG_REQUEST_MPS = 0.48
+_BAG_RANGE_M = 0.22
+
 
 def _reliable_qos() -> QoSProfile:
     return QoSProfile(
@@ -134,6 +141,12 @@ def generate_test_description():
                 "watchdog_missed_cycles": _TEST_WATCHDOG_MISSED_CYCLES,
                 # Deliberately no ttc_warning_s / ttc_brake_s here: the node must pick up the
                 # committed vehicle_params values on its own.
+                #
+                # Synthetic scans (_make_scan) are aligned to the VEHICLE (bearing 0 = ahead),
+                # not mounted like the real car's LiDAR (sensors.lidar.mount_yaw_rad = pi), so
+                # this fixture ignores the binding, the same way racer_control's synthetic-scan
+                # fixtures do. The real car always keeps the default (true).
+                "laser_yaw_from_vehicle_params": False,
             }
         ],
     )
@@ -485,6 +498,67 @@ class TestSafetyNode(unittest.TestCase):
             3,
             f"TTC logged {len(ttc_brake_engages)} brake interventions for ONE continuous "
             "close-obstacle condition -- /safety/events is counting cycles, not interventions",
+        )
+
+        # Obstacle gone: the latch releases (request TTC far above ttc_warning_s), with one
+        # PHASE_RELEASE record whose detail says "ttc brake released", and the speed comes
+        # back. Also leaves the node's cached scan clear for whatever test runs next.
+        self._publish_steadily(
+            drive_raw_pub, forward_cmd, seconds=1.5, scan_pub=scan_pub, scan=far_scan
+        )
+        ttc_brake_releases = [
+            e for e in _releases(events, "ttc") if e.severity == SafetyEvent.SEVERITY_BRAKE
+        ]
+        self.assertGreaterEqual(len(ttc_brake_releases), 1, "the TTC brake latch never released")
+        self.assertIn("ttc brake released", ttc_brake_releases[-1].detail)
+        self.assertGreater(drive_out[-1].drive.speed, 1.0, "speed did not recover after release")
+
+    def test_ttc_limit_cycle_scenario_is_held_at_zero(self):
+        """Regression test for the 2026-10-06 limit cycle (gate_logic.hpp, "THE OBSTACLE GATE
+        AND ITS LATCH"). A steady request whose own TTC violates the brake threshold must
+        give zero speed on EVERY /drive message, not a ramp that the brake keeps cutting."""
+        drive_out = []
+        self.node.create_subscription(
+            AckermannDriveStamped, "/drive", drive_out.append, _reliable_qos()
+        )
+        events = []
+        self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        drive_raw_pub = self.node.create_publisher(
+            AckermannDriveStamped, "/drive_raw", _reliable_qos()
+        )
+        scan_pub = self.node.create_publisher(LaserScan, "/scan", _best_effort_qos())
+        self._spin_for(0.3)
+
+        request = _make_drive(steering=0.0, speed=_BAG_REQUEST_MPS)
+        self.assertLess(_BAG_RANGE_M / _BAG_REQUEST_MPS, _TTC_BRAKE_S)
+        bag_scan = _make_scan(range_m=_BAG_RANGE_M)
+        # Settle: the brake engages within a cycle or two of the scan arriving.
+        self._publish_steadily(
+            drive_raw_pub, request, seconds=0.5, scan_pub=scan_pub, scan=bag_scan
+        )
+
+        drive_out.clear()
+        events.clear()
+        self._publish_steadily(
+            drive_raw_pub, request, seconds=3.0, scan_pub=scan_pub, scan=bag_scan
+        )
+
+        self.assertGreater(len(drive_out), 0)
+        leaked = [round(m.drive.speed, 3) for m in drive_out if m.drive.speed != 0.0]
+        self.assertEqual(
+            leaked,
+            [],
+            "safety_node let throttle through while the request's own TTC violated the brake "
+            f"threshold (the 2026-10-06 limit cycle): {leaked}",
+        )
+        # Sustained and latched: no new engage, no release, and no rate_limit fight.
+        self.assertEqual(_engages(events, "ttc"), [], "the TTC brake re-engaged mid-episode")
+        self.assertEqual(_releases(events, "ttc"), [], "the TTC brake released mid-episode")
+        self.assertEqual(_engages(events, "rate_limit"), [], "rate limiter fought the brake")
+
+        # Clear the obstacle so later tests start from a released latch.
+        self._publish_steadily(
+            drive_raw_pub, request, seconds=1.0, scan_pub=scan_pub, scan=_make_scan(range_m=100.0)
         )
 
     def test_drive_raw_subscription_is_reliable_not_best_effort(self):

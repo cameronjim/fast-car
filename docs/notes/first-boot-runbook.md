@@ -1107,10 +1107,30 @@ Then the orientation check, which is the point of this step: put a box on the fl
 While the 3D panel is up, look at the closest returns: anything that is part of the car
 (mount posts, the Jetson, cables, antenna) shows as points within a few tens of centimetres.
 Note how close the nearest self-return is. **That number matters before any drive with
-`lidar:=true`**: `safety_node` takes the minimum valid range over the whole 360 degree scan
-for its TTC gate (PROVISIONAL `limits.ttc_brake_s` 0.5 s), so at the 0.8 m/s first-tap speed
-any return closer than 0.4 m in any direction, including the car itself and the person behind
-it, zeroes the throttle. That is why `car_teleop.launch.py`'s `lidar` argument defaults to
+`lidar:=true`**. Since 2026-10-06 (`docs/notes/ttc-limit-cycle-2026-10-06.md`) `safety_node`'s
+obstacle gate works like this:
+
+- It looks only at returns inside a forward sector of +/- `limits.ttc_forward_sector_half_angle_rad`
+  (PROVISIONAL 1.0 rad, about 57 deg each side) of the car's nose, after turning each laser
+  bearing into a vehicle bearing with `sensors.lidar.mount_yaw_rad` (pi on this car). Returns
+  that are NaN, inf, zero, below `range_min` or above `range_max` are ignored. Things behind
+  and beside the car, and the person holding the kill switch behind it, no longer count.
+- TTC is the nearest forward return divided by the REQUESTED speed (not the speed the gate
+  last output). At or below `limits.ttc_brake_s` (PROVISIONAL 1.0 s) it zeroes the forward
+  throttle; at the 0.8 m/s first-tap speed that is anything within 0.8 m ahead.
+- A distance floor, `limits.min_forward_clearance_m` (PROVISIONAL 0.30 m from the LiDAR head),
+  zeroes the forward throttle for any forward request, however slow.
+- Both LATCH. Once braked, forward throttle stays at zero until the request's TTC is above
+  `limits.ttc_warning_s` (PROVISIONAL 2.0 s, 1.6 m at 0.8 m/s) AND the nearest forward return
+  is beyond 1.5 times the floor (0.45 m). Letting go of the throttle can clear the TTC half
+  (a zero request has no TTC), but pressing it again re-trips on the same cycle, so no forward
+  throttle reaches the motor while the obstacle is still there. Reverse still works while
+  latched.
+  `/safety/events` shows one `ttc` BRAKE engage record when it trips and one release record
+  starting "ttc brake released" when it clears.
+
+So a self-return inside the forward sector and closer than about 0.45 m would hold the car at
+zero throttle indefinitely. That is why `car_teleop.launch.py`'s `lidar` argument defaults to
 false.
 
 ### L6. Measure the mount and write everything down

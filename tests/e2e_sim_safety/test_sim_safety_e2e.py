@@ -71,6 +71,10 @@ def generate_test_description():
             {
                 "control_rate_hz": _SAFETY_CONTROL_RATE_HZ,
                 "watchdog_missed_cycles": _SAFETY_WATCHDOG_MISSED_CYCLES,
+                # racer_gym_bridge publishes /scan aligned to the vehicle (laser yaw 0), not
+                # mounted like the real car's LiDAR (vehicle_params sensors.lidar.mount_yaw_rad
+                # = pi), so the sim must not apply the car's yaw to the forward sector.
+                "laser_yaw_from_vehicle_params": False,
             }
         ],
     )

@@ -3,6 +3,9 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
+#include <string>
+#include <utility>
 
 #include "racer_safety/gate_logic_formatting.hpp"
 
@@ -75,6 +78,26 @@ bool is_valid_range(double range_m) {
   return true;
 }
 
+// Below this a request is "not moving forward" for TTC purposes (unchanged since the TTC
+// gate was written; a numerical zero guard, not a physical constant).
+constexpr double kMinForwardSpeedMps = 1e-6;
+
+// Garbage range: NaN, zero, negative or -inf. +inf is NOT garbage (it is "nothing in the
+// forward sector"), and neither is a finite positive distance. Written as !(r > 0) so NaN
+// lands here without its own branch.
+bool is_garbage_range(double range_m) { return !(range_m > 0.0); }
+
+// The watchdog and command-sanity short-circuits do not run the obstacle gate, so they cannot
+// judge a release: they hold the latch (result.ttc_brake_latched already carries the input's
+// value) and keep reporting the engagement so an unrelated short-circuit does not split it
+// into two interventions.
+void report_held_obstacle_latch(bool latched, GateResult& result) {
+  if (latched) {
+    result.activations.push_back(GateActivation{GateSource::kTtc, EventSeverity::kBrake,
+                                                formatting::ttc_latch_held_detail()});
+  }
+}
+
 }  // namespace
 
 // The output of a gate that forces zero speed: zero speed, and the steering angle this logic
@@ -141,9 +164,132 @@ DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
   return out;
 }
 
+double SafetyGateLogic::ttc_release_threshold_s() const {
+  if (limits_.ttc_warning_s.has_value()) {
+    if (*limits_.ttc_warning_s > *limits_.ttc_brake_s) {
+      return *limits_.ttc_warning_s;
+    }
+  }
+  return *limits_.ttc_brake_s * limits_.ttc_release_hysteresis_factor;
+}
+
+void SafetyGateLogic::apply_obstacle_gate(const DriveCommand& requested, const GateInput& input,
+                                          DriveCommand& target, GateResult& result) const {
+  // No state estimator (/odom) feeds safety_node yet (the EKF is roadmap phase 2), so the
+  // REQUESTED speed is the forward-speed estimate. Reversing/stopped is never TTC-braked.
+  const double range_m = input.min_scan_range_m;
+  const double forward_speed_mps = requested.speed_mps > 0.0 ? requested.speed_mps : 0.0;
+  bool moving_forward = false;
+  if (forward_speed_mps > kMinForwardSpeedMps) {
+    moving_forward = true;
+  }
+  const bool obstacle = is_valid_range(range_m);  // finite and > 0
+
+  // TTC of the REQUEST. +inf when there is no obstacle or the request is not forward.
+  double ttc_s = std::numeric_limits<double>::infinity();
+  if (obstacle) {
+    if (moving_forward) {
+      ttc_s = range_m / forward_speed_mps;
+    }
+  }
+
+  // Trip tests. A disabled half (unset threshold) never trips.
+  bool ttc_trip = false;
+  if (limits_.ttc_brake_s.has_value()) {
+    if (ttc_s <= *limits_.ttc_brake_s) {
+      ttc_trip = true;
+    }
+  }
+  bool floor_trip = false;
+  if (limits_.min_forward_clearance_m.has_value()) {
+    if (obstacle) {
+      if (moving_forward) {
+        if (range_m < *limits_.min_forward_clearance_m) {
+          floor_trip = true;
+        }
+      }
+    }
+  }
+
+  // Release test (only consulted when the latch came in set). Garbage range never releases.
+  double release_ttc_s = std::numeric_limits<double>::quiet_NaN();
+  double release_clearance_m = std::numeric_limits<double>::quiet_NaN();
+  bool release_ok = true;
+  if (is_garbage_range(range_m)) {
+    release_ok = false;
+  } else {
+    if (limits_.ttc_brake_s.has_value()) {
+      release_ttc_s = ttc_release_threshold_s();
+      if (!(ttc_s > release_ttc_s)) {
+        release_ok = false;
+      }
+    }
+    if (limits_.min_forward_clearance_m.has_value()) {
+      release_clearance_m = *limits_.min_forward_clearance_m * limits_.clearance_release_factor;
+      if (!(range_m > release_clearance_m)) {
+        release_ok = false;
+      }
+    }
+  }
+
+  // Trip always wins over release (gate_logic.hpp: a misconfigured release factor must never
+  // produce an output pulse).
+  bool latched = false;
+  if (ttc_trip) {
+    latched = true;
+  } else if (floor_trip) {
+    latched = true;
+  } else if (input.ttc_brake_latched) {
+    if (!release_ok) {
+      latched = true;
+    }
+  }
+
+  if (latched) {
+    // Only forward throttle is held; a zero/reverse request passes (gate_logic.hpp).
+    if (target.speed_mps > 0.0) {
+      target.speed_mps = 0.0;
+    }
+    result.zero_throttle = true;
+    std::string detail;
+    if (ttc_trip) {
+      detail = formatting::ttc_brake_detail(ttc_s, *limits_.ttc_brake_s);
+    } else if (floor_trip) {
+      detail = formatting::clearance_brake_detail(range_m, *limits_.min_forward_clearance_m);
+    } else {
+      detail = formatting::ttc_latch_held_detail();
+    }
+    result.activations.push_back(
+        GateActivation{GateSource::kTtc, EventSeverity::kBrake, std::move(detail)});
+  } else if (input.ttc_brake_latched) {
+    // The latch released on this cycle: the "ttc brake released" note that becomes the
+    // PHASE_RELEASE record's detail.
+    result.releases.push_back(GateActivation{
+        GateSource::kTtc, EventSeverity::kBrake,
+        formatting::ttc_release_detail(ttc_s, release_ttc_s, range_m, release_clearance_m)});
+  }
+  result.ttc_brake_latched = latched;
+
+  // Advisory warning zone: only when not latched, and only when the TTC brake is configured
+  // (an unconfigured TTC gate is a documented no-op, CLAUDE.md invariant 2).
+  if (!latched) {
+    if (limits_.ttc_brake_s.has_value()) {
+      if (limits_.ttc_warning_s.has_value()) {
+        if (ttc_s <= *limits_.ttc_warning_s) {
+          result.activations.push_back(
+              GateActivation{GateSource::kTtc, EventSeverity::kInfo,
+                             formatting::ttc_warning_detail(ttc_s, *limits_.ttc_warning_s)});
+        }
+      }
+    }
+  }
+}
+
 GateResult SafetyGateLogic::evaluate(const GateInput& input,
                                      const DriveCommand& previous_output) const {
   GateResult result;
+  // Every return path below either recomputes the latch (step 3b) or holds it as it came in.
+  result.ttc_brake_latched = input.ttc_brake_latched;
 
   // 1. Watchdog (claude-docs/04-architecture.md: "missing /drive_raw for 3 cycles -> brake
   // command") -- short-circuits everything else below; a stale/garbage age means there is no
@@ -164,6 +310,7 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     result.activations.push_back(
         GateActivation{GateSource::kWatchdog, EventSeverity::kBrake,
                        formatting::watchdog_detail(watchdog_timeout_s, input.drive_raw_age_s)});
+    report_held_obstacle_latch(input.ttc_brake_latched, result);
     return result;
   }
 
@@ -175,6 +322,7 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     result.zero_throttle = true;
     result.activations.push_back(GateActivation{GateSource::kCommandSanity, EventSeverity::kBrake,
                                                 formatting::command_sanity_detail()});
+    report_held_obstacle_latch(input.ttc_brake_latched, result);
     return result;
   }
 
@@ -193,15 +341,24 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
                                         limits_.speed_min_mps, limits_.speed_max_mps)});
   }
 
-  // 3b. Rate-limit clamp relative to the previous OUTPUT (what was actually commanded last
-  // cycle, not what was requested), then re-clamp to absolute bounds defensively.
+  // 3b. Obstacle gate (TTC brake on the REQUESTED speed + distance floor, one latch). See
+  // gate_logic.hpp "THE OBSTACLE GATE AND ITS LATCH" for why this runs BEFORE the rate
+  // limiter and on the request, not the output (the 2026-10-06 limit cycle).
+  const DriveCommand requested = cmd;
+  DriveCommand target = requested;
+  apply_obstacle_gate(requested, input, target, result);
+
+  // 3c. Rate-limit clamp relative to the previous OUTPUT (what was actually commanded last
+  // cycle, not what was requested), applied to whatever the obstacle gate left, then
+  // re-clamp to absolute bounds defensively. Braking to zero is a decrease and is never
+  // rate-limited, so a latched brake reaches the output on the cycle it engages.
   const double dt_s = safe_dt(input.dt_s);
-  DriveCommand rate_limited = rate_limit(cmd, previous_output, dt_s);
+  DriveCommand rate_limited = rate_limit(target, previous_output, dt_s);
   rate_limited = clamp_to_bounds(rate_limited);
   bool rate_clamped = false;
-  if (rate_limited.steering_angle_rad != cmd.steering_angle_rad) {
+  if (rate_limited.steering_angle_rad != target.steering_angle_rad) {
     rate_clamped = true;
-  } else if (rate_limited.speed_mps != cmd.speed_mps) {
+  } else if (rate_limited.speed_mps != target.speed_mps) {
     rate_clamped = true;
   }
   if (rate_clamped) {
@@ -209,45 +366,6 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
                                                 formatting::rate_limit_detail(dt_s)});
   }
   cmd = rate_limited;
-
-  // 3c. TTC gate (claude-docs/05-safety.md: "TTC braking from /scan"). Uses the
-  // already-clamped/rate-limited output speed as the forward-speed estimate: no state
-  // estimator (/odom) feeds safety_node in this milestone (the EKF is roadmap phase 2), so
-  // the commanded speed is the best available proxy for how fast the vehicle is about to be
-  // told to go. Reversing/stopped (speed <= ~0) is never TTC-braked -- not moving toward an
-  // obstacle is not what TTC protects against. `limits_.ttc_brake_s`/`ttc_warning_s` are
-  // `std::optional` because config/vehicle_params.yaml's limits.ttc_brake_s/ttc_warning_s
-  // are currently null (not yet tuned) -- an unconfigured TTC gate is a documented no-op,
-  // not an invented threshold (CLAUDE.md invariant 2).
-  const double forward_speed_mps = cmd.speed_mps > 0.0 ? cmd.speed_mps : 0.0;
-  if (!limits_.ttc_brake_s.has_value()) {
-    // TTC gate not configured; no-op.
-  } else if (!is_valid_range(input.min_scan_range_m)) {
-    // No valid /scan return this cycle; no-op.
-  } else if (forward_speed_mps <= 1e-6) {
-    // Not moving forward; no-op.
-  } else {
-    const double ttc_s = input.min_scan_range_m / forward_speed_mps;
-    if (ttc_s <= *limits_.ttc_brake_s) {
-      cmd.speed_mps = 0.0;
-      result.zero_throttle = true;
-      result.activations.push_back(
-          GateActivation{GateSource::kTtc, EventSeverity::kBrake,
-                         formatting::ttc_brake_detail(ttc_s, *limits_.ttc_brake_s)});
-    } else {
-      bool in_warning_zone = false;
-      if (limits_.ttc_warning_s.has_value()) {
-        if (ttc_s <= *limits_.ttc_warning_s) {
-          in_warning_zone = true;
-        }
-      }
-      if (in_warning_zone) {
-        result.activations.push_back(
-            GateActivation{GateSource::kTtc, EventSeverity::kInfo,
-                           formatting::ttc_warning_detail(ttc_s, *limits_.ttc_warning_s)});
-      }
-    }
-  }
 
   // 4. Covariance gate stub (roadmap task 2.6). Evaluated unconditionally and applied
   // unconditionally (multiplying by speed_fraction, a no-op at the stub's fixed 1.0) --
@@ -268,8 +386,20 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
 }
 
 std::vector<SafetyEventRecord> GateEventTracker::update(
-    const std::vector<GateActivation>& activations, double now_s) {
+    const std::vector<GateActivation>& activations, double now_s,
+    const std::vector<GateActivation>& release_notes) {
   std::vector<SafetyEventRecord> records;
+
+  // Release reasons by slot (first note per slot wins). Pointers into `release_notes`, which
+  // outlives every use of them below.
+  std::array<const std::string*, kGateSourceCount * kEventSeverityCount> notes{};
+  for (const GateActivation& note : release_notes) {
+    const std::size_t slot = static_cast<std::size_t>(note.source) * kEventSeverityCount +
+                             static_cast<std::size_t>(note.severity);
+    if (notes[slot] == nullptr) {
+      notes[slot] = &note.detail;
+    }
+  }
 
   // Index arithmetic, not a lookup or a switch: an engagement's identity is its
   // (source, severity) pair (see GateEventTracker's doc comment for why severity is part of
@@ -308,10 +438,15 @@ std::vector<SafetyEventRecord> GateEventTracker::update(
     }
     const double duration_s = engagement_duration_s(engagements_[slot].engaged_at_s, now_s);
     engagements_[slot].engaged = false;
+    std::string detail;
+    if (notes[slot] != nullptr) {
+      detail = formatting::release_detail_with_reason(duration_s, *notes[slot]);
+    } else {
+      detail = formatting::release_detail(duration_s);
+    }
     records.push_back(SafetyEventRecord{static_cast<GateSource>(slot / kEventSeverityCount),
                                         static_cast<EventSeverity>(slot % kEventSeverityCount),
-                                        EventPhase::kRelease,
-                                        formatting::release_detail(duration_s), duration_s});
+                                        EventPhase::kRelease, std::move(detail), duration_s});
   }
 
   return records;

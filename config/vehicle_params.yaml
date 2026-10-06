@@ -111,6 +111,17 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.6.1 -> 0.7.0 on 2026-10-06: two new REQUIRED limits fields for
+# racer_safety's obstacle gate, limits.min_forward_clearance_m (PROVISIONAL 0.30 m, a distance
+# floor that zeroes forward throttle regardless of speed) and
+# limits.ttc_forward_sector_half_angle_rad (PROVISIONAL 1.0 rad, the forward sector the TTC
+# gate and the floor look at, instead of the whole 360 degree scan). New required fields change
+# the schema's required-field set, so this is a minor bump per rule 5. limits.ttc_brake_s
+# 0.5 -> 1.0 and limits.ttc_warning_s 1.0 -> 2.0 in the same change (still PROVISIONAL). Why:
+# the 2026-10-06 wheels-off bench run, where 0.5 s at crawl speed was 25 cm and the TTC brake
+# and the gate's own rate limiter fought each other in a 17 Hz brake/release limit cycle. See
+# docs/notes/ttc-limit-cycle-2026-10-06.md and the limits section below.
+#
 # schema_version bumped 0.5.1 -> 0.6.0 on 2026-10-05 (roadmap 2.3, RPLIDAR C1): a new
 # REQUIRED section, sensors.lidar_spec, carries the LiDAR head's datasheet numbers (scan rate,
 # sample rate, resolution, field of view, range) that racer_tools' lidar_check compares a live
@@ -401,8 +412,37 @@ limits:
   # measured one. Slower-than-commanded means TTC is under-estimated (brakes early, the safe
   # direction); coasting faster than commanded means it is over-estimated. That stands until
   # /odom exists.
-  ttc_warning_s: 1.0                # PROVISIONAL (conventional starting point, NOT tuned) -- see above
-  ttc_brake_s: 0.5                  # PROVISIONAL (conventional starting point, NOT tuned) -- see above
+  #
+  # RAISED 2026-10-06 (0.5 -> 1.0 brake, 1.0 -> 2.0 warn), still PROVISIONAL and NOT tuned.
+  # Wheels-off bench run that evening (bag 2026-10-06T18-51-39_car_teleop on the Jetson): at
+  # the crawl speed teleop and gap_follow actually use, 0.5 s of TTC is 25 cm at 0.5 m/s,
+  # which is about the car's own length from the LiDAR to the bumper and leaves no room to
+  # coast to a stop (a "brake" here is a coast, see racer_safety/gate_logic.hpp). The same run
+  # showed the gate's TTC brake and its own rate limiter fighting each other in a 3-cycle
+  # brake/release limit cycle (docs/notes/ttc-limit-cycle-2026-10-06.md); that was a logic
+  # bug, fixed in racer_safety, but the threshold was also too small. Release of the latched
+  # brake needs the requested speed's TTC to exceed ttc_warning_s, so the warning value is
+  # also the brake's release point.
+  ttc_warning_s: 2.0                # PROVISIONAL (raised 2026-10-06, NOT tuned) -- see above
+  ttc_brake_s: 1.0                  # PROVISIONAL (raised 2026-10-06, NOT tuned) -- see above
+  # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
+  # nearest valid return inside the forward sector below is closer than this, forward throttle
+  # is held at zero whatever the requested speed, with the same latch as the TTC brake
+  # (released once that return is farther than this times the gate's release factor, see
+  # gate_logic.hpp). It catches what TTC cannot: a crawl-speed request makes TTC large even
+  # when the obstacle is centimetres away. PROVISIONAL, NOT measured: 0.30 m is the
+  # 2026-10-06 bench obstacle distance (0.22 m) plus a margin, chosen so that case brakes.
+  # Replace with a value from measured coast-down distance at teleop speeds (roadmap phase 2).
+  min_forward_clearance_m: 0.30     # PROVISIONAL (bench-derived margin, NOT measured) -- see above
+  # Half angle of the forward sector, in the VEHICLE frame (base_link, x forward, left
+  # positive), that the TTC gate and the distance floor take their minimum range over. Before
+  # 2026-10-06 safety_node took the minimum over the whole 360 degree scan, so the car itself,
+  # the operator behind it, and a wall beside it all braked a forward command. safety_node
+  # converts each laser bearing to a vehicle bearing with sensors.lidar.mount_yaw_rad (pi on
+  # this car). PROVISIONAL, NOT tuned: 1.0 rad (about 57 deg each side) covers the car's
+  # swept width at full steering lock over the first metre or so; replace when there is
+  # driving data to tune against.
+  ttc_forward_sector_half_angle_rad: 1.0  # PROVISIONAL (NOT tuned) -- see above
   envelope_fraction_speed: null     # needs Phase 5 tuning (claude-docs/08-learning.md)
   envelope_fraction_lateral_accel: null  # needs Phase 5 tuning (claude-docs/08-learning.md)
   # PROVISIONAL, NOT measured or tuned: 100 ms is roughly five missed frames of a 50 Hz
@@ -426,10 +466,12 @@ meta:
   # steering section above). Added 2026-09-29: actuation.throttle_deadband_us is
   # PROVISIONAL (a copied VESC setting), and the two actuation.*_pwm_achieved_period_us
   # fields are MEASURED at the mux. Added 2026-10-05: the four sensors.lidar mount fields are
-  # PROVISIONAL placeholders; sensors.lidar_spec is datasheet values. sysid_session_id stays
+  # PROVISIONAL placeholders; sensors.lidar_spec is datasheet values. Added 2026-10-06:
+  # limits.min_forward_clearance_m and limits.ttc_forward_sector_half_angle_rad are
+  # PROVISIONAL, and the two limits.ttc_*_s were raised (still PROVISIONAL). sysid_session_id stays
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.6.1"
+  schema_version: "0.7.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

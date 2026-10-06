@@ -49,12 +49,23 @@
 // is frozen at zero, which makes every measured age exactly 0.0 -- i.e. the watchdog would
 // consider a permanently silent /drive_raw permanently FRESH. Both failure modes are
 // removed by measuring on the steady clock. See test/test_safety_node_clock_launch.py.
+//
+// /scan -> FORWARD-SECTOR MINIMUM RANGE (2026-10-06). The obstacle gate (TTC brake + distance
+// floor, gate_logic.hpp) brakes on the nearest valid return inside +/-
+// limits.ttc_forward_sector_half_angle_rad of the car's +x axis, not over the whole 360 degree
+// scan. Each laser bearing is turned into a vehicle bearing with the LiDAR mount yaw, which
+// comes from vehicle_params sensors.lidar.mount_yaw_rad (pi on this car), resolved by
+// racer_safety::resolve_laser_yaw_rad exactly the way racer_control's nodes resolve it.
+// laser_yaw_from_vehicle_params (default true) must stay true on the car; it is false ONLY for
+// the simulator (racer_gym_bridge's /scan is aligned to the vehicle, yaw 0) and synthetic-scan
+// tests. forward_sector.hpp documents which returns count.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <racer_msgs/msg/safety_event.hpp>
 #include <rcl_interfaces/msg/floating_point_range.hpp>
 #include <rcl_interfaces/msg/integer_range.hpp>
@@ -66,39 +77,14 @@
 #include <vector>
 #include <vehicle_params_generated.hpp>
 
+#include "racer_safety/forward_sector.hpp"
 #include "racer_safety/gate_logic.hpp"
 
 namespace racer_safety {
 
 namespace {
 
-// Nearest usable /scan return this cycle: finite, strictly positive, and within the
-// message's own declared [range_min, range_max] -- claude-docs/05-safety.md's TTC gate
-// operates on real obstacle distance, not on a sensor's own "no return"/error encodings
-// (many LiDAR drivers report those as 0.0, negative, or +inf, all already excluded by
-// gate_logic's `is_valid_range`, but filtering to the message's own valid band here as well
-// keeps this ROS-message-specific parsing step honest about what "valid" means for THIS
-// message type). Returns +infinity ("no valid range this cycle") if nothing qualifies --
-// gate_logic.hpp documents that as a safe no-op for the TTC gate, not a fabricated obstacle.
-double compute_min_scan_range_m(const sensor_msgs::msg::LaserScan& msg) {
-  double min_range = std::numeric_limits<double>::infinity();
-  for (const float r : msg.ranges) {
-    const double range = static_cast<double>(r);
-    if (!std::isfinite(range)) {
-      continue;
-    }
-    if (range <= 0.0) {
-      continue;
-    }
-    if (range < static_cast<double>(msg.range_min) || range > static_cast<double>(msg.range_max)) {
-      continue;
-    }
-    if (range < min_range) {
-      min_range = range;
-    }
-  }
-  return min_range;
-}
+constexpr double kPi = 3.14159265358979323846;
 
 }  // namespace
 
@@ -135,6 +121,7 @@ class SafetyNode : public rclcpp::Node {
                                 "the command path runs at 50 Hz).");
     control_period_s_ = 1.0 / control_rate_hz;
     gate_.emplace(build_limits());
+    configure_scan_sector();
 
     rcl_interfaces::msg::ParameterDescriptor inject_fault_descriptor;
     inject_fault_descriptor.description =
@@ -148,9 +135,11 @@ class SafetyNode : public rclcpp::Node {
                                      std::bind(&SafetyNode::on_timer, this));
 
     RCLCPP_INFO(this->get_logger(),
-                "safety_node up: %.1f Hz, watchdog=%d missed cycles, ttc_brake_s=%s, "
+                "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
+                "%.3f m, forward sector +/-%.3f rad, laser yaw %.6f rad, ttc_brake_s=%s, "
                 "ttc_warning_s=%s",
                 control_rate_hz, gate_limits_.watchdog_missed_cycles,
+                *gate_limits_.min_forward_clearance_m, sector_half_angle_rad_, laser_yaw_rad_,
                 gate_limits_.ttc_brake_s.has_value()
                     ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
                     : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
@@ -189,13 +178,13 @@ class SafetyNode : public rclcpp::Node {
 
     // ttc_warning_s / ttc_brake_s are vehicle_params.yaml's limits.ttc_warning_s/ttc_brake_s
     // (CLAUDE.md invariant 2: this is their ONE source of truth). Since 2026-09-13 the
-    // committed file holds PROVISIONAL values (1.0 s warn / 0.5 s brake, conventional
-    // F1TENTH-class starting points, NOT tuned against this car's measured braking distance
-    // -- see that file's comments and GitHub issue #36), so the TTC gate is ARMED whenever a
-    // /scan is present rather than the documented no-op it used to be. `null` there still
-    // maps to std::nullopt, which SafetyLimits/evaluate() treat as a no-op (the TTC gate does
-    // not brake), and that path is unchanged. With no /scan publisher at all the gate stays a
-    // no-op regardless of these values, because there is no range to compute a TTC from.
+    // committed file holds PROVISIONAL values (2.0 s warn / 1.0 s brake since 2026-10-06,
+    // raised from 1.0 / 0.5 after the bench limit cycle; NOT tuned against this car's
+    // measured braking distance -- see that file's comments and GitHub issue #36), so the TTC
+    // gate is ARMED whenever a /scan is present rather than the documented no-op it used to be.
+    // `null` there still maps to std::nullopt, which SafetyLimits/evaluate() treat as a no-op (the
+    // TTC gate does not brake), and that path is unchanged. With no /scan publisher at all the gate
+    // stays a no-op regardless of these values, because there is no range to compute a TTC from.
     // These are declared as ROS parameters ANYWAY, defaulting to whatever vehicle_params
     // currently holds (a negative default when it is null, meaning "unconfigured"), so that:
     // (a) once a real tuned value is committed to vehicle_params.yaml, this node picks it up
@@ -237,10 +226,58 @@ class SafetyNode : public rclcpp::Node {
         ttc_warning_param > 0.0 ? std::optional<double>(ttc_warning_param) : std::nullopt;
     limits.ttc_brake_s =
         ttc_brake_param > 0.0 ? std::optional<double>(ttc_brake_param) : std::nullopt;
+    // Distance floor of the obstacle gate (schema 0.7.0, required, so always set here). The
+    // latch hysteresis factors stay at SafetyLimits' documented defaults (gate tuning, not
+    // physics; see gate_logic.hpp).
+    limits.min_forward_clearance_m = VEHICLE_PARAMS.limits.min_forward_clearance_m;
     limits.watchdog_missed_cycles = watchdog_missed_cycles;
     limits.control_period_s = control_period_s_;
     gate_limits_ = limits;
     return limits;
+  }
+
+  // Forward sector for the obstacle gate: half angle from vehicle_params, LiDAR yaw resolved
+  // against the binding (see this file's "/scan -> FORWARD-SECTOR MINIMUM RANGE" note).
+  // Throws (the node refuses to start) when the yaw parameter disagrees with the binding.
+  void configure_scan_sector() {
+    sector_half_angle_rad_ = VEHICLE_PARAMS.limits.ttc_forward_sector_half_angle_rad;
+
+    rcl_interfaces::msg::ParameterDescriptor yaw_descriptor;
+    yaw_descriptor.description =
+        "LiDAR mounting yaw in base_link (rad, CCW positive; pi = facing backwards). With "
+        "laser_yaw_from_vehicle_params true, only used while vehicle_params "
+        "sensors.lidar.mount_yaw_rad is null; once that is measured it wins and a disagreeing "
+        "non-zero value here refuses to start. With it false, used as given.";
+    rcl_interfaces::msg::FloatingPointRange yaw_range;
+    yaw_range.from_value = -kPi;
+    yaw_range.to_value = kPi;
+    yaw_descriptor.floating_point_range = {yaw_range};
+    const double yaw_param =
+        this->declare_parameter<double>("laser_yaw_offset_rad", 0.0, yaw_descriptor);
+
+    rcl_interfaces::msg::ParameterDescriptor from_params_descriptor;
+    from_params_descriptor.description =
+        "true (default, the real car): LiDAR yaw comes from vehicle_params "
+        "sensors.lidar.mount_yaw_rad when set. false: SIMULATOR AND SYNTHETIC-SCAN TESTS ONLY, "
+        "ignore the binding and use laser_yaw_offset_rad as given.";
+    const bool yaw_from_vehicle_params = this->declare_parameter<bool>(
+        "laser_yaw_from_vehicle_params", true, from_params_descriptor);
+    if (!yaw_from_vehicle_params) {
+      RCLCPP_INFO(this->get_logger(),
+                  "safety_node: laser_yaw_from_vehicle_params is false, ignoring vehicle_params "
+                  "sensors.lidar.mount_yaw_rad and using laser_yaw_offset_rad = %.6f rad (sim "
+                  "or synthetic-scan fixture only)",
+                  yaw_param);
+    }
+    const std::optional<double> yaw = resolve_laser_yaw_rad(
+        VEHICLE_PARAMS.sensors.lidar.mount_yaw_rad, yaw_param, yaw_from_vehicle_params);
+    if (!yaw.has_value()) {
+      throw std::invalid_argument(
+          "safety_node: laser_yaw_offset_rad disagrees with vehicle_params "
+          "sensors.lidar.mount_yaw_rad with laser_yaw_from_vehicle_params true (or is not "
+          "finite); refusing to start");
+    }
+    laser_yaw_rad_ = *yaw;
   }
 
   void on_drive_raw(const ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg) {
@@ -253,7 +290,13 @@ class SafetyNode : public rclcpp::Node {
   }
 
   void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
-    min_scan_range_m_ = compute_min_scan_range_m(*msg);
+    ScanGeometry geometry;
+    geometry.angle_min_rad = static_cast<double>(msg->angle_min);
+    geometry.angle_increment_rad = static_cast<double>(msg->angle_increment);
+    geometry.range_min_m = static_cast<double>(msg->range_min);
+    geometry.range_max_m = static_cast<double>(msg->range_max);
+    min_scan_range_m_ =
+        min_forward_range_m(geometry, msg->ranges, laser_yaw_rad_, sector_half_angle_rad_);
   }
 
   void publish_event(const SafetyEventRecord& record, const rclcpp::Time& stamp) {
@@ -288,10 +331,11 @@ class SafetyNode : public rclcpp::Node {
   // EVERY /safety/events record leaves the node through here, fault path included, so the
   // engage/release pairing can never get out of step between the two paths.
   void publish_transitions(const std::vector<GateActivation>& activations,
+                           const std::vector<GateActivation>& release_notes,
                            const rclcpp::Time& steady_now, const rclcpp::Time& stamp) {
     // Steady clock, NOT `stamp` -- durations are elapsed time (CLOCK POLICY, top of file).
     for (const SafetyEventRecord& record :
-         event_tracker_.update(activations, steady_now.seconds())) {
+         event_tracker_.update(activations, steady_now.seconds(), release_notes)) {
       publish_event(record, stamp);
     }
   }
@@ -327,13 +371,15 @@ class SafetyNode : public rclcpp::Node {
       input.dt_s =
           has_evaluated_before_ ? (steady_now - last_eval_steady_).seconds() : control_period_s_;
       input.min_scan_range_m = min_scan_range_m_;
+      input.ttc_brake_latched = ttc_brake_latched_;
       input.has_pose_input = false;  // TODO(roadmap 2.6): wire from /pose once it exists.
       input.pose_covariance_trace = 0.0;
 
       const GateResult result = gate_->evaluate(input, previous_output_);
       publish_drive(result.output, now);
-      publish_transitions(result.activations, steady_now, now);
+      publish_transitions(result.activations, result.releases, steady_now, now);
       previous_output_ = result.output;
+      ttc_brake_latched_ = result.ttc_brake_latched;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     } catch (const std::exception& e) {
@@ -347,10 +393,18 @@ class SafetyNode : public rclcpp::Node {
       // internal_fault engagement (not one record per cycle, GitHub issue #37), and any gate
       // that was engaged before the fault gets its release record here, because the fault
       // short-circuits gate evaluation and those gates are no longer being reported.
-      const std::vector<GateActivation> fault_activations{
+      std::vector<GateActivation> fault_activations{
           GateActivation{GateSource::kInternalFault, EventSeverity::kBrake,
                          std::string("internal fault: ") + e.what()}};
-      publish_transitions(fault_activations, steady_now, now);
+      // The obstacle-gate latch is HELD across a fault (the gate did not run, so nothing can
+      // judge a release) and its engagement keeps being reported, same as the watchdog and
+      // command-sanity short-circuits do in gate_logic.cpp.
+      if (ttc_brake_latched_) {
+        fault_activations.push_back(
+            GateActivation{GateSource::kTtc, EventSeverity::kBrake,
+                           "ttc brake latch held across an internal fault"});
+      }
+      publish_transitions(fault_activations, {}, steady_now, now);
       previous_output_ = safe_output;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
@@ -373,6 +427,11 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Time last_drive_raw_steady_{0, 0, RCL_STEADY_TIME};
   rclcpp::Time last_eval_steady_{0, 0, RCL_STEADY_TIME};
   double min_scan_range_m_;
+  // Obstacle-gate latch, threaded through evaluate() like previous_output_ (gate_logic.hpp).
+  bool ttc_brake_latched_{false};
+  // Forward sector (configure_scan_sector).
+  double sector_half_angle_rad_{0.0};
+  double laser_yaw_rad_{0.0};
   bool has_received_command_;
   bool has_evaluated_before_;
 

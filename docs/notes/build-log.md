@@ -1757,3 +1757,22 @@ UBEC feeds the receiver about 5.3 V; set High to 6.0 V.
 
 Open: permanent plate, re-measure after it, pin the udev rule to this adapter's serial, and the
 safety node's TTC over the full 360 degrees before `lidar:=true` is used while driving.
+
+## 2026-10-06 late: safety_node TTC limit cycle found on the bench, fixed (vehicle_params 0.7.0)
+
+Wheels-off run with gap_follow_node requesting about 0.48 m/s and an obstacle about 0.22 m
+ahead (bag 2026-10-06T18-51-39_car_teleop, on the Jetson). The gated /drive speed cycled
+0.00 / 0.19 / 0.38 m/s at 50 Hz, 780 brake/release flips in 286 s, the motor pulsing at about
+17 Hz. Cause: safety_node judged TTC on its own rate-limited output, so after each brake the
+limiter's ramp passed TTC for two cycles. Full write-up:
+`docs/notes/ttc-limit-cycle-2026-10-06.md`.
+
+Software change, NOT yet run on the car: TTC is judged on the requested speed and latches
+until the request's TTC clears ttc_warning_s; a new distance floor
+(`limits.min_forward_clearance_m`, PROVISIONAL 0.30 m) brakes regardless of speed; TTC and the
+floor look at a forward sector only (`limits.ttc_forward_sector_half_angle_rad`, PROVISIONAL
+1.0 rad, with the measured mount yaw pi); `ttc_brake_s` 0.5 -> 1.0 s and `ttc_warning_s`
+1.0 -> 2.0 s, still PROVISIONAL. vehicle_params 0.6.1 -> 0.7.0 (two new required fields).
+
+Open: repeat the wheels-off check described at the end of the note before `lidar:=true` is
+used while driving.

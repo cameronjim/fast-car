@@ -117,6 +117,11 @@ def generate_launch_description() -> LaunchDescription:
         executable="safety_node",
         name="safety_node",
         output="screen",
+        # racer_gym_bridge publishes /scan aligned to the vehicle (laser yaw 0), not mounted
+        # like the real car's LiDAR (vehicle_params sensors.lidar.mount_yaw_rad = pi), so the
+        # sim must not apply the car's yaw to safety_node's forward sector. Sim only: the car's
+        # launch files keep the default (true).
+        parameters=[{"laser_yaw_from_vehicle_params": False}],
     )
     teleop_node = Node(
         package="racer_tools",

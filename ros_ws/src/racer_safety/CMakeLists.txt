@@ -13,7 +13,8 @@ endif()
 # logic". OFF by default (instrumentation overhead is pointless for a normal build); the
 # dedicated racer-safety-coverage CI job (.github/workflows/ci.yml, .github/scripts/
 # racer_safety_coverage.sh) turns this ON via -DRACER_SAFETY_COVERAGE=ON, builds ONLY this
-# package, and runs gcovr scoped to gate_logic.cpp/.hpp with --fail-under-branch 100.
+# package, and runs gcovr scoped to gate_logic.cpp/.hpp and forward_sector.cpp/.hpp with
+# --fail-under-branch 100.
 option(RACER_SAFETY_COVERAGE "Build racer_safety_core with --coverage instrumentation" OFF)
 
 find_package(ament_cmake REQUIRED)
@@ -28,6 +29,7 @@ find_package(racer_msgs REQUIRED)
 add_library(racer_safety_core
   src/gate_logic.cpp
   src/gate_logic_formatting.cpp
+  src/forward_sector.cpp
 )
 target_include_directories(racer_safety_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -94,6 +96,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_racer_safety_core
     test/test_gate_logic.cpp
+    test/test_obstacle_gate.cpp
+    test/test_forward_sector.cpp
   )
   target_link_libraries(test_racer_safety_core racer_safety_core)
 

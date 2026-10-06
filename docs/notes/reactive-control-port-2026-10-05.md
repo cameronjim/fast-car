@@ -125,6 +125,63 @@ side, real C1 geometry with yaw pi), p = 0 picks the opening on either side and 
 the lane. That is a synthetic test, not a tuning recommendation: pick p on the floor. The L5
 canary runs with the defaults and is unaffected.
 
+## Swept-path clamp (2026-10-06 floor finding)
+
+Bag `2026-10-06T22-12-40_car_teleop`, replayed: a counter-clockwise loop with loose objects on
+the inside of every left corner. The follower steered to a geometrically correct gap, but the
+car's inside flank swept across the apex object: 62 of 63 scans chose a gap whose turn passed
+within the car's width of an object beside the car. The disparity bubble only inflates
+obstacle edges angularly from the near edge inside the search cone, so an object alongside the
+car, 60 to 100 degrees off the LiDAR's axis, never constrains the turn.
+
+The fix is a steering clamp after `steering_from_bearing` and before the corner override
+(`clamp_steering_to_swept_path` in `gap_follow.hpp`). Geometry, in the rear-axle frame (x
+forward, y left), worked for a left turn (a right turn is the mirror image):
+
+- For steering delta the rear axle follows a circle of radius R = L / tan(delta) about (0, R),
+  L = `chassis.wheelbase_m`. Same model as racer_safety's arc corridor; no code is shared.
+- With c = `chassis.width_m / 2` + `safety_margin_m`, the inside flank sweeps the circle of
+  radius R - c (the body point nearest the centre is (0, half width)), and the outside front
+  corner sweeps hypot(body_front_x, R + c), with body_front_x = `cg_to_rear_axle_m` +
+  `length_m / 2` (the bounding box taken as centred on the CG, the f1tenth_gym convention its
+  values come from).
+- Returns are taken from the raw scan (invalid returns ignored, not filled), turned to the
+  vehicle frame with the laser yaw and shifted by `sensors.lidar.mount_x_m / mount_y_m`. The
+  node refuses to start while those are null.
+- A return counts only if it is on the turn-in side outside the car's width (y > half width;
+  a return straight ahead inside the car's width is the TTC gate's job), ahead along the turn
+  (arc angle atan2(x, R - y) in (0, pi/2)), within `swept_path_lookahead_m` (default 1.0 m) of
+  rear-axle arc length, and inside the swept annulus R - c < rho <= outer radius.
+- Closed form: a return clears the inside flank by the margin exactly when the curvature
+  k = 1 / R satisfies k <= 2 (y - c) / (x^2 + y^2 - c^2) (0 when y <= c, so a return within
+  the margin beside the car forbids any turn toward it). Starting from the wanted curvature,
+  k drops to the smallest such bound among the returns in the swept area, and repeats with
+  the window re-evaluated at the new k until nothing violates (one pass per return at most,
+  usually one or two). Output delta = atan(k L), with the wanted sign.
+
+The steering is unchanged bit for bit when nothing violates or the clamp is off
+(`swept_path_clamp`, default true). `GapFollowResult` carries `wanted_steering_rad` and
+`swept_path_clamped`; the node logs the clamp at DEBUG at most once per second. If the clamp
+drives the steering near zero while the target bearing is large, the corner override and
+safety_node take over. Both parameters are also `gap_follow.launch.py` arguments (empty =
+node default).
+
+Example from the tests (real C1 geometry, margin 0.05 m): an object 0.5 m left of the head at
+x 0.1 to 0.4 m ahead of the head. Full left (0.4189 rad, R 0.742 m) sweeps the inside flank
+through it; the clamp gives about 0.28 rad (R 1.15 m), set by the object's far corner at
+(0.685, 0.5) in the rear-axle frame, and the inside flank circle then misses every return by
+exactly the margin.
+
+Sim note: racer_gym_bridge raycasts from the car's pose with no LiDAR offset, while the node
+applies the car's measured 0.285 m mount (rear axle to head). In the canary the clamp
+therefore places returns forward of where the sim saw them, by the difference between the
+mount and the gym's pose reference point. The clamp is a car feature; the canary only checks
+it does not break the lap.
+
+With the clamp on by default the L5 canary below still passes: 26.04 s and 25.95 s for two
+laps on two runs, worst distance from the raceline 0.165 m and 0.163 m (was about 26.0 s and
+0.163 m).
+
 ## L5 canary
 
 `tests/l5_reactive_lap` runs `bridge_node` and `gap_follow_node` (which sees only `/scan`) on

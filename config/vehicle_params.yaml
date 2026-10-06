@@ -111,6 +111,14 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.7.0 -> 0.7.1 on 2026-10-06 (evening): limits.ttc_brake_s 1.0 -> 0.5,
+# ttc_warning_s 2.0 -> 0.8, min_forward_clearance_m 0.30 -> 0.25 after the wheels-off-ground
+# retest with the latched obstacle gate (PR 91). With the latch the chatter is gone, and the
+# owner found the 1.0 s / 2.0 s pair too early at the 0.5 m/s bench cap (brake at 0.50 m,
+# release only past 1.0 m). The warning threshold doubles as the release line, so 0.8 s
+# releases at 0.40 m and 0.5 s brakes at 0.25 m at that speed. Value change only: patch bump
+# per rule 5. Still PROVISIONAL: re-tune on the floor at real speed, where 0.5 s at 2 m/s is 1 m.
+#
 # schema_version bumped 0.6.1 -> 0.7.0 on 2026-10-06: two new REQUIRED limits fields for
 # racer_safety's obstacle gate, limits.min_forward_clearance_m (PROVISIONAL 0.30 m, a distance
 # floor that zeroes forward throttle regardless of speed) and
@@ -423,8 +431,8 @@ limits:
   # bug, fixed in racer_safety, but the threshold was also too small. Release of the latched
   # brake needs the requested speed's TTC to exceed ttc_warning_s, so the warning value is
   # also the brake's release point.
-  ttc_warning_s: 2.0                # PROVISIONAL (raised 2026-10-06, NOT tuned) -- see above
-  ttc_brake_s: 1.0                  # PROVISIONAL (raised 2026-10-06, NOT tuned) -- see above
+  ttc_warning_s: 0.8                # PROVISIONAL (bench-tuned 2026-10-06 evening: release line, see 0.7.1 note)
+  ttc_brake_s: 0.5                  # PROVISIONAL (bench-tuned 2026-10-06 evening, see 0.7.1 note)
   # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
   # nearest valid return inside the forward sector below is closer than this, forward throttle
   # is held at zero whatever the requested speed, with the same latch as the TTC brake
@@ -433,7 +441,7 @@ limits:
   # when the obstacle is centimetres away. PROVISIONAL, NOT measured: 0.30 m is the
   # 2026-10-06 bench obstacle distance (0.22 m) plus a margin, chosen so that case brakes.
   # Replace with a value from measured coast-down distance at teleop speeds (roadmap phase 2).
-  min_forward_clearance_m: 0.30     # PROVISIONAL (bench-derived margin, NOT measured) -- see above
+  min_forward_clearance_m: 0.25     # PROVISIONAL (bench-tuned 2026-10-06 evening; measured from the LiDAR, about 0.10 m ahead of the bumper)
   # Half angle of the forward sector, in the VEHICLE frame (base_link, x forward, left
   # positive), that the TTC gate and the distance floor take their minimum range over. Before
   # 2026-10-06 safety_node took the minimum over the whole 360 degree scan, so the car itself,
@@ -472,6 +480,6 @@ meta:
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.7.0"
+  schema_version: "0.7.1"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

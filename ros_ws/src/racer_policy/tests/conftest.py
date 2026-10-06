@@ -92,8 +92,10 @@ _TEMPLATE: dict[str, Any] = {
         # 0.7.0 on 2026-10-06 when the required limits.min_forward_clearance_m and
         # limits.ttc_forward_sector_half_angle_rad were added (racer_safety TTC limit cycle),
         # then 0.7.2 -> 0.8.0 the same night when limits.obstacle_steering_hold_after_s was
-        # added and the TTC release line and forward sector were retuned.
-        "schema_version": "0.8.0",
+        # added and the TTC release line and forward sector were retuned, then 0.8.0 ->
+        # 0.9.0 the same night when limits.obstacle_corridor_margin_m was added (the obstacle
+        # gate's path corridor, first floor test).
+        "schema_version": "0.9.1",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

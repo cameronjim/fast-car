@@ -84,7 +84,7 @@ bool is_valid_range(double range_m) {
 constexpr double kMinForwardSpeedMps = 1e-6;
 
 // Garbage range: NaN, zero, negative or -inf. +inf is NOT garbage (it is "nothing in the
-// forward sector"), and neither is a finite positive distance. Written as !(r > 0) so NaN
+// path"), and neither is a finite positive distance. Written as !(r > 0) so NaN
 // lands here without its own branch.
 bool is_garbage_range(double range_m) { return !(range_m > 0.0); }
 

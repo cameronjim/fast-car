@@ -111,6 +111,28 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.9.0 -> 0.9.1 on 2026-10-06: limits.ttc_forward_sector_half_angle_rad
+# 0.6 -> 1.2. With the corridor gate the sector is only an outer bound, and at 0.6 rad it hid
+# anything inside about 0.30 m of the head that sat near a front corner (the corridor half
+# width 0.205 m over tan 0.6). At 1.2 rad the corridor is fully covered out past 0.08 m. Value
+# change only: patch bump per rule 5.
+#
+# schema_version bumped 0.8.0 -> 0.9.0 on 2026-10-06 (night, first floor test): one new
+# REQUIRED field, limits.obstacle_corridor_margin_m (PROVISIONAL 0.05 m). On a tight track of
+# backpacks about 1 m wide with gap_follow_node at 0.8 to 1.0 m/s, racer_safety's obstacle gate
+# took its minimum range over the whole +/- 0.6 rad wedge ahead of the car, so a bag 0.3 m to
+# the side of the car's path, which the car passes cleanly, tripped the TTC brake (0.35 s) and
+# the clearance floor (0.20 m) exactly like a bag straight ahead, and the owner found the
+# safety node far too aggressive on that track. The gate now counts a return only if it lies in
+# a straight corridor ahead of the car, |y| <= chassis.width_m / 2 + this margin (0.155 + 0.05
+# = 0.205 m), and uses the along-track distance x, not the slant range, for TTC and the floor.
+# ttc_forward_sector_half_angle_rad stays at 0.6 as an outer bound only (nothing outside it is
+# ever considered, whatever the margin). With these values the sector, not the corridor, limits
+# what is seen closer than about 0.30 m from the head (0.205 / tan 0.6), so a return right at a
+# front corner that close is still outside the test; see racer_safety/forward_sector.hpp. A new
+# required field changes the schema's required-field set, so this is a minor bump per rule 5.
+# No existing value changed. Consumers refuse on mismatch either way.
+#
 # schema_version bumped 0.7.2 -> 0.8.0 on 2026-10-06 (late, third bench pass, wheels off the
 # ground with gap_follow_node): limits.ttc_warning_s 0.6 -> 0.45 (it is the latch's release
 # line) and limits.ttc_forward_sector_half_angle_rad 1.0 -> 0.6. On the stand, a person beside
@@ -464,14 +486,28 @@ limits:
   # Replace with a value from measured coast-down distance at teleop speeds (roadmap phase 2).
   min_forward_clearance_m: 0.20     # PROVISIONAL (bench-tuned 2026-10-06, second pass; measured from the LiDAR, about 0.05 m ahead of the bumper)
   # Half angle of the forward sector, in the VEHICLE frame (base_link, x forward, left
-  # positive), that the TTC gate and the distance floor take their minimum range over. Before
+  # positive). Since schema 0.9.0 (2026-10-06 floor test) this is only the OUTER bound of the
+  # obstacle gate's in-path test: no return outside it is ever considered, whatever
+  # obstacle_corridor_margin_m says. The corridor below is the primary filter. Before 0.9.0 the
+  # TTC gate and the distance floor took their minimum range over this whole wedge. Before
   # 2026-10-06 safety_node took the minimum over the whole 360 degree scan, so the car itself,
   # the operator behind it, and a wall beside it all braked a forward command. safety_node
   # converts each laser bearing to a vehicle bearing with sensors.lidar.mount_yaw_rad (pi on
   # this car). PROVISIONAL, NOT tuned: 1.0 rad (about 57 deg each side) covers the car's
   # swept width at full steering lock over the first metre or so; replace when there is
   # driving data to tune against.
-  ttc_forward_sector_half_angle_rad: 0.6  # PROVISIONAL (bench-tuned 2026-10-06, third pass, about 34 deg each side; see 0.8.0 note)
+  ttc_forward_sector_half_angle_rad: 1.2   # PROVISIONAL (widened 2026-10-06 with the corridor gate, see 0.9.1 note)
+  # Lateral margin of the obstacle gate's path corridor (added 2026-10-06, schema 0.9.0). A LiDAR
+  # return at vehicle bearing theta and range r (x = r cos theta ahead, y = r sin theta left)
+  # counts for the TTC brake and the distance floor only if x > 0 and
+  # |y| <= chassis.width_m / 2 + this margin, and the distance used is x, not r. racer_safety
+  # reads chassis.width_m and this field from the generated binding. Reason: on the first floor
+  # test (backpack track about 1 m wide) a bag 0.3 m beside the path braked the car like a bag
+  # straight ahead under the old wedge (see the 0.9.0 header note). PROVISIONAL, NOT tuned:
+  # 0.05 m each side is a starting allowance for LiDAR noise and a slightly wider swept path
+  # than the bounding box; widen it if the car clips things it should have braked for, narrow
+  # it if bags beside the path still brake it.
+  obstacle_corridor_margin_m: 0.05  # PROVISIONAL (floor-test choice 2026-10-06, NOT tuned) -- see above
   # Steering hold on the obstacle latch (added 2026-10-06 late, schema 0.8.0). A TTC or
   # clearance brake zeroes forward throttle and keeps steering live, because a car braking at
   # speed must keep steering authority. Once the latch has held the OUTPUT speed at exactly
@@ -509,10 +545,11 @@ meta:
   # PROVISIONAL placeholders; sensors.lidar_spec is datasheet values. Added 2026-10-06:
   # limits.min_forward_clearance_m and limits.ttc_forward_sector_half_angle_rad are
   # PROVISIONAL, and the two limits.ttc_*_s were raised (still PROVISIONAL). Added 2026-10-06
-  # late: limits.obstacle_steering_hold_after_s is PROVISIONAL. sysid_session_id stays
+  # late: limits.obstacle_steering_hold_after_s is PROVISIONAL. Added 2026-10-06 night:
+  # limits.obstacle_corridor_margin_m is PROVISIONAL. sysid_session_id stays
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.8.0"
+  schema_version: "0.9.1"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

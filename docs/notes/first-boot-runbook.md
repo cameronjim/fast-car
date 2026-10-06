@@ -1110,13 +1110,21 @@ Note how close the nearest self-return is. **That number matters before any driv
 `lidar:=true`**. Since 2026-10-06 (`docs/notes/ttc-limit-cycle-2026-10-06.md`) `safety_node`'s
 obstacle gate works like this:
 
-- It looks only at returns inside a forward sector of +/- `limits.ttc_forward_sector_half_angle_rad`
-  (PROVISIONAL 0.6 rad since vehicle_params 0.8.0, about 34 deg each side; it was 1.0 rad, and
-  a person beside the front corner held the latch) of the car's nose, after turning each laser
-  bearing into a vehicle bearing with `sensors.lidar.mount_yaw_rad` (pi on this car). Returns
-  that are NaN, inf, zero, below `range_min` or above `range_max` are ignored. Things behind
-  and beside the car, and the person holding the kill switch behind it, do not count.
-- TTC is the nearest forward return divided by the REQUESTED speed (not the speed the gate
+- It looks only at returns in the car's path: a straight corridor ahead of the LiDAR head,
+  `chassis.width_m` / 2 + `limits.obstacle_corridor_margin_m` (0.155 + PROVISIONAL 0.05 =
+  0.205 m) each side of the centreline, since vehicle_params 0.9.0 ("corridor, not wedge":
+  on the first floor test a bag 0.3 m beside the path braked the car like one straight ahead).
+  Each laser bearing is first turned into a vehicle bearing with `sensors.lidar.mount_yaw_rad`
+  (pi on this car). The forward sector of +/- `limits.ttc_forward_sector_half_angle_rad`
+  (PROVISIONAL 0.6 rad, about 34 deg each side) is kept as an outer bound only, so nothing
+  behind or far beside the car is ever considered. Close in, that bound is the tighter one:
+  nearer than about 0.30 m from the head, a return at the very edge of the corridor (a front
+  corner) is outside 0.6 rad and is not seen. Returns that are NaN, inf, zero, below
+  `range_min` or above `range_max` are ignored. The person holding the kill switch behind the
+  car does not count.
+- The distance used below is the along-track distance to the return (how far ahead of the
+  head it is), not its straight-line range.
+- TTC is the nearest in-path distance divided by the REQUESTED speed (not the speed the gate
   last output). At or below `limits.ttc_brake_s` (PROVISIONAL 0.35 s) it zeroes the forward
   throttle; at the 0.8 m/s first-tap speed that is anything within 0.28 m ahead.
 - A distance floor, `limits.min_forward_clearance_m` (PROVISIONAL 0.20 m from the LiDAR head),
@@ -1139,7 +1147,7 @@ obstacle gate works like this:
   after `/drive` goes to zero the servo should stop moving, and it should follow the request
   again as soon as the obstacle is moved away.
 
-So a self-return inside the forward sector and closer than about 0.30 m would hold the car at
+So a self-return inside the path corridor and closer than about 0.30 m would hold the car at
 zero throttle indefinitely. That is why `car_teleop.launch.py`'s `lidar` argument defaults to
 false.
 

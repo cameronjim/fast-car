@@ -93,7 +93,7 @@ these is `null` -- the same refuse-to-arm discipline as `firmware/safety_mux`'s
 | `steering.pwm_left_bound` | which pulse end is full LEFT | `pwm_min_us` (MEASURED 2026-09-21: shorter pulse is left) |
 | `steering.min_angle_rad` / `max_angle_rad` | angle range the pulse ends correspond to | -0.4189 / +0.4189 (gym defaults) |
 | `actuation.throttle_pwm_min_us` / `throttle_pwm_neutral_us` / `throttle_pwm_max_us` | throttle pulse ends and neutral | 1000 / 1500 / 2000 (PROVISIONAL, unmeasured) |
-| `actuation.throttle_full_scale_mps` | full-scale reference for the open-loop speed map | 5.0 (PROVISIONAL, unmeasured) |
+| `actuation.throttle_full_scale_mps` | full-scale reference for the open-loop speed map | 2.91 (DERIVED 2026-10-06 from the VESC 6000 ERPM cap and the drivetrain fields; was 5.0) |
 | `limits.global_speed_cap_mps` | clamp applied to the commanded speed before the map | 20.0 (a model-validity bound, NOT a safety cap) |
 | `actuation.steering_pwm_period_us` / `throttle_pwm_period_us` | PWM frame period REQUESTED on each channel's sysfs `period` | 4000 / 4000 (250 Hz; sets the pulse grid, see "Actuator resolution") |
 | `actuation.steering_pwm_achieved_period_us` / `throttle_pwm_achieved_period_us` | frame the hardware ACTUALLY emits for that request; every duty is pre-scaled by requested / achieved | 3925 / 3925 (MEASURED 2026-09-29 at the mux, issue #77; see "Frame compensation") |

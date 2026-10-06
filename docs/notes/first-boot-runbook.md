@@ -52,9 +52,11 @@ each other's, unpredictably. `--network host` (used below) is what actually expo
 container to the LAN for discovery to happen at all -- confirm `echo $ROS_DOMAIN_ID` inside
 the running container prints `42` before trusting `ros2 topic list` output.
 
-Also note the throttle map's scale. `actuation.throttle_full_scale_mps` is 5.0 m/s, and it is
-PROVISIONAL and unmeasured like the rest (added 2026-09-13, GitHub issue #40). With the
-1000/1500/2000 us ends, **a commanded 1 m/s is 100 us off neutral: 1600 us forward, 1400 us
+Also note the throttle map's scale. `actuation.throttle_full_scale_mps` was 5.0 m/s until
+2026-10-06 and is now 2.91 m/s, derived from the VESC's 6000 ERPM cap and the drivetrain
+fields (still PROVISIONAL until wheel speed is measured against pulse width). The numbers in
+the rest of this paragraph are the ORIGINAL 5.0 m/s map, kept as the record of the first
+drives: with the 1000/1500/2000 us ends, **a commanded 1 m/s was 100 us off neutral: 1600 us forward, 1400 us
 reverse**, and 5 m/s or anything above it saturates at 2000 us. It used to be scaled by
 `limits.global_speed_cap_mps` (20 m/s), which made 1 m/s only 25 us off neutral, probably
 inside the VESC's default PPM deadband -- so if you are working from an older printout and
@@ -799,8 +801,8 @@ throttle range) to start turning from rest. Measured on the bench 2026-09-21: 15
 nothing, 1600 and 1650 us made the rear tyres click for a few seconds without turning, 1700
 and 1750 us spun them up.
 
-On the provisional open-loop map (`actuation.throttle_full_scale_mps: 5.0`, so 1 m/s = 100 us
-off neutral) that means:
+On the open-loop map as it was at the time (`actuation.throttle_full_scale_mps: 5.0`, so 1 m/s
+= 100 us off neutral; 2.91 since 2026-10-06, so 1 m/s = 165 us) that meant:
 
 | Commanded speed | Pulse | What happens from rest |
 |---|---|---|

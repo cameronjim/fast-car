@@ -111,6 +111,12 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.9.2 -> 0.9.3 on 2026-10-06: actuation.throttle_full_scale_mps 5.0 ->
+# 2.91, derived from the VESC's 6000 ERPM cap and the drivetrain fields (see the field's own
+# note). Every speed request now means roughly the real wheel speed, and the smallest request
+# the VESC will act on is about 0.45 m/s (its s_pid_min_erpm of 900). Value change only: patch
+# bump per rule 5.
+#
 # schema_version bumped 0.9.1 -> 0.9.2 on 2026-10-06 (late floor test): limits.ttc_warning_s
 # 0.45 -> 0.36, the latch's release line, just above the 0.35 s brake; the owner wants the car
 # released as soon as its path is clear. Finding (bag 2026-10-06T22-12-40_car_teleop,
@@ -322,7 +328,15 @@ actuation:
   # docs/notes/first-boot-runbook.md's wheels-off-the-ground throttle step: sweep the
   # commanded speed, record wheel speed against pulse width, and set this to the speed
   # observed at throttle_pwm_max_us.
-  throttle_full_scale_mps: 5.0      # PROVISIONAL (unmeasured open-loop map scale) -- see above
+  # 2026-10-06: DERIVED from the VESC configuration instead of the old 5.0 placeholder. In
+  # centred PID speed control (config/vesc/2026-09-29d-fsesc67-app.xml) the VESC maps the
+  # pulse linearly onto +/- l_max_erpm = 6000 ERPM (2026-09-29-fsesc67-motor.xml), and
+  # 6000 ERPM / pole_pairs 2 / gear_ratio 11.82 * 2 pi * 0.1095 m = 2.91 m/s. With 5.0 here a
+  # request of 1.0 m/s was really about 0.6 m/s and a request of 0.25 m/s never started the
+  # motor (the VESC speed loop's s_pid_min_erpm is 900, i.e. about 0.44 m/s real). Still
+  # PROVISIONAL: gear_ratio and nominal_radius_m are assumed, so measure wheel speed against
+  # pulse width on the bench and replace this with the observed value at throttle_pwm_max_us.
+  throttle_full_scale_mps: 2.91     # DERIVED 2026-10-06 from l_max_erpm, pole_pairs, gear_ratio, tire radius -- see above
   # PWM FRAME PERIOD on the Jetson's two sysfs PWM channels (GitHub issue #66). This is the
   # carrier period racer_drivers/pwm_output_node writes to <channel>/period, in microseconds
   # (the sysfs value is this x 1000, in nanoseconds).
@@ -563,6 +577,6 @@ meta:
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.9.2"
+  schema_version: "0.9.3"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

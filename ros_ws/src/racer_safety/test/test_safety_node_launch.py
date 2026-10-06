@@ -2,7 +2,9 @@
 
 Checklist covered: nominal passthrough on a fresh, in-bounds command; watchdog brake on
 /drive_raw silence; TTC brake on a synthetic close-obstacle /scan, its latch and its "ttc brake
-released" record; the 2026-10-06 limit-cycle scenario held at zero; fail-closed (and clean
+released" record; the 2026-10-06 limit-cycle scenario held at zero; the steering hold while
+parked on the obstacle latch (steering stops following /drive_raw after
+limits.obstacle_steering_hold_after_s and resumes once the obstacle clears); fail-closed (and clean
 recovery) on an injected internal fault; a bounds_clamp /safety/events record on an
 out-of-bounds command; correct QoS (the /drive_raw subscription is genuinely `reliable`, not
 accidentally `best_effort`; the TTC test's /scan publisher is deliberately `best_effort`,
@@ -88,6 +90,11 @@ _BAG_RANGE_M = 0.22
 # 80 percent of the threshold. At the original 0.5 s this is the bag's own 0.48 m/s.
 _MIN_FORWARD_CLEARANCE_M = _VEHICLE_PARAMS["limits"]["min_forward_clearance_m"]
 _SCENARIO_REQUEST_MPS = max(_BAG_REQUEST_MPS, _BAG_RANGE_M / (0.8 * _TTC_BRAKE_S))
+# Steering hold on the obstacle latch (schema 0.8.0, gate_logic.hpp "STEERING HOLD WHILE PARKED
+# ON THE OBSTACLE LATCH"): read from the committed yaml like the thresholds above, so the test
+# proves the number the car boots with.
+_STEERING_HOLD_AFTER_S = _VEHICLE_PARAMS["limits"]["obstacle_steering_hold_after_s"]
+assert _STEERING_HOLD_AFTER_S is not None and _STEERING_HOLD_AFTER_S >= 0.0
 
 
 def _reliable_qos() -> QoSProfile:
@@ -539,9 +546,16 @@ class TestSafetyNode(unittest.TestCase):
         self.assertLess(_BAG_RANGE_M / _SCENARIO_REQUEST_MPS, _TTC_BRAKE_S)
         self.assertGreater(_BAG_RANGE_M, _MIN_FORWARD_CLEARANCE_M)
         bag_scan = _make_scan(range_m=_BAG_RANGE_M)
-        # Settle: the brake engages within a cycle or two of the scan arriving.
+        # Settle: the brake engages within a cycle or two of the scan arriving, and the steering
+        # hold (a ttc INFO engage, 2026-10-06 late) follows limits.obstacle_steering_hold_after_s
+        # later. Both must be engaged before the window opens, so that "no ttc engage inside the
+        # window" below keeps meaning "nothing changed state" rather than racing the hold.
         self._publish_steadily(
-            drive_raw_pub, request, seconds=0.5, scan_pub=scan_pub, scan=bag_scan
+            drive_raw_pub,
+            request,
+            seconds=0.5 + _STEERING_HOLD_AFTER_S + 0.5,
+            scan_pub=scan_pub,
+            scan=bag_scan,
         )
 
         drive_out.clear()
@@ -567,6 +581,113 @@ class TestSafetyNode(unittest.TestCase):
         self._publish_steadily(
             drive_raw_pub, request, seconds=1.0, scan_pub=scan_pub, scan=_make_scan(range_m=100.0)
         )
+
+    def test_steering_hold_while_parked_on_the_obstacle_latch(self):
+        """2026-10-06 late (gate_logic.hpp, "STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH").
+        Parked on the obstacle latch, the /drive steering stops following a changing
+        /drive_raw steering once limits.obstacle_steering_hold_after_s has passed, stays at the
+        angle it had when the hold started, and follows /drive_raw again once the obstacle
+        clears. One ttc INFO engage record "steering held while obstacle-latched" with the held
+        angle, and one "steering hold released" record on the way out."""
+        drive_out = []
+        self.node.create_subscription(
+            AckermannDriveStamped, "/drive", drive_out.append, _reliable_qos()
+        )
+        events = []
+        self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        drive_raw_pub = self.node.create_publisher(
+            AckermannDriveStamped, "/drive_raw", _reliable_qos()
+        )
+        scan_pub = self.node.create_publisher(LaserScan, "/scan", _best_effort_qos())
+        self._spin_for(0.3)
+
+        held_angle = 0.2
+        far_scan = _make_scan(range_m=100.0)
+        # Inside the clearance floor: any forward request latches.
+        park_range_m = _MIN_FORWARD_CLEARANCE_M * 0.5
+        park_scan = _make_scan(range_m=park_range_m)
+        request_mps = 0.5
+
+        # Clear road first (also releases any latch a previous test left behind).
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=held_angle, speed=request_mps),
+            seconds=1.0,
+            scan_pub=scan_pub,
+            scan=far_scan,
+        )
+        self.assertAlmostEqual(drive_out[-1].drive.steering_angle, held_angle, places=4)
+
+        # Park on the obstacle with the same steering, comfortably past the hold time.
+        events.clear()
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=held_angle, speed=request_mps),
+            seconds=_STEERING_HOLD_AFTER_S + 1.0,
+            scan_pub=scan_pub,
+            scan=park_scan,
+        )
+        self.assertEqual(drive_out[-1].drive.speed, 0.0, "the obstacle latch did not engage")
+        hold_engages = [
+            e
+            for e in _engages(events, "ttc")
+            if e.severity == SafetyEvent.SEVERITY_INFO
+            and "steering held while obstacle-latched" in e.detail
+        ]
+        self.assertEqual(
+            len(hold_engages),
+            1,
+            "expected one ttc INFO 'steering held while obstacle-latched' engage record, got "
+            f"{[(e.severity, e.phase, e.detail) for e in events if e.source == 'ttc']}",
+        )
+        self.assertIn("0.2", hold_engages[0].detail, "the held angle is not in the detail")
+
+        # Now wiggle the requested steering every message. The output must not move.
+        drive_out.clear()
+        wiggle = [-0.3, 0.35, -0.1, 0.05, 0.3, -0.25]
+        end = time.time() + 2.0
+        i = 0
+        while time.time() < end:
+            drive_raw_pub.publish(_make_drive(steering=wiggle[i % len(wiggle)], speed=request_mps))
+            scan_pub.publish(park_scan)
+            rclpy.spin_once(self.node, timeout_sec=0.02)
+            i += 1
+        self.assertGreater(len(drive_out), 5)
+        moved = [
+            round(m.drive.steering_angle, 4)
+            for m in drive_out
+            if abs(m.drive.steering_angle - held_angle) > 1e-6
+        ]
+        self.assertEqual(
+            moved,
+            [],
+            "the /drive steering followed a changing /drive_raw steering while parked on the "
+            f"obstacle latch past the hold time: {moved}",
+        )
+        self.assertTrue(all(m.drive.speed == 0.0 for m in drive_out))
+
+        # Obstacle clears: the latch releases and the steering follows /drive_raw again.
+        resumed_angle = -0.1
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=resumed_angle, speed=request_mps),
+            seconds=1.5,
+            scan_pub=scan_pub,
+            scan=far_scan,
+        )
+        self.assertAlmostEqual(
+            drive_out[-1].drive.steering_angle,
+            resumed_angle,
+            places=4,
+            msg="steering did not follow /drive_raw again after the obstacle cleared",
+        )
+        self.assertGreater(drive_out[-1].drive.speed, 0.0, "speed did not recover after release")
+        hold_releases = [
+            e
+            for e in _releases(events, "ttc")
+            if e.severity == SafetyEvent.SEVERITY_INFO and "steering hold released" in e.detail
+        ]
+        self.assertEqual(len(hold_releases), 1, "expected one 'steering hold released' record")
 
     def test_drive_raw_subscription_is_reliable_not_best_effort(self):
         """A best_effort /drive_raw publisher must be QoS-incompatible with safety_node's

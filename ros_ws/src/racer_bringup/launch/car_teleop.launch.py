@@ -58,10 +58,10 @@ launch when it is missing, so nothing argues for true yet. Two reasons for false
   * /scan ARMS safety_node's obstacle gate. Since 2026-10-06 (docs/notes/
     ttc-limit-cycle-2026-10-06.md) it looks only at a forward sector (+/-
     limits.ttc_forward_sector_half_angle_rad, after sensors.lidar.mount_yaw_rad), brakes on the
-    REQUESTED speed's TTC (PROVISIONAL limits.ttc_brake_s 1.0 s, released above ttc_warning_s
-    2.0 s) and on a distance floor (PROVISIONAL limits.min_forward_clearance_m 0.30 m), and
+    REQUESTED speed's TTC (PROVISIONAL limits.ttc_brake_s 0.35 s, released above ttc_warning_s
+    0.45 s) and on a distance floor (PROVISIONAL limits.min_forward_clearance_m 0.20 m), and
     latches: once braked, forward throttle stays at zero until the obstacle is clear. At the
-    0.8 m/s first-tap speed anything within about 0.8 m ahead holds the car, which is the safe
+    0.8 m/s first-tap speed anything within about 0.36 m ahead holds the car, which is the safe
     direction but looks like a dead throttle if you do not expect it. Turn this on for a drive
     only after the returns have been looked at in Foxglove (docs/notes/first-boot-runbook.md
     "LiDAR first power-up").

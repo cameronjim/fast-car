@@ -59,6 +59,12 @@
 // laser_yaw_from_vehicle_params (default true) must stay true on the car; it is false ONLY for
 // the simulator (racer_gym_bridge's /scan is aligned to the vehicle, yaw 0) and synthetic-scan
 // tests. forward_sector.hpp documents which returns count.
+//
+// STEERING HOLD (2026-10-06 late). Once the obstacle latch has held the /drive speed at zero
+// for vehicle_params limits.obstacle_steering_hold_after_s, the gate freezes the steering
+// output until the latch releases (a car parked against an obstacle stops hunting its servo).
+// This node only threads the hold timer from cycle to cycle, like the latch, and keeps an
+// engaged hold reported across an internal fault. gate_logic.hpp has the rule and the reasons.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
 #include <chrono>
@@ -134,18 +140,18 @@ class SafetyNode : public rclcpp::Node {
     timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
                                      std::bind(&SafetyNode::on_timer, this));
 
-    RCLCPP_INFO(this->get_logger(),
-                "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
-                "%.3f m, forward sector +/-%.3f rad, laser yaw %.6f rad, ttc_brake_s=%s, "
-                "ttc_warning_s=%s",
-                control_rate_hz, gate_limits_.watchdog_missed_cycles,
-                *gate_limits_.min_forward_clearance_m, sector_half_angle_rad_, laser_yaw_rad_,
-                gate_limits_.ttc_brake_s.has_value()
-                    ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
-                    : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
-                gate_limits_.ttc_warning_s.has_value()
-                    ? std::to_string(*gate_limits_.ttc_warning_s).c_str()
-                    : "unset");
+    RCLCPP_INFO(
+        this->get_logger(),
+        "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
+        "%.3f m, forward sector +/-%.3f rad, laser yaw %.6f rad, steering hold after "
+        "%.3f s on the obstacle latch, ttc_brake_s=%s, ttc_warning_s=%s",
+        control_rate_hz, gate_limits_.watchdog_missed_cycles, *gate_limits_.min_forward_clearance_m,
+        sector_half_angle_rad_, laser_yaw_rad_, gate_limits_.obstacle_steering_hold_after_s,
+        gate_limits_.ttc_brake_s.has_value()
+            ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
+            : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
+        gate_limits_.ttc_warning_s.has_value() ? std::to_string(*gate_limits_.ttc_warning_s).c_str()
+                                               : "unset");
   }
 
  private:
@@ -178,7 +184,7 @@ class SafetyNode : public rclcpp::Node {
 
     // ttc_warning_s / ttc_brake_s are vehicle_params.yaml's limits.ttc_warning_s/ttc_brake_s
     // (CLAUDE.md invariant 2: this is their ONE source of truth). Since 2026-09-13 the
-    // committed file holds PROVISIONAL values (2.0 s warn / 1.0 s brake since 2026-10-06,
+    // committed file holds PROVISIONAL values (0.45 s warn / 0.35 s brake since 2026-10-06,
     // raised from 1.0 / 0.5 after the bench limit cycle; NOT tuned against this car's
     // measured braking distance -- see that file's comments and GitHub issue #36), so the TTC
     // gate is ARMED whenever a /scan is present rather than the documented no-op it used to be.
@@ -230,6 +236,9 @@ class SafetyNode : public rclcpp::Node {
     // latch hysteresis factors stay at SafetyLimits' documented defaults (gate tuning, not
     // physics; see gate_logic.hpp).
     limits.min_forward_clearance_m = VEHICLE_PARAMS.limits.min_forward_clearance_m;
+    // Steering hold on the obstacle latch (schema 0.7.3, required, so always set here; see
+    // gate_logic.hpp "STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH").
+    limits.obstacle_steering_hold_after_s = VEHICLE_PARAMS.limits.obstacle_steering_hold_after_s;
     limits.watchdog_missed_cycles = watchdog_missed_cycles;
     limits.control_period_s = control_period_s_;
     gate_limits_ = limits;
@@ -372,6 +381,7 @@ class SafetyNode : public rclcpp::Node {
           has_evaluated_before_ ? (steady_now - last_eval_steady_).seconds() : control_period_s_;
       input.min_scan_range_m = min_scan_range_m_;
       input.ttc_brake_latched = ttc_brake_latched_;
+      input.obstacle_hold_timer_s = obstacle_hold_timer_s_;
       input.has_pose_input = false;  // TODO(roadmap 2.6): wire from /pose once it exists.
       input.pose_covariance_trace = 0.0;
 
@@ -380,6 +390,7 @@ class SafetyNode : public rclcpp::Node {
       publish_transitions(result.activations, result.releases, steady_now, now);
       previous_output_ = result.output;
       ttc_brake_latched_ = result.ttc_brake_latched;
+      obstacle_hold_timer_s_ = result.obstacle_hold_timer_s;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     } catch (const std::exception& e) {
@@ -403,6 +414,13 @@ class SafetyNode : public rclcpp::Node {
         fault_activations.push_back(
             GateActivation{GateSource::kTtc, EventSeverity::kBrake,
                            "ttc brake latch held across an internal fault"});
+        // Same for an engaged steering hold: its timer is held as it is (the gate did not
+        // run) and its engagement keeps being reported, through the gate's own helpers so the
+        // detail matches. safe_output already holds the previous steering, the held angle.
+        if (gate_->steering_hold_engaged(obstacle_hold_timer_s_)) {
+          fault_activations.push_back(
+              gate_->steering_hold_activation(safe_output.steering_angle_rad));
+        }
       }
       publish_transitions(fault_activations, {}, steady_now, now);
       previous_output_ = safe_output;
@@ -429,6 +447,8 @@ class SafetyNode : public rclcpp::Node {
   double min_scan_range_m_;
   // Obstacle-gate latch, threaded through evaluate() like previous_output_ (gate_logic.hpp).
   bool ttc_brake_latched_{false};
+  // Steering-hold timer on that latch, threaded the same way (gate_logic.hpp).
+  std::optional<double> obstacle_hold_timer_s_;
   // Forward sector (configure_scan_sector).
   double sector_half_angle_rad_{0.0};
   double laser_yaw_rad_{0.0};

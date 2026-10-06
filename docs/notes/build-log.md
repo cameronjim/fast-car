@@ -1776,3 +1776,19 @@ floor look at a forward sector only (`limits.ttc_forward_sector_half_angle_rad`,
 
 Open: repeat the wheels-off check described at the end of the note before `lidar:=true` is
 used while driving.
+
+## 2026-10-06 late: steering hold on the obstacle latch, release retuned (vehicle_params 0.8.0)
+
+Third wheels-off pass with gap_follow_node on 0.7.2. Two things the owner saw on the stand:
+the servo kept hunting while the latch held the car at zero throttle, and a person standing
+beside the front corner was inside the 1.0 rad forward sector and held the latch.
+
+Software change, NOT yet run on the car: once the obstacle latch has held the gated speed at
+zero for `limits.obstacle_steering_hold_after_s` (new required field, PROVISIONAL 0.5 s),
+safety_node freezes the steering at the angle it had when the hold started, until the latch
+releases. Braking at speed still keeps live steering. `ttc_warning_s` (the release line)
+0.6 -> 0.45 s, `ttc_forward_sector_half_angle_rad` 1.0 -> 0.6 rad; `ttc_brake_s` 0.35 s and
+`min_forward_clearance_m` 0.20 m unchanged. Details in the steering hold section of
+`docs/notes/ttc-limit-cycle-2026-10-06.md`.
+
+Open: the bench check at the end of that section before `lidar:=true` is used while driving.

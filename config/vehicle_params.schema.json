@@ -431,7 +431,8 @@
       "required": [
         "global_speed_cap_mps", "min_velocity_mps", "ttc_warning_s", "ttc_brake_s",
         "envelope_fraction_speed", "envelope_fraction_lateral_accel",
-        "mux_watchdog_timeout_s", "mux_kill_switch_threshold_us"
+        "mux_watchdog_timeout_s", "mux_kill_switch_threshold_us",
+        "min_forward_clearance_m", "ttc_forward_sector_half_angle_rad"
       ],
       "properties": {
         "global_speed_cap_mps": {
@@ -455,6 +456,17 @@
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 10,
           "units": "s",
           "description": "Time-to-collision hard-brake threshold used by racer_safety/safety_node's layer-3 TTC gate. Null disables the gate. The committed value is PROVISIONAL: a conventional F1TENTH-class starting point, not tuned against this car's measured braking distance. Note that safety_node's forward-speed estimate for TTC is its own COMMANDED speed until /odom exists."
+        },
+        "min_forward_clearance_m": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 5,
+          "units": "m",
+          "description": "Distance floor for racer_safety/safety_node's layer-3 obstacle gate (added 2026-10-06, schema 0.7.0). If the nearest valid LiDAR return inside the forward sector (ttc_forward_sector_half_angle_rad) is closer than this, measured from the LiDAR head, forward throttle is held at zero regardless of the requested speed, latched with the TTC brake and released once that return is farther than this times the gate's release factor (racer_safety/gate_logic.hpp). Catches the crawl-speed case TTC cannot. The committed value is PROVISIONAL, not measured."
+        },
+        "ttc_forward_sector_half_angle_rad": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 3.141593,
+          "units": "rad",
+          "sign_convention": "symmetric about the vehicle's +x axis (base_link, REP-103); the sector is [-value, +value] in VEHICLE bearing, i.e. after sensors.lidar.mount_yaw_rad is applied to each laser bearing",
+          "description": "Half angle of the forward sector over which racer_safety/safety_node takes the minimum LiDAR range for the TTC gate and the distance floor (added 2026-10-06, schema 0.7.0; before that it used the whole 360 degree scan, so self-returns and anything beside or behind the car braked a forward command). The committed value is PROVISIONAL, not tuned."
         },
         "envelope_fraction_speed": {
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1,

@@ -146,6 +146,11 @@ if(BUILD_TESTING)
     TARGET test_gap_follow_node_launch
     TIMEOUT 120
   )
+  # forward_preference / gap_switch_margin range checks: out of [0, 1] refuses to start.
+  add_launch_test(test/test_gap_follow_node_params_launch.py
+    TARGET test_gap_follow_node_params_launch
+    TIMEOUT 120
+  )
   add_launch_test(test/test_wall_follow_node_launch.py
     TARGET test_wall_follow_node_launch
     TIMEOUT 120

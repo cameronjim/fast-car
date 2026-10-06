@@ -789,6 +789,36 @@ teleop.md` already records).
 The default Teleop panel binds the up button to `linear.x = 2.0 m/s`, which is just above the
 deadzone below -- deliberately, so the first click actually moves the car rather than clicking.
 
+### Gap follow from the launch file (LiDAR; checkpoint profile of 2026-10-06)
+
+gap_follow_node drove its first working floor laps on 2026-10-06; that parameter set is the
+`floor-2026-10-06` profile of `racer_control`'s `gap_follow.launch.py` (table and known limits
+in `docs/notes/reactive-control-port-2026-10-05.md`, "Checkpoint 2026-10-06"). Same pre-drive
+checklist as above, kill switch in a second person's hand.
+
+1. Start the stack with the LiDAR and NO teleop source: in "Start the stack" above, end the
+   command with `exec ros2 launch racer_bringup car_teleop.launch.py lidar:=true` (no
+   `browser_teleop:=true`). gap_follow_node publishes `/drive_raw`, and nothing arbitrates
+   between two publishers of it, so no keyboard or browser teleop while it runs. Recording
+   stays on (the default); the bag picks up `/scan`, `/drive_raw` and `/drive`.
+2. In a second terminal, into the same container:
+
+   ```sh
+   docker exec -it car-stack bash -lc '
+     source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash
+     exec ros2 launch racer_control gap_follow.launch.py profile:=floor-2026-10-06'
+   ```
+
+   The startup line `gap_follow_node up: ...` must show `max speed 0.90 m/s, speed time
+   constant 0.500 s, target range median over 5 scans`. If it does not, the workspace was not
+   rebuilt after pulling (step 6).
+3. Any launch argument given explicitly overrides the profile, for example
+   `profile:=floor-2026-10-06 max_speed_mps:=0.7`. Leave `laser_yaw_from_vehicle_params` alone:
+   on the car the LiDAR yaw comes from `config/vehicle_params.yaml`.
+4. Stop with Ctrl-C in the second terminal. gap_follow_node then stops publishing and
+   safety_node brakes on the `/drive_raw` silence; the kill switch is still the first thing to
+   reach for if the car does anything unexpected.
+
 ### The throttle start deadzone (expect this, it is not a fault)
 
 **HISTORICAL, 2026-09-21 (sensorless, Current No Reverse With Brake).** Since 2026-09-29 the

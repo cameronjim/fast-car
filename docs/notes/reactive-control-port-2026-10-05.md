@@ -182,6 +182,86 @@ With the clamp on by default the L5 canary below still passes: 26.04 s and 25.95
 laps on two runs, worst distance from the raceline 0.165 m and 0.163 m (was about 26.0 s and
 0.163 m).
 
+## Checkpoint 2026-10-06: first working floor laps
+
+On the evening of 2026-10-06 gap_follow_node completed its first working laps on the floor, on
+the owner's living-room lane, with the node parameters below. They are saved as the
+`floor-2026-10-06` profile of `gap_follow.launch.py` (`FLOOR_2026_10_06_PROFILE`), so the
+working state can always be brought back:
+
+```sh
+ros2 launch racer_control gap_follow.launch.py profile:=floor-2026-10-06
+```
+
+This is a checkpoint, not a tuned optimum: one evening of hand tuning on one lane at 0.5 to
+0.9 m/s. To record a better set later, add a new dated profile rather than editing this one.
+Any launch argument given explicitly still wins over the profile (for example
+`max_speed_mps:=0.7`), and the profile wins over `params_file`. `profile:=none`, the default,
+passes nothing extra and keeps the node defaults (and `max_speed_mps` 2.0) exactly as before.
+
+| Parameter | Profile | Node default |
+|---|---|---|
+| `min_speed_mps` | 0.5 | 0.5 |
+| `max_speed_mps` | 0.9 | 2.0 |
+| `k_steer` | 0.4 | 0.5 |
+| `free_space_threshold_m` | 0.6 | 1.5 |
+| `steering_gain` | 1.6 | 1.0 |
+| `steering_time_constant_s` | 0.15 | 0.1 |
+| `disparity_threshold_m` | 0.3 | 0.5 |
+| `cone_half_angle_rad` | 1.2 | 1.57 |
+| `forward_preference` | 0.0 | 0.0 |
+| `gap_switch_margin` | 0.0 | 0.0 |
+| `swept_path_clamp` | true | true |
+| `swept_path_lookahead_m` | 0.6 | 1.0 |
+| `corner_sector_inner_rad` | 0.4 | pi/2 |
+| `corner_sector_outer_rad` | 1.6 | 3 pi/4 |
+| `corner_min_clearance_m` | 0.35 | 0.2 |
+| `speed_rate_limit_margin_fraction` | 0.1 | 0.5 |
+| `target_deepest_ray` | false | false |
+| `speed_time_constant_s` (new, see below) | 0.5 | 0.0 (off) |
+| `target_range_median_scans` (new, see below) | 5 | 1 (off) |
+
+Everything not listed (`k_speed_per_s` 1.0, `safety_margin_m`, `clip_max_range_m`, the control
+rate, the watchdog) stays at the node default.
+
+### Speed smoothing
+
+The one complaint left after the laps: the speed surged and slowed all the time. Speed is
+`clamp(k_speed * range along the target bearing, min, max)` times the steering slowdown,
+recomputed for every scan at 10 Hz, and the target range flickers between scans. With
+`speed_rate_limit_margin_fraction` 0.1 the rate limiter already holds acceleration to about
+0.95 m/s^2, but it never limits deceleration, so every short target range dropped the speed at
+once and the limiter then ramped it back up. Two new parameters, both off by default, both in
+the profile, both `gap_follow.launch.py` arguments:
+
+- `target_range_median_scans` (integer, 1 to 15, default 1 = off): the speed law uses the
+  median of the last N scans' target ranges instead of this scan's. With 5 a target range has
+  to persist for 3 of the last 5 scans (0.3 s) before it changes the speed, so a one or two scan
+  flicker never reaches it. Updated once per scan, not per control cycle.
+- `speed_time_constant_s` (0 to 5 s, default 0 = off): a first-order low-pass (the same
+  `FirstOrderLowPass` as the steering) on the speed command, applied BEFORE the
+  `SpeedRateLimiter`, so the limiter still bounds the acceleration of what is published. 0.5 s
+  spreads a step over about a second in both directions.
+
+Both reset with the rate limiter when the `/scan` watchdog trips. With both off the speed
+chain is bit-identical to before (pinned by a gtest against the unfiltered chain), and the L5
+canary, which runs on the node defaults, still passes: 26.035 s for two laps, worst distance
+from the raceline 0.163 m.
+
+The smoothing has not been on the floor yet; the laps above were driven without it.
+
+### Known limits
+
+- Turning circle about 0.8 m (full lock, 0.4189 rad on the 0.3302 m wheelbase, is a 0.742 m
+  radius at the rear axle centre, more at the body), while the corners of the lane need about
+  1 m of radius. There is little margin in the corners, which is why the corner and swept-path
+  settings above matter, and a tighter corner than this lane's will not go round.
+- No reverse. A car that ends up nose-in to a wall waits for safety_node's latch and cannot back
+  out. The next step per the roadmap (2.3b) is a rear corridor check in safety_node, then a
+  reverse escape behaviour in gap_follow_node (latched for a few seconds, back straight out a
+  short distance, resume).
+- One lane, one evening, one speed band. Nothing here says the profile works elsewhere.
+
 ## L5 canary
 
 `tests/l5_reactive_lap` runs `bridge_node` and `gap_follow_node` (which sees only `/scan`) on

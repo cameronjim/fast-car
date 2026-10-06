@@ -23,7 +23,7 @@ from racer_policy.verify import verify_against_environment
 def test_accepts_when_contract_matches_the_real_committed_params(
     tmp_path: Path, valid_manifest: dict[str, Any], real_vehicle_params: Any
 ) -> None:
-    # config/vehicle_params.yaml currently has meta.schema_version = "0.7.0" (0.1.0 ->
+    # config/vehicle_params.yaml currently has meta.schema_version = "0.7.1" (0.1.0 ->
     # 0.2.0 for milestone 4, roadmap task 1.3; 0.2.0 -> 0.2.1 when that file's safety_mux
     # PWM/watchdog fields were given PROVISIONAL values; 0.2.1 -> 0.2.2 when
     # actuation.throttle_full_scale_mps was added and the TTC thresholds were filled in,

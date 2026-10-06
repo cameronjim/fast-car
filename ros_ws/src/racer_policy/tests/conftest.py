@@ -97,7 +97,7 @@ _TEMPLATE: dict[str, Any] = {
         # gate's path corridor, first floor test), then 0.9.0 -> 0.9.1 (sector bound widened)
         # and 0.9.1 -> 0.9.2 (ttc_warning_s release line 0.45 -> 0.36, arc corridor floor
         # test), both value-only.
-        "schema_version": "0.9.3",
+        "schema_version": "0.9.4",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

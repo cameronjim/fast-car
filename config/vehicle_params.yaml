@@ -111,6 +111,15 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.9.3 -> 0.9.4 on 2026-10-06 (late): limits.ttc_brake_s 0.35 -> 0.6,
+# ttc_warning_s 0.36 -> 0.75, min_forward_clearance_m 0.20 -> 0.40. The earlier values were
+# tuned while throttle_full_scale_mps was 5.0, when a "1.0 m/s" request was really 0.6 m/s.
+# With the scale corrected (0.9.3) the follower crawls at a real 0.5 m/s, where 0.35 s is
+# 0.17 m: below the 0.20 m floor, which is measured from the LiDAR head 0.15 m behind the
+# bumper. Bag 2026-10-06T23-19-41: one brake, the floor at 0.18 m, bumper against the wall.
+# Now 0.6 s brakes 0.30 m out at 0.5 m/s and 0.54 m out at 0.9 m/s, with the floor 0.25 m
+# ahead of the bumper as the backstop. Value change only: patch bump per rule 5.
+#
 # schema_version bumped 0.9.2 -> 0.9.3 on 2026-10-06: actuation.throttle_full_scale_mps 5.0 ->
 # 2.91, derived from the VESC's 6000 ERPM cap and the drivetrain fields (see the field's own
 # note). Every speed request now means roughly the real wheel speed, and the smallest request
@@ -501,8 +510,8 @@ limits:
   # bug, fixed in racer_safety, but the threshold was also too small. Release of the latched
   # brake needs the requested speed's TTC to exceed ttc_warning_s, so the warning value is
   # also the brake's release point.
-  ttc_warning_s: 0.36               # PROVISIONAL (floor test 2026-10-06 late: release line just above the brake, see 0.9.2 note)
-  ttc_brake_s: 0.35                 # PROVISIONAL (bench-tuned 2026-10-06, second pass, see 0.7.2 note)
+  ttc_warning_s: 0.75               # PROVISIONAL (crawl-speed pass 2026-10-06 late: release line, see 0.9.4 note)
+  ttc_brake_s: 0.6                  # PROVISIONAL (crawl-speed pass 2026-10-06 late, see 0.9.4 note)
   # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
   # nearest valid return inside the forward sector below is closer than this, forward throttle
   # is held at zero whatever the requested speed, with the same latch as the TTC brake
@@ -511,7 +520,7 @@ limits:
   # when the obstacle is centimetres away. PROVISIONAL, NOT measured: 0.30 m is the
   # 2026-10-06 bench obstacle distance (0.22 m) plus a margin, chosen so that case brakes.
   # Replace with a value from measured coast-down distance at teleop speeds (roadmap phase 2).
-  min_forward_clearance_m: 0.20     # PROVISIONAL (bench-tuned 2026-10-06, second pass; measured from the LiDAR, about 0.05 m ahead of the bumper)
+  min_forward_clearance_m: 0.40     # PROVISIONAL (crawl-speed pass 2026-10-06 late; measured from the LiDAR head, about 0.25 m ahead of the bumper)
   # Half angle of the forward sector, in the VEHICLE frame (base_link, x forward, left
   # positive). Since schema 0.9.0 (2026-10-06 floor test) this is only the OUTER bound of the
   # obstacle gate's in-path test: no return outside it is ever considered, whatever
@@ -577,6 +586,6 @@ meta:
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.9.3"
+  schema_version: "0.9.4"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

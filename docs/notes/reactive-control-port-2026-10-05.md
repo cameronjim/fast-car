@@ -71,7 +71,9 @@ c. **Disparity extension.** The bubble is `ceil(atan2(half_width + safety_margin
    order. Work is O(n + total bubble length).
 d. **Gap selection.** Still the widest free gap in the cone, tie-broken toward forward, aimed
    at its centre. `target_deepest_ray` (default off) aims at the gap's deepest ray instead,
-   tie-broken toward forward. Both are tested.
+   tie-broken toward forward. Both are tested. Two optional scoring terms were added after
+   the 2026-10-06 floor test; both default to off, which is exactly this behaviour (see
+   "Gap selection after the 2026-10-06 floor test" below).
 e. **Steering.** A PID on a target bearing is not meaningful (its I term winds up on any
    steady curve), so it is gone: `steering = clamp(steering_gain * bearing, +/- max_angle)`,
    then a first-order low-pass (`steering_time_constant_s`, default 0.1 s) at the 50 Hz
@@ -90,6 +92,38 @@ g. **Wall follow.** Same two-ray geometry (alpha, D, D + L sin alpha). L was spe
    node steers straight and resets the PID. The PID has no magic first-step dt, skips the
    derivative on the first sample, takes its integral clamp as a parameter, and gets its dt
    from the steady clock between scans.
+
+## Gap selection after the 2026-10-06 floor test
+
+Bag `2026-10-06T22-12-40_car_teleop`: a lane with a continuous wall on one side and scattered
+objects on the other. The follower picked a gap between the objects, into the open room, in 62
+of 63 recorded scans under every parameter set tried. "Widest run of free rays" prefers an
+opening close to the car on the side, because it subtends a wider angle than the lane ahead.
+The owner wants the lane ahead unless a side opening is much bigger. Two parameters, both in
+[0, 1], both default 0 (off), both range-checked by the node (out of range refuses to start)
+and exposed as `gap_follow.launch.py` arguments:
+
+- `forward_preference` p. Each gap scores
+  `angular_width_rad * max(0, 1 - p * (1 - cos(centre_bearing)))`, with the centre bearing in
+  the vehicle frame (laser yaw applied). The best score wins; exact ties still go to the gap
+  nearer forward, and the centre or deepest target is still chosen inside the winning gap.
+  p = 0 is exactly the widest gap (pinned bit-identical against a copy of the old code on the
+  existing fixtures and 800 seeded random scans). p = 1 scores a gap at 90 degrees zero. The
+  weighting is even in the bearing, never rewards turning away, and is quadratic near 0, so a
+  lane a few degrees off axis is barely penalised (10 degrees costs p * 1.5 percent). The
+  clamp at 0 only matters past 90 degrees with p > 0.5. With p = 0.6 a gap centred at 60
+  degrees needs 1.43 times the width of one dead ahead to win.
+- `gap_switch_margin` m. If a gap contains the previous scan's target bearing, it is kept
+  unless the best gap's score exceeds its score by more than the fraction m. This stops the
+  target flipping between two similar gaps on alternate scans.
+
+The launch arguments default to empty, meaning "not set here", so a value in a params file is
+not overridden by a launch default.
+
+In an idealised copy of the floor scene (1.2 m lane, 2 m opening centred at 70 degrees on one
+side, real C1 geometry with yaw pi), p = 0 picks the opening on either side and p = 0.6 picks
+the lane. That is a synthetic test, not a tuning recommendation: pick p on the floor. The L5
+canary runs with the defaults and is unaffected.
 
 ## L5 canary
 

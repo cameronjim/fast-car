@@ -1,8 +1,10 @@
 """L3 node tests for gap_follow_node (claude-docs/12-testing.md, GitHub issue 26).
 
-Launched through the real launch/gap_follow.launch.py (max_speed_mps launch argument plus
-the test/fixtures/gap_follow_test_params.yaml params file), so the launch file is exercised
-too, following test_tracker_node_launch.py's structure.
+Launched through the real launch/gap_follow.launch.py (max_speed_mps, forward_preference and
+gap_switch_margin launch arguments plus the test/fixtures/gap_follow_test_params.yaml params
+file), so the launch file is exercised too, following test_tracker_node_launch.py's
+structure. Out-of-range values for the two gap selection parameters are covered by
+test_gap_follow_node_params_launch.py.
 
 Checklist covered:
   * nominal input: a synthetic scan in racer_gym_bridge's ray ordering (1080 rays over
@@ -77,6 +79,11 @@ def generate_test_description():
         launch_arguments={
             "max_speed_mps": str(_MAX_SPEED_MPS),
             "params_file": _PARAMS_FILE,
+            # Integer-looking strings on purpose: the launch file must hand them to the node
+            # as floats (a double parameter rejects an integer). 0 keeps today's behaviour,
+            # which the steering assertions below rely on.
+            "forward_preference": "0",
+            "gap_switch_margin": "0",
         }.items(),
     )
     return launch.LaunchDescription([gap_follow, launch_testing.actions.ReadyToTest()])

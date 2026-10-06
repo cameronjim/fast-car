@@ -132,10 +132,11 @@ class GapFollowNode : public rclcpp::Node {
     const GapFollowConfig& c = follower_.config();
     RCLCPP_INFO(this->get_logger(),
                 "gap_follow_node up: %.1f Hz, half width %.3f m + margin %.3f m, cone +/- %.3f "
-                "rad, laser yaw %.3f rad, %s target, max speed %.2f m/s",
+                "rad, laser yaw %.3f rad, %s target, forward preference %.3f, gap switch "
+                "margin %.3f, max speed %.2f m/s",
                 control_rate_hz, c.half_width_m, c.safety_margin_m, c.cone_half_angle_rad,
                 c.laser_yaw_offset_rad, c.target == GapTarget::kDeepest ? "deepest" : "centre",
-                max_speed_mps_);
+                c.forward_preference, c.gap_switch_margin, max_speed_mps_);
   }
 
  private:
@@ -163,6 +164,16 @@ class GapFollowNode : public rclcpp::Node {
                    "Aim at the deepest ray of the chosen gap instead of its centre ray.")
                    ? GapTarget::kDeepest
                    : GapTarget::kCentre;
+    c.forward_preference = declare_ranged_double(
+        *this, "forward_preference", 0.0, 0.0, 1.0,
+        "Weights gap selection toward the vehicle's forward direction: each gap scores "
+        "width * max(0, 1 - p * (1 - cos(centre bearing))). 0 (default) = plain widest gap; "
+        "1 = a gap at 90 degrees scores zero. See gap_follow.hpp GapPreference.");
+    c.gap_switch_margin = declare_ranged_double(
+        *this, "gap_switch_margin", 0.0, 0.0, 1.0,
+        "Gap switching hysteresis (fraction). Keep the gap containing last scan's target "
+        "bearing unless another gap's score exceeds it by more than this fraction. 0 "
+        "(default) = off.");
     c.steering_gain = declare_ranged_double(*this, "steering_gain", 1.0, 0.0, 10.0,
                                             "steering = clamp(gain * target bearing, +/- max).");
     c.corner_sector_inner_rad = declare_ranged_double(

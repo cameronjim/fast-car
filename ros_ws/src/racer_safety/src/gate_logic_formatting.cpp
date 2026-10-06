@@ -79,6 +79,16 @@ std::string ttc_release_detail(double ttc_s, double release_ttc_s, double range_
          "m (nan = that half of the gate is disabled)";
 }
 
+std::string steering_hold_detail(double held_steering_angle_rad, double hold_after_s) {
+  return "steering held while obstacle-latched: held angle " +
+         std::to_string(held_steering_angle_rad) + " rad (output speed zero for at least " +
+         std::to_string(hold_after_s) + "s; frozen until the latch releases)";
+}
+
+std::string steering_hold_release_detail() {
+  return "steering hold released (obstacle latch released, or the output speed left zero)";
+}
+
 std::string covariance_detail(double speed_fraction) {
   return "covariance gate engaged; speed fraction " + std::to_string(speed_fraction);
 }

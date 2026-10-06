@@ -91,3 +91,36 @@ for a drive: wheels off the ground, the same gap_follow setup and an obstacle at
 check that `/drive` stays at 0 with ONE `ttc` brake engage record, then move the obstacle away
 and check one "ttc brake released" record and a smooth ramp. Also check that nothing on the car
 itself is inside the forward sector within the floor distance.
+
+## Steering hold while parked on the latch (2026-10-06, late)
+
+Third wheels-off pass with gap_follow_node, vehicle_params 0.7.2. The latch held the car at
+zero throttle as intended, but the steering servo kept hunting back and forth: the gate keeps
+steering live while latched, and gap_follow_node's steering request wandered while it looked
+for a gap it could not take.
+
+Change (racer_safety, vehicle_params 0.7.3, not yet run on the car):
+
+- Steering stays live while the latch is fresh, because a car braking at speed must keep
+  steering authority. Once the latch has held the gated output speed at exactly zero for
+  `limits.obstacle_steering_hold_after_s` (new, PROVISIONAL 0.5 s), the gate freezes the
+  steering output at the angle it had when the hold started, until the latch releases. A
+  reverse request (allowed while latched) moves the car, so it gets its steering back and the
+  timer restarts.
+- The timer uses the gate's own dt, threaded through `GateInput` / `GateResult` like the latch.
+  Watchdog, command-sanity and internal-fault short-circuits hold it as it is.
+- `/safety/events`: one `ttc` INFO engage, "steering held while obstacle-latched" with the held
+  angle, and one release, "steering hold released", normally on the same cycle as "ttc brake
+  released".
+- Zero speed is a coast and there is no `/odom`, so 0.5 s stands in for "the car has stopped".
+  It needs to be longer than the coast to rest from the speeds the car is driven at.
+
+Same commit, release tuning: `limits.ttc_warning_s` (the release line) 0.6 -> 0.45 s and
+`limits.ttc_forward_sector_half_angle_rad` 1.0 -> 0.6 rad. A person standing beside the front
+corner sat inside the 1.0 rad sector and held the latch, and releasing at 0.6 s with a
+1.0 m/s request needed 0.6 m of clear road (0.45 m at 0.45 s). `ttc_brake_s` 0.35 s and
+`min_forward_clearance_m` 0.20 m are unchanged.
+
+Bench check still to do: park the car on an obstacle with gap_follow_node running, check that
+the servo stops moving about 0.5 s after `/drive` goes to zero and that it steers again when
+the obstacle is moved away; stand beside the front corner and check the latch no longer holds.

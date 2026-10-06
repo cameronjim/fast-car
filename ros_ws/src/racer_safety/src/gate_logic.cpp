@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -87,15 +88,22 @@ constexpr double kMinForwardSpeedMps = 1e-6;
 // lands here without its own branch.
 bool is_garbage_range(double range_m) { return !(range_m > 0.0); }
 
-// The watchdog and command-sanity short-circuits do not run the obstacle gate, so they cannot
-// judge a release: they hold the latch (result.ttc_brake_latched already carries the input's
-// value) and keep reporting the engagement so an unrelated short-circuit does not split it
-// into two interventions.
-void report_held_obstacle_latch(bool latched, GateResult& result) {
-  if (latched) {
-    result.activations.push_back(GateActivation{GateSource::kTtc, EventSeverity::kBrake,
-                                                formatting::ttc_latch_held_detail()});
+// The steering-hold timer for a cycle on which the latch holds the output speed at zero
+// (gate_logic.hpp, "STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH"): 0.0 on the first such
+// cycle, previous + dt after that. A garbage previous value (non-finite or negative, which no
+// path in this file produces) restarts the timer: steering stays live, today's behaviour,
+// rather than holding on nonsense. `dt_s` has already been through safe_dt.
+double advance_hold_timer_s(const std::optional<double>& previous_s, double dt_s) {
+  if (!previous_s.has_value()) {
+    return 0.0;
   }
+  if (!std::isfinite(*previous_s)) {
+    return 0.0;
+  }
+  if (*previous_s < 0.0) {
+    return 0.0;
+  }
+  return *previous_s + dt_s;
 }
 
 }  // namespace
@@ -162,6 +170,72 @@ DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
     }
   }
   return out;
+}
+
+bool SafetyGateLogic::steering_hold_engaged(const std::optional<double>& hold_timer_s) const {
+  if (!hold_timer_s.has_value()) {
+    return false;
+  }
+  // Written as a literal `if` (not `return a >= b`) for the branch-coverage gate. A NaN
+  // configured hold time never engages.
+  if (*hold_timer_s >= limits_.obstacle_steering_hold_after_s) {
+    return true;
+  }
+  return false;
+}
+
+GateActivation SafetyGateLogic::steering_hold_activation(double held_steering_angle_rad) const {
+  return GateActivation{GateSource::kTtc, EventSeverity::kInfo,
+                        formatting::steering_hold_detail(held_steering_angle_rad,
+                                                         limits_.obstacle_steering_hold_after_s)};
+}
+
+void SafetyGateLogic::hold_obstacle_state(const GateInput& input,
+                                          const DriveCommand& previous_output,
+                                          GateResult& result) const {
+  // result.ttc_brake_latched already carries the input's latch. Without a latch the hold timer
+  // stays cleared (GateResult's default) and the hold does not apply.
+  if (input.ttc_brake_latched) {
+    result.activations.push_back(GateActivation{GateSource::kTtc, EventSeverity::kBrake,
+                                                formatting::ttc_latch_held_detail()});
+    result.obstacle_hold_timer_s = input.obstacle_hold_timer_s;
+    if (steering_hold_engaged(input.obstacle_hold_timer_s)) {
+      // The short-circuit output already holds the previous steering (zero_throttle_command),
+      // which is the held angle; this only keeps the engagement from being split.
+      result.activations.push_back(
+          steering_hold_activation(zero_throttle_command(previous_output).steering_angle_rad));
+    }
+  }
+}
+
+void SafetyGateLogic::apply_steering_hold(const GateInput& input,
+                                          const DriveCommand& previous_output, double dt_s,
+                                          DriveCommand& target, DriveCommand& output,
+                                          GateResult& result) const {
+  std::optional<double> timer_s;  // nullopt: the latch is not holding the output at zero
+  if (result.ttc_brake_latched) {
+    if (output.speed_mps == 0.0) {
+      timer_s = advance_hold_timer_s(input.obstacle_hold_timer_s, dt_s);
+    }
+  }
+  result.obstacle_hold_timer_s = timer_s;
+
+  if (steering_hold_engaged(timer_s)) {
+    // Frozen at the angle the output had when the hold started: the previous output, which
+    // on every later held cycle is that same angle again. Bounds-clamped and NaN-defended
+    // (zero_throttle_command) although no path here can produce either case.
+    const double held_rad = clamp_value(zero_throttle_command(previous_output).steering_angle_rad,
+                                        limits_.steering_min_rad, limits_.steering_max_rad);
+    // `target` too, so the rate-limit detection below does not count the hold as a clamp.
+    target.steering_angle_rad = held_rad;
+    output.steering_angle_rad = held_rad;
+    result.activations.push_back(steering_hold_activation(held_rad));
+  } else if (steering_hold_engaged(input.obstacle_hold_timer_s)) {
+    // The hold ended on this cycle (latch released, or a reverse request moved the car): the
+    // note that becomes the PHASE_RELEASE record's detail.
+    result.releases.push_back(GateActivation{GateSource::kTtc, EventSeverity::kInfo,
+                                             formatting::steering_hold_release_detail()});
+  }
 }
 
 double SafetyGateLogic::ttc_release_threshold_s() const {
@@ -310,7 +384,7 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     result.activations.push_back(
         GateActivation{GateSource::kWatchdog, EventSeverity::kBrake,
                        formatting::watchdog_detail(watchdog_timeout_s, input.drive_raw_age_s)});
-    report_held_obstacle_latch(input.ttc_brake_latched, result);
+    hold_obstacle_state(input, previous_output, result);
     return result;
   }
 
@@ -322,7 +396,7 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
     result.zero_throttle = true;
     result.activations.push_back(GateActivation{GateSource::kCommandSanity, EventSeverity::kBrake,
                                                 formatting::command_sanity_detail()});
-    report_held_obstacle_latch(input.ttc_brake_latched, result);
+    hold_obstacle_state(input, previous_output, result);
     return result;
   }
 
@@ -355,6 +429,12 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   const double dt_s = safe_dt(input.dt_s);
   DriveCommand rate_limited = rate_limit(target, previous_output, dt_s);
   rate_limited = clamp_to_bounds(rate_limited);
+
+  // 3d. Steering hold while parked on the obstacle latch (gate_logic.hpp, "STEERING HOLD WHILE
+  // PARKED ON THE OBSTACLE LATCH"). Runs on the final speed, so "held at zero" means what the
+  // car is actually sent; may freeze the steering of `target` and `rate_limited`.
+  apply_steering_hold(input, previous_output, dt_s, target, rate_limited, result);
+
   bool rate_clamped = false;
   if (rate_limited.steering_angle_rad != target.steering_angle_rad) {
     rate_clamped = true;

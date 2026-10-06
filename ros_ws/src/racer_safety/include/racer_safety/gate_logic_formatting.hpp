@@ -30,6 +30,8 @@ std::string clearance_brake_detail(double range_m, double min_clearance_m);
 std::string ttc_latch_held_detail();
 std::string ttc_release_detail(double ttc_s, double release_ttc_s, double range_m,
                                double release_clearance_m);
+std::string steering_hold_detail(double held_steering_angle_rad, double hold_after_s);
+std::string steering_hold_release_detail();
 std::string covariance_detail(double speed_fraction);
 std::string release_detail(double duration_s);
 std::string release_detail_with_reason(double duration_s, const std::string& reason);

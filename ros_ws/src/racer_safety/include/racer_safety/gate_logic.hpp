@@ -60,6 +60,10 @@
 //      3c. a rate-limit clamp against the PREVIOUS cycle's output (steering rate, and speed
 //          increase only -- braking/decelerating is never rate-limited), applied to whatever
 //          3b left, so the rate limit holds on everything that is finally output.
+//      3d. the steering hold: once the obstacle latch has held the output speed at zero for
+//          SafetyLimits::obstacle_steering_hold_after_s, the steering output is frozen at
+//          the angle it had when the hold started, until the latch releases. See "STEERING
+//          HOLD WHILE PARKED ON THE OBSTACLE LATCH" below.
 //   4. Covariance gate: STUB. No /pose source exists yet (roadmap task 2.6); see
 //      `evaluate_covariance_gate` below. Per this milestone's instructions, the stub must
 //      fail SAFE, meaning absent pose input must not disable any of the other gates above --
@@ -121,6 +125,54 @@
 //     calls it per scan): returns within +/- limits.ttc_forward_sector_half_angle_rad of the
 //     vehicle's +x axis, after sensors.lidar.mount_yaw_rad, invalid returns ignored.
 //
+// STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH (added 2026-10-06 late; read before
+// changing step 3d).
+//
+// Why. A TTC or clearance brake zeroes forward throttle and keeps steering live, and that
+// stays true: a car braking at speed must keep steering authority, so for the first part of a
+// latched episode the steering passes exactly as it always has (bounds-clamped and
+// rate-limited, test_obstacle_gate.cpp's "SteeringIsKeptAndStillRateLimitedDuringALatchedBrake").
+// But a car PARKED against an obstacle has nothing to steer for, and on the 2026-10-06 stand
+// run with gap_follow_node the owner watched the servo hunt back and forth while the latch
+// held the car still, following a steering request that wandered as the planner looked for a
+// gap it could not take. So: once the latch has held the output speed at zero for
+// SafetyLimits::obstacle_steering_hold_after_s (vehicle_params
+// limits.obstacle_steering_hold_after_s, PROVISIONAL 0.5 s), the steering output is frozen at
+// the angle it had when the hold started (the previous cycle's output), and stays frozen until
+// the latch releases. Braking at speed keeps steering; a car parked against an obstacle stops
+// twitching its servo.
+//
+// Details, each one deliberate:
+//   * The timer is the gate's own dt accounting (the same safe_dt the rate limiter uses), not
+//     a wall clock: GateInput::obstacle_hold_timer_s comes in, GateResult::
+//     obstacle_hold_timer_s goes out, threaded by safety_node like the latch. It is
+//     std::nullopt whenever the latch is not holding the output at zero; it starts at 0.0 on
+//     the first cycle that does and grows by dt on each further one. The hold engages on the
+//     first cycle where it is >= the configured time.
+//   * "Held at zero" means the final OUTPUT speed is exactly 0.0 while the latch is set. A
+//     reverse request passes while latched (backing away is allowed), the output is then not
+//     zero, so the timer resets and the hold lets go: a car moving backwards gets its
+//     steering back. Garbage timer input (non-finite or negative) restarts the timer rather
+//     than holding on nonsense; that is today's behaviour (steering live), not a new risk.
+//   * Zero speed on /drive is a coast (GateResult note below) and safety_node has no /odom, so
+//     the hold time is the stand-in for "the car has actually stopped". It must stay longer
+//     than the car takes to coast to rest from the speeds it is driven at.
+//   * Watchdog, command-sanity and internal-fault short-circuits keep their own behaviour
+//     (zero speed, previous steering held). They do not run the gate, so, like the latch,
+//     they HOLD the timer as it came in (no advance, no reset) when the latch is set, and keep
+//     reporting the hold engagement if it was engaged, so a one-cycle blip does not split it.
+//     With no latch they clear the timer and the hold does not apply.
+//   * Events: the hold is reported as a (kTtc, kInfo) activation, "steering held while
+//     obstacle-latched" with the held angle in the detail, on every cycle it is engaged, so
+//     GateEventTracker publishes ONE PHASE_ENGAGE when it engages and one PHASE_RELEASE
+//     (detail "steering hold released") when it ends, normally on the same cycle as the
+//     latch's own "ttc brake released" record. It shares (kTtc, kInfo) with the TTC warning
+//     advisory, which is emitted only while NOT latched, so the two can never be engaged on
+//     the same or adjacent cycles: the hold needs the latch, and the latch releases only when
+//     the request's TTC is above the warning threshold.
+//   * Unset (SafetyLimits default +infinity) never holds. safety_node always sets it from the
+//     binding; only tests leave it unset, so the pre-existing suites see no hold.
+//
 // Every field that would naturally come from `config/vehicle_params.yaml` is threaded in
 // through `SafetyLimits`, populated ONLY from the generated vehicle_params C++ binding by
 // safety_node.cpp (CLAUDE.md invariant 2: never hand-write a physical constant) -- this
@@ -131,6 +183,7 @@
 
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -168,6 +221,11 @@ struct SafetyLimits {
   //   * Floor release clearance: min_forward_clearance_m * clearance_release_factor.
   double ttc_release_hysteresis_factor = 2.0;
   double clearance_release_factor = 1.5;
+  // vehicle_params limits.obstacle_steering_hold_after_s (schema 0.7.3, required there, so
+  // safety_node always sets it): how long the obstacle latch must have held the output speed
+  // at zero before the steering output is frozen (see "STEERING HOLD WHILE PARKED ON THE
+  // OBSTACLE LATCH" above). The default +infinity never holds; only tests rely on it.
+  double obstacle_steering_hold_after_s = std::numeric_limits<double>::infinity();
   int watchdog_missed_cycles = 3;
   double control_period_s = 0.02;  // 1 / 50 Hz, claude-docs/04-architecture.md
 };
@@ -244,6 +302,10 @@ struct GateInput {
   // The obstacle-gate latch as the previous cycle left it (GateResult::ttc_brake_latched).
   // false at startup. See "THE OBSTACLE GATE AND ITS LATCH".
   bool ttc_brake_latched = false;
+  // The steering-hold timer as the previous cycle left it (GateResult::obstacle_hold_timer_s):
+  // seconds the latch has held the output speed at zero, std::nullopt when it was not. See
+  // "STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH".
+  std::optional<double> obstacle_hold_timer_s;
   // Covariance gate stub inputs (TODO roadmap task 2.6: wire from /pose once it exists).
   // `has_pose_input` is always false until then; `pose_covariance_trace` is unused while it
   // is.
@@ -279,6 +341,9 @@ struct GateResult {
   // The obstacle-gate latch after this cycle; safety_node feeds it back in as next cycle's
   // GateInput::ttc_brake_latched.
   bool ttc_brake_latched = false;
+  // The steering-hold timer after this cycle; safety_node feeds it back in as next cycle's
+  // GateInput::obstacle_hold_timer_s.
+  std::optional<double> obstacle_hold_timer_s;
   // Why an engagement ended, for gates that know (today only the obstacle gate's "ttc brake
   // released" note). Not an engagement: GateEventTracker::update uses a matching
   // (source, severity) entry here as the detail of that engagement's PHASE_RELEASE record.
@@ -316,6 +381,13 @@ class SafetyGateLogic {
   // requested), seeded to {0, 0} by the node at startup.
   GateResult evaluate(const GateInput& input, const DriveCommand& previous_output) const;
 
+  // Whether a steering-hold timer value means the hold is engaged (>= the configured hold
+  // time). Public, with steering_hold_activation, because safety_node's fail-closed exception
+  // path must keep reporting an engaged hold exactly the way the gate's own short-circuits do.
+  bool steering_hold_engaged(const std::optional<double>& hold_timer_s) const;
+  // The (kTtc, kInfo) "steering held while obstacle-latched" activation for a given held angle.
+  GateActivation steering_hold_activation(double held_steering_angle_rad) const;
+
  private:
   DriveCommand clamp_to_bounds(const DriveCommand& cmd) const;
   DriveCommand rate_limit(const DriveCommand& cmd, const DriveCommand& previous_output,
@@ -326,6 +398,15 @@ class SafetyGateLogic {
                            DriveCommand& target, GateResult& result) const;
   // TTC the request must exceed to release the latch. Only called when ttc_brake_s is set.
   double ttc_release_threshold_s() const;
+  // Step 3d. Advances or clears the hold timer from the final `output` speed and, while the
+  // hold is engaged, freezes the steering of both `target` and `output` at the previous
+  // output's angle. Records the timer, the activation and the release note in `result`.
+  void apply_steering_hold(const GateInput& input, const DriveCommand& previous_output, double dt_s,
+                           DriveCommand& target, DriveCommand& output, GateResult& result) const;
+  // The watchdog / command-sanity short-circuits: hold the latch and the hold timer as they
+  // came in and keep reporting their engagements (see "THE OBSTACLE GATE AND ITS LATCH").
+  void hold_obstacle_state(const GateInput& input, const DriveCommand& previous_output,
+                           GateResult& result) const;
 
   SafetyLimits limits_;
 };

@@ -1111,25 +1111,35 @@ Note how close the nearest self-return is. **That number matters before any driv
 obstacle gate works like this:
 
 - It looks only at returns inside a forward sector of +/- `limits.ttc_forward_sector_half_angle_rad`
-  (PROVISIONAL 1.0 rad, about 57 deg each side) of the car's nose, after turning each laser
+  (PROVISIONAL 0.6 rad since vehicle_params 0.7.3, about 34 deg each side; it was 1.0 rad, and
+  a person beside the front corner held the latch) of the car's nose, after turning each laser
   bearing into a vehicle bearing with `sensors.lidar.mount_yaw_rad` (pi on this car). Returns
   that are NaN, inf, zero, below `range_min` or above `range_max` are ignored. Things behind
-  and beside the car, and the person holding the kill switch behind it, no longer count.
+  and beside the car, and the person holding the kill switch behind it, do not count.
 - TTC is the nearest forward return divided by the REQUESTED speed (not the speed the gate
-  last output). At or below `limits.ttc_brake_s` (PROVISIONAL 1.0 s) it zeroes the forward
-  throttle; at the 0.8 m/s first-tap speed that is anything within 0.8 m ahead.
-- A distance floor, `limits.min_forward_clearance_m` (PROVISIONAL 0.30 m from the LiDAR head),
+  last output). At or below `limits.ttc_brake_s` (PROVISIONAL 0.35 s) it zeroes the forward
+  throttle; at the 0.8 m/s first-tap speed that is anything within 0.28 m ahead.
+- A distance floor, `limits.min_forward_clearance_m` (PROVISIONAL 0.20 m from the LiDAR head),
   zeroes the forward throttle for any forward request, however slow.
 - Both LATCH. Once braked, forward throttle stays at zero until the request's TTC is above
-  `limits.ttc_warning_s` (PROVISIONAL 2.0 s, 1.6 m at 0.8 m/s) AND the nearest forward return
-  is beyond 1.5 times the floor (0.45 m). Letting go of the throttle can clear the TTC half
+  `limits.ttc_warning_s` (PROVISIONAL 0.45 s, 0.36 m at 0.8 m/s) AND the nearest forward return
+  is beyond 1.5 times the floor (0.30 m). Letting go of the throttle can clear the TTC half
   (a zero request has no TTC), but pressing it again re-trips on the same cycle, so no forward
   throttle reaches the motor while the obstacle is still there. Reverse still works while
   latched.
   `/safety/events` shows one `ttc` BRAKE engage record when it trips and one release record
   starting "ttc brake released" when it clears.
+- Steering stays live while the car brakes, so it can still be steered while it coasts. Once
+  the latch has held `/drive` speed at zero for `limits.obstacle_steering_hold_after_s`
+  (PROVISIONAL 0.5 s, since vehicle_params 0.7.3), the steering is FROZEN at the angle it had
+  then, until the latch releases: a car parked against an obstacle stops hunting its servo
+  however the planner's steering request wanders. Reversing while latched unfreezes it. Expect
+  one `ttc` INFO engage record "steering held while obstacle-latched" (with the held angle) and
+  one "steering hold released" record when the latch clears. On the stand: about half a second
+  after `/drive` goes to zero the servo should stop moving, and it should follow the request
+  again as soon as the obstacle is moved away.
 
-So a self-return inside the forward sector and closer than about 0.45 m would hold the car at
+So a self-return inside the forward sector and closer than about 0.30 m would hold the car at
 zero throttle indefinitely. That is why `car_teleop.launch.py`'s `lidar` argument defaults to
 false.
 

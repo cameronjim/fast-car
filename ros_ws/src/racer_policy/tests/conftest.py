@@ -96,8 +96,10 @@ _TEMPLATE: dict[str, Any] = {
         # 0.9.0 the same night when limits.obstacle_corridor_margin_m was added (the obstacle
         # gate's path corridor, first floor test), then 0.9.0 -> 0.9.1 (sector bound widened)
         # and 0.9.1 -> 0.9.2 (ttc_warning_s release line 0.45 -> 0.36, arc corridor floor
-        # test), both value-only.
-        "schema_version": "0.9.4",
+        # test), both value-only, then 0.9.2 -> 0.9.3 -> 0.9.4 (throttle scale, crawl-speed
+        # TTC and floor, value-only), then 0.9.4 -> 0.10.0 when the required
+        # chassis.rear_overhang_m was added (racer_safety's rear corridor).
+        "schema_version": "0.10.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

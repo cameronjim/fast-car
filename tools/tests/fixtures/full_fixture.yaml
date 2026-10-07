@@ -13,6 +13,7 @@ chassis:
   yaw_inertia_kg_m2: 0.04712
   length_m: 0.58
   width_m: 0.31
+  rear_overhang_m: 0.11
 
 tires:
   surface_friction_coefficient: 1.0489

@@ -111,6 +111,17 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.9.4 -> 0.10.0 on 2026-10-06 (night): new REQUIRED field
+# chassis.rear_overhang_m, PROVISIONAL 0.12 m, NOT measured. Floor finding (bags
+# 2026-10-06T23-19-41 and 23-25-38): in both lap directions the car ended nose-in to a corner
+# tighter than its turning circle and could not back out, because safety_node had no rear check
+# and the follower never reversed. racer_safety now runs the arc corridor mirrored behind the
+# car for a reverse request, with the in-path distance measured along the reverse path from
+# the rear bumper line, so it needs the rear axle to bumper distance. cg_to_rear_axle_m is not
+# that (it runs from the CG to the axle, forward of the axle) and length_m is only a bounding
+# box. A new required field changes the schema's required-field set, so this is a minor bump
+# per rule 5. No existing value changed.
+#
 # schema_version bumped 0.9.3 -> 0.9.4 on 2026-10-06 (late): limits.ttc_brake_s 0.35 -> 0.6,
 # ttc_warning_s 0.36 -> 0.75, min_forward_clearance_m 0.20 -> 0.40. The earlier values were
 # tuned while throttle_full_scale_mps was 5.0, when a "1.0 m/s" request was really 0.6 m/s.
@@ -220,6 +231,13 @@ chassis:
   yaw_inertia_kg_m2: 0.04712       # gym: I
   length_m: 0.58                   # gym: length (bounding box)
   width_m: 0.31                    # gym: width (bounding box)
+  # Rear axle centre to the rear bumper line, along -x (added 2026-10-06 night, schema 0.10.0).
+  # racer_safety's rear corridor measures a reverse request's in-path distance from this line
+  # (see the 0.10.0 header note). PROVISIONAL, NOT measured: 0.12 m is a placeholder for this
+  # chassis' rear overhang until it is taped on the car (with the car on the bench, rear axle
+  # centre to the rearmost point of the bumper, body included). Measure it before relying on
+  # the rear corridor's clearance floor.
+  rear_overhang_m: 0.12            # PROVISIONAL (placeholder, NOT measured) -- see above
 
 tires:
   surface_friction_coefficient: 1.0489               # gym: mu
@@ -582,10 +600,11 @@ meta:
   # limits.min_forward_clearance_m and limits.ttc_forward_sector_half_angle_rad are
   # PROVISIONAL, and the two limits.ttc_*_s were raised (still PROVISIONAL). Added 2026-10-06
   # late: limits.obstacle_steering_hold_after_s is PROVISIONAL. Added 2026-10-06 night:
-  # limits.obstacle_corridor_margin_m is PROVISIONAL. sysid_session_id stays
+  # limits.obstacle_corridor_margin_m is PROVISIONAL. Added 2026-10-06 night (schema 0.10.0):
+  # chassis.rear_overhang_m is PROVISIONAL (a placeholder, not measured). sysid_session_id stays
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.9.4"
+  schema_version: "0.10.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

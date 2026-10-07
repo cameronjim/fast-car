@@ -84,7 +84,8 @@
       "additionalProperties": false,
       "required": [
         "mass_kg", "wheelbase_m", "cg_to_front_axle_m", "cg_to_rear_axle_m",
-        "track_width_m", "cg_height_m", "yaw_inertia_kg_m2", "length_m", "width_m"
+        "track_width_m", "cg_height_m", "yaw_inertia_kg_m2", "length_m", "width_m",
+        "rear_overhang_m"
       ],
       "properties": {
         "mass_kg": {
@@ -134,6 +135,12 @@
           "type": "number", "exclusiveMinimum": 0, "maximum": 1,
           "units": "m",
           "description": "Overall vehicle bounding-box width."
+        },
+        "rear_overhang_m": {
+          "type": "number", "minimum": 0, "maximum": 1,
+          "units": "m",
+          "sign_convention": "distance measured aft from the rear axle centre along -x (REP-103)",
+          "description": "Distance from the rear axle centre back to the rear-most point of the body (the rear bumper line), added 2026-10-06 (schema 0.10.0) for racer_safety/safety_node's rear corridor: a reverse request's in-path distance is measured along the reverse path from this line. Not cg_to_rear_axle_m (that is the CG to the axle, forward of it) and not derivable from length_m, which is a bounding box. The committed value is PROVISIONAL, to be measured on the car."
         }
       }
     },

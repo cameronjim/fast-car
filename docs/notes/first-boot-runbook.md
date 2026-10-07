@@ -518,6 +518,17 @@ move. What that session proved and what it did not is in `docs/notes/build-log.m
 2026-09-21 evening entry. Steps 1-15 above are the first-time procedure; this is the short
 version for every session after the pins and the image already exist.
 
+> **THE CAR CAN NOW REVERSE ON ITS OWN (2026-10-06 night).** gap_follow_node's reverse escape
+> (`reverse_escape`, ON in the `floor-2026-10-06` profile) commands the car BACKWARDS, with the
+> wheels at full lock, whenever safety_node has refused its forward request for 1.5 s and it
+> sees no way forward: up to 0.4 m (commanded) or 2 s at a time, up to 3 times in a row. Nobody
+> touches a key for it. Before any gap follow run, clear the space BEHIND and BESIDE the car as
+> well as in front, keep feet and hands out of it, and keep the kill switch in a second
+> person's hand. safety_node now judges reverse requests too (a rear corridor from the rear
+> bumper, `ttc_reverse` on `/safety/events`), but `chassis.rear_overhang_m` is still a
+> PROVISIONAL 0.12 m and the rear check has not been on the car yet. To run without the
+> escape: `reverse_escape:=false`.
+
 ### Pre-drive checklist (do these in order, every time)
 
 Nothing in this checklist is optional, and the order matters: the car gets power only after
@@ -796,6 +807,13 @@ gap_follow_node drove its first working floor laps on 2026-10-06; that parameter
 in `docs/notes/reactive-control-port-2026-10-05.md`, "Checkpoint 2026-10-06"). Same pre-drive
 checklist as above, kill switch in a second person's hand.
 
+**WITH THIS PROFILE THE CAR REVERSES ON ITS OWN** (the reverse escape, see the box at the top of
+"Launch and drive" and `docs/notes/reactive-control-port-2026-10-05.md`, "Reverse escape").
+Clear the space behind the car as well as ahead. The profile also turns on lane centring.
+Neither has been on the floor yet; `reverse_escape:=false centering_gain:=0` (plus
+`speed_time_constant_s:=0 target_range_median_scans:=1`) gives exactly the parameters of the
+first laps.
+
 1. Start the stack with the LiDAR and NO teleop source: in "Start the stack" above, end the
    command with `exec ros2 launch racer_bringup car_teleop.launch.py lidar:=true` (no
    `browser_teleop:=true`). gap_follow_node publishes `/drive_raw`, and nothing arbitrates
@@ -809,15 +827,19 @@ checklist as above, kill switch in a second person's hand.
      exec ros2 launch racer_control gap_follow.launch.py profile:=floor-2026-10-06'
    ```
 
-   The startup line `gap_follow_node up: ...` must show `max speed 0.90 m/s, speed time
-   constant 0.500 s, target range median over 5 scans`. If it does not, the workspace was not
-   rebuilt after pulling (step 6).
+   The startup line `gap_follow_node up: ...` must show `lane centring gain 0.600`, `max speed
+   0.90 m/s, speed time constant 0.500 s, target range median over 5 scans`, and the next line
+   must be the WARN `REVERSE ESCAPE ON: this node will command the car to REVERSE on its own
+   ...` (or `reverse escape off` with `reverse_escape:=false`). If they do not, the workspace
+   was not rebuilt after pulling (step 6). Every escape logs `reverse escape N/3: ...` when it
+   starts and `complete`, `timed out` or `aborted` when it ends.
 3. Any launch argument given explicitly overrides the profile, for example
    `profile:=floor-2026-10-06 max_speed_mps:=0.7`. Leave `laser_yaw_from_vehicle_params` alone:
    on the car the LiDAR yaw comes from `config/vehicle_params.yaml`.
 4. Stop with Ctrl-C in the second terminal. gap_follow_node then stops publishing and
    safety_node brakes on the `/drive_raw` silence; the kill switch is still the first thing to
-   reach for if the car does anything unexpected.
+   reach for if the car does anything unexpected, including backing up when you did not expect
+   it.
 
 ### The throttle start deadzone (expect this, it is not a fault)
 

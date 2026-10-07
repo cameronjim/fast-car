@@ -1852,3 +1852,46 @@ start it in `docs/notes/first-boot-runbook.md` "Launch and drive".
 Open: drive the lane with the profile and check that the speed no longer surges, and that the
 smoothing does not make the car slow to react to a wall that really is close (safety_node's
 obstacle gate brakes regardless of what gap_follow_node asks for).
+
+## 2026-10-06, night: lane centring, rear corridor and reverse escape (vehicle_params 0.10.0)
+
+Observed (bags `2026-10-06T23-19-41` and `23-25-38`, replayed through the follower core): (a)
+gap_follow_node is edge-biased, its gap centre dragging toward whichever wall the car is
+already near, and the owner watched it hug the edges in both directions; (b) in both lap
+directions the car ended nose-in to a corner tighter than its 0.8 m turning circle, the arc
+brake fired correctly, no steering gave a clear forward arc, and the latch held for ever.
+
+Software change, NOT yet run on the car (sim and tests only):
+
+1. Lane centring in gap_follow_node (`centering_gain`, default 0 = off, 0.6 in the
+   floor-2026-10-06 profile): a push away from the nearer side wall, from the median
+   perpendicular distance of each side's returns, added before the steering clamp; no push
+   while either side is open.
+2. Rear corridor in safety_node: a reverse request is judged on the arc corridor mirrored
+   behind the car, from the rear bumper line, with its own latch and a new `/safety/events`
+   source `ttc_reverse`. New required field `chassis.rear_overhang_m`, PROVISIONAL 0.12 m, NOT
+   measured. The speed rate limiter now limits magnitude growth in both directions and never
+   limits braking toward zero in either.
+3. Reverse escape in gap_follow_node (`reverse_escape`, default false, TRUE in the profile):
+   when safety_node has refused the forward request for 1.5 s (seen on the gated `/drive`) and
+   no steering gives 0.3 m of clear forward arc, the node requests -0.5 m/s with the steering
+   opposite to the wanted one for 0.4 m (commanded, no odometry) or 2 s, then resumes; aborted
+   and retried after 3 s if safety_node refuses the reverse too, at most 3 times without
+   forward progress. WITH THE PROFILE THE CAR CAN REVERSE ON ITS OWN.
+
+Sim (ros-dev image): the corridor canary passes in both directions with centring on (about
+26.1 s counter-clockwise, 25.8 s clockwise for two laps), and a new canary with a square corner
+the car cannot drive round passes with one escape per run (about 26.0 s for the lap). The same
+scene without the escape reproduces (b): latched nose-in for the rest of the run.
+
+Found in the sim, not changed: safety_node's forward arc band (0.205 m about the rear-axle path)
+misses the outer front corner's sweep by about 6 cm at full lock, so on a merely tight round
+corner the car scraped the outside wall before the gate braked. Details in
+`docs/notes/ttc-limit-cycle-2026-10-06.md`, "Rear corridor".
+
+Open, on the bench and then the floor: measure `chassis.rear_overhang_m`; back the car toward a
+wall and check the rear floor (`/drive` to zero about 0.4 m from the bumper, one `ttc_reverse`
+record); drive the lane with the profile and check the edge hugging is gone; park it nose-in to
+a corner it cannot make and watch one escape. Kill switch in a second person's hand for all of
+it. Details in `docs/notes/reactive-control-port-2026-10-05.md` ("Lane centring", "Reverse
+escape") and the runbook's "Gap follow from the launch file".

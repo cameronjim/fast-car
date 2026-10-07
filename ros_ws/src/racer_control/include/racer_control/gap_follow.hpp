@@ -253,10 +253,12 @@ double centering_steering(const LaneWalls& walls, double centering_gain);
 // When the clamp drives the steering to (near) zero while the target bearing is large, that
 // is intended: the corner override and the safety node take it from there.
 struct SweptPathGeometry {
-  double wheelbase_m = 0.0;      // chassis.wheelbase_m
-  double half_width_m = 0.0;     // chassis.width_m / 2
-  double margin_m = 0.0;         // the follower's safety_margin_m
-  double body_front_x_m = 0.0;   // rear axle to the front of the body, for the outer circle
+  double wheelbase_m = 0.0;   // chassis.wheelbase_m
+  double half_width_m = 0.0;  // chassis.width_m / 2
+  double margin_m = 0.0;      // the follower's safety_margin_m
+  // Rear axle to the front bumper line, for the outer circle: chassis.wheelbase_m +
+  // chassis.front_overhang_m (schema 0.11.0; was cg_to_rear_axle_m + length_m / 2).
+  double body_front_x_m = 0.0;
   double lidar_mount_x_m = 0.0;  // sensors.lidar.mount_x_m (rear axle to head, forward)
   double lidar_mount_y_m = 0.0;  // sensors.lidar.mount_y_m (left)
   double lookahead_m = 0.0;      // swept_path_lookahead_m, rear-axle arc length

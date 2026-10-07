@@ -27,8 +27,8 @@ ArcProbeGeometry car_geometry(double margin_m = 0.05) {
   g.wheelbase_m = 0.3302;
   g.half_width_m = 0.155;
   g.margin_m = margin_m;
-  g.front_x_m = 0.17145 + 0.58 / 2.0;  // cg_to_rear_axle_m + length_m / 2, as for the clamp
-  g.rear_x_m = 0.12;                   // chassis.rear_overhang_m (PROVISIONAL)
+  g.front_x_m = 0.3302 + 0.13;  // wheelbase_m + front_overhang_m (PROVISIONAL), as for the clamp
+  g.rear_x_m = 0.12;            // chassis.rear_overhang_m (PROVISIONAL)
   g.lidar_mount_x_m = 0.285;
   g.lidar_mount_y_m = 0.0;
   return g;

@@ -82,8 +82,9 @@
 // (the `max_speed_mps` parameter is range-limited below it), acceleration =
 // actuation.max_acceleration_mps2 via SpeedRateLimiter. LiDAR yaw comes from
 // sensors.lidar.mount_yaw_rad once measured (see resolve_laser_yaw_offset). The swept-path
-// clamp takes chassis.wheelbase_m, chassis.length_m, chassis.cg_to_rear_axle_m and
-// sensors.lidar.mount_x_m / mount_y_m (the node refuses to start while the mount is null).
+// clamp takes chassis.wheelbase_m, chassis.front_overhang_m (front bumper at wheelbase +
+// front overhang from the rear axle) and sensors.lidar.mount_x_m / mount_y_m (the node refuses
+// to start while the mount is null).
 // Everything else is a tuning parameter with a default and a description.
 //
 // laser_yaw_from_vehicle_params (default true) is the one exception to the yaw rule above:
@@ -307,10 +308,13 @@ class GapFollowNode : public rclcpp::Node {
     c.swept_path.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
     c.swept_path.lidar_mount_x_m = *VEHICLE_PARAMS.sensors.lidar.mount_x_m;
     c.swept_path.lidar_mount_y_m = *VEHICLE_PARAMS.sensors.lidar.mount_y_m;
-    // The front of the body relative to the rear axle: chassis.length_m is a bounding box,
-    // taken as centred on the CG (the f1tenth_gym convention its values come from).
+    // The front bumper line relative to the rear axle: wheelbase_m + front_overhang_m (schema
+    // 0.11.0), the same point racer_safety's arc corridor takes its outer edge from. Until
+    // 0.11.0 this was cg_to_rear_axle_m + length_m / 2, which assumed the bounding box
+    // (length_m) is centred on the CG; the PROVISIONAL front_overhang_m keeps the value
+    // within 1.3 mm of that until it is measured.
     c.swept_path.body_front_x_m =
-        VEHICLE_PARAMS.chassis.cg_to_rear_axle_m + VEHICLE_PARAMS.chassis.length_m / 2.0;
+        VEHICLE_PARAMS.chassis.wheelbase_m + VEHICLE_PARAMS.chassis.front_overhang_m;
     return c;
   }
 

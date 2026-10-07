@@ -18,7 +18,11 @@
     for the REAL car: safety_node + racer_drivers/pwm_output_node + foxglove_bridge, no sim
     bridge; see docs/notes/first-boot-runbook.md. Roadmap 2.3 adds lidar.launch.py: the
     RPLIDAR C1 driver (sllidar_ros2) on /scan plus the base_link -> laser static transform from
-    vehicle_params, included from car_teleop.launch.py with lidar:=true.
+    vehicle_params, included from car_teleop.launch.py with lidar:=true. The optional camera
+    bring-up (outside the thesis) adds camera_usb.launch.py (usb_cam), camera_csi.launch.py
+    (gscam over nvarguscamerasrc) and cameras.launch.py, included from car_teleop.launch.py with
+    cameras:=true or run in a separate car-camera container; usb_cam and gscam come from the
+    car image and are deliberately not exec_depends, like sllidar_ros2.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>

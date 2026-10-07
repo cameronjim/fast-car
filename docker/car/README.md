@@ -86,6 +86,76 @@ the LiDAR keeps its name once another USB serial device is plugged in:
 flags to the "Start the stack" command and pass `lidar:=true` (read that launch argument's
 description first: `/scan` arms `safety_node`'s TTC gate).
 
+## Cameras (added 2026-10-07; OPTIONAL, outside the thesis)
+
+Cameras are for detection experiments and training-data collection. Nothing in the command
+path reads them, and the car drives exactly the same without them. Hardware: one Waveshare
+IMX219-160 on the Orin Nano's CAM0 socket (a second IMX219 later, sensor_id 1) and one ELP
+AR0234 global-shutter UVC camera on USB 3.
+
+**What the image adds** (one apt layer, all from the ROS and Ubuntu repos, nothing built from
+source): `ros-humble-usb-cam` 0.8.1 (USB camera), `ros-humble-gscam` 2.0.2 (GStreamer to ROS,
+used for the CSI camera with an `nvarguscamerasrc` pipeline), `ros-humble-image-transport-plugins`
+(the compressed JPEG transport), the GStreamer tools and base/good plugins, and `v4l-utils`.
+The build refuses unless `usb_cam`, `gscam`, `compressed_image_transport` and `videoconvert`
+are all found. **The image has to be rebuilt to get this layer**, and `ros_ws` rebuilt for the
+camera launch files and `camera_check`.
+
+**Why gscam for the CSI camera.** The IMX219 on Jetson is a raw Bayer sensor behind the ISP,
+reachable only through NVIDIA's libargus (the `nvarguscamerasrc` GStreamer element talking to
+the host's `nvargus-daemon`), not through plain V4L2. Of the ROS 2 options for Humble on
+JetPack 6, gscam is the lowest risk: it is in the apt repo for arm64, takes any GStreamer
+pipeline, and is small. gscam2 adds nothing needed here and would be a source build;
+NVIDIA's `isaac_ros_argus_camera` needs the Isaac ROS container and NITROS, far too heavy for
+an optional camera. `camera_csi.launch.py`'s docstring has the details.
+
+**Why a separate container, car-camera.** The CSI camera needs the NVIDIA container runtime
+and the host's Argus socket. car-stack is deliberately started without either (unprivileged,
+no `--runtime nvidia`, see `docs/notes/first-boot-runbook.md` "Start the stack"), so the
+cameras run in their own container from the same `car:local` image, on the host network:
+
+```sh
+cd ~/car
+USBCAM=/dev/video1          # see the runbook for how to find N
+docker run --rm -it --name car-camera --network host \
+  --runtime nvidia \
+  --user "$(id -u):$(id -g)" \
+  --group-add "$(getent group video | cut -d: -f3)" \
+  -e HOME=/tmp \
+  -e FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/ros_ws/src/racer_bringup/config/fastdds_udp_only.xml \
+  -v /tmp/argus_socket:/tmp/argus_socket \
+  --device "$USBCAM" \
+  -v "$PWD":/workspace -w /workspace/ros_ws \
+  car:local bash -lc "
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    exec ros2 launch racer_bringup cameras.launch.py usb_device:=$USBCAM"
+```
+
+What each camera flag is for:
+
+| Flag | Why | Status |
+|---|---|---|
+| `--runtime nvidia` | The NVIDIA container runtime mounts the host's L4T libraries (libargus client, the `nvarguscamerasrc` / `nvvidconv` GStreamer plugins) and the Tegra device nodes (`/dev/nvmap`, `/dev/nvhost-*` or their R36 equivalents) into the container. The image does not carry them. | UNVERIFIED on this host: check `gst-inspect-1.0 nvarguscamerasrc` inside the container. |
+| `-v /tmp/argus_socket:/tmp/argus_socket` | `nvarguscamerasrc` is only a client: the camera is driven by `nvargus-daemon` on the HOST, reached through this Unix socket. | UNVERIFIED |
+| `--group-add video` | The Tegra device nodes and `/dev/videoN` are group `video` on L4T. The container runs as your UID, not root. | UNVERIFIED for the R36 Tegra nodes; certain for `/dev/videoN` on stock Ubuntu. |
+| `--device /dev/videoN` | The USB camera. Must be the plain `/dev/videoN`, same path inside as outside: usb_cam 0.8.1 only accepts a device it finds under `/sys/class/video4linux`, so a `/dev/v4l/by-id/` path is rejected. The CSI sensor's own `/dev/video0` is NOT needed in the container (Argus opens it on the host). | from the usb_cam 0.8.1 source |
+| `-e FASTRTPS_DEFAULT_PROFILES_FILE=...fastdds_udp_only.xml` | car-stack and car-camera share the host network but not `/dev/shm`. Fast DDS would otherwise try to hand data between them through shared memory the other side cannot open: topics visible, no messages. This profile makes car-camera's participants UDP-only, so car-stack's run command does not change. The alternative is `--ipc host` on both containers. | Reproduced on the Mac 2026-10-06 with two ros-dev containers sharing one network namespace and separate `/dev/shm`: without the profile `camera_check` saw the topics and 0 frames; with it in the publishing container only, 60.00 Hz PASS. Not yet on the Jetson. |
+
+If `gst-inspect-1.0 nvarguscamerasrc` fails with an nvmap / nvhost error rather than "No such
+element", the runtime did not pass a device node: list them on the host with `ls -l
+/dev/nvhost* /dev/nvmap /dev/host1x* 2>/dev/null` and add each with `--device`. If it says "No
+such element", the runtime did not mount the plugin: check
+`grep -ri argus /etc/nvidia-container-runtime/host-files-for-container.d/` on the host. Neither
+is `--privileged`, and car-camera should never need it.
+
+**Same container instead.** `car_teleop.launch.py cameras:=true camera_usb_device:=/dev/videoN`
+includes the cameras in car-stack itself. That only works if car-stack is started with the
+camera flags above, which widens the one container that drives the car; prefer car-camera.
+
+**Recording.** car-stack's recorder takes `/camera/.*/compressed` and leaves the raw images
+out, wherever the cameras run. Expected bag growth at 720p60 is in the runbook ("Cameras first
+power-up"): roughly 5 to 10 MB/s per camera, an estimate until `camera_check` measures it.
+
 ## Base image tag vs. the device (decided 2026-09-13)
 
 The bench Jetson runs L4T R36.4.4 (JetPack 6.2.1); this image pins r36.4.0 (JetPack 6.1).
@@ -109,6 +179,7 @@ stack needs no CUDA, so it gates phase 5, not first boot.
 | The image can actually run `car_teleop.launch.py` | **Yes** -- 2026-09-21, unprivileged and non-root, both PWM channels driven and confirmed at the mux. See `docs/notes/first-boot-runbook.md`'s "Launch and drive". |
 | A `colcon build` of `ros_ws` succeeds inside this image | **Yes** -- 2026-09-21, 6 packages in 68 s, after two fixes: `apt-get update` before `rosdep install` (the image deletes the apt lists), and `cmake -E env --unset=PYTHONPATH` around the vehicle_params codegen (this image's `ENV PYTHONPATH` was shadowing the `tools/` uv venv). |
 | The `sllidar_ros2` layer builds and is found by `ros2` | **Partly** -- the layer's exact commands were replayed in the `ros-dev` image (Ubuntu 22.04, Humble, arm64) on 2026-10-05: it builds, `ros2 pkg prefix sllidar_ros2` resolves after sourcing `/opt/ros/humble` and an overlay workspace, and `ldd` finds every library. The car image itself has not been rebuilt with it, and the driver has never talked to a real C1. |
+| The camera apt layer installs and the camera launch files work | **Partly** -- 2026-10-06, in the `ros-dev` image (Ubuntu 22.04, Humble, arm64) on the Mac: the same apt packages install (`usb_cam` 0.8.1, `gscam` 2.0.2, `image_transport` 3.1.13), `camera_csi.launch.py` with `videotestsrc` substituted for `nvarguscamerasrc` publishes `/camera/csi0/image_raw`, `/image_raw/compressed` and `/camera_info` only (no theora / compressedDepth), best_effort, `camera_check` PASSES at 60.00 Hz 1280x720, and a bag with `car_teleop.launch.py`'s regex holds the compressed topic and not the raw one. `camera_usb.launch.py` starts `usb_cam` with its parameters accepted and stops at the missing V4L2 device, as it must with no camera. The car image itself has not been rebuilt with the layer, Argus has never run in a container here, and neither camera has been plugged in. |
 | The Jetson torch wheel installs and imports `torch` correctly | **No** -- and with the new default (`INSTALL_TORCH=skip`) it is not even attempted. Unchanged from before: no real `TORCH_WHEEL_URL` has ever been supplied. |
 | The `INSTALL_TORCH` skip/required/invalid branches behave as documented | Yes, for the shell logic only -- the RUN step's script was extracted and executed in a plain `ubuntu:22.04` container on 2026-09-13: `skip` prints the notice, writes the marker and exports `RACER_TORCH=absent` in a login shell; `required` with no URL exits 1; an invalid value exits 1. That is the branch logic, NOT a build of this image. |
 | `nvcr.io/nvidia/l4t-jetpack` has no tag matching the device's JetPack 6.2.1 | Yes -- registry tag list queried 2026-09-13, newest is `r36.4.0`. See "Base image tag vs. the device" above. |

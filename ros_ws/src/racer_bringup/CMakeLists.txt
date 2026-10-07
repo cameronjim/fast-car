@@ -32,6 +32,10 @@ if(BUILD_TESTING)
   # any driver command topic, all six command subscriptions removed, every set-command a no-op.
   # Description and patch-text inspection only; vesc_driver exists only in the car image.
   ament_add_pytest_test(test_vesc_telemetry_launch test/test_vesc_telemetry_launch.py)
+  # L1 check of the optional camera launches (camera_usb, camera_csi, cameras) and
+  # car_teleop.launch.py's `cameras` argument and recorder regex. Description inspection only:
+  # usb_cam and gscam are installed in the car image, not in ros-dev, and are never started.
+  ament_add_pytest_test(test_camera_launch test/test_camera_launch.py)
 
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_car_teleop_launch.py

@@ -89,6 +89,16 @@ motor is still driven only by the PPM pulse through the mux. Default false becau
 is not wired yet and the VESC's app mode is still PPM only; with vesc:=true and no VESC on the
 port the driver exits and the rest of the launch keeps running. See
 docs/notes/first-boot-runbook.md "VESC telemetry".
+
+CAMERAS ARE OFF BY DEFAULT AND OPTIONAL (2026-10-07). Cameras are for detection experiments
+and training data, outside the project thesis, and nothing in the command path reads them.
+The preferred way to run them is their own container, car-camera, with cameras.launch.py
+(docker/car/README.md "Cameras"): the CSI camera needs the NVIDIA runtime and the host's Argus
+socket, which car-stack is deliberately started without. `cameras:=true` includes
+cameras.launch.py HERE instead, for a car-stack started with the camera docker flags. Either
+way the recorder's regex takes /camera/.*/compressed (about 5 to 10 MB/s per camera at 720p60,
+ESTIMATED, see the runbook) and leaves the raw images out: rgb8 at 1280x720x60 is about
+166 MB/s per camera, more than a bag should take.
 """
 
 import datetime
@@ -120,6 +130,8 @@ _FOXGLOVE_BRIDGE_PORT = 8765
 #: directory, so it is found relative to this file rather than through the ament index (which
 #: also keeps the L1 launch-description tests free of an installed racer_bringup).
 _LIDAR_LAUNCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lidar.launch.py")
+#: cameras.launch.py, found the same way (optional camera bring-up, 2026-10-07).
+_CAMERAS_LAUNCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cameras.launch.py")
 
 #: vesc_telemetry.launch.py, found the same way as lidar.launch.py.
 _VESC_LAUNCH_FILE = os.path.join(
@@ -175,12 +187,16 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.8
 #:                     can never silently drop the VESC's temperatures and faults.
 #:   /vesc/sensors/core the driver's raw VescStateStamped, so /odom/wheel can be re-derived
 #:                     from the bag if gear_ratio or the tyre radius is re-measured later
+#:   /camera/.../compressed
+#:                     JPEG frames of every camera (optional, cameras:=true or the
+#:                     car-camera container). Only the compressed sub-topic: raw rgb8
+#:                     image_raw is about 166 MB/s per camera at 720p60 and is NOT recorded.
 #:   /rosout           every node's log stream, in the same file as the data it explains
 #:   /parameter_events which parameters the run actually ran with
 _RECORDED_TOPIC_REGEX = (
     r"^(/drive_raw|/drive|/safety/events|/teleop/cmd_vel|/telemetry/.*|/scan"
     r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core"
-    r"|/rosout|/parameter_events)$"
+    r"|/camera/.*/compressed|/rosout|/parameter_events)$"
 )
 
 
@@ -533,6 +549,25 @@ def generate_launch_description() -> LaunchDescription:
             "as serial_port. /dev/ttyTHS1 = Jetson 40-pin header pins 8 (TXD) / 10 (RXD)."
         ),
     )
+    cameras_arg = DeclareLaunchArgument(
+        "cameras",
+        default_value="false",
+        description=(
+            "Include cameras.launch.py (USB camera on /camera/usb/*, CSI camera 0 on "
+            "/camera/csi0/*; optional, outside the thesis). Only for a car-stack container "
+            "started with the camera docker flags; the preferred setup runs the cameras in "
+            "their own car-camera container instead (docker/car/README.md). Either way "
+            "/camera/.*/compressed is recorded and raw images are not."
+        ),
+    )
+    camera_usb_device_arg = DeclareLaunchArgument(
+        "camera_usb_device",
+        default_value="/dev/video0",
+        description=(
+            "V4L2 node of the USB camera, passed to cameras.launch.py as usb_device. Usually "
+            "/dev/video1 once the IMX219 overlay is enabled: check `v4l2-ctl --list-devices`."
+        ),
+    )
 
     safety_node = Node(
         package="racer_safety",
@@ -634,6 +669,11 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={"serial_port": LaunchConfiguration("vesc_serial_port")}.items(),
         condition=IfCondition(LaunchConfiguration("vesc")),
     )
+    cameras_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(_CAMERAS_LAUNCH_FILE),
+        launch_arguments={"usb_device": LaunchConfiguration("camera_usb_device")}.items(),
+        condition=IfCondition(LaunchConfiguration("cameras")),
+    )
     foxglove_bridge_node = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -668,6 +708,8 @@ def generate_launch_description() -> LaunchDescription:
             lidar_serial_port_arg,
             vesc_arg,
             vesc_serial_port_arg,
+            cameras_arg,
+            camera_usb_device_arg,
             # rail_voltage_node BEFORE the recorder so its topics exist by the time
             # `ros2 bag record --regex` does its first discovery pass, and the recorder
             # before the command-path nodes for the same reason: rosbag2 does keep
@@ -679,6 +721,9 @@ def generate_launch_description() -> LaunchDescription:
             lidar_launch,
             # Telemetry only, after the recorder for the same reason as the LiDAR.
             vesc_launch,
+            # Same reasoning as the LiDAR: after the recorder, which picks the compressed
+            # camera topics up once they appear.
+            cameras_launch,
             safety_node,
             pwm_output_node,
             teleop_node,

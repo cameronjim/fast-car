@@ -183,9 +183,10 @@ def test_car_teleop_lidar_defaults_off():
 
 def test_car_teleop_includes_lidar_launch_only_when_asked():
     entities = _load("car_teleop.launch.py").generate_launch_description().entities
-    # car_teleop.launch.py also includes vesc_telemetry.launch.py (vesc:=true); pick the LiDAR
-    # one by file name. Loading each included description first resolves its location, and
-    # proves the file at that path imports cleanly.
+    # car_teleop.launch.py also includes vesc_telemetry.launch.py (vesc:=true) and
+    # cameras.launch.py (cameras:=true, see test_camera_launch.py); pick the LiDAR one by file
+    # name. Loading each included description first resolves its location, and proves the file
+    # at that path imports cleanly.
     includes = []
     for e in entities:
         if isinstance(e, IncludeLaunchDescription):

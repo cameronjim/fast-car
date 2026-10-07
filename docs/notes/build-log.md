@@ -1896,6 +1896,81 @@ a corner it cannot make and watch one escape. Kill switch in a second person's h
 it. Details in `docs/notes/reactive-control-port-2026-10-05.md` ("Lane centring", "Reverse
 escape") and the runbook's "Gap follow from the launch file".
 
+## 2026-10-07: camera bring-up software (optional, outside the thesis), nothing run on the car
+
+Cameras are an optional side subsystem for detection experiments and training data. They are
+not part of the thesis, nothing in the command path reads them, and the car drives the same
+without them. Hardware: one Waveshare IMX219-160 for the Orin Nano's CAM0 socket (fitted
+tomorrow; the second IMX219 is three weeks out) and one ELP AR0234 global-shutter UVC camera
+on USB 3.
+
+Software change, NOT yet run on the Jetson and with no camera plugged in:
+
+1. Car image: one apt layer with `ros-humble-usb-cam` 0.8.1, `ros-humble-gscam` 2.0.2,
+   `ros-humble-image-transport-plugins`, GStreamer tools and base/good plugins, `v4l-utils`.
+   Both drivers are in the ROS apt repo for Humble on arm64 (jammy arm64 package index,
+   checked 2026-10-06), so nothing is built from source.
+2. `camera_usb.launch.py` (usb_cam, `/camera/usb/*`), `camera_csi.launch.py` (gscam with an
+   `nvarguscamerasrc` pipeline, `/camera/csi<sensor_id>/*`), `cameras.launch.py` (both, for a
+   separate car-camera container), and `cameras:=true` on `car_teleop.launch.py` (default
+   false). Defaults 1280x720 at 60 fps, JPEG quality 80.
+3. The recorder regex now takes `/camera/.*/compressed` and still leaves the raw images out.
+4. `racer_tools` `camera_check`: subscribes to a compressed image topic, reports frame rate,
+   resolution (read from the JPEG/PNG header) and payload rate, exits 1 below a threshold
+   (default 54 Hz) and 2 on silence.
+5. `racer_bringup/config/fastdds_udp_only.xml`, loaded only in car-camera.
+
+**CSI node choice: gscam.** The IMX219 on Jetson needs the ISP, so it goes through libargus
+(`nvarguscamerasrc`), not plain V4L2. gscam is in apt, takes any pipeline and is small.
+gscam2 would be a pinned source build for no gain; NVIDIA's `isaac_ros_argus_camera` needs the
+Isaac ROS container and NITROS, far too heavy for an optional camera.
+
+**Found in the usb_cam 0.8.1 source, which changed the plan.** (a) There is no pixel format
+called `mjpeg`: the names are `raw_mjpeg` and `mjpeg2rgb`, and anything else throws. The
+node's JPEG pass-through branch tests for the name `mjpeg` and so can never run, and
+`raw_mjpeg` copies a fixed width x height x channels buffer into a sensor_msgs/Image instead of
+the JPEG bytes. So the USB camera runs `mjpeg2rgb` (MJPEG from the camera, decoded on the CPU)
+and the compressed topic is re-encoded by `compressed_image_transport`. The launch file
+refuses `mjpeg` and `raw_mjpeg` by name. (b) The device must be the plain `/dev/videoN`, same
+path in the container as on the host: usb_cam only accepts a device it finds under
+`/sys/class/video4linux` and mangles symlinks, so `/dev/v4l/by-id/` paths are rejected.
+
+**Found in Humble's launch and image_transport, also designed around.** IncludeLaunchDescription
+does not scope launch configurations, so a camera `frame_id` argument would have picked up
+`lidar.launch.py`'s `frame_id` (laser) under `car_teleop.launch.py`; the camera launch files
+have no generic per-camera argument that collides, and `cameras.launch.py` forwards prefixed
+`usb_*` / `csi_*` arguments explicitly. image_transport derives the compressed sub-topic from
+the expanded base name, so each camera remaps `image_raw/compressed` on its own, and only the
+raw and compressed transports are enabled (no theora / compressedDepth topics).
+
+**Reproduced on the Mac (ros-dev image, arm64, no Jetson, no camera).** The apt packages
+install. `camera_csi.launch.py` with `videotestsrc` substituted for `nvarguscamerasrc`
+publishes exactly `/camera/csi0/image_raw`, `/camera/csi0/image_raw/compressed` and
+`/camera/csi0/camera_info`, best_effort, with `camera.image_raw.jpeg_quality` 80 and only the
+raw and compressed plugins; `camera_check` on it: 301 frames in 5.000 s, 60.00 Hz, 1280x720,
+PASS. A bag recorded with `car_teleop.launch.py`'s regex held 477 compressed frames in 7.9 s
+and no raw image topic. `camera_usb.launch.py` started usb_cam with every parameter accepted
+and stopped at the missing V4L2 device, as it must here. The two-container DDS problem was
+reproduced too: gscam in one container and `camera_check` in another, sharing one network
+namespace (as car-stack and car-camera share the host's) but not `/dev/shm`. Without the
+profile `camera_check` listed the camera topics and received 0 frames (exit 2); with
+`fastdds_udp_only.xml` loaded in the publishing container only, 299 frames, 60.00 Hz, PASS.
+
+**Not verified, and why it matters.** Argus has never run inside a container on this host:
+whether `--runtime nvidia` on JetPack 6.2.1 exposes `nvarguscamerasrc` / `nvvidconv` and the
+Tegra device nodes to an unprivileged container, which groups those nodes need, and whether
+`jetson-io`'s "Camera IMX219-A" entry names CAM0 on this carrier are all first-power-up checks
+in the runbook. Running `jetson-io` again can rewrite the `OVERLAYS` line and drop
+`/boot/racer-hdr40-gpio.dtbo`, which would re-tristate the heartbeat pad and the mux would cut;
+the runbook backs up `extlinux.conf` and re-runs `tools/jetson_pinmux/install.sh` before the
+reboot. Expected bag growth at 720p60 (about 5 to 10 MB/s per camera, 17 to 37 GB per hour)
+and the CPU cost of decoding and re-encoding are estimates until `camera_check` and `top` are
+run on the car. Camera mount poses are not part of this work; no camera transform is
+published.
+
+Next: runbook "Cameras first power-up" C1 to C8, then paste the sensor-mode list, both
+`camera_check` reports, the measured MB/s and the CPU load into an entry here.
+
 ## 2026-10-07: VESC UART telemetry and wheel odometry, read-only (software only, not on the car)
 
 Goal: the car knows how far it has moved, from the VESC's sensored motor, without touching the

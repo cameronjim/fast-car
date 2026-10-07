@@ -963,7 +963,8 @@ immutable).
 waited for: `/drive_raw`, `/drive`, `/safety/events`, `/teleop/cmd_vel`, everything under
 `/telemetry/` (the rail volts and amps), `/scan` when the launch runs with `lidar:=true`
 (see "LiDAR first power-up" below), `/odom/wheel`, `/telemetry/vesc/*` and `/vesc/sensors/core`
-when it runs with `vesc:=true` (see "VESC telemetry" below), plus `/rosout` and
+when it runs with `vesc:=true` (see "VESC telemetry" below), `/camera/*/compressed` (never
+the raw images) when cameras run (see "Cameras first power-up" below), plus `/rosout` and
 `/parameter_events`.
 
 **Format: mcap on the car, sqlite3 elsewhere.** `bag_storage:=auto` (the default) picks mcap
@@ -1409,6 +1410,297 @@ To record it with everything else, start "Start the stack" with `--device /dev/t
 recorder regex keeps `/odom/wheel`, `/telemetry/vesc/.*` and the raw `/vesc/sensors/core`.
 If the VESC is absent the driver exits and the rest of the launch keeps running; the bag then
 shows `STALE_NO_VESC_DATA` on `/telemetry/vesc/fault`.
+
+## Cameras first power-up (OPTIONAL, outside the thesis; UNVERIFIED, written 2026-10-07 before the cameras were fitted)
+
+**Optional, and not part of the thesis.** The cameras are for detection experiments and
+training data. Nothing in the command path reads them, and every other section of this
+runbook works the same with them unplugged. **Nothing in this section has been run on the
+Jetson.** The ROS side (gscam with a test pattern in place of the camera, `camera_check`, the
+recorder regex, the two-container DDS fix) was exercised in the `ros-dev` image on the Mac;
+Argus, the overlay and both real cameras have not (`docs/notes/build-log.md`, 2026-10-07).
+
+Hardware: one Waveshare IMX219-160 on the Orin Nano dev kit's CAM0 socket (the second IMX219
+arrives in about three weeks) and one ELP AR0234 global-shutter UVC camera on USB 3. The car
+does not move in any step; no battery is needed.
+
+What it proves when it passes: the IMX219 overlay is applied without losing the 40-pin
+pinmux, both cameras stream into ROS at the requested mode from an unprivileged container,
+car-stack receives and records the compressed streams, and the bag growth rate is measured.
+What it does not prove: any calibration, camera mount poses (not part of this work; no camera
+transform is published), or anything about detection.
+
+### C1. Fit the CSI camera, Jetson powered off
+
+The Waveshare module has a 15-pin connector and the dev kit's camera sockets are 22-pin, so it
+needs one of the 15-to-22-pin ribbons from the pack. Lift the CAM0 socket's latch, insert the
+22-pin end with its exposed contacts facing the socket's contacts, close the latch, and do the
+same at the camera end. Which way the contacts face on this carrier is UNVERIFIED: look at the
+socket before inserting, and never plug or unplug a ribbon with the Jetson on.
+
+### C2. Enable the IMX219 overlay (host, one time), WITHOUT losing the pinmux overlay
+
+The 40-pin header currently depends on `/boot/racer-hdr40-gpio.dtbo` on the `OVERLAYS` line
+of `/boot/extlinux/extlinux.conf` (`tools/jetson_pinmux/README.md`). `jetson-io` rewrites that
+file. If it drops the racer overlay, header pin 7 goes back to tristated, the heartbeat never
+reaches the mux, and the mux cuts (safe, but the car will not drive). If it re-adds
+`/boot/jetson-io-hdr40-user-custom.dtbo`, the two overlays fight over the same pinmux node.
+So back up first and check before rebooting:
+
+```sh
+sudo cp /boot/extlinux/extlinux.conf /boot/extlinux/extlinux.conf.pre-camera
+grep -n OVERLAYS /boot/extlinux/extlinux.conf     # expect /boot/racer-hdr40-gpio.dtbo
+sudo /opt/nvidia/jetson-io/jetson-io.py
+```
+
+In the menu (labels UNVERIFIED on this JetPack): "Configure Jetson 24pin CSI Connector" ->
+"Configure for compatible hardware" -> **"Camera IMX219-A"** (single camera; A is expected to
+be CAM0, UNVERIFIED on this carrier) -> "Save pin changes" -> **"Save and exit without
+rebooting"**. Then, before rebooting:
+
+```sh
+ls /boot/*imx219*.dtbo                            # the camera overlay jetson-io picked
+grep -n OVERLAYS /boot/extlinux/extlinux.conf
+cd ~/car/tools/jetson_pinmux && sudo ./install.sh # idempotent: puts the racer overlay back on
+                                                  # every OVERLAYS line, removes the conflicting
+                                                  # jetson-io hdr40 entry, keeps the camera one
+grep -n OVERLAYS /boot/extlinux/extlinux.conf     # must list BOTH racer-hdr40-gpio.dtbo and the
+                                                  # imx219 .dtbo, and NOT jetson-io-hdr40-user-custom
+sudo reboot
+```
+
+If `jetson-io` added a new boot entry (a second `LABEL` block) and made it the `DEFAULT`, the
+check applies to that entry's `OVERLAYS` line; `install.sh` edits every one. To undo all of
+it: `sudo cp /boot/extlinux/extlinux.conf.pre-camera /boot/extlinux/extlinux.conf` and reboot.
+
+After the reboot, first the pinmux, then the camera:
+
+```sh
+ls /sys/class/pwm                                 # pwmchip0 and pwmchip2 still there
+sudo systemctl stop racer-heartbeat
+cd ~/car/tools/jetson_pinmux && sudo ./verify.sh 144 5   # pin 7: tristate 0, about 3.3 V
+sudo systemctl start racer-heartbeat
+
+sudo dmesg | grep -i imx219        # expect the sensor bound on an i2c bus, no "probe failed" / -121
+ls -l /dev/video*                  # expect /dev/video0 = the CSI sensor (group video)
+systemctl is-active nvargus-daemon # expect active
+```
+
+Then the first picture. With a monitor on the Jetson, `nvgstcapture-1.0 --sensor-id=0` shows
+a preview (`j` then Enter saves a JPEG, `q` quits). Over SSH, without a display:
+
+```sh
+gst-launch-1.0 -e nvarguscamerasrc sensor-id=0 num-buffers=120 \
+  ! 'video/x-raw(memory:NVMM),width=1280,height=720,framerate=60/1,format=NV12' ! fakesink
+gst-launch-1.0 -e nvarguscamerasrc sensor-id=0 num-buffers=60 \
+  ! 'video/x-raw(memory:NVMM),width=1280,height=720,framerate=60/1' ! nvvidconv \
+  ! 'video/x-raw,format=I420' ! jpegenc ! multifilesink location=/tmp/csi0_%02d.jpg
+```
+
+The first command must end with no error. Its `GST_ARGUS:` lines list the sensor modes
+(expect a 1280 x 720 mode at about 60 fps among them): **copy that list into the build log**.
+If 1280x720 at 60 is not listed, use a mode that is, in every command below
+(`csi_width`/`csi_height`/`csi_fps`). Copy `/tmp/csi0_59.jpg` (a late frame, after auto
+exposure settled) to the Mac to look at it. "No cameras available" means the overlay or the
+ribbon: re-check `dmesg`, then the ribbon orientation, then try "Camera IMX219-C".
+
+### C3. Plug in the USB camera and find its device node
+
+Any of the dev kit's USB-A ports. On the host:
+
+```sh
+lsusb                                             # the ELP camera; note VID:PID for the build log
+lsusb -t                                          # its line should show 5000M (USB 3), not 480M
+v4l2-ctl --list-devices                           # the ELP lists two nodes; the first captures
+USBCAM=$(readlink -f /dev/v4l/by-id/usb-*-video-index0); echo "$USBCAM"   # e.g. /dev/video1
+v4l2-ctl -d "$USBCAM" --list-formats-ext          # expect MJPG with 1280x720 at 60 fps
+ls -l "$USBCAM"                                   # group video
+```
+
+Use that plain `/dev/videoN` everywhere: usb_cam 0.8.1 rejects `/dev/v4l/by-id/` paths
+(`camera_usb.launch.py` docstring), and the container must see the device at the same path
+as the host. N can change when cameras are re-plugged or the CSI overlay changes, so re-run
+the `readlink` line before each session.
+
+### C4. Rebuild the image and the workspace
+
+The camera packages are a new layer in `docker/car/Dockerfile`, and the camera launch files,
+`camera_check` and the DDS profile are new in `ros_ws`. On the Jetson, from `~/car`, after
+pulling:
+
+```sh
+docker build -t car:local docker/car
+docker run --rm -v "$PWD":/workspace -w /workspace car:local bash -lc '
+  source /opt/ros/humble/setup.bash
+  apt-get update && rosdep install --from-paths ros_ws/src --ignore-src -r -y
+  cd ros_ws && colcon build --symlink-install
+  chown -R 1000:1000 build install log /workspace/tools/.venv'
+```
+
+Then check that the NVIDIA runtime gives an unprivileged container the Argus plugin (this is
+the UNVERIFIED part of the whole design):
+
+```sh
+docker info | grep -i runtimes                    # expect nvidia among them
+docker run --rm --runtime nvidia --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  --group-add "$(getent group video | cut -d: -f3)" \
+  -v /tmp/argus_socket:/tmp/argus_socket car:local bash -lc '
+    gst-inspect-1.0 nvarguscamerasrc | head -n 5
+    gst-launch-1.0 -e nvarguscamerasrc sensor-id=0 num-buffers=60 \
+      ! "video/x-raw(memory:NVMM),width=1280,height=720,framerate=60/1,format=NV12" ! fakesink'
+```
+
+"No such element or plugin" means the runtime did not mount NVIDIA's GStreamer plugins: check
+`grep -ri argus /etc/nvidia-container-runtime/host-files-for-container.d/` on the host and
+record what is there. An nvmap / nvhost / "Failed to create CaptureSession" error means a
+device node or the socket did not get through: `ls -l /dev/nvhost* /dev/nvmap /dev/host1x*
+2>/dev/null` on the host and add each with `--device`, and check `ls -l /tmp/argus_socket`.
+Do not reach for `--privileged`; record what was needed in the build log and in
+`docker/car/README.md`'s flag table.
+
+### C5. Start the cameras in their own container, car-camera
+
+car-stack is unprivileged and has no NVIDIA runtime by design, so the cameras get their own
+container on the host network (`docker/car/README.md` "Cameras" explains every flag). From
+`~/car`, in its own terminal:
+
+```sh
+cd ~/car
+USBCAM=$(readlink -f /dev/v4l/by-id/usb-*-video-index0)
+docker run --rm -it --name car-camera --network host \
+  --runtime nvidia \
+  --user "$(id -u):$(id -g)" \
+  --group-add "$(getent group video | cut -d: -f3)" \
+  -e HOME=/tmp \
+  -e FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/ros_ws/src/racer_bringup/config/fastdds_udp_only.xml \
+  -v /tmp/argus_socket:/tmp/argus_socket \
+  --device "$USBCAM" \
+  -v "$PWD":/workspace -w /workspace/ros_ws \
+  car:local bash -lc "
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    exec ros2 launch racer_bringup cameras.launch.py usb_device:=$USBCAM"
+```
+
+Leave the `FASTRTPS_DEFAULT_PROFILES_FILE` line in: without it car-stack sees the camera
+topics but receives no frames (reproduced on the Mac, see the build log). Other arguments:
+`usb:=false` or `csi:=false` to start one camera, `usb_width`/`usb_height`/`usb_fps`,
+`csi_width`/`csi_height`/`csi_fps`, `csi_flip_method:=2` for an upside-down CSI mount, and
+`jpeg_quality:=60` (reaches both cameras) to shrink the bag.
+
+Expect, from the two nodes:
+
+```
+[camera_usb] Starting 'usb' (/dev/video1) at 1280x720 via mmap (mjpeg2rgb) at 60 FPS
+[camera_csi0] Using gstreamer config from rosparam: "nvarguscamerasrc sensor-id=0 ! ..."
+[camera_csi0] Publishing stream...
+[camera_csi0] Started stream.
+```
+
+Both warn that no calibration file exists: expected, nothing is calibrated. `Device specified
+is not available or is not a vaild V4L2 device` means `usb_device` and `--device` disagree or
+the camera moved to another N. `Failed to PAUSE stream, check your gstreamer configuration`
+means the pipeline did not start: go back to the C4 container check. If the USB picture has
+wrong colours or stripes, its JPEGs are 4:2:0: start that camera on its own with
+`ros2 launch racer_bringup camera_usb.launch.py device:=$USBCAM av_device_format:=YUV420P`
+and record it.
+
+### C6. Measure the frame rate
+
+In a second terminal, inside car-camera:
+
+```sh
+docker exec -it car-camera bash -lc '
+  source /opt/ros/humble/setup.bash && source install/setup.bash
+  ros2 run racer_tools camera_check --ros-args -p topic:=/camera/usb/image_raw/compressed \
+    -p expected_width:=1280 -p expected_height:=720
+  ros2 run racer_tools camera_check --ros-args -p topic:=/camera/csi0/image_raw/compressed \
+    -p expected_width:=1280 -p expected_height:=720'
+```
+
+Each listens for 10 s (`-p duration_s:=30.0` for longer) and exits 0 on PASS, 1 on FAIL, 2 if
+fewer than two frames arrived. With the defaults:
+
+| Line | Expect | Fails when |
+|---|---|---|
+| frame rate (stamps) | about 60 Hz | below 54 Hz (`min_rate_hz`; pass a lower value if the camera was launched slower) |
+| frame rate (arrival) | about the same | (reported only; much lower than the stamp rate means a slow subscriber) |
+| resolution | 1280x720 | anything else, or a change during the window |
+| undecodable frames | 0 | any |
+| mean frame size | tens to a couple of hundred kB, scene dependent | (reported only) |
+| payload rate | about 5 to 10 MB/s per camera (estimate) | (reported only; this IS the bag growth, record it) |
+
+A UVC camera in a dim room may stretch its exposure past 1/60 s and drop below 60 fps: test
+in normal room light, and note it if the rate falls with the lights down. While both cameras
+run, note the CPU load with `top` on the host: the USB stream is decoded and re-encoded on the
+CPU, and the CSI stream converted and encoded there too (UNVERIFIED cost at 720p60). If the
+control stack's nodes slow down, drop to `usb_fps:=30 csi_fps:=30`.
+
+Then the same check from car-stack's side, which is what the recorder sees (start car-stack
+as in "Start the stack" if it is not running):
+
+```sh
+docker exec -it car-stack bash -lc '
+  source /opt/ros/humble/setup.bash && source install/setup.bash
+  ros2 run racer_tools camera_check --ros-args -p topic:=/camera/usb/image_raw/compressed'
+```
+
+PASS here too. Exit 2 with the topics listed is the shared-memory problem: car-camera was
+started without the profile line.
+
+### C7. Look at it in Foxglove
+
+car-stack's `foxglove_bridge` (on by default, `viz`) serves the camera topics too: in Foxglove
+on the Mac, connect to `ws://10.0.0.226:8765`, add an **Image** panel and pick
+`/camera/usb/image_raw/compressed`, then a second for `/camera/csi0/image_raw/compressed`.
+Always the `compressed` topics: a raw `image_raw` is about 166 MB/s per camera and will choke
+the WiFi. Expect a live picture at whatever rate the WiFi carries (below the camera's 60 fps
+is normal over WiFi; `camera_check` is the rate measurement, not Foxglove). Without car-stack
+running, start a bridge in car-camera the way LiDAR step L5 does
+(`docker exec -it car-camera bash -lc '... exec ros2 run foxglove_bridge foxglove_bridge
+--ros-args -p port:=8765'`). If the CSI picture is upside down, restart car-camera with
+`csi_flip_method:=2`.
+
+### C8. Recording and bag growth
+
+Every car-stack run already records the cameras: `car_teleop.launch.py`'s recorder regex
+takes `/camera/.*/compressed` and NOT `image_raw`, wherever the cameras run. Expected growth
+at 720p60, **an estimate until measured**: a 1280x720 JPEG at `jpeg_quality` 80 is roughly 80
+to 170 kB for an indoor scene, so 60 fps is about **5 to 10 MB/s per camera (17 to 37 GB per
+hour)**, about 10 to 20 MB/s (35 to 75 GB per hour) with both. The raw images would be
+1280 x 720 x 3 bytes x 60 = 166 MB/s per camera, which is why they are left out. Replace the
+estimate with `camera_check`'s measured payload rate, and check the space first:
+
+```sh
+df -h ~/car/data
+```
+
+Lower `jpeg_quality` or the fps if a session would not fit. After a recorded run,
+`ros2 bag info` on the bag should list `/camera/usb/image_raw/compressed` and
+`/camera/csi0/image_raw/compressed`, each with about 60 messages per second of duration, and no
+`image_raw`.
+
+To collect camera data without the drive stack (no car-stack, so no drive and no invariant-5
+recorder), record inside car-camera:
+
+```sh
+docker exec -it car-camera bash -lc '
+  source /opt/ros/humble/setup.bash
+  mkdir -p /workspace/data/bags
+  exec ros2 bag record -s mcap --regex "^/camera/.*/compressed$" \
+    -o /workspace/data/bags/$(date +%Y-%m-%dT%H-%M-%S)_cameras'
+```
+
+Ctrl-C closes the bag cleanly.
+
+### C9. Write it down
+
+Dated `docs/notes/build-log.md` entry: which overlay `jetson-io` applied and the final
+`OVERLAYS` line, the `GST_ARGUS` sensor-mode list, the USB camera's VID:PID, `/dev/videoN` and
+`--list-formats-ext` MJPG modes, anything the container needed beyond the documented flags,
+both `camera_check` reports from car-camera and from car-stack, the measured MB/s, and the CPU
+load. When the second IMX219 arrives: `jetson-io` "Camera IMX219 Dual", the same overlay
+checks as C2, and `camera_csi.launch.py sensor_id:=1` publishes under `/camera/csi1/*`
+(`cameras.launch.py` starts sensor 0 only until then).
 
 ## Afterwards
 

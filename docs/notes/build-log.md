@@ -2043,3 +2043,30 @@ and measure it (UNVERIFIED in the runbook); VESC Tool App to Use `PPM` -> `PPM a
 re-export and commit the app XML; disable nvgetty if it holds `/dev/ttyTHS1`; wire pins 8/10/GND
 crossed, never the VESC's 5 V; run the bench checks (no subscribers, 50 Hz, sign by hand-turned
 wheel, 10-turn distance check).
+
+## 2026-10-07: park_node, parallel park and three-point turn (roadmap 2.9, software only)
+
+Owner-requested, sim and unit tests only; nothing ran on the car. New `racer_control/park_node`
+(`park.launch.py profile:=floor-2026-10-07`): drives slowly along a row with the LiDAR, finds a
+pocket at least `slot_length_min_m` long and `slot_depth_min_m` deep, plans the two-arc parallel
+park (R = 0.3302 / tan(0.95 x 0.4189) = 0.7855 m; a 0.5 m lateral offset gives theta 47.0 deg
+and 1.149 m along the row) and drives it from `/odom/wheel`. Also a three-point turn in the
+current lane (at least 1.60 m wide). Started by service (`ros2 service call /park_node/start
+std_srvs/srv/Trigger`), publishes `/drive_raw` only. **It reverses on its own.**
+
+The plan predicts safety_node's obstacle gate, so the rear gap after the arcs is about 0.37 m,
+not the 0.1 m margin (the rear corridor reads the rear obstacle along the steering arc), and the
+shortest slot it accepts is about 1.51 m (1.24 m without that). Details, formulas and the run
+procedure: `docs/notes/parking-2026-10-07.md`.
+
+racer_gym_bridge gained opt-in parameters for the L5 canary (`tests/l5_park`, CI job
+`l5-park`): a pocket in the corridor wall, `/odom/wheel` from the sim speed, a /scan cast from
+the car's LiDAR mount (360 degrees, yaw pi), and the gym's speed controller mirrored for reverse
+(the gym brakes a reversing car 20 times more weakly than a forward one). The canary parks the
+sim car inside the pocket, parallel within 1 degree, 0.20 m clear of every wall, with no
+obstacle brake from safety_node. The car stack's recorder now also takes `/park_node/status`.
+
+No physical constant changed and no schema bump. Before the first floor run: VESC UART wired and
+`/odom/wheel` checked (runbook "VESC telemetry"), `chassis.front_overhang_m` and
+`rear_overhang_m` measured (both still placeholders, the swept-body check uses them), the real
+turning radius at 0.95 lock measured against 0.786 m, and the L6 wheels-off-ground sweep.

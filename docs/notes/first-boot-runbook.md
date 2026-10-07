@@ -841,6 +841,19 @@ first laps.
    reach for if the car does anything unexpected, including backing up when you did not expect
    it.
 
+### Parallel park and three-point turn (park_node; NOT yet run on the car)
+
+`racer_control`'s park_node (roadmap 2.9, 2026-10-07) finds a slot along a row of obstacles
+with the LiDAR and parallel parks in it, or turns the car round in its lane, from the VESC's
+wheel odometry. **IT REVERSES ON ITS OWN.** Everything, including the prerequisites (VESC UART
+wired and `/odom/wheel` checked in "VESC telemetry" below, both overhangs measured, the turning
+radius checked, an L6 sweep), the commands and what to expect in the log, is in
+`docs/notes/parking-2026-10-07.md`, "Running it on the car". In short: the stack with
+`lidar:=true vesc:=true` and no teleop source, then
+`ros2 launch racer_control park.launch.py profile:=floor-2026-10-07`, then
+`ros2 service call /park_node/start std_srvs/srv/Trigger` (or `/park_node/three_point_turn`;
+`/park_node/abort` stops it). Kill switch in a second person's hand.
+
 ### The throttle start deadzone (expect this, it is not a fault)
 
 **HISTORICAL, 2026-09-21 (sensorless, Current No Reverse With Brake).** Since 2026-09-29 the

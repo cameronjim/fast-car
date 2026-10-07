@@ -1,0 +1,171 @@
+diff --git a/vesc_driver/include/vesc_driver/vesc_interface.hpp b/vesc_driver/include/vesc_driver/vesc_interface.hpp
+index dcca50f..ac2ce2d 100644
+--- a/vesc_driver/include/vesc_driver/vesc_interface.hpp
++++ b/vesc_driver/include/vesc_driver/vesc_interface.hpp
+@@ -33,6 +33,7 @@
+ 
+ #include "vesc_driver/vesc_packet.hpp"
+ 
++#include <cstdint>
+ #include <exception>
+ #include <functional>
+ #include <memory>
+@@ -97,6 +98,9 @@ public:
+    */
+   void connect(const std::string & port);
+ 
++  /** racer patch: serial baud rate used by the next connect(). Default 115200. */
++  void setBaudRate(uint32_t baud_rate);
++
+   /**
+    * Closes the serial port interface to the VESC.
+    */
+diff --git a/vesc_driver/src/vesc_driver.cpp b/vesc_driver/src/vesc_driver.cpp
+index 5c8ef62..147a564 100644
+--- a/vesc_driver/src/vesc_driver.cpp
++++ b/vesc_driver/src/vesc_driver.cpp
+@@ -67,6 +67,8 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
+ {
+   // get vesc serial port address
+   std::string port = declare_parameter<std::string>("port", "");
++  // racer patch: serial baud rate as a parameter (upstream hard-codes 115200).
++  vesc_.setBaudRate(static_cast<uint32_t>(declare_parameter<int>("baud", 115200)));
+ 
+   // attempt to connect to the serial port
+   try {
+@@ -82,26 +84,11 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
+   imu_pub_ = create_publisher<VescImuStamped>("sensors/imu", rclcpp::QoS{10});
+   imu_std_pub_ = create_publisher<Imu>("sensors/imu/raw", rclcpp::QoS{10});
+ 
+-  // since vesc state does not include the servo position, publish the commanded
+-  // servo position as a "sensor"
+-  servo_sensor_pub_ = create_publisher<Float64>(
+-    "sensors/servo_position_command", rclcpp::QoS{10});
+-
+-  // subscribe to motor and servo command topics
+-  duty_cycle_sub_ = create_subscription<Float64>(
+-    "commands/motor/duty_cycle", rclcpp::QoS{10}, std::bind(
+-      &VescDriver::dutyCycleCallback, this,
+-      _1));
+-  current_sub_ = create_subscription<Float64>(
+-    "commands/motor/current", rclcpp::QoS{10}, std::bind(&VescDriver::currentCallback, this, _1));
+-  brake_sub_ = create_subscription<Float64>(
+-    "commands/motor/brake", rclcpp::QoS{10}, std::bind(&VescDriver::brakeCallback, this, _1));
+-  speed_sub_ = create_subscription<Float64>(
+-    "commands/motor/speed", rclcpp::QoS{10}, std::bind(&VescDriver::speedCallback, this, _1));
+-  position_sub_ = create_subscription<Float64>(
+-    "commands/motor/position", rclcpp::QoS{10}, std::bind(&VescDriver::positionCallback, this, _1));
+-  servo_sub_ = create_subscription<Float64>(
+-    "commands/servo/position", rclcpp::QoS{10}, std::bind(&VescDriver::servoCallback, this, _1));
++  // racer read-only patch: no servo "sensor" publisher and NO command subscriptions. Upstream
++  // subscribes commands/motor/{duty_cycle,current,brake,speed,position} and
++  // commands/servo/position here and forwards them to the VESC over the serial link. On this
++  // car the motor is driven ONLY by PPM through the layer-1 safety mux (fast-car CLAUDE.md
++  // invariant 1), so this driver is telemetry only and offers no command interface at all.
+ 
+   // create a 50Hz timer, used for state machine & polling VESC telemetry
+   timer_ = create_wall_timer(20ms, std::bind(&VescDriver::timerCallback, this));
+@@ -146,8 +133,8 @@ void VescDriver::timerCallback()
+   } else if (driver_mode_ == MODE_OPERATING) {
+     // poll for vesc state (telemetry)
+     vesc_.requestState();
+-    // poll for vesc imu
+-    vesc_.requestImuData();
++    // racer patch: no IMU poll. The car's IMU is the dedicated one at the CG, never the VESC's
++    // (fast-car hardware doc), and halving the UART traffic leaves the state poll its full rate.
+   } else {
+     // unknown mode, how did that happen?
+     assert(false && "unknown driver mode");
+@@ -163,6 +150,9 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
+     auto state_msg = VescStateStamped();
+     state_msg.header.stamp = now();
+ 
++    // racer patch: upstream parses these two but never copies them into the message.
++    state_msg.state.temp_fet = values->temp_fet();
++    state_msg.state.temp_motor = values->temp_motor();
+     state_msg.state.voltage_input = values->v_in();
+     state_msg.state.current_motor = values->avg_motor_current();
+     state_msg.state.current_input = values->avg_input_current();
+diff --git a/vesc_driver/src/vesc_interface.cpp b/vesc_driver/src/vesc_interface.cpp
+index 9557431..3f230ce 100644
+--- a/vesc_driver/src/vesc_interface.cpp
++++ b/vesc_driver/src/vesc_interface.cpp
+@@ -58,6 +58,7 @@ public:
+   void on_configure();
+   void connect(const std::string & port);
+ 
++  uint32_t baud_rate_{115200};
+   bool packet_thread_run_;
+   std::unique_ptr<std::thread> packet_thread_;
+   PacketHandlerFunction packet_handler_;
+@@ -146,8 +147,12 @@ void VescInterface::Impl::packet_creation_thread()
+ 
+ void VescInterface::Impl::connect(const std::string & port)
+ {
+-  uint32_t baud_rate = 115200;
+-  auto fc = drivers::serial_driver::FlowControl::HARDWARE;
++  // racer patch: baud rate from the node's `baud` parameter (was hard-coded 115200), and NO
++  // flow control (was HARDWARE). Upstream assumes the VESC's USB CDC port, where flow control
++  // is meaningless; on a 3-wire TX/RX/GND UART (Jetson /dev/ttyTHS1) hardware flow control
++  // would gate transmission on a CTS line that is not connected.
++  uint32_t baud_rate = baud_rate_;
++  auto fc = drivers::serial_driver::FlowControl::NONE;
+   auto pt = drivers::serial_driver::Parity::NONE;
+   auto sb = drivers::serial_driver::StopBits::ONE;
+   device_config_ =
+@@ -253,32 +258,49 @@ void VescInterface::requestState()
+ 
+ void VescInterface::setDutyCycle(double duty_cycle)
+ {
+-  send(VescPacketSetDuty(duty_cycle));
++  // racer read-only patch: commands are never sent. The motor is driven by PPM through
++  // the layer-1 safety mux only (fast-car docker/car/patches/README.md).
++  (void)duty_cycle;
+ }
+ 
+ void VescInterface::setCurrent(double current)
+ {
+-  send(VescPacketSetCurrent(current));
++  // racer read-only patch: commands are never sent. The motor is driven by PPM through
++  // the layer-1 safety mux only (fast-car docker/car/patches/README.md).
++  (void)current;
+ }
+ 
+ void VescInterface::setBrake(double brake)
+ {
+-  send(VescPacketSetCurrentBrake(brake));
++  // racer read-only patch: commands are never sent. The motor is driven by PPM through
++  // the layer-1 safety mux only (fast-car docker/car/patches/README.md).
++  (void)brake;
+ }
+ 
+ void VescInterface::setSpeed(double speed)
+ {
+-  send(VescPacketSetRPM(speed));
++  // racer read-only patch: commands are never sent. The motor is driven by PPM through
++  // the layer-1 safety mux only (fast-car docker/car/patches/README.md).
++  (void)speed;
+ }
+ 
+ void VescInterface::setPosition(double position)
+ {
+-  send(VescPacketSetPos(position));
++  // racer read-only patch: commands are never sent. The motor is driven by PPM through
++  // the layer-1 safety mux only (fast-car docker/car/patches/README.md).
++  (void)position;
+ }
+ 
+ void VescInterface::setServo(double servo)
+ {
+-  send(VescPacketSetServoPos(servo));
++  // racer read-only patch: commands are never sent. The motor is driven by PPM through
++  // the layer-1 safety mux only (fast-car docker/car/patches/README.md).
++  (void)servo;
++}
++
++void VescInterface::setBaudRate(uint32_t baud_rate)
++{
++  impl_->baud_rate_ = baud_rate;
+ }
+ 
+ void VescInterface::requestImuData()

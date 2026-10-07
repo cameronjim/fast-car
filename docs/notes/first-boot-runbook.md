@@ -962,7 +962,10 @@ immutable).
 **What is recorded**, by regex, so a topic that does not exist yet is skipped rather than
 waited for: `/drive_raw`, `/drive`, `/safety/events`, `/teleop/cmd_vel`, everything under
 `/telemetry/` (the rail volts and amps), `/scan` when the launch runs with `lidar:=true`
-(see "LiDAR first power-up" below), plus `/rosout` and `/parameter_events`.
+(see "LiDAR first power-up" below), `/odom/wheel`, `/telemetry/vesc/*` and `/vesc/sensors/core`
+when it runs with `vesc:=true` (see "VESC telemetry" below), `/camera/*/compressed` (never
+the raw images) when cameras run (see "Cameras first power-up" below), plus `/rosout` and
+`/parameter_events`.
 
 **Format: mcap on the car, sqlite3 elsewhere.** `bag_storage:=auto` (the default) picks mcap
 when `ros-humble-rosbag2-storage-mcap` is installed, which `docker/car/Dockerfile` does, and
@@ -1223,6 +1226,190 @@ To record a bag of the LiDAR with the rest of the stack, start "Start the stack"
 the two extra flags (`--device ...` and `--group-add` for `dialout`) and `lidar:=true` (plus
 `lidar_serial_port:=/dev/lidar` with the udev rule). The recorder's regex already includes
 `/scan`.
+
+## VESC telemetry (wheel odometry over the VESC UART; UNVERIFIED, written 2026-10-07)
+
+**Nothing in this section has been run on the car.** The software side (the f1tenth
+`vesc_driver` read-only patched in the car image, `racer_drivers/vesc_odometry_node`,
+`vesc_telemetry.launch.py`) was built and exercised in the `ros-dev` container on 2026-10-07
+against a fake VESC on a pseudo-terminal; no real VESC, no Jetson UART, no wiring.
+
+What it gives you: `/odom/wheel` (`nav_msgs/Odometry`: `twist.twist.linear.x` = wheel speed in
+m/s, positive forward; `pose.pose.position.x` = SIGNED along-track distance in metres since the
+node started, forward adds and reverse subtracts, NOT an x coordinate; pose covariance 1e6 so
+nothing fuses it as a pose; frames `odom` / `base_link`, no TF) and `/telemetry/vesc/`
+`voltage_v`, `current_motor_a`, `current_input_a`, `temp_fet_degc`, `temp_motor_degc`, `erpm`
+(raw, the non-SI driver-boundary value) and `fault` (a name such as `NONE` or `OVER_TEMP_FET`,
+or `STALE_NO_VESC_DATA` while nothing arrives). Speed is ERPM / `drivetrain.pole_pairs` /
+`drivetrain.gear_ratio` x 2 pi x `tires.nominal_radius_m`, from the generated binding only; with
+today's PROVISIONAL gear ratio and tyre radius that is 0.000485 m/s per ERPM, so the VESC's 6000
+ERPM cap reads 2.91 m/s, the same number as `actuation.throttle_full_scale_mps`.
+
+**It is read-only, and it must stay that way.** The motor is commanded ONLY by the PPM pulse
+through the layer-1 mux (`CLAUDE.md` invariant 1). Upstream `vesc_driver` subscribes six
+command topics and forwards them to the VESC over this same serial line; the car image builds
+it with `docker/car/patches/vesc_driver-readonly.patch`, which removes those subscriptions and
+makes every set-command a no-op, and the image build refuses if the patched source can still
+subscribe or send one. The driver only ever asks the VESC for its firmware version and its
+state (`COMM_FW_VERSION`, `COMM_GET_VALUES`, 50 Hz). `vesc_ackermann` is not built. Do not
+"fix" a telemetry problem by installing the unpatched driver or the apt/ROS 1 one.
+
+**Roadmap note (2.1 / 2.4 / 2.9).** Roadmap 2.1 plans wheel-speed sensors on the ingest board.
+The VESC's sensored motor already measures driven-wheel speed (through the drivetrain, all four
+wheels are driven on the Slash 4x4), so `/odom/wheel` can be the wheel-speed input of 2.1 and
+2.4 instead of a separate sensor, at least until slip measurement needs per-wheel speeds. It is
+also the "how far have I moved" signal for 2.9's parking and three-point turn. The VESC keeps
+its own timeline (`claude-docs/11-hardware.md` "Sensor sync"): the stamp on `/odom/wheel` is the
+Jetson's receive time in the driver, so 2.2 still has to measure that offset.
+
+### V1. VESC Tool: turn on the UART app without touching PPM
+
+Over USB, as in step 13, wheels off the ground, mux knob killed:
+
+1. **App Settings > General > App to Use: `PPM and UART`** (it is `PPM` today:
+   `app_to_use` 1 in `config/vesc/2026-09-29d-fsesc67-app.xml`; `PPM and UART` is 4). This
+   keeps the PPM input exactly as configured (control type, deadband, ranges are unchanged) and
+   additionally listens on the UART. Do NOT pick `UART` alone: that turns PPM off and the car
+   can no longer be driven.
+2. **App Settings > UART > Baudrate: 115200** (`app_uart_baudrate`, already 115200 in the
+   committed export). It must equal the launch argument `baud` (default 115200).
+3. Write the app configuration, then re-export it into `config/vesc/` with a new date
+   (`2026-10-07-fsesc67-app.xml` or the date you do it) and commit it: the committed export is
+   safety layer 2 and the L6 config-diff check diffs against it. Change nothing in the motor
+   configuration.
+4. Check PPM still works before anything else: arm the mux, one keyboard tap, wheels turn,
+   release, they stop. If they do not, put App to Use back to `PPM` and stop.
+
+The same two settings apply unchanged to the FSESC 4.12 when it replaces the 6.7.
+
+### V2. Wiring: three wires, 3.3 V logic, never the VESC's 5 V
+
+| Jetson Orin Nano 40-pin header | Wire | VESC COMM (UART) port |
+|---|---|---|
+| pin 8, UART1_TXD (3.3 V) | crosses to | RX |
+| pin 10, UART1_RXD (3.3 V) | crosses to | TX |
+| pin 6 (or 9, 14, 20, 25, 30, 34, 39), GND | straight | GND |
+| (nothing) | | 5 V: **leave unconnected** |
+| (nothing) | | 3.3 V: leave unconnected |
+
+TX goes to RX and RX to TX. On JetPack 6 header pins 8/10 are `/dev/ttyTHS1` (they were
+`ttyTHS0` on JetPack 5; NVIDIA developer forum, "How to access UART1 on expansion pins 8/10").
+
+**FSESC 6.7 COMM pinout: UNVERIFIED.** On VESC 6-derived boards the COMM port is a small
+JST-PH socket that carries the UART's TX and RX (3.3 V logic, per VESC forum reports) next to
+supply pins. No source found on 2026-10-07 (Flipsky's manual pages were not readable, forum
+threads give no pin order) states the FSESC 6.7's pin order, so none is written here as fact.
+Before connecting anything to the Jetson:
+
+- Read the pin names off the board's silkscreen next to the COMM socket (and the pigtail
+  Flipsky ships with it). Photograph it and commit the photo to `docs/notes/`.
+- With the VESC powered from the pack and the Jetson NOT connected, measure each candidate pin
+  to GND with a meter. GND: continuity to battery negative. 5 V and 3.3 V: steady 5 V / 3.3 V
+  (these are the two you must not connect). VESC TX: idles high at about 3.3 V once the UART
+  app is enabled. **If the pin you take for TX reads above 3.6 V, stop**: the Orin's header
+  pins are 3.3 V and not 5 V tolerant.
+- Only then make the three-wire lead. Keep it short and away from the motor phase wires.
+
+The Jetson and the VESC already share a ground through the power wiring; the GND wire is still
+required as the signal reference. Never connect the VESC's 5 V to the Jetson's 5 V or to the
+mux board's 5 V bus (same rule as the PPM BEC pin, `claude-docs/11-hardware.md`).
+
+### V3. Host: free the UART and check permissions
+
+On the Jetson host (not in the container):
+
+```sh
+ls -l /dev/ttyTHS1               # expect: crw-rw---- 1 root dialout ... /dev/ttyTHS1
+getent group dialout             # note the GID; racer must be a member (id racer)
+sudo lsof /dev/ttyTHS1           # expect: nothing holds it
+systemctl list-units --all | grep -i -e getty -e nvgetty
+```
+
+If `nvgetty` (NVIDIA's serial console service) or a `serial-getty@ttyTHS1` unit is present and
+active, a login prompt is fighting the driver for the port. Disable it:
+
+```sh
+sudo systemctl disable --now nvgetty
+sudo systemctl disable --now serial-getty@ttyTHS1.service   # only if it exists
+sudo usermod -aG dialout racer                              # only if racer is not in dialout
+```
+
+Log out and back in after a `usermod`. A udev rule is not needed for `ttyTHS1`: it is created
+`root:dialout 0660` by the stock rules, so the `dialout` group is the whole permission story,
+the same as the LiDAR's `ttyUSB0`. Optional loopback check of the Jetson side alone, with the
+VESC unplugged and a jumper between pins 8 and 10:
+
+```sh
+stty -F /dev/ttyTHS1 115200 raw -echo
+cat /dev/ttyTHS1 & sleep 0.5; echo uart-ok > /dev/ttyTHS1; sleep 0.5; kill %1   # expect: uart-ok
+```
+
+Remove the jumper afterwards.
+
+### V4. Rebuild, then run the telemetry on its own
+
+The driver is a new layer in `docker/car/Dockerfile` and the node is new in `ros_ws`. On the
+Jetson, from `~/car`, after pulling this branch: rebuild the image and the workspace exactly as
+in "LiDAR first power-up" L1, then check the lookup:
+
+```sh
+docker run --rm car:local bash -lc 'source /opt/ros/humble/setup.bash && ros2 pkg prefix vesc_driver'
+# expect: /opt/racer_thirdparty
+```
+
+Start the driver and the odometry node alone, VESC powered (wheels off the ground, mux knob
+killed: nothing here can move the car, but the VESC is live):
+
+```sh
+cd ~/car
+docker run --rm -it --name car-vesc --network host \
+  --user "$(id -u):$(id -g)" \
+  --device /dev/ttyTHS1 \
+  --group-add "$(getent group dialout | cut -d: -f3)" \
+  -e HOME=/tmp \
+  -v "$PWD":/workspace -w /workspace/ros_ws \
+  car:local bash -lc '
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    exec ros2 launch racer_bringup vesc_telemetry.launch.py'
+```
+
+(`serial_port:=...` and `baud:=...` override the defaults `/dev/ttyTHS1` and 115200.) Expect
+`Connected to VESC with firmware version <major>.<minor>` from `vesc_driver`, then
+vesc_odometry_node's startup line with `0.000485 m/s per ERPM`. Without a VESC answering, the
+driver never prints the firmware line and vesc_odometry_node warns `no VescStateStamped on
+/vesc/sensors/core`; check, in order: App to Use (V1), TX/RX crossed (V2), the port is free
+(V3), the baud on both ends. `Failed to connect to the VESC` means the device or the group did
+not reach the container: re-check `--device` and `--group-add`.
+
+### V5. Bench checks (record the results in the build log)
+
+In a second shell: `docker exec -it car-vesc bash -lc 'source /opt/ros/humble/setup.bash &&
+source install/setup.bash && ...'` with:
+
+- `ros2 node info /vesc/vesc_driver`: **Subscribers lists only `/parameter_events`.** Any
+  `commands/...` subscriber means the unpatched driver is running: stop and rebuild the image.
+- `ros2 topic hz /odom/wheel`: about 50 Hz.
+- `ros2 topic echo /telemetry/vesc/voltage_v`: the pack voltage, within a few tenths of a meter
+  reading. `fault`: `NONE`. `temp_fet_degc`: room temperature-ish. `temp_motor_degc`: plausible
+  only once motor temperature sensing is enabled in VESC Tool (step 13); until then it is not a
+  measurement.
+- **Sign check, wheels off the ground:** turn a wheel BY HAND in the forward direction. On a
+  sensored motor the halls see this: `erpm` and `/odom/wheel` `twist.twist.linear.x` must go
+  POSITIVE and `pose.pose.position.x` must grow. Negative means the VESC's positive rotation is
+  backwards relative to `claude-docs/06-vehicle-params.md`'s "positive = drive torque forward";
+  that is a VESC motor-direction setting or a wiring question to resolve and write down, not a
+  sign to flip in software.
+- **Distance check:** mark a tyre, roll the car by hand along the floor for exactly 10 wheel
+  turns (or push it a taped 2.000 m), and compare `pose.pose.position.x` with 10 x 2 pi x
+  `tires.nominal_radius_m` (or 2.000 m). The ratio is the first measurement of
+  `drivetrain.gear_ratio` x tyre radius together; write it into the build log, and only then
+  into `config/vehicle_params.yaml` (with its schema bump) when the gear ratio is counted.
+
+To record it with everything else, start "Start the stack" with `--device /dev/ttyTHS1`, the
+`dialout` `--group-add`, and `vesc:=true` (`vesc_serial_port:=` to override the port). The
+recorder regex keeps `/odom/wheel`, `/telemetry/vesc/.*` and the raw `/vesc/sensors/core`.
+If the VESC is absent the driver exits and the rest of the launch keeps running; the bag then
+shows `STALE_NO_VESC_DATA` on `/telemetry/vesc/fault`.
 
 ## Cameras first power-up (OPTIONAL, outside the thesis; UNVERIFIED, written 2026-10-07 before the cameras were fitted)
 

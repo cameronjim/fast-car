@@ -1,6 +1,8 @@
 # racer_drivers
 
-On-vehicle drivers (`claude-docs/02-repo-layout.md`). One node so far.
+On-vehicle drivers (`claude-docs/02-repo-layout.md`): `pwm_output_node` (the tail of the
+command path), `rail_voltage_node` and `vesc_odometry_node` (telemetry, no path to the
+actuators).
 
 ## `pwm_output_node` -- the tail of the command path
 
@@ -440,6 +442,45 @@ Cross-reference: `firmware/safety_mux/README.md`'s "Board connector map" is the 
 the board side of this connector; this table is the authority on which Jetson pin each wire
 leaves from.
 
+## `vesc_odometry_node` -- wheel odometry from the VESC, read-only (2026-10-07)
+
+```
+VESC --UART--> vesc_driver (f1tenth, read-only patched, car image) --/vesc/sensors/core-->
+    vesc_odometry_node --> /odom/wheel, /telemetry/vesc/{erpm,voltage_v,current_motor_a,
+                           current_input_a,temp_fet_degc,temp_motor_degc,fault}
+```
+
+Subscribes `vesc_msgs/VescStateStamped` (best_effort, depth 10) and publishes, reliable depth
+10:
+
+- `/odom/wheel` (`nav_msgs/Odometry`, `odom` -> `base_link`, stamp = the driver's stamp):
+  `twist.twist.linear.x` is wheel speed in m/s, positive forward; `pose.pose.position.x` is the
+  SIGNED along-track distance since start (reverse subtracts), an arc length and not an odom
+  x coordinate. Pose covariance and every twist variance except linear.x are 1e6
+  (`pose_variance`), linear.x is `twist_linear_x_variance` (PROVISIONAL 0.01). No TF.
+- `/telemetry/vesc/*` as `std_msgs/Float32` (SI; temperatures in degrees Celsius; `erpm` is the
+  raw driver-boundary value) and `/telemetry/vesc/fault` (`std_msgs/String`, the firmware fault
+  name, or `STALE_NO_VESC_DATA` after `stale_timeout_s` of silence).
+
+Speed = ERPM / `drivetrain.pole_pairs` / `drivetrain.gear_ratio` x 2 pi x
+`tires.nominal_radius_m`, all three from the generated binding; the node refuses to start if
+any is null or not positive. Distance is trapezoidal over the samples' own stamps and never
+bridges a gap longer than `max_integration_gap_s` (0.2 s), a duplicate or backward stamp, or a
+non-finite sample. Positive ERPM is forward because the project's convention is "positive
+current = forward torque" and the VESC's positive rotation is the one positive current produces;
+the runbook's sign check confirms it on the bench.
+
+The node publishes nothing on any command topic (asserted against the live graph in its L3
+test) and the driver is patched so it neither subscribes to nor sends any command
+(`docker/car/patches/README.md`). Launched by `racer_bringup/launch/vesc_telemetry.launch.py`
+or `car_teleop.launch.py vesc:=true`. Bench procedure and wiring:
+`docs/notes/first-boot-runbook.md` "VESC telemetry".
+
+Tests: `test/test_vesc_odometry.cpp` (L1, conversion/integrator/fault names on fixture values),
+`test/test_vesc_odometry_binding.cpp` (L1, against the real binding: the newest committed VESC
+export's `l_max_erpm` must reproduce `actuation.throttle_full_scale_mps` within 0.005 m/s),
+`test/test_vesc_odometry_node_launch.py` (L3, synthetic `VescStateStamped`).
+
 ## Layout
 
 ```
@@ -448,9 +489,13 @@ racer_drivers/
 ├── include/racer_drivers/         ROS-free, sysfs-free headers
 │   ├── pwm_mapping.hpp            angle/speed -> pulse, clamping, staleness, refuse-on-null
 │   ├── pwm_sink.hpp               the PwmChannelSink interface + in-memory fake + sysfs impl
-│   └── pwm_output_driver.hpp      fail-closed sequencing over two sinks
-├── src/                           those three, plus pwm_output_node.cpp (all the ROS)
+│   ├── pwm_output_driver.hpp      fail-closed sequencing over two sinks
+│   └── vesc_odometry.hpp          ERPM -> wheel speed, along-track integrator, fault names
+├── src/                           the pwm sources, pwm_output_node.cpp, vesc_odometry_node.cpp
 └── test/
     ├── test_pwm_mapping.cpp       L1 gtest: table-driven, bounds/epsilon/NaN/inf
-    └── test_pwm_output_node_launch.py  L3 launch_testing against a fake sysfs tree
+    ├── test_pwm_output_node_launch.py  L3 launch_testing against a fake sysfs tree
+    ├── test_vesc_odometry.cpp     L1 gtest: conversion, integrator, fault names
+    ├── test_vesc_odometry_binding.cpp  L1 gtest: against the real vehicle_params + VESC export
+    └── test_vesc_odometry_node_launch.py  L3 launch_testing with synthetic VescStateStamped
 ```

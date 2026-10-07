@@ -131,6 +131,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # expected to work in GitHub Actions.
 RUN rosdep update
 
+# --- vesc_msgs for racer_drivers' vesc_odometry_node (added 2026-10-07) -------------------
+# racer_drivers compiles against vesc_msgs/VescStateStamped, which has no apt package and no
+# rosdep key. Built here from the SAME pinned f1tenth/vesc commit as docker/car/Dockerfile
+# (keep VESC_COMMIT identical in both files; see that file's comment for why this commit),
+# into the same /opt/racer_thirdparty prefix, so the l3-and-cpp CI job builds and tests
+# vesc_odometry_node exactly as the car does. Only vesc_msgs: the driver needs a serial port
+# and is only ever run on the car, so it stays out of this image. AMENT_PREFIX_PATH makes
+# rosdep and `ros2` see the package, CMAKE_PREFIX_PATH makes find_package see it,
+# LD_LIBRARY_PATH lets the built node load its typesupport libraries, PYTHONPATH lets the L3
+# launch test import vesc_msgs.msg. /opt/ros/humble/setup.bash and a workspace's setup.bash
+# prepend to all four, never reset them. The base image sets none of them, so these are plain
+# values (no trailing ':' that would put the current directory on a search path).
+ARG VESC_REPO=https://github.com/f1tenth/vesc.git
+ARG VESC_COMMIT=153998df8545fe1781b975df88e411b4e71d4bfe
+# hadolint ignore=SC1091
+RUN set -e; \
+    git clone --quiet --no-checkout "$VESC_REPO" /tmp/thirdparty_ws/src/vesc; \
+    git -C /tmp/thirdparty_ws/src/vesc checkout --quiet --detach "$VESC_COMMIT"; \
+    test "$(git -C /tmp/thirdparty_ws/src/vesc rev-parse HEAD)" = "$VESC_COMMIT"; \
+    . /opt/ros/humble/setup.sh; \
+    colcon --log-base /tmp/thirdparty_ws/log build --base-paths /tmp/thirdparty_ws/src \
+        --packages-select vesc_msgs \
+        --build-base /tmp/thirdparty_ws/build --merge-install --install-base /opt/racer_thirdparty \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF; \
+    rm -rf /tmp/thirdparty_ws
+ENV AMENT_PREFIX_PATH=/opt/racer_thirdparty
+ENV CMAKE_PREFIX_PATH=/opt/racer_thirdparty
+ENV LD_LIBRARY_PATH=/opt/racer_thirdparty/lib
+ENV PYTHONPATH=/opt/racer_thirdparty/local/lib/python3.10/dist-packages
+RUN bash -c 'source /opt/ros/humble/setup.bash \
+    && ros2 interface show vesc_msgs/msg/VescStateStamped > /dev/null \
+    && python3 -c "from vesc_msgs.msg import VescStateStamped"'
+
 # Pin the uv binary itself to the same version used to generate uv.lock
 # locally (matches sim-cpu/train-cuda), so `uv sync --locked` resolves the
 # lockfile the same way here as it did during development.

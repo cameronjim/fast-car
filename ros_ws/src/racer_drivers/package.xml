@@ -22,6 +22,14 @@
     car_teleop.launch.py's rosbag satisfies both halves of CLAUDE.md invariant 5 ("rosbag +
     rail voltage") until the INA226 in claude-docs/11-hardware.md is fitted. It warns once
     and publishes nothing when the sensor is absent, and never exits on a read failure.
+
+    Third node: vesc_odometry_node (C++), wheel odometry from the VESC's sensored motor over
+    its UART. It subscribes vesc_driver's vesc_msgs/VescStateStamped (the f1tenth driver,
+    built read-only-patched in the car image) and publishes /odom/wheel (wheel speed and
+    signed along-track distance from ERPM, using only drivetrain.pole_pairs,
+    drivetrain.gear_ratio and tires.nominal_radius_m from the generated binding) and
+    /telemetry/vesc/*. It never commands the VESC: the motor's only command path is the PPM
+    pulse through the layer-1 mux.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -38,6 +46,14 @@
        to record. std_msgs only - no custom message, per claude-docs/02-repo-layout.md. -->
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
+
+  <!-- vesc_odometry_node (C++): reads vesc_driver's VescStateStamped, publishes /odom/wheel
+       and /telemetry/vesc/*. Read-only: no command topic, no path to the VESC. vesc_msgs has
+       no rosdep key; it is built from f1tenth/vesc at a pinned commit into
+       /opt/racer_thirdparty by docker/car/Dockerfile and docker/ros-dev/Dockerfile, and rosdep
+       treats it as installed because that prefix is on AMENT_PREFIX_PATH. -->
+  <depend>nav_msgs</depend>
+  <depend>vesc_msgs</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>

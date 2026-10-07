@@ -38,6 +38,10 @@ constexpr double kRearOverhang = 0.12;  // chassis.rear_overhang_m (PROVISIONAL)
 constexpr double kHalfAngle = 1.2;      // limits.ttc_forward_sector_half_angle_rad
 constexpr double kHalfWidth = 0.205;    // chassis.width_m / 2 + limits.obstacle_corridor_margin_m
 constexpr double kCarYaw = kPi;         // sensors.lidar.mount_yaw_rad
+// Rear axle to the front bumper line: chassis.wheelbase_m + chassis.front_overhang_m
+// (PROVISIONAL, schema 0.11.0). Forward only; the rear corridor's leading edge is the rear
+// bumper line.
+constexpr double kBodyFrontX = kWheelbase + 0.13;
 // The rear bumper line, in the head frame (x ahead of the head).
 constexpr double kBumperX = -(kMountX + kRearOverhang);
 
@@ -47,6 +51,7 @@ PathGeometry car_path() {
   path.max_steering_angle_rad = kMaxSteer;
   path.lidar_mount_x_m = kMountX;
   path.lidar_mount_y_m = 0.0;
+  path.body_front_x_m = kBodyFrontX;
   return path;
 }
 
@@ -231,6 +236,40 @@ TEST(RearCorridorArc, APostStraightBehindIsOutOfThePathAtFullLock) {
   EXPECT_EQ(rear(post, -kMaxSteer), kInf);
 }
 
+TEST(RearCorridorArc, TheOuterEdgeIsTheOuterRearCornersSweep) {
+  // Backing up, the rear bumper line leads, so the band's outer edge is the outer REAR corner's
+  // sweep, hypot(rear_overhang_m, R + half width) (forward_sector.hpp "OUTER BOUNDARY"), not
+  // R + half width and not the front corner's. At full lock: 0.954 m against 0.947 m.
+  constexpr double kEps = 5e-4;
+  const double radius = full_lock_radius();
+  const double old_outer = radius + kHalfWidth;
+  const double corner_outer = std::hypot(kRearOverhang, radius + kHalfWidth);
+  ASSERT_NEAR(corner_outer, 0.9542, 1e-4);
+  const double between = 0.5 * (old_outer + corner_outer);
+  for (const bool left : {true, false}) {
+    const double steer = left ? kMaxSteer : -kMaxSteer;
+    // Inside the rear corner's sweep but outside the old band: in the path, at the reverse arc
+    // length from the bumper line.
+    const Xy in = head_of_mirrored(on_mirrored_arc(radius, 0.9, between - radius, left), kMountX);
+    EXPECT_NEAR(rear(OneReturn(in.x, in.y, kCarYaw), steer),
+                radius * (0.9 - std::atan2(kRearOverhang, radius)), 1e-5)
+        << left;
+    // With no overhang the leading corner is on the axle line: the old band, and it is out.
+    EXPECT_EQ(rear(OneReturn(in.x, in.y, kCarYaw), steer, car_path(), 0.0), kInf) << left;
+    // Just outside the rear corner's sweep: out.
+    const Xy out =
+        head_of_mirrored(on_mirrored_arc(radius, 0.9, corner_outer - radius + kEps, left), kMountX);
+    EXPECT_EQ(rear(OneReturn(out.x, out.y, kCarYaw), steer), kInf) << left;
+    // The FRONT bumper's x plays no part behind the car, however large.
+    PathGeometry long_nose = car_path();
+    long_nose.body_front_x_m = 2.0;
+    EXPECT_EQ(rear(OneReturn(out.x, out.y, kCarYaw), steer, long_nose), kInf) << left;
+    EXPECT_NEAR(rear(OneReturn(in.x, in.y, kCarYaw), steer, long_nose),
+                rear(OneReturn(in.x, in.y, kCarYaw), steer), 0.0)
+        << left;
+  }
+}
+
 TEST(RearCorridorArc, BeyondAQuarterTurnAndAheadOfTheRearAxleAreIgnored) {
   const Xy past = head_of_mirrored(on_mirrored_arc(1.0, 1.7, 0.0, true), 0.0);
   EXPECT_EQ(rear(OneReturn(past.x, past.y, kCarYaw), kUnitSteer, unit_path(), 0.0), kInf);
@@ -288,6 +327,11 @@ TEST(RearCorridorGarbage, GarbageInputFallsBackToTheWholeScanConservatively) {
   }
   PathGeometry bad_path = car_path();
   bad_path.wheelbase_m = 0.0;
+  EXPECT_NEAR(min_rear_path_distance_m(scene.geometry, scene.ranges, kCarYaw, kHalfAngle,
+                                       kHalfWidth, bad_path, kRearOverhang, 0.0),
+              whole, 1e-5);
+  bad_path = car_path();
+  bad_path.body_front_x_m = kNan;
   EXPECT_NEAR(min_rear_path_distance_m(scene.geometry, scene.ranges, kCarYaw, kHalfAngle,
                                        kHalfWidth, bad_path, kRearOverhang, 0.0),
               whole, 1e-5);

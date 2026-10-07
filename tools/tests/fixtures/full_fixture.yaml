@@ -14,6 +14,7 @@ chassis:
   length_m: 0.58
   width_m: 0.31
   rear_overhang_m: 0.11
+  front_overhang_m: 0.14
 
 tires:
   surface_friction_coefficient: 1.0489

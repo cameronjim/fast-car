@@ -15,6 +15,8 @@ find_package(rcl_interfaces REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(ackermann_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 
 # -- ROS-free core library (claude-docs/10-conventions.md: gate/decision logic separated
 #    from node plumbing) -------------------------------------------------------------------
@@ -31,6 +33,12 @@ add_library(racer_control_core
   src/pid.cpp
   src/reactive_speed.cpp
   src/reverse_escape.cpp
+  # Low-speed manoeuvres (roadmap 2.9): park_node's slot detection, two-arc parallel park and
+  # three-point turn, and the state machine that runs them. Same ROS-free rule.
+  src/park_geometry.cpp
+  src/park_slot.cpp
+  src/park_planner.cpp
+  src/park_controller.cpp
 )
 target_include_directories(racer_control_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -103,6 +111,20 @@ foreach(reactive_node gap_follow_node wall_follow_node)
   )
 endforeach()
 
+# -- park_node (roadmap 2.9): parallel park and three-point turn from /scan and /odom/wheel.
+#    Publishes /drive_raw only (never /drive), reads the gated /drive, physical constants from
+#    the generated binding. Plans off the control thread (std::async), hence Threads. ---------
+find_package(Threads REQUIRED)
+add_executable(park_node src/park_node.cpp)
+add_dependencies(park_node racer_control_generate_vehicle_params)
+target_include_directories(park_node PRIVATE "${RACER_GENERATED_DIR}")
+target_link_libraries(park_node racer_control_core Threads::Threads)
+ament_target_dependencies(park_node rclcpp rcl_interfaces sensor_msgs nav_msgs ackermann_msgs
+  std_msgs std_srvs)
+install(TARGETS park_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # -- pure_pursuit_cli: tiny CLI harness for the S.3 cross-language base-controller
 #    divergence test (see src/pure_pursuit_cli.cpp's header comment). Built unconditionally
 #    (not gated behind BUILD_TESTING) -- it is a small, useful-on-its-own diagnostic binary,
@@ -133,6 +155,11 @@ if(BUILD_TESTING)
     test/test_gap_follow.cpp
     test/test_wall_follow.cpp
     test/test_reverse_escape.cpp
+    # park_node core (roadmap 2.9); park_test_helpers.hpp holds the synthetic LiDAR.
+    test/test_park_geometry.cpp
+    test/test_park_slot.cpp
+    test/test_park_planner.cpp
+    test/test_park_controller.cpp
   )
   target_link_libraries(test_racer_control_core racer_control_core)
   target_compile_definitions(test_racer_control_core PRIVATE
@@ -172,6 +199,20 @@ if(BUILD_TESTING)
   # (same approach as racer_bringup's test_car_teleop_profile.py).
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_gap_follow_launch_profile test/test_gap_follow_launch_profile.py)
+  # park_node (roadmap 2.9): IDLE publishes nothing; ~/start refused without odometry
+  # (require_odometry); SEARCH drives straight; safety_node holding the car -> ABORT naming the
+  # phase; ~/abort; ~/three_point_turn refused in a narrow lane; never publishes /drive.
+  add_launch_test(test/test_park_node_launch.py
+    TARGET test_park_node_launch
+    TIMEOUT 120
+  )
+  # require_odometry false: starts without /odom/wheel, WARNs, odom_fallback=true in ~/status.
+  add_launch_test(test/test_park_node_fallback_launch.py
+    TARGET test_park_node_fallback_launch
+    TIMEOUT 120
+  )
+  # park.launch.py `profile`: launch-description inspection only (L1).
+  ament_add_pytest_test(test_park_launch_profile test/test_park_launch_profile.py)
   add_launch_test(test/test_wall_follow_node_launch.py
     TARGET test_wall_follow_node_launch
     TIMEOUT 120

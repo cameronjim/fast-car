@@ -56,10 +56,12 @@
 //          brake evaluated on the REQUESTED forward speed, plus a distance floor, sharing one
 //          latch. While latched, forward speed is forced to zero. In the warning zone, with
 //          no latch, it emits an advisory-only event with no command change. See "THE
-//          OBSTACLE GATE AND ITS LATCH" below.
+//          OBSTACLE GATE AND ITS LATCH" below. Then the same gate mirrored for a REVERSE
+//          request on the rear corridor, with its own latch: see "THE REAR OBSTACLE GATE".
 //      3c. a rate-limit clamp against the PREVIOUS cycle's output (steering rate, and speed
-//          increase only -- braking/decelerating is never rate-limited), applied to whatever
-//          3b left, so the rate limit holds on everything that is finally output.
+//          magnitude increase only -- braking toward zero, forward or reverse, is never
+//          rate-limited), applied to whatever 3b left, so the rate limit holds on everything
+//          that is finally output. See "SPEED RATE LIMIT IN BOTH DIRECTIONS" below.
 //      3d. the steering hold: once the obstacle latch has held the output speed at zero for
 //          SafetyLimits::obstacle_steering_hold_after_s, the steering output is frozen at
 //          the angle it had when the hold started, until the latch releases. See "STEERING
@@ -136,6 +138,51 @@
 //     steering away (bag 2026-10-06T22-12-40_car_teleop). Nothing in this file changed for
 //     that: the gate still just reads GateInput::min_scan_range_m, and
 //     test_arc_corridor.cpp composes the two exactly the way safety_node does.
+//
+// THE REAR OBSTACLE GATE (added 2026-10-06 night; read before changing step 3b).
+//
+// Why. On the night floor test (bags 2026-10-06T23-19-41 and 23-25-38) the car ended nose-in
+// to a corner tighter than its turning circle in both lap directions: the forward gate braked
+// correctly, no steering gave a clear forward arc, and the latch held forever. The follower
+// never reversed, and this gate had no rear check, so nothing would have judged a reverse
+// request anyway. gap_follow_node now has a reverse escape (racer_control), and a reverse
+// request is judged here exactly like a forward one.
+//
+// What. GateInput::min_rear_scan_range_m is the in-path distance behind the car along the arc
+// of the requested steering, from the rear bumper line (forward_sector.hpp "REAR CORRIDOR";
+// safety_node recomputes it every cycle like the forward one). The rear gate is the forward
+// gate with the direction flipped: TTC = rear distance / |requested speed| for a reverse
+// request (a forward or zero request has infinite rear TTC), the same ttc_brake_s,
+// ttc_warning_s, min_forward_clearance_m floor (applied to the rear distance), release
+// hysteresis, trip-wins rule and garbage handling. While its latch is set, REVERSE speed is
+// held at zero; forward and zero requests pass.
+//
+// Two latches, not one latch keyed by direction. The forward latch (GateInput/GateResult
+// ttc_brake_latched) and the rear latch (reverse_brake_latched) are independent: each trips,
+// holds and releases on its own corridor with its own hysteresis, and each only ever zeroes
+// motion toward its own side. So the forward latch never blocks a reverse request (backing
+// out is exactly what a car parked nose-in needs) and the rear latch never blocks a forward
+// one. A single latch keyed by direction would have to drop or re-key the forward latch the
+// moment a reverse request arrives and judge the forward release afresh when the request
+// turns forward again, losing the hysteresis that exists to stop flicker; and a car boxed in
+// front and back needs both held at once. They are also separate engagements on
+// /safety/events: the rear gate reports GateSource::kTtcReverse ("ttc_reverse"), so a car
+// latched both ways is two interventions, each with its own engage and release record, and
+// neither release can be hidden by the other still being engaged.
+//
+// The steering hold below stays tied to the FORWARD latch only, as before: a car parked by the
+// rear latch is one whose reverse request was refused, and the requester (the escape, or an
+// operator) holds a steady steering while it waits.
+//
+// SPEED RATE LIMIT IN BOTH DIRECTIONS (2026-10-06 night, step 3c). The rate limiter used to
+// compare signed speeds: any increase was limited and any decrease passed. That is right going
+// forward, but backwards it limited BRAKING (-0.5 -> 0 is an increase) and passed any reverse
+// ACCELERATION (0 -> -5 is a decrease). With the rear gate a reverse brake must reach the
+// output at once, exactly like a forward one, so the limiter now works on the speed's
+// magnitude: a change toward zero passes at once in either direction, growth away from zero
+// in either direction is limited to max_acceleration_mps2 * dt, and a request that crosses
+// zero is a brake to zero (free) followed by growth from zero (limited). Forward behaviour is
+// unchanged bit for bit (previous output and request both >= 0).
 //
 // STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH (added 2026-10-06 late; read before
 // changing step 3d).
@@ -257,6 +304,9 @@ enum class GateSource {
   kTtc,
   kCovariance,
   kInternalFault,
+  // The rear obstacle gate (2026-10-06 night, "THE REAR OBSTACLE GATE"): a reverse request
+  // judged on the rear corridor. A separate source so it is a separate engagement.
+  kTtcReverse,
 };
 
 enum class EventSeverity {
@@ -270,7 +320,7 @@ enum class EventSeverity {
 // -- deliberately arithmetic rather than a switch, so the tracker adds no branches to the
 // 100%-branch-coverage gate and no heap allocation to the 50 Hz path. Keep these in step
 // with the enums above if an enumerator is ever added.
-inline constexpr std::size_t kGateSourceCount = 7;
+inline constexpr std::size_t kGateSourceCount = 8;
 inline constexpr std::size_t kEventSeverityCount = 3;
 
 // One gate's state for ONE control cycle, as reported by SafetyGateLogic::evaluate(): "this
@@ -316,6 +366,13 @@ struct GateInput {
   // The obstacle-gate latch as the previous cycle left it (GateResult::ttc_brake_latched).
   // false at startup. See "THE OBSTACLE GATE AND ITS LATCH".
   bool ttc_brake_latched = false;
+  // Distance to the nearest valid /scan return in the REAR path corridor, along the reverse
+  // arc of THIS cycle's requested steering, from the rear bumper line
+  // (forward_sector.hpp min_rear_path_distance_m, recomputed by safety_node every cycle);
+  // +inf if none (the default: nothing behind). See "THE REAR OBSTACLE GATE".
+  double min_rear_scan_range_m = std::numeric_limits<double>::infinity();
+  // The rear gate's latch as the previous cycle left it (GateResult::reverse_brake_latched).
+  bool reverse_brake_latched = false;
   // The steering-hold timer as the previous cycle left it (GateResult::obstacle_hold_timer_s):
   // seconds the latch has held the output speed at zero, std::nullopt when it was not. See
   // "STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH".
@@ -345,9 +402,10 @@ struct GateInput {
 struct GateResult {
   DriveCommand output;
   // true iff a gate is holding the throttle at zero this cycle (watchdog, command sanity,
-  // or the obstacle-gate latch) rather than passing a clamped command. The latch holds only
-  // FORWARD throttle, so while it is set a reverse request can still come out negative. See
-  // the note above: this is a zero-throttle command, not a claim about deceleration.
+  // or either obstacle-gate latch) rather than passing a clamped command. The forward latch
+  // holds only FORWARD throttle and the rear latch only REVERSE throttle, so while one is set
+  // a request the other way can still come out non-zero. See the note above: this is a
+  // zero-throttle command, not a claim about deceleration.
   bool zero_throttle = false;
   // Which gates are engaged THIS cycle (not what gets published -- see GateActivation and
   // GateEventTracker). A gate that stays engaged appears here every cycle.
@@ -355,6 +413,8 @@ struct GateResult {
   // The obstacle-gate latch after this cycle; safety_node feeds it back in as next cycle's
   // GateInput::ttc_brake_latched.
   bool ttc_brake_latched = false;
+  // The rear gate's latch after this cycle; fed back as GateInput::reverse_brake_latched.
+  bool reverse_brake_latched = false;
   // The steering-hold timer after this cycle; safety_node feeds it back in as next cycle's
   // GateInput::obstacle_hold_timer_s.
   std::optional<double> obstacle_hold_timer_s;
@@ -406,10 +466,14 @@ class SafetyGateLogic {
   DriveCommand clamp_to_bounds(const DriveCommand& cmd) const;
   DriveCommand rate_limit(const DriveCommand& cmd, const DriveCommand& previous_output,
                           double dt_s) const;
-  // Step 3b. Reads the REQUESTED command, may zero `target`'s forward speed, and records the
-  // latch, activations and release note in `result`.
-  void apply_obstacle_gate(const DriveCommand& requested, const GateInput& input,
-                           DriveCommand& target, GateResult& result) const;
+  // Step 3b, for one direction: +1.0 forward (range GateInput::min_scan_range_m, latch
+  // ttc_brake_latched, source kTtc) or -1.0 reverse (min_rear_scan_range_m,
+  // reverse_brake_latched, kTtcReverse). Reads the REQUESTED command, may zero `target`'s
+  // speed toward that side, and records the latch, activations and release note in `result`;
+  // returns the new latch.
+  bool apply_obstacle_gate(double direction, GateSource source, double range_m, bool latched_in,
+                           const DriveCommand& requested, DriveCommand& target,
+                           GateResult& result) const;
   // TTC the request must exceed to release the latch. Only called when ttc_brake_s is set.
   double ttc_release_threshold_s() const;
   // Step 3d. Advances or clears the hold timer from the final `output` speed and, while the
@@ -417,8 +481,8 @@ class SafetyGateLogic {
   // output's angle. Records the timer, the activation and the release note in `result`.
   void apply_steering_hold(const GateInput& input, const DriveCommand& previous_output, double dt_s,
                            DriveCommand& target, DriveCommand& output, GateResult& result) const;
-  // The watchdog / command-sanity short-circuits: hold the latch and the hold timer as they
-  // came in and keep reporting their engagements (see "THE OBSTACLE GATE AND ITS LATCH").
+  // The watchdog / command-sanity short-circuits: hold both latches and the hold timer as
+  // they came in and keep reporting their engagements (see "THE OBSTACLE GATE AND ITS LATCH").
   void hold_obstacle_state(const GateInput& input, const DriveCommand& previous_output,
                            GateResult& result) const;
 

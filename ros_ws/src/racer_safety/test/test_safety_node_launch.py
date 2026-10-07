@@ -3,7 +3,9 @@
 Checklist covered: nominal passthrough on a fresh, in-bounds command; watchdog brake on
 /drive_raw silence; TTC brake on a synthetic close-obstacle /scan, its latch and its "ttc brake
 released" record; the 2026-10-06 limit-cycle scenario held at zero; the arc corridor (a latch
-on a wall releases once the request steers away and its arc is clear); the steering hold while
+on a wall releases once the request steers away and its arc is clear); the rear corridor (a
+reverse request toward a wall behind the car brakes with a `ttc_reverse` record, reversing with
+the rear clear passes, and the rear latch never blocks a forward request); the steering hold while
 parked on the obstacle latch (steering stops following /drive_raw after
 limits.obstacle_steering_hold_after_s and resumes once the obstacle clears); fail-closed (and clean
 recovery) on an injected internal fault; a bounds_clamp /safety/events record on an
@@ -101,6 +103,11 @@ _SCENARIO_REQUEST_MPS = max(_BAG_REQUEST_MPS, _SCENARIO_RANGE_M / (0.8 * _TTC_BR
 # proves the number the car boots with.
 _STEERING_HOLD_AFTER_S = _VEHICLE_PARAMS["limits"]["obstacle_steering_hold_after_s"]
 assert _STEERING_HOLD_AFTER_S is not None and _STEERING_HOLD_AFTER_S >= 0.0
+# Rear corridor (schema 0.10.0, forward_sector.hpp "REAR CORRIDOR"): a reverse request's distance
+# is measured from the rear bumper line, chassis.rear_overhang_m behind the rear axle, which is
+# sensors.lidar.mount_x_m behind the head. Read from the committed yaml like everything above.
+_LIDAR_MOUNT_X_M = _VEHICLE_PARAMS["sensors"]["lidar"]["mount_x_m"]
+_REAR_OVERHANG_M = _VEHICLE_PARAMS["chassis"]["rear_overhang_m"]
 
 
 def _reliable_qos() -> QoSProfile:
@@ -174,6 +181,31 @@ def _make_segment_scan(
             y_m = x_m * math.tan(bearing)
             if lo_m <= y_m <= hi_m:
                 hit = x_m / cos_bearing
+        ranges.append(hit)
+    msg.ranges = ranges
+    return msg
+
+
+def _make_rear_wall_scan(behind_bumper_m: float, num_beams: int = 360) -> LaserScan:
+    """A full-circle, vehicle-aligned scan with only a wall across the path BEHIND the car,
+    `behind_bumper_m` behind the rear bumper line (head frame x = -(mount_x + rear_overhang +
+    behind_bumper_m)), from 0.6 m right to 0.6 m left. Rays that miss it are +inf."""
+    msg = LaserScan()
+    msg.angle_min = -math.pi
+    msg.angle_max = math.pi
+    msg.angle_increment = 2.0 * math.pi / num_beams
+    msg.range_min = 0.0
+    msg.range_max = 30.0
+    x_wall_m = -(_LIDAR_MOUNT_X_M + _REAR_OVERHANG_M + behind_bumper_m)
+    ranges = []
+    for i in range(num_beams):
+        bearing = msg.angle_min + i * msg.angle_increment
+        cos_bearing = math.cos(bearing)
+        hit = math.inf
+        if cos_bearing < 0.0:
+            slant_m = x_wall_m / cos_bearing
+            if abs(slant_m * math.sin(bearing)) <= 0.6:
+                hit = slant_m
         ranges.append(hit)
     msg.ranges = ranges
     return msg
@@ -839,6 +871,93 @@ class TestSafetyNode(unittest.TestCase):
             seconds=1.0,
             scan_pub=scan_pub,
             scan=far_scan,
+        )
+
+    def test_reverse_request_against_a_rear_wall_brakes(self):
+        """2026-10-06 night floor finding (bags 2026-10-06T23-19-41 and 23-25-38): the car
+        ended nose-in to a corner it could not drive round, and nothing judged a reverse
+        request. safety_node now reduces the last scan along the REVERSE arc of the request,
+        from the rear bumper line (forward_sector.hpp "REAR CORRIDOR"), and brakes a reverse
+        request on its own latch (gate_logic.hpp "THE REAR OBSTACLE GATE")."""
+        drive_out = []
+        self.node.create_subscription(
+            AckermannDriveStamped, "/drive", drive_out.append, _reliable_qos()
+        )
+        events = []
+        self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        drive_raw_pub = self.node.create_publisher(
+            AckermannDriveStamped, "/drive_raw", _reliable_qos()
+        )
+        scan_pub = self.node.create_publisher(LaserScan, "/scan", _best_effort_qos())
+        self._spin_for(0.3)
+
+        reverse_cmd = _make_drive(steering=0.0, speed=-0.5)
+        clear_behind = _make_rear_wall_scan(behind_bumper_m=3.0)
+        # 0.25 m behind the bumper: inside the clearance floor, so the floor trips at any
+        # reverse speed (TTC 0.5 s at 0.5 m/s would trip too).
+        close_behind = _make_rear_wall_scan(behind_bumper_m=0.25)
+        self.assertLess(0.25, _MIN_FORWARD_CLEARANCE_M)
+
+        # Reversing with the rear clear: passes, negative on /drive.
+        self._publish_steadily(
+            drive_raw_pub, reverse_cmd, seconds=1.0, scan_pub=scan_pub, scan=clear_behind
+        )
+        self.assertGreater(len(drive_out), 0)
+        self.assertLess(drive_out[-1].drive.speed, -0.4, "a clear reverse request was braked")
+
+        # Reversing toward the wall behind: braked to zero, one ttc_reverse brake engagement,
+        # no forward ttc engagement.
+        events.clear()
+        self._publish_steadily(
+            drive_raw_pub, reverse_cmd, seconds=1.5, scan_pub=scan_pub, scan=close_behind
+        )
+        self.assertEqual(
+            drive_out[-1].drive.speed, 0.0, "safety_node did not brake a reverse request"
+        )
+        reverse_engages = [
+            e for e in _engages(events, "ttc_reverse") if e.severity == SafetyEvent.SEVERITY_BRAKE
+        ]
+        self.assertGreaterEqual(len(reverse_engages), 1, "no ttc_reverse brake engage record")
+        self.assertLessEqual(len(reverse_engages), 3, "ttc_reverse is counting cycles")
+        detail = reverse_engages[0].detail
+        self.assertTrue("rear clearance" in detail or "reverse time-to-collision" in detail, detail)
+        self.assertEqual(
+            [e for e in _engages(events, "ttc") if e.severity == SafetyEvent.SEVERITY_BRAKE],
+            [],
+            "a reverse request engaged the FORWARD ttc gate",
+        )
+
+        # The rear latch never blocks a forward request (the wall behind is still there).
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=0.0, speed=1.0),
+            seconds=1.0,
+            scan_pub=scan_pub,
+            scan=close_behind,
+        )
+        self.assertGreater(
+            drive_out[-1].drive.speed, 0.5, "the rear latch blocked a forward request"
+        )
+
+        # The wall behind goes away: the rear latch releases with its own record and reverse
+        # is allowed again.
+        self._publish_steadily(
+            drive_raw_pub, reverse_cmd, seconds=1.5, scan_pub=scan_pub, scan=clear_behind
+        )
+        reverse_releases = [
+            e for e in _releases(events, "ttc_reverse") if e.severity == SafetyEvent.SEVERITY_BRAKE
+        ]
+        self.assertGreaterEqual(len(reverse_releases), 1, "the rear latch never released")
+        self.assertIn("reverse ttc brake released", reverse_releases[-1].detail)
+        self.assertLess(drive_out[-1].drive.speed, -0.4, "reverse did not come back after release")
+
+        # Leave the node stopped with a forward-only scan, like the other tests expect.
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=0.0, speed=0.0),
+            seconds=0.5,
+            scan_pub=scan_pub,
+            scan=_make_scan(range_m=100.0),
         )
 
     def test_drive_raw_subscription_is_reliable_not_best_effort(self):

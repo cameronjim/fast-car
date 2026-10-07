@@ -106,6 +106,34 @@ class TestBuildTrackFromRaceline(unittest.TestCase):
         self.assertEqual(cell(1.0, 0.0), 255.0)  # on the raceline
         self.assertEqual(cell(1.0, 1.0), 0.0)  # the infield is a wall
 
+    def test_reverse_direction_turns_the_start_round_and_keeps_the_walls(self):
+        """The reactive canary runs both lap directions: reversing the waypoints puts the reset
+        pose (first raceline point, raceline heading) facing the other way round the loop."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            raceline_path = f"{tmp_dir}/raceline.csv"
+            with open(raceline_path, "w") as f:
+                f.write(_SQUARE_RACELINE_CSV)
+            forward = build_track_from_raceline(raceline_path, track_half_width_m=0.4)
+            backward = build_track_from_raceline(
+                raceline_path, track_half_width_m=0.4, reverse_direction=True
+            )
+        # Forward starts at (0, 0) going counter-clockwise round the square; reversed starts at
+        # the old last waypoint (0, 2) going clockwise (toward (2, 2)).
+        self.assertAlmostEqual(float(forward.raceline.xs[0]), 0.0, places=3)
+        self.assertAlmostEqual(float(forward.raceline.ys[0]), 0.0, places=3)
+        self.assertAlmostEqual(float(backward.raceline.xs[0]), 0.0, places=3)
+        self.assertAlmostEqual(float(backward.raceline.ys[0]), 2.0, places=3)
+
+        def signed_area(track) -> float:
+            xs = [float(v) for v in track.raceline.xs]
+            ys = [float(v) for v in track.raceline.ys]
+            n = len(xs)
+            return 0.5 * sum(xs[i] * ys[(i + 1) % n] - xs[(i + 1) % n] * ys[i] for i in range(n))
+
+        self.assertGreater(signed_area(forward), 0.0)  # counter-clockwise
+        self.assertLess(signed_area(backward), 0.0)  # clockwise
+        self.assertTrue((forward.occupancy_map == backward.occupancy_map).all())
+
 
 @pytest.mark.launch_test
 def generate_test_description():

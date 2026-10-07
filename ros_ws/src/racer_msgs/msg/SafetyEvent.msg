@@ -43,8 +43,9 @@ uint8 phase
 float64 duration_s
 
 # Which gate raised this event. One of: "watchdog", "command_sanity", "bounds_clamp",
-# "rate_limit", "ttc", "covariance", "internal_fault" (racer_safety::GateSource, see
-# ros_ws/src/racer_safety/include/racer_safety/gate_logic.hpp).
+# "rate_limit", "ttc", "covariance", "internal_fault", "ttc_reverse" (racer_safety::GateSource,
+# see ros_ws/src/racer_safety/include/racer_safety/gate_logic.hpp). "ttc" is the forward
+# obstacle gate and "ttc_reverse" the rear one (2026-10-06 night), each its own engagement.
 string source
 
 # Human-readable specifics (values involved, thresholds crossed) for post-hoc analysis

@@ -8,8 +8,11 @@
     claude-docs/12-testing.md): runs racer_gym_bridge with a walled corridor around the
     committed config/tracks/gym_oval raceline (track_half_width_m) and racer_control's
     gap_follow_node driving from the bridge's /scan only, and asserts the car completes laps
-    within a time budget without leaving the corridor. Same shape as tests/l5_tracker_lap; a
-    separate package so the tracker canary stays untouched. No library code of its own.
+    within a time budget without leaving the corridor, in both lap directions with lane
+    centring on. A second scenario runs a loop with one corner tighter than the turning circle,
+    with safety_node in the loop, where the reverse escape must fire. Same shape as
+    tests/l5_tracker_lap; a separate package so the tracker canary stays untouched. No library
+    code of its own (l5_reactive_common.py is a test helper loaded by path).
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -18,6 +21,11 @@
 
   <test_depend>racer_gym_bridge</test_depend>
   <test_depend>racer_control</test_depend>
+  <test_depend>racer_safety</test_depend>
+  <test_depend>ackermann_msgs</test_depend>
+  <test_depend>nav_msgs</test_depend>
+  <test_depend>sensor_msgs</test_depend>
+  <test_depend>std_srvs</test_depend>
   <test_depend>launch</test_depend>
   <test_depend>launch_ros</test_depend>
   <test_depend>launch_testing</test_depend>

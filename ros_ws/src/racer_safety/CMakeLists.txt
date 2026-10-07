@@ -99,6 +99,7 @@ if(BUILD_TESTING)
     test/test_obstacle_gate.cpp
     test/test_forward_sector.cpp
     test/test_arc_corridor.cpp
+    test/test_rear_corridor.cpp
   )
   target_link_libraries(test_racer_safety_core racer_safety_core)
 

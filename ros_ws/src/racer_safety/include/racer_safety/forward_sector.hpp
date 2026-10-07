@@ -1,4 +1,6 @@
-// In-path obstacle distance for racer_safety's obstacle gate (TTC brake + distance floor).
+// In-path obstacle distance for racer_safety's obstacle gate (TTC brake + distance floor),
+// ahead of the car for a forward request and, since 2026-10-06 night, behind it for a reverse
+// request ("REAR CORRIDOR" below; the file keeps its name).
 //
 // ROS-free, like gate_logic.hpp, so it is gtest-unit-testable with no ROS install and sits
 // under the same 100% branch-coverage gate (.github/scripts/racer_safety_coverage.sh).
@@ -50,7 +52,9 @@
 //   * A return at head-relative (x, y) moves to the rear-axle frame with the LiDAR mount
 //     (sensors.lidar.mount_x_m, mount_y_m): xr = x + mount_x, yr = y + mount_y. Its distance
 //     from the turn centre is rho = hypot(xr, yr - R). It is in the swept band if
-//     |rho - |R|| <= corridor_half_width_m (the same half width as the straight corridor).
+//       |R| - corridor_half_width_m <= rho <= hypot(body_front_x_m, |R| + corridor_half_width_m)
+//     (corridor_half_width_m is the same half width as the straight corridor; see "OUTER
+//     BOUNDARY" below for the outer edge).
 //   * Its arc angle from the car's position, measured around the turn centre in the direction
 //     of travel, is phi = atan2(xr, |R| - sign(R) yr). It counts only if 0 < phi < pi/2:
 //     nothing behind the rear axle and nothing beyond a quarter turn.
@@ -61,6 +65,24 @@
 //     HEAD, not from the bumper; as R grows it tends to the straight corridor's x. It is never
 //     the straight-line range.
 // The outer sector bound applies before either corridor, unchanged.
+//
+// OUTER BOUNDARY (2026-10-06 night, sim escape scenario on a round corner). The band used to
+// end at |R| + corridor_half_width_m on the outside, the circle the rear axle's outer side
+// sweeps. But the body reaches further out than that: its OUTER FRONT CORNER, at
+// (body_front_x_m, -/+ half width) in the rear-axle frame, sweeps the circle of radius
+// hypot(body_front_x_m, |R| + half width) about the turn centre. At full lock (R = 0.742 m) with
+// the committed geometry that corner circle is about 1.008 m without margin, while the old
+// band ended at 0.947 m with it: a round wall between the two scraped the corner before the
+// brake fired. The outer edge is now that corner's sweep, with the corridor margin added to
+// the half width as everywhere else: hypot(body_front_x_m, |R| + corridor_half_width_m),
+// about 1.053 m at full lock. body_front_x_m is the rear axle to front bumper distance,
+// chassis.wheelbase_m + chassis.front_overhang_m (schema 0.11.0), the same point
+// racer_control's swept-path clamp uses for its outer circle. The inner edge (the inside
+// flank, |R| - corridor_half_width_m) is unchanged. The straight corridor is unchanged: going
+// straight the corner moves along the side line, already inside |y| <= corridor_half_width_m.
+// The DISTANCE for a return in the new outer strip is still the arc length to the head's arc
+// angle, like every other arc return: the reference is the head, as for the clearance floor,
+// not the corner. With body_front_x_m = 0 the band is the old |rho - |R|| <= half width.
 //
 // WHICH STEERING. The path is the one the car is being ASKED to drive, the bounds-clamped
 // /drive_raw steering, not the gate's rate-limited or held output. That is what lets a latched
@@ -128,6 +150,10 @@ struct PathGeometry {
   double max_steering_angle_rad = 0.0;  // steering.max_angle_rad (the request is clamped to +/-)
   double lidar_mount_x_m = 0.0;         // sensors.lidar.mount_x_m: head ahead of the rear axle
   double lidar_mount_y_m = 0.0;         // sensors.lidar.mount_y_m: head left of the centreline
+  // Rear axle to the front bumper line, chassis.wheelbase_m + chassis.front_overhang_m: the
+  // outer front corner's sweep is the arc band's outer edge ("OUTER BOUNDARY"). 0 gives the
+  // pre-0.11.0 band, |R| + half width.
+  double body_front_x_m = 0.0;
 };
 
 // Below this |clamped steering| the path is treated as straight (a numerical guard, not a
@@ -146,14 +172,50 @@ inline constexpr double kStraightSteeringEpsilonRad = 1e-3;
 // angle_increment is not positive, laser_yaw_rad/half_angle_rad are non-finite or
 // half_angle_rad is not positive, corridor_half_width_m is non-finite or not positive, the
 // wheelbase is non-finite or not positive, the max steering angle is non-finite, negative or
-// not below pi/2, a mount offset is non-finite, or the requested steering is non-finite, the
-// in-path test cannot be trusted, so the result is the minimum slant range r over EVERY usable
-// return (the pre-2026-10-06 whole-scan behaviour). That sees every return either corridor
-// could have counted, never fewer.
+// not below pi/2, a mount offset is non-finite, body_front_x_m is non-finite or negative, or
+// the requested steering is non-finite, the in-path test cannot be trusted, so the result is
+// the minimum slant range r over EVERY usable return (the pre-2026-10-06 whole-scan
+// behaviour). That sees every return either corridor could have counted, never fewer.
 double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
                            double laser_yaw_rad, double half_angle_rad,
                            double corridor_half_width_m, const PathGeometry& path,
                            double requested_steering_rad);
+
+// REAR CORRIDOR (2026-10-06 night floor finding). In both lap directions the car ended nose-in
+// to a corner tighter than its turning circle (full lock 0.4189 rad on the 0.3302 m wheelbase):
+// the arc corridor braked correctly, then no steering gave a clear forward arc and the latch
+// held forever. gap_follow_node can now back out (its reverse escape), so safety_node needs a
+// rear check: until now nothing judged a reverse request at all. min_rear_path_distance_m is
+// the same in-path test mirrored behind the car, for the arc a REVERSE request sweeps:
+//   * Mirror the rear-axle frame front to back: a return at head-relative (x, y) becomes
+//     xm = -(x + mount_x) (behind the rear axle is positive) and ym = y + mount_y. Backing up
+//     with steering delta, the rear axle follows the same circle of signed radius
+//     R = L / tan(delta) about (0, R) as driving forward with delta, only in the other
+//     direction; in the mirrored frame that is exactly the forward case. So the forward
+//     formulas apply unchanged to (xm, ym).
+//   * Straight (|delta| < kStraightSteeringEpsilonRad): in the path if |ym| <=
+//     corridor_half_width_m, and the distance is xm - rear_overhang_m, which must be > 0.
+//   * Arc: in the swept band if |R| - corridor_half_width_m <= hypot(xm, ym - R) <=
+//     hypot(rear_overhang_m, |R| + corridor_half_width_m) (the inner flank, and the OUTER REAR
+//     corner's sweep: backing up, the rear bumper line leads, "OUTER BOUNDARY"), arc angle
+//     phi = atan2(xm, |R| - sign(R) ym) in (0, pi/2), and the distance is the arc length the
+//     rear axle travels until the rear bumper line's centre reaches the return's angle,
+//     |R| (phi - atan2(rear_overhang_m, |R|)), which must be > 0.
+//   * REFERENCE: the REAR BUMPER LINE, rear_overhang_m (chassis.rear_overhang_m, schema
+//     0.10.0) behind the rear axle. The forward corridor is measured from the LiDAR head (about
+//     0.15 m behind the front bumper on this car), the rear one from the bumper itself: the
+//     head sits far forward, so measuring the rear from it would put 0.4 m of car inside the
+//     distance. Returns inside the car's own footprint behind the head (the body, cables) have
+//     a distance <= 0 and never count.
+//   * Outer bound: the same half angle as the forward sector, centred on the car's -x axis:
+//     |wrap(vehicle bearing - pi)| <= half_angle_rad, as seen from the head.
+// Same invalid-return policy, same +infinity for "nothing in the path", and the same
+// conservative fallback (minimum slant range over every usable return) on garbage input, which
+// here also covers a non-finite or negative rear_overhang_m.
+double min_rear_path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
+                                double laser_yaw_rad, double half_angle_rad,
+                                double corridor_half_width_m, const PathGeometry& path,
+                                double rear_overhang_m, double requested_steering_rad);
 
 // The straight corridor on its own: min_path_distance_m with a straight request and the head
 // on the centreline (mount_y 0). The arc corridor reduces to this as the steering goes to

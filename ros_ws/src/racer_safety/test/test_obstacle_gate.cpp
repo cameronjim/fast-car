@@ -690,19 +690,24 @@ TEST(ObstacleGateSteeringHold, AReverseRequestWhileHeldGivesSteeringBackAndResta
   EXPECT_DOUBLE_EQ(again.output.steering_angle_rad, 0.0);
 }
 
-TEST(ObstacleGateSteeringHold, ALatchedZeroRequestStillRollingBackwardsDoesNotStartTheTimer) {
-  // Previous output -1.0 m/s, zero request while latched: the increase toward zero is
-  // rate-limited, so the output is not yet zero and the timer stays cleared.
+TEST(ObstacleGateSteeringHold, ALatchedZeroRequestWhileRollingBackwardsBrakesAtOnceAndHolds) {
+  // Previous output -1.0 m/s, zero request while latched. Until 2026-10-06 night the rate
+  // limiter compared signed speeds, so -1.0 -> 0 counted as an increase and was rate-limited:
+  // the output stayed negative and this test pinned that the timer did not start. The limiter
+  // now works on the speed's magnitude (gate_logic.hpp "SPEED RATE LIMIT IN BOTH
+  // DIRECTIONS"): braking toward zero is free in either direction, so the output is zero on
+  // this cycle, the latch is holding it there, and the timer advances like any parked cycle.
   SafetyGateLogic gate(hold_limits(0.0));
   GateInput input = cycle_input(0.0, kParkRangeM, true);
   input.obstacle_hold_timer_s = 3.0;
   const GateResult result = gate.evaluate(input, DriveCommand{0.1, -1.0});
   EXPECT_TRUE(result.ttc_brake_latched);
-  EXPECT_LT(result.output.speed_mps, 0.0);
-  EXPECT_FALSE(result.obstacle_hold_timer_s.has_value());
-  EXPECT_EQ(find_activation(result, GateSource::kTtc, EventSeverity::kInfo), nullptr);
-  ASSERT_EQ(result.releases.size(), 1u);  // the input timer said "engaged"
-  EXPECT_EQ(result.releases[0].severity, EventSeverity::kInfo);
+  EXPECT_EQ(result.output.speed_mps, 0.0);
+  ASSERT_TRUE(result.obstacle_hold_timer_s.has_value());
+  EXPECT_DOUBLE_EQ(*result.obstacle_hold_timer_s, 3.0 + kDt);
+  EXPECT_DOUBLE_EQ(result.output.steering_angle_rad, 0.1);  // held at the previous output
+  EXPECT_NE(find_activation(result, GateSource::kTtc, EventSeverity::kInfo), nullptr);
+  EXPECT_TRUE(result.releases.empty());
 }
 
 TEST(ObstacleGateSteeringHold, AWatchdogBlipKeepsTheHoldAndHoldsTheTimer) {

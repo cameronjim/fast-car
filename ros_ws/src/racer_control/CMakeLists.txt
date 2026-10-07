@@ -30,6 +30,7 @@ add_library(racer_control_core
   src/wall_follow.cpp
   src/pid.cpp
   src/reactive_speed.cpp
+  src/reverse_escape.cpp
 )
 target_include_directories(racer_control_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -131,6 +132,7 @@ if(BUILD_TESTING)
     test/test_laser_scan.cpp
     test/test_gap_follow.cpp
     test/test_wall_follow.cpp
+    test/test_reverse_escape.cpp
   )
   target_link_libraries(test_racer_control_core racer_control_core)
   target_compile_definitions(test_racer_control_core PRIVATE
@@ -146,11 +148,30 @@ if(BUILD_TESTING)
     TARGET test_gap_follow_node_launch
     TIMEOUT 120
   )
-  # forward_preference / gap_switch_margin range checks: out of [0, 1] refuses to start.
+  # forward_preference / gap_switch_margin range checks: out of [0, 1] refuses to start. Also
+  # swept_path_lookahead_m, speed_time_constant_s and target_range_median_scans.
   add_launch_test(test/test_gap_follow_node_params_launch.py
     TARGET test_gap_follow_node_params_launch
     TIMEOUT 120
   )
+  # gap_follow.launch.py `profile` argument (2026-10-06 floor checkpoint): the
+  # floor-2026-10-06 profile reaches the node with the right types and the speed smoothing
+  # parameters take effect, through the real node and its parameter services.
+  add_launch_test(test/test_gap_follow_node_profile_launch.py
+    TARGET test_gap_follow_node_profile_launch
+    TIMEOUT 120
+  )
+  # Reverse escape (2026-10-06 night floor finding): nose-in with forward refused by a stand-in
+  # for safety_node, the node reverses, completes, resumes; with reverse refused too it aborts,
+  # waits, and holds after escape_max_attempts. Never publishes /drive.
+  add_launch_test(test/test_gap_follow_node_escape_launch.py
+    TARGET test_gap_follow_node_escape_launch
+    TIMEOUT 120
+  )
+  # L1 check of the same argument: launch-description inspection only, no processes started
+  # (same approach as racer_bringup's test_car_teleop_profile.py).
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_gap_follow_launch_profile test/test_gap_follow_launch_profile.py)
   add_launch_test(test/test_wall_follow_node_launch.py
     TARGET test_wall_follow_node_launch
     TIMEOUT 120

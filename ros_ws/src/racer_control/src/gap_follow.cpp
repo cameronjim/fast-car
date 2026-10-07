@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
+#include <limits>
 
 namespace racer_control {
 
@@ -312,6 +314,196 @@ SweptPathClamp clamp_steering_to_swept_path(const ScanInput& scan, double laser_
   return out;
 }
 
+namespace {
+
+// Median of values[0, count), reordering them. count must be > 0. Even count: the mean of
+// the two middle values (same convention as RollingMedian).
+double median_in_place(std::vector<double>& values, std::size_t count) {
+  const auto first = values.begin();
+  const auto mid = first + static_cast<std::ptrdiff_t>(count / 2);
+  const auto last = first + static_cast<std::ptrdiff_t>(count);
+  std::nth_element(first, mid, last);
+  const double upper = *mid;
+  if (count % 2 == 1) {
+    return upper;
+  }
+  const double lower = *std::max_element(first, mid);
+  return 0.5 * (lower + upper);
+}
+
+}  // namespace
+
+LaneWalls measure_lane_walls(const ScanInput& scan, double laser_yaw_offset_rad,
+                             double sector_half_angle_rad, double max_range_m,
+                             double lidar_mount_y_m, std::vector<double>& left_scratch,
+                             std::vector<double>& right_scratch) {
+  LaneWalls walls;
+  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  if (!is_usable(scan) || !std::isfinite(laser_yaw_offset_rad) ||
+      !positive(sector_half_angle_rad) || !positive(max_range_m) ||
+      !std::isfinite(lidar_mount_y_m)) {
+    return walls;
+  }
+  const std::size_t n = scan.ranges.size();
+  if (left_scratch.size() < n) {
+    left_scratch.resize(n);
+  }
+  if (right_scratch.size() < n) {
+    right_scratch.resize(n);
+  }
+  std::size_t n_left = 0;
+  std::size_t n_right = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (!is_valid_return(scan.ranges[i], scan)) {
+      continue;
+    }
+    const double r = static_cast<double>(scan.ranges[i]);
+    if (r > max_range_m) {
+      continue;
+    }
+    const double bearing = wrap_angle(laser_bearing_of_index(scan, i) + laser_yaw_offset_rad);
+    const double lateral = r * std::sin(bearing) + lidar_mount_y_m;  // left positive
+    if (bearing > 0.0 && bearing <= sector_half_angle_rad) {
+      if (lateral > 0.0) {
+        left_scratch[n_left++] = lateral;
+      }
+    } else if (bearing < 0.0 && bearing >= -sector_half_angle_rad) {
+      if (lateral < 0.0) {
+        right_scratch[n_right++] = -lateral;
+      }
+    }
+  }
+  if (n_left > 0) {
+    walls.left_m = median_in_place(left_scratch, n_left);
+  }
+  if (n_right > 0) {
+    walls.right_m = median_in_place(right_scratch, n_right);
+  }
+  return walls;
+}
+
+double centering_steering(const LaneWalls& walls, double centering_gain) {
+  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  if (!std::isfinite(centering_gain) || centering_gain == 0.0 || !walls.left_m || !walls.right_m ||
+      !positive(*walls.left_m) || !positive(*walls.right_m)) {
+    return 0.0;
+  }
+  const double left = *walls.left_m;
+  const double right = *walls.right_m;
+  return centering_gain * (left - right) / (left + right);
+}
+
+namespace {
+
+bool probe_geometry_usable(const ScanInput& scan, double laser_yaw_offset_rad, double travel_m,
+                           const ArcProbeGeometry& g) {
+  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  const auto non_negative = [](double v) { return std::isfinite(v) && v >= 0.0; };
+  return is_usable(scan) && std::isfinite(laser_yaw_offset_rad) && positive(travel_m) &&
+         positive(g.wheelbase_m) && positive(g.half_width_m) && non_negative(g.margin_m) &&
+         non_negative(g.front_x_m) && non_negative(g.rear_x_m) &&
+         std::isfinite(g.lidar_mount_x_m) && std::isfinite(g.lidar_mount_y_m);
+}
+
+// The inflated body rectangle about the rear axle (gap_follow.hpp ArcProbeGeometry).
+struct ProbeBody {
+  double x_lo, x_hi, half_y;
+  bool contains(double x, double y) const {
+    return x >= x_lo && x <= x_hi && std::abs(y) <= half_y;
+  }
+};
+
+ProbeBody probe_body(const ArcProbeGeometry& g) {
+  return ProbeBody{-g.rear_x_m - g.margin_m, g.front_x_m + g.margin_m, g.half_width_m + g.margin_m};
+}
+
+// Loads the scan's valid returns into `points` as interleaved rear-axle (x, y), skipping any
+// already inside the body at the start pose. Returns the number of points.
+std::size_t load_probe_points(const ScanInput& scan, double laser_yaw_offset_rad,
+                              const ArcProbeGeometry& g, std::vector<double>& points) {
+  const ProbeBody body = probe_body(g);
+  if (points.size() < 2 * scan.ranges.size()) {
+    points.resize(2 * scan.ranges.size());
+  }
+  std::size_t count = 0;
+  for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
+    if (!is_valid_return(scan.ranges[i], scan)) {
+      continue;
+    }
+    const double r = static_cast<double>(scan.ranges[i]);
+    const double bearing = laser_bearing_of_index(scan, i) + laser_yaw_offset_rad;
+    const double x = r * std::cos(bearing) + g.lidar_mount_x_m;
+    const double y = r * std::sin(bearing) + g.lidar_mount_y_m;
+    if (body.contains(x, y)) {
+      continue;
+    }
+    points[2 * count] = x;
+    points[2 * count + 1] = y;
+    ++count;
+  }
+  return count;
+}
+
+bool arc_clear_for_points(const std::vector<double>& points, std::size_t count, double steering_rad,
+                          double travel_m, const ArcProbeGeometry& g) {
+  const ProbeBody body = probe_body(g);
+  const double k = std::tan(steering_rad) / g.wheelbase_m;
+  const auto steps = static_cast<std::size_t>(std::ceil(travel_m / kArcProbeStepM));
+  for (std::size_t step = 1; step <= steps; ++step) {
+    const double s = std::min(static_cast<double>(step) * kArcProbeStepM, travel_m);
+    // Rear-axle pose after s of travel: heading theta = k s, position on the circle.
+    const double theta = k * s;
+    const double ct = std::cos(theta);
+    const double st = std::sin(theta);
+    double tx = s;
+    double ty = 0.0;
+    if (std::abs(k) > 1e-12) {
+      tx = st / k;
+      ty = (1.0 - ct) / k;
+    }
+    for (std::size_t p = 0; p < count; ++p) {
+      const double dx = points[2 * p] - tx;
+      const double dy = points[2 * p + 1] - ty;
+      // Into the body frame at that pose (rotate by -theta).
+      if (body.contains(ct * dx + st * dy, -st * dx + ct * dy)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+bool forward_arc_clear(const ScanInput& scan, double laser_yaw_offset_rad, double steering_rad,
+                       double travel_m, const ArcProbeGeometry& geometry,
+                       std::vector<double>& points) {
+  if (!probe_geometry_usable(scan, laser_yaw_offset_rad, travel_m, geometry) ||
+      !std::isfinite(steering_rad) || std::abs(steering_rad) >= M_PI_2) {
+    return true;
+  }
+  const std::size_t count = load_probe_points(scan, laser_yaw_offset_rad, geometry, points);
+  return arc_clear_for_points(points, count, steering_rad, travel_m, geometry);
+}
+
+bool any_forward_arc_clear(const ScanInput& scan, double laser_yaw_offset_rad,
+                           double max_steering_rad, double travel_m,
+                           const ArcProbeGeometry& geometry, std::vector<double>& points) {
+  if (!probe_geometry_usable(scan, laser_yaw_offset_rad, travel_m, geometry) ||
+      !std::isfinite(max_steering_rad) || max_steering_rad < 0.0 || max_steering_rad >= M_PI_2) {
+    return true;
+  }
+  const std::size_t count = load_probe_points(scan, laser_yaw_offset_rad, geometry, points);
+  for (std::size_t c = 0; c < kArcProbeCandidates; ++c) {
+    const double fraction =
+        2.0 * static_cast<double>(c) / static_cast<double>(kArcProbeCandidates - 1) - 1.0;
+    if (arc_clear_for_points(points, count, fraction * max_steering_rad, travel_m, geometry)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 double FirstOrderLowPass::update(double input, double dt_s) {
   if (!std::isfinite(input) || !std::isfinite(dt_s) || dt_s <= 0.0) {
     return output_;
@@ -354,8 +546,27 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
   result.gap_found = selection->gap_found;
   result.target_vehicle_bearing_rad = selection->target_vehicle_bearing_rad;
   result.target_range_m = extended_[selection->target_index];
-  result.steering_rad = steering_from_bearing(
-      selection->target_vehicle_bearing_rad, config_.steering_gain, config_.max_steering_angle_rad);
+  if (config_.centering_gain == 0.0) {
+    // Centring off: exactly the pipeline without it, bit for bit.
+    result.steering_rad =
+        steering_from_bearing(selection->target_vehicle_bearing_rad, config_.steering_gain,
+                              config_.max_steering_angle_rad);
+  } else {
+    result.lane_walls = measure_lane_walls(
+        scan, config_.laser_yaw_offset_rad, config_.centering_sector_half_angle_rad,
+        config_.centering_max_range_m, config_.swept_path.lidar_mount_y_m, lane_left_, lane_right_);
+    result.centering_steering_rad = centering_steering(result.lane_walls, config_.centering_gain);
+    // The push is added to gain * bearing BEFORE the clamp, so the sum saturates at the
+    // steering limit (a hard gap turn is not undone by the push).
+    // steering_from_bearing with an infinite limit is the unclamped gain * bearing (0 for a
+    // non-finite input), and the centring push is always finite.
+    const double gap_steering =
+        steering_from_bearing(selection->target_vehicle_bearing_rad, config_.steering_gain,
+                              std::numeric_limits<double>::infinity());
+    const double max_rad = config_.max_steering_angle_rad;
+    result.steering_rad =
+        std::min(std::max(gap_steering + result.centering_steering_rad, -max_rad), max_rad);
+  }
   result.wanted_steering_rad = result.steering_rad;
   if (config_.swept_path_clamp) {
     SweptPathGeometry geometry = config_.swept_path;

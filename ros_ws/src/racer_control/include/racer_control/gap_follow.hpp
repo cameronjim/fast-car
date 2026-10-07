@@ -15,6 +15,9 @@
 //      default to off, which is the plain widest gap. Target its centre ray (default) or its
 //      deepest ray.
 //   4. steering_from_bearing: steering = clamp(gain * target_bearing, +/- max_angle).
+//   4a. lane centring (optional, centering_gain, default 0 = off): a push away from the
+//      nearer side wall is added to gain * target_bearing BEFORE that clamp, so the sum
+//      saturates at the steering limit (2026-10-06 floor finding (a), see below).
 //   4b. clamp_steering_to_swept_path (optional, default on): reduce |steering| until the
 //      car's swept area over the next swept_path_lookahead_m of arc is clear of every return
 //      beside and ahead of it on the turn-in side (2026-10-06 floor finding, see below).
@@ -145,6 +148,66 @@ bool corner_blocked(const ScanInput& geometry, const std::vector<double>& ranges
 // Step 4: clamp(gain * bearing, +/- max_steering_rad). Non-finite input returns 0.
 double steering_from_bearing(double bearing_rad, double gain, double max_steering_rad);
 
+// Lane centring (step 4a). Added after the 2026-10-06 night floor test (bags
+// 2026-10-06T23-19-41 and 23-25-38, replayed through this core): the follower is EDGE-BIASED.
+// It aims at the angular centre of the widest run of free rays, and rays grazing the wall the
+// car is already near stay long and count as free, so the gap centre drags toward that wall.
+// The owner watched it hug the edges in both directions. Centring adds a push away from the
+// nearer side wall, measured directly from the scan.
+//
+// MEASUREMENT (measure_lane_walls). Returns are taken from the RAW scan (invalid returns, as
+// for the swept-path clamp, are ignored, never filled), turned to the VEHICLE frame with the
+// laser yaw. A return at vehicle bearing b and range r is on the LEFT if 0 < b <=
+// sector_half_angle_rad and on the RIGHT if -sector_half_angle_rad <= b < 0 (b = 0 is on
+// neither side), and counts only if r <= max_range_m. Its perpendicular distance from the
+// car's centreline is r sin(b) + lidar_mount_y_m on the left and -(r sin(b) + lidar_mount_y_m)
+// on the right (only positive values count). The side's wall distance is the MEDIAN of those
+// perpendicular distances, not the nearest return's. Why the median (the "cleaner estimate"):
+//   * a wall parallel to the car gives the same perpendicular distance on every ray, so the
+//     median, the minimum and the nearest return all agree on a straight lane;
+//   * a wall ACROSS the lane ahead (the outside wall of the next corner) also falls in the
+//     front sector, and its rays just off the centreline have a perpendicular distance near
+//     zero. The nearest return (or the minimum r |sin b|) then reads a wall at about 0 m on
+//     whichever side that ray lands, and the push saturates the steering away from it, which
+//     on the way into a corner is away from the turn. The median of a side that holds both a
+//     side wall and part of a wall ahead stays near the side wall's distance, and a side that
+//     sees only the wall ahead reads a typical distance across that wall rather than 0, so
+//     the push into a corner stays small (the gap steering is large there anyway);
+//   * one near object (a chair leg) does not decide the push; avoiding objects is the job of
+//     the gap, the swept-path clamp and safety_node, not of centring.
+// A side with no counted return is OPEN (nullopt).
+//
+// PUSH (centering_steering). With both sides measured,
+//     centering = centering_gain * (d_left - d_right) / (d_left + d_right)
+// so the push is positive (LEFT) when the right wall is nearer, zero when centred, odd in the
+// offset, and bounded by +/- centering_gain. (The task text wrote (d_right - d_left); with the
+// left-positive steering convention that steers TOWARD the nearer wall, the opposite of its
+// own "positive = steer left when the right wall is nearer". The tests pin the stated intent:
+// a car offset to the right steers left.) If either side is OPEN the push is ZERO: centring
+// is relative to a lane with two walls, and with one side open (a doorway, the room beyond a
+// row of scattered objects) there is no centre to aim at. Substituting max_range_m for the
+// open side would push the car toward the opening, which is the "into the open room" failure
+// of the first floor test. In a straight lane of width W, an offset e from the centre gives
+// (d_left - d_right) / (d_left + d_right) = 2 e / W, i.e. a push of 2 * gain / W rad per metre.
+//
+// Garbage (non-finite or non-positive sector or max range, unusable scan, non-finite yaw or
+// mount) measures both sides open, so centring contributes nothing.
+struct LaneWalls {
+  std::optional<double> left_m;   // median perpendicular distance of the left wall, m
+  std::optional<double> right_m;  // same for the right wall (a positive distance)
+};
+
+// `left_scratch` / `right_scratch` are working buffers (grown, never shrunk), so a caller that
+// keeps them allocates nothing once they have reached the scan size.
+LaneWalls measure_lane_walls(const ScanInput& scan, double laser_yaw_offset_rad,
+                             double sector_half_angle_rad, double max_range_m,
+                             double lidar_mount_y_m, std::vector<double>& left_scratch,
+                             std::vector<double>& right_scratch);
+
+// centering_gain * (d_left - d_right) / (d_left + d_right); 0 when either side is open, the
+// gain is 0 or not finite, or a distance is not finite and positive.
+double centering_steering(const LaneWalls& walls, double centering_gain);
+
 // Swept-path steering clamp (step 4b). Added after the 2026-10-06 floor test (bag
 // 2026-10-06T22-12-40_car_teleop, counter-clockwise loop with loose objects on the inside of
 // every left corner): the follower steered to a geometrically correct gap, but the car's
@@ -190,10 +253,12 @@ double steering_from_bearing(double bearing_rad, double gain, double max_steerin
 // When the clamp drives the steering to (near) zero while the target bearing is large, that
 // is intended: the corner override and the safety node take it from there.
 struct SweptPathGeometry {
-  double wheelbase_m = 0.0;      // chassis.wheelbase_m
-  double half_width_m = 0.0;     // chassis.width_m / 2
-  double margin_m = 0.0;         // the follower's safety_margin_m
-  double body_front_x_m = 0.0;   // rear axle to the front of the body, for the outer circle
+  double wheelbase_m = 0.0;   // chassis.wheelbase_m
+  double half_width_m = 0.0;  // chassis.width_m / 2
+  double margin_m = 0.0;      // the follower's safety_margin_m
+  // Rear axle to the front bumper line, for the outer circle: chassis.wheelbase_m +
+  // chassis.front_overhang_m (schema 0.11.0; was cg_to_rear_axle_m + length_m / 2).
+  double body_front_x_m = 0.0;
   double lidar_mount_x_m = 0.0;  // sensors.lidar.mount_x_m (rear axle to head, forward)
   double lidar_mount_y_m = 0.0;  // sensors.lidar.mount_y_m (left)
   double lookahead_m = 0.0;      // swept_path_lookahead_m, rear-axle arc length
@@ -206,6 +271,56 @@ struct SweptPathClamp {
 
 SweptPathClamp clamp_steering_to_swept_path(const ScanInput& scan, double laser_yaw_offset_rad,
                                             double steering_rad, const SweptPathGeometry& geometry);
+
+// Forward arc probe for the reverse escape (reverse_escape.hpp; 2026-10-06 night floor finding
+// (b): nose-in to a corner tighter than the turning circle). "Is there ANY steering that would
+// let the car drive forward `travel_m` without its body touching a return?" If not, the forward
+// path is blocked and backing out is the only way on.
+//
+// GEOMETRY. The same kinematic model as the swept-path clamp: for steering delta the rear axle
+// follows a circle of curvature k = tan(delta) / L (rear-axle frame, x forward, y left). The
+// body is the rectangle x in [-rear_x_m - margin_m, front_x_m + margin_m], |y| <= half_width_m +
+// margin_m about the rear axle, i.e. the bounding box inflated by the margin on every side.
+// Returns are taken from the RAW scan (invalid returns ignored, never filled), turned to the
+// vehicle frame with the laser yaw and shifted by the LiDAR mount into the rear-axle frame.
+// A return already inside the inflated body at the start pose is ignored: it is either the car
+// itself or contact the probe cannot judge (safety_node's job); everything else must stay out
+// of the body at every pose along the arc. The arc is sampled every kArcProbeStepM of
+// rear-axle travel up to and including travel_m; between samples a body corner moves at most
+// that step times hypot(front_x, R + c) / R, about 1.3 times the step at full lock, so a
+// return can only slip between samples within a couple of centimetres of the body, inside
+// the margin.
+//
+// CANDIDATES. kArcProbeCandidates steering angles evenly spaced over [-max, +max] (9: every
+// 0.105 rad at the 0.4189 rad lock), including straight ahead. This is a numerical resolution,
+// not a vehicle constant.
+//
+// forward_arc_clear: true when that one steering's arc is clear for travel_m.
+// any_forward_arc_clear: true when at least one candidate is.
+// Unusable input (scan, yaw, non-positive wheelbase / half width / travel / max steering at or
+// beyond pi/2, negative or non-finite margin / extents / mounts) reports CLEAR: the probe only
+// ever ADDS a reason to back up, so garbage must not invent one (the node refuses to start
+// without the geometry, so this is belt and braces).
+inline constexpr std::size_t kArcProbeCandidates = 9;
+inline constexpr double kArcProbeStepM = 0.02;
+
+struct ArcProbeGeometry {
+  double wheelbase_m = 0.0;      // chassis.wheelbase_m
+  double half_width_m = 0.0;     // chassis.width_m / 2
+  double margin_m = 0.0;         // the follower's safety_margin_m
+  double front_x_m = 0.0;        // rear axle to the front of the body (as for the clamp)
+  double rear_x_m = 0.0;         // rear axle to the rear bumper line, chassis.rear_overhang_m
+  double lidar_mount_x_m = 0.0;  // sensors.lidar.mount_x_m
+  double lidar_mount_y_m = 0.0;  // sensors.lidar.mount_y_m
+};
+
+// `points` is a working buffer (grown, never shrunk) for the returns in the rear-axle frame.
+bool forward_arc_clear(const ScanInput& scan, double laser_yaw_offset_rad, double steering_rad,
+                       double travel_m, const ArcProbeGeometry& geometry,
+                       std::vector<double>& points);
+bool any_forward_arc_clear(const ScanInput& scan, double laser_yaw_offset_rad,
+                           double max_steering_rad, double travel_m,
+                           const ArcProbeGeometry& geometry, std::vector<double>& points);
 
 // Discrete first-order low-pass y += dt / (tau + dt) * (x - y), stable for any dt > 0. A
 // non-finite or non-positive dt holds the previous output (same "no elapsed time, no change"
@@ -249,6 +364,12 @@ struct GapFollowConfig {
   // binding.
   bool swept_path_clamp = false;
   SweptPathGeometry swept_path;
+  // Lane centring (step 4a, see measure_lane_walls / centering_steering). centering_gain 0
+  // (the default) skips the measurement entirely and the pipeline is bit-identical to the
+  // one without centring. The LiDAR's lateral mount is taken from swept_path.lidar_mount_y_m.
+  double centering_gain = 0.0;
+  double centering_sector_half_angle_rad = 1.0;
+  double centering_max_range_m = 1.5;
 };
 
 struct GapFollowResult {
@@ -259,7 +380,12 @@ struct GapFollowResult {
   bool corner_blocked = false;
   double target_vehicle_bearing_rad = 0.0;
   double target_range_m = 0.0;  // extended range along the target ray (input to speed)
-  // steering_from_bearing's output, before the swept-path clamp and the corner override.
+  // Lane centring (step 4a): the walls it measured (both open when centring is off) and the
+  // push it added before the clamp (0 when off or when a side is open).
+  LaneWalls lane_walls;
+  double centering_steering_rad = 0.0;
+  // clamp(steering_gain * bearing + centering, +/- max): the steering the follower wants,
+  // before the swept-path clamp and the corner override.
   double wanted_steering_rad = 0.0;
   bool swept_path_clamped = false;  // the swept-path clamp reduced |steering|
   double steering_rad = 0.0;        // after clamps and corner override, BEFORE low-pass
@@ -278,6 +404,8 @@ class GapFollower {
   std::optional<double> previous_target_vehicle_bearing_rad_;
   std::vector<double> sanitized_;
   std::vector<double> extended_;
+  std::vector<double> lane_left_;
+  std::vector<double> lane_right_;
 };
 
 }  // namespace racer_control

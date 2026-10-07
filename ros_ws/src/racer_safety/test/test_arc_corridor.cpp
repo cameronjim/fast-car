@@ -35,6 +35,9 @@ constexpr double kMountX = 0.285;      // sensors.lidar.mount_x_m
 constexpr double kHalfAngle = 1.2;     // limits.ttc_forward_sector_half_angle_rad
 constexpr double kHalfWidth = 0.205;   // chassis.width_m / 2 + limits.obstacle_corridor_margin_m
 constexpr double kCarYaw = kPi;        // sensors.lidar.mount_yaw_rad
+// Rear axle to the front bumper line: chassis.wheelbase_m + chassis.front_overhang_m
+// (PROVISIONAL 0.13 m, schema 0.11.0).
+constexpr double kBodyFrontX = kWheelbase + 0.13;
 
 PathGeometry car_path() {
   PathGeometry path;
@@ -42,6 +45,7 @@ PathGeometry car_path() {
   path.max_steering_angle_rad = kMaxSteer;
   path.lidar_mount_x_m = kMountX;
   path.lidar_mount_y_m = 0.0;
+  path.body_front_x_m = kBodyFrontX;
   return path;
 }
 
@@ -135,9 +139,18 @@ struct CastScan {
 double full_lock_radius() { return kWheelbase / std::tan(kMaxSteer); }
 
 // The floor-test wall: 0.33 m ahead of the head, from 2 cm right of the centreline out to
-// 0.6 m on the right. Straight ahead it is in the corridor; full lock LEFT (away from it)
-// clears it; full lock right (into it) does not.
+// 0.6 m on the right. Straight ahead it is in the corridor; full lock right (into it) it is
+// too. Full lock LEFT (away from it) cleared it with the pre-0.11.0 band, but the car's outer
+// (right) front corner sweeps 1.008 m from the turn centre, and the wall's near end, 2 to 5.7
+// cm right of the centreline, is inside that circle: steering away, the corner would clip it.
+// Since the band's outer edge is that corner's sweep (forward_sector.hpp "OUTER BOUNDARY") the
+// near end is in the full-lock-left path too.
 std::vector<Segment> bag_wall() { return {Segment{0.33, -0.02, 0.33, -0.60}}; }
+
+// The same wall with its near end 15 cm right of the centreline: still in the straight
+// corridor (half width 0.205 m) at 0.33 m, and clear of the outer front corner's sweep with
+// the margin (1.053 m) at full lock left, its nearest point 1.083 m from the turn centre.
+std::vector<Segment> clear_wall() { return {Segment{0.33, -0.15, 0.33, -0.60}}; }
 
 // ---------------------------------------------------------------------------------------
 // Straight request: the arc corridor reduces to the straight corridor.
@@ -220,12 +233,29 @@ TEST(ArcCorridorGeometry, LeftAndRightTurnsAreMirrorImages) {
 }
 
 TEST(ArcCorridorGeometry, AWallStraightAheadIsOutOfThePathAtFullLockAwayFromIt) {
-  // The bag geometry: in the straight corridor at 0.33 m, gone from the full-lock-left arc.
-  const CastScan scan(bag_wall());
+  // In the straight corridor at 0.33 m, gone from the full-lock-left arc once the outer front
+  // corner clears its near end.
+  const CastScan scan(clear_wall());
   EXPECT_NEAR(scan.distance(0.0), 0.33, 1e-6);
   EXPECT_EQ(scan.distance(kMaxSteer), kInf);
   // A request beyond the lock is clamped to it, so it sees the same path.
   EXPECT_EQ(scan.distance(1.0), kInf);
+}
+
+TEST(ArcCorridorGeometry, TheBagWallsNearEndIsInTheFullLockAwayPathBecauseTheCornerWouldClipIt) {
+  // The bag geometry itself: the right front corner, steering left, sweeps through the wall's
+  // near end, so it is in the path, closer than the straight-ahead 0.33 m. With the pre-0.11.0
+  // band it was not.
+  const CastScan scan(bag_wall());
+  const double left = scan.distance(kMaxSteer);
+  EXPECT_TRUE(std::isfinite(left));
+  EXPECT_GT(left, 0.0);
+  EXPECT_LT(left, 0.33);
+  PathGeometry old_band = car_path();
+  old_band.body_front_x_m = 0.0;
+  EXPECT_EQ(min_path_distance_m(scan.geometry, scan.ranges, kCarYaw, kHalfAngle, kHalfWidth,
+                                old_band, kMaxSteer),
+            kInf);
 }
 
 TEST(ArcCorridorGeometry, AWallOnTheInsideOfTheTurnIsInThePath) {
@@ -241,7 +271,10 @@ TEST(ArcCorridorGeometry, AWallOnTheInsideOfTheTurnIsInThePath) {
   // Mirror image: a wall on the left, full lock left.
   const CastScan left_scan({Segment{0.33, 0.02, 0.33, 0.60}});
   EXPECT_NEAR(left_scan.distance(kMaxSteer), right, 2e-3);  // 720-ray sampling
-  EXPECT_EQ(left_scan.distance(-kMaxSteer), kInf);
+  // Full lock right, away from it: its near end is inside the outer (left) front corner's
+  // sweep (see bag_wall), the clear wall's mirror image is not.
+  EXPECT_NEAR(left_scan.distance(-kMaxSteer), scan.distance(kMaxSteer), 2e-3);
+  EXPECT_EQ(CastScan({Segment{0.33, 0.15, 0.33, 0.60}}).distance(-kMaxSteer), kInf);
 }
 
 TEST(ArcCorridorGeometry, BeyondAQuarterTurnIsIgnored) {
@@ -336,6 +369,125 @@ TEST(ArcCorridorGeometry, TakesTheNearestOfSeveralReturnsOnThePath) {
 }
 
 // ---------------------------------------------------------------------------------------
+// The outer boundary: the outer front corner's sweep (forward_sector.hpp "OUTER BOUNDARY",
+// 2026-10-06 night sim escape scenario on a round corner).
+// ---------------------------------------------------------------------------------------
+
+// The band's edges at full lock with the committed geometry.
+double old_outer_radius() { return full_lock_radius() + kHalfWidth; }
+double corner_outer_radius() { return std::hypot(kBodyFrontX, full_lock_radius() + kHalfWidth); }
+
+TEST(ArcCorridorOuterCorner, TheCommittedNumbers) {
+  // R = 0.742 m at full lock. The old band ended at R + 0.205 = 0.947 m; the outer front
+  // corner sweeps hypot(0.4602, 0.897) = 1.008 m without the margin and 1.053 m with it.
+  EXPECT_NEAR(full_lock_radius(), 0.7416, 1e-4);
+  EXPECT_NEAR(old_outer_radius(), 0.9466, 1e-4);
+  EXPECT_NEAR(std::hypot(kBodyFrontX, full_lock_radius() + 0.155), 1.0078, 1e-4);
+  EXPECT_NEAR(corner_outer_radius(), 1.0525, 1e-4);
+}
+
+TEST(ArcCorridorOuterCorner, AReturnInsideTheCornerSweepButOutsideTheOldBandIsNowInThePath) {
+  // The round-corner wall: 1.0 m from the turn centre at full lock, 5 cm outside the old band
+  // and inside the corner's sweep, at arc angle 0.8 rad. It is in the path, at the usual arc
+  // length from the head; with the pre-0.11.0 band (body_front_x 0) it was not.
+  const double radius = full_lock_radius();
+  const double phi_head = std::atan2(kMountX, radius);
+  for (const bool left : {true, false}) {
+    const double steer = left ? kMaxSteer : -kMaxSteer;
+    const Xy p = on_arc(radius, 0.8, 1.0 - radius, left);
+    const OneReturn r(p.x - kMountX, p.y, kCarYaw);
+    EXPECT_NEAR(path_distance(r, steer, car_path()), radius * (0.8 - phi_head), 1e-6) << left;
+    PathGeometry old_band = car_path();
+    old_band.body_front_x_m = 0.0;
+    EXPECT_EQ(path_distance(r, steer, old_band), kInf) << left;
+  }
+}
+
+TEST(ArcCorridorOuterCorner, TheOuterEdgeIsExactlyTheCornerSweepWithTheMargin) {
+  constexpr double kEps = 1e-3;
+  const double radius = full_lock_radius();
+  for (const bool left : {true, false}) {
+    const double steer = left ? kMaxSteer : -kMaxSteer;
+    const Xy in = on_arc(radius, 0.9, corner_outer_radius() - radius - kEps, left);
+    const Xy out = on_arc(radius, 0.9, corner_outer_radius() - radius + kEps, left);
+    EXPECT_TRUE(
+        std::isfinite(path_distance(OneReturn(in.x - kMountX, in.y, kCarYaw), steer, car_path())))
+        << left;
+    EXPECT_EQ(path_distance(OneReturn(out.x - kMountX, out.y, kCarYaw), steer, car_path()), kInf)
+        << left;
+  }
+}
+
+TEST(ArcCorridorOuterCorner, TheInnerEdgeIsUnchanged) {
+  // The inside flank, R - half width, whatever the front x. (A sector of pi: the inner edge
+  // at 1 rad of arc is about 1.22 rad off the head's axis.)
+  constexpr double kEps = 1e-3;
+  const double radius = full_lock_radius();
+  for (const double front_x : {0.0, kBodyFrontX, 1.0}) {
+    PathGeometry path = car_path();
+    path.body_front_x_m = front_x;
+    const Xy in = on_arc(radius, 1.0, -kHalfWidth + kEps, true);
+    const Xy out = on_arc(radius, 1.0, -kHalfWidth - kEps, true);
+    EXPECT_TRUE(std::isfinite(
+        path_distance(OneReturn(in.x - kMountX, in.y, kCarYaw), kMaxSteer, path, kCarYaw, kPi)))
+        << front_x;
+    EXPECT_EQ(
+        path_distance(OneReturn(out.x - kMountX, out.y, kCarYaw), kMaxSteer, path, kCarYaw, kPi),
+        kInf)
+        << front_x;
+  }
+}
+
+TEST(ArcCorridorOuterCorner, TheStraightCorridorIsUnchanged) {
+  // Going straight the corner runs along the side line, inside |y| <= half width already: the
+  // front x changes nothing, edge for edge.
+  constexpr double kEps = 1e-3;
+  for (const double front_x : {0.0, kBodyFrontX, 1.0}) {
+    PathGeometry path = car_path();
+    path.body_front_x_m = front_x;
+    for (const double steer : {0.0, 5e-4, -5e-4}) {
+      EXPECT_NEAR(path_distance(OneReturn(0.5, kHalfWidth - kEps, kCarYaw), steer, path), 0.5,
+                  1e-6);
+      EXPECT_NEAR(path_distance(OneReturn(0.5, -kHalfWidth + kEps, kCarYaw), steer, path), 0.5,
+                  1e-6);
+      EXPECT_EQ(path_distance(OneReturn(0.5, kHalfWidth + kEps, kCarYaw), steer, path), kInf);
+      EXPECT_EQ(path_distance(OneReturn(0.5, -kHalfWidth - kEps, kCarYaw), steer, path), kInf);
+    }
+    const CastScan scan(bag_wall());
+    EXPECT_EQ(
+        min_path_distance_m(scan.geometry, scan.ranges, kCarYaw, kHalfAngle, kHalfWidth, path, 0.0),
+        min_corridor_distance_m(scan.geometry, scan.ranges, kCarYaw, kHalfAngle, kHalfWidth))
+        << front_x;
+  }
+}
+
+TEST(ArcCorridorOuterCorner, ARoundCornerWallIsSeenBeforeTheCornerReachesIt) {
+  // The sim escape scenario: full lock left round a corner whose outside wall is a circle
+  // about the turn centre (ray-cast, 720 rays). With the wall at the corner's no-margin sweep
+  // (1.008 m) the car would scrape it; it must be in the path, ahead of the head. The
+  // pre-0.11.0 band (0.947 m) never saw it.
+  const double radius = full_lock_radius();
+  const double wall_r = std::hypot(kBodyFrontX, radius + 0.155);
+  std::vector<Segment> wall;
+  for (int i = 0; i < 40; ++i) {
+    const double a0 = 0.3 + 0.03 * i;
+    const double a1 = a0 + 0.03;
+    // On the circle about (0, R) in the rear-axle frame, then to the head frame.
+    wall.push_back(Segment{wall_r * std::sin(a0) - kMountX, radius - wall_r * std::cos(a0),
+                           wall_r * std::sin(a1) - kMountX, radius - wall_r * std::cos(a1)});
+  }
+  const CastScan scan(wall);
+  const double d = scan.distance(kMaxSteer);
+  EXPECT_TRUE(std::isfinite(d));
+  EXPECT_GT(d, 0.0);
+  PathGeometry old_band = car_path();
+  old_band.body_front_x_m = 0.0;
+  EXPECT_EQ(min_path_distance_m(scan.geometry, scan.ranges, kCarYaw, kHalfAngle, kHalfWidth,
+                                old_band, kMaxSteer),
+            kInf);
+}
+
+// ---------------------------------------------------------------------------------------
 // Invalid returns and garbage inputs.
 // ---------------------------------------------------------------------------------------
 
@@ -350,7 +502,7 @@ TEST(ArcCorridorGarbage, InvalidReturnsOnThePathAreIgnored) {
 
 TEST(ArcCorridorGarbage, GarbagePathInputFallsBackToTheWholeScanConservatively) {
   // Whole-scan minimum: a 0.10 m return straight behind the head, which no corridor counts.
-  CastScan scan(bag_wall());
+  CastScan scan(clear_wall());
   scan.ranges[0] = 0.10f;  // ray 0 points straight back (vehicle bearing -pi)
   auto with = [&](auto mutate, double steer) {
     PathGeometry path = car_path();
@@ -380,6 +532,12 @@ TEST(ArcCorridorGarbage, GarbagePathInputFallsBackToTheWholeScanConservatively) 
   EXPECT_FLOAT_EQ(static_cast<float>(with([](PathGeometry& p) { p.lidar_mount_x_m = kNan; }, 0.2)),
                   0.10f);
   EXPECT_FLOAT_EQ(static_cast<float>(with([](PathGeometry& p) { p.lidar_mount_y_m = kInf; }, 0.2)),
+                  0.10f);
+  EXPECT_FLOAT_EQ(static_cast<float>(with([](PathGeometry& p) { p.body_front_x_m = kNan; }, 0.2)),
+                  0.10f);
+  EXPECT_FLOAT_EQ(static_cast<float>(with([](PathGeometry& p) { p.body_front_x_m = kInf; }, 0.2)),
+                  0.10f);
+  EXPECT_FLOAT_EQ(static_cast<float>(with([](PathGeometry& p) { p.body_front_x_m = -0.01; }, 0.2)),
                   0.10f);
   // Garbage scan geometry still falls back too, whatever the path.
   ScanGeometry bad_geometry = scan.geometry;
@@ -484,7 +642,9 @@ void latch_on_the_wall(NodeLoop& loop, const CastScan& scan) {
 }
 
 TEST(ArcCorridorBag, LatchedOnAWallReleasesOnTheCycleTheRequestSteersAwayAndTheArcIsClear) {
-  const CastScan scan(bag_wall());
+  // The bag's wall with its near end 15 cm right of the centreline (clear_wall): the bag's own
+  // near end, 2 cm right, is inside the outer front corner's sweep (next test).
+  const CastScan scan(clear_wall());
   NodeLoop loop;
   latch_on_the_wall(loop, scan);
   EXPECT_DOUBLE_EQ(loop.previous.steering_angle_rad, 0.0);  // held at the hold-start angle
@@ -526,6 +686,20 @@ TEST(ArcCorridorBag, LatchedOnAWallReleasesOnTheCycleTheRequestSteersAwayAndTheA
       1u);
 }
 
+TEST(ArcCorridorBag, TheBagsOwnWallHoldsTheLatchAtFullLockAwayBecauseTheCornerWouldClipIt) {
+  // Since schema 0.11.0 the bag geometry no longer releases by steering away: the right front
+  // corner would sweep through the wall's near end (bag_wall). The car has to back out first
+  // (gap_follow_node's reverse escape, through the rear corridor).
+  const CastScan scan(bag_wall());
+  NodeLoop loop;
+  latch_on_the_wall(loop, scan);
+  for (int i = 0; i < 10 * 50; ++i) {
+    const GateResult r = loop.step(scan, kMaxSteer, kBagSpeedMps);
+    ASSERT_TRUE(r.ttc_brake_latched) << "cycle " << i;
+    ASSERT_EQ(r.output.speed_mps, 0.0);
+  }
+}
+
 TEST(ArcCorridorBag, AStraightRequestOrFullLockIntoTheWallStillNeverReleases) {
   // Control: a straight request (what the straight corridor assumed whatever the steering) or
   // full lock INTO the wall keeps the latch for the bag's longest latch, 37 s.
@@ -551,7 +725,7 @@ TEST(ArcCorridorBag, AnObstacleFurtherRoundTheArcReleasesOnlyPastTheHysteresis) 
     const Xy p = on_arc(radius, phi_head + arc_m / radius, 0.0, true);
     const double x = p.x - kMountX;
     const double y = p.y;
-    CastScan scan(bag_wall(), std::atan2(y, x));  // ray 0 exactly on the return's bearing
+    CastScan scan(clear_wall(), std::atan2(y, x));  // ray 0 exactly on the return's bearing
     scan.ranges[0] = static_cast<float>(std::hypot(x, y));
     return scan;
   };

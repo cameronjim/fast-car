@@ -70,6 +70,12 @@ bool is_trustworthy_path(const PathGeometry& path, double requested_steering_rad
   if (!std::isfinite(path.lidar_mount_y_m)) {
     return false;
   }
+  if (!std::isfinite(path.body_front_x_m)) {
+    return false;
+  }
+  if (path.body_front_x_m < 0.0) {
+    return false;
+  }
   if (!std::isfinite(requested_steering_rad)) {
     return false;
   }
@@ -99,20 +105,44 @@ std::optional<double> straight_corridor_distance_m(double x, double y, double ha
   return x;
 }
 
+// Rear straight corridor (forward_sector.hpp "REAR CORRIDOR"): mirrored rear-axle frame
+// coordinates (xm behind the rear axle, ym left). In the path if behind the rear bumper line and
+// within the half width of the centreline. Distance: from the rear bumper line.
+std::optional<double> rear_straight_corridor_distance_m(double xm, double ym, double half_width_m,
+                                                        double rear_overhang_m) {
+  const double behind_bumper_m = xm - rear_overhang_m;
+  if (behind_bumper_m <= 0.0) {
+    return std::nullopt;
+  }
+  if (std::abs(ym) > half_width_m) {
+    return std::nullopt;
+  }
+  return behind_bumper_m;
+}
+
 // Arc corridor (forward_sector.hpp "ARC CORRIDOR"): the rear axle follows a circle of signed
-// radius `radius_m` (left positive) about (0, radius_m) in the rear-axle frame. Distance: the
-// arc length the rear axle travels until the head reaches the return's arc angle.
-std::optional<double> arc_corridor_distance_m(double x, double y, double half_width_m,
-                                              const PathGeometry& path, double radius_m) {
-  const double xr = x + path.lidar_mount_x_m;
-  const double yr = y + path.lidar_mount_y_m;
+// radius `radius_m` (left positive) about (0, radius_m) in the rear-axle frame. (xr, yr) is the
+// return in that frame and (ref_x, ref_y) the reference point the distance is measured from
+// (the head going forward; the rear bumper line's centre in the mirrored frame going backward,
+// "REAR CORRIDOR"). `body_x_m` is the x of the body's leading edge in that frame (the front
+// bumper line going forward, the rear bumper line going backward): its outer corner sets the
+// band's outer radius ("OUTER BOUNDARY"). Distance: the arc length the rear axle travels until
+// the reference point reaches the return's arc angle.
+std::optional<double> arc_corridor_distance_m(double xr, double yr, double half_width_m,
+                                              double radius_m, double body_x_m, double ref_x,
+                                              double ref_y) {
   const double abs_radius_m = std::abs(radius_m);
   double turn_sign = 1.0;
   if (radius_m < 0.0) {
     turn_sign = -1.0;
   }
   const double rho_m = std::hypot(xr, yr - radius_m);
-  if (std::abs(rho_m - abs_radius_m) > half_width_m) {
+  // Inner boundary: the inside flank, |R| - half width (unchanged).
+  if (rho_m < abs_radius_m - half_width_m) {
+    return std::nullopt;
+  }
+  // Outer boundary: the outer leading corner's sweep, hypot(body_x, |R| + half width).
+  if (rho_m > std::hypot(body_x_m, abs_radius_m + half_width_m)) {
     return std::nullopt;
   }
   // Arc angle from the car's position (the rear axle), in the direction of travel.
@@ -123,9 +153,8 @@ std::optional<double> arc_corridor_distance_m(double x, double y, double half_wi
   if (phi >= kHalfPi) {
     return std::nullopt;
   }
-  const double phi_head =
-      std::atan2(path.lidar_mount_x_m, abs_radius_m - turn_sign * path.lidar_mount_y_m);
-  const double arc_m = abs_radius_m * (phi - phi_head);
+  const double phi_ref = std::atan2(ref_x, abs_radius_m - turn_sign * ref_y);
+  const double arc_m = abs_radius_m * (phi - phi_ref);
   if (arc_m <= 0.0) {
     return std::nullopt;
   }
@@ -167,14 +196,34 @@ double corridor_half_width_m(double chassis_width_m, double margin_m) {
   return 0.5 * chassis_width_m + margin_m;
 }
 
-double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
-                           double laser_yaw_rad, double half_angle_rad,
-                           double corridor_half_width_m, const PathGeometry& path,
-                           double requested_steering_rad) {
+namespace {
+
+// The rear corridor's extra input. Same explicit-branch style.
+bool is_trustworthy_rear_overhang(double rear_overhang_m) {
+  if (!std::isfinite(rear_overhang_m)) {
+    return false;
+  }
+  if (rear_overhang_m < 0.0) {
+    return false;
+  }
+  return true;
+}
+
+// The in-path test for either direction (forward_sector.hpp "ARC CORRIDOR" and "REAR
+// CORRIDOR"). `reverse` false is min_path_distance_m exactly; `rear_overhang_m` is only read
+// when `reverse` is true.
+double path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
+                       double laser_yaw_rad, double half_angle_rad, double corridor_half_width_m,
+                       const PathGeometry& path, double requested_steering_rad, bool reverse,
+                       double rear_overhang_m) {
   bool use_path = false;
   if (is_trustworthy_geometry(geometry, laser_yaw_rad, half_angle_rad, corridor_half_width_m)) {
     if (is_trustworthy_path(path, requested_steering_rad)) {
-      use_path = true;
+      if (!reverse) {
+        use_path = true;
+      } else if (is_trustworthy_rear_overhang(rear_overhang_m)) {
+        use_path = true;
+      }
     }
   }
   // Only read when use_path is true, so the steering and the wheelbase are finite here.
@@ -199,17 +248,38 @@ double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float
       const double laser_bearing =
           geometry.angle_min_rad + static_cast<double>(i) * geometry.angle_increment_rad;
       const double vehicle_bearing = wrap_angle_rad(laser_bearing + laser_yaw_rad);
-      // Outer bound: never consider a return outside the sector, whatever the margin.
-      if (std::abs(vehicle_bearing) > half_angle_rad) {
+      // Outer bound: never consider a return outside the sector, whatever the margin. The rear
+      // sector is centred on the car's -x axis.
+      double off_axis_rad = vehicle_bearing;
+      if (reverse) {
+        off_axis_rad = wrap_angle_rad(vehicle_bearing - kPi);
+      }
+      if (std::abs(off_axis_rad) > half_angle_rad) {
         continue;
       }
       const double x = range * std::cos(vehicle_bearing);
       const double y = range * std::sin(vehicle_bearing);
       std::optional<double> in_path;
-      if (straight) {
-        in_path = straight_corridor_distance_m(x, y, corridor_half_width_m, path.lidar_mount_y_m);
+      if (!reverse) {
+        if (straight) {
+          in_path = straight_corridor_distance_m(x, y, corridor_half_width_m, path.lidar_mount_y_m);
+        } else {
+          in_path = arc_corridor_distance_m(x + path.lidar_mount_x_m, y + path.lidar_mount_y_m,
+                                            corridor_half_width_m, radius_m, path.body_front_x_m,
+                                            path.lidar_mount_x_m, path.lidar_mount_y_m);
+        }
       } else {
-        in_path = arc_corridor_distance_m(x, y, corridor_half_width_m, path, radius_m);
+        // Mirrored rear-axle frame: behind the rear axle is +xm (forward_sector.hpp "REAR
+        // CORRIDOR"); the reference point is the rear bumper line's centre.
+        const double xm = -(x + path.lidar_mount_x_m);
+        const double ym = y + path.lidar_mount_y_m;
+        if (straight) {
+          in_path =
+              rear_straight_corridor_distance_m(xm, ym, corridor_half_width_m, rear_overhang_m);
+        } else {
+          in_path = arc_corridor_distance_m(xm, ym, corridor_half_width_m, radius_m,
+                                            rear_overhang_m, rear_overhang_m, 0.0);
+        }
       }
       if (!in_path.has_value()) {
         continue;
@@ -221,6 +291,25 @@ double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float
     }
   }
   return min_distance;
+}
+
+}  // namespace
+
+double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
+                           double laser_yaw_rad, double half_angle_rad,
+                           double corridor_half_width_m, const PathGeometry& path,
+                           double requested_steering_rad) {
+  return path_distance_m(geometry, ranges, laser_yaw_rad, half_angle_rad, corridor_half_width_m,
+                         path, requested_steering_rad, /*reverse=*/false,
+                         /*rear_overhang_m=*/0.0);
+}
+
+double min_rear_path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
+                                double laser_yaw_rad, double half_angle_rad,
+                                double corridor_half_width_m, const PathGeometry& path,
+                                double rear_overhang_m, double requested_steering_rad) {
+  return path_distance_m(geometry, ranges, laser_yaw_rad, half_angle_rad, corridor_half_width_m,
+                         path, requested_steering_rad, /*reverse=*/true, rear_overhang_m);
 }
 
 double min_corridor_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,

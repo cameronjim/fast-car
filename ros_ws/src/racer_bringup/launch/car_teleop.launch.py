@@ -11,6 +11,18 @@ including that racer_safety/safety_node is the ONLY node here that publishes /dr
 (claude-docs/05-safety.md layer 3) and that pwm_output_node subscribes to /drive and never to
 /drive_raw (CLAUDE.md invariant 1).
 
+THE CAR CAN REVERSE ON ITS OWN (2026-10-06 night). Nothing in THIS launch file commands
+motion, but the controller that is run next to it for floor driving, racer_control's
+gap_follow_node with gap_follow.launch.py profile:=floor-2026-10-06, has a reverse escape
+(reverse_escape, ON in that profile): when safety_node has refused its forward request for
+1.5 s and it sees no way forward, it requests REVERSE at full steering lock, up to 0.4 m
+(commanded) or 2 s at a time, up to 3 times in a row, with nobody touching a key. Clear the
+space BEHIND the car as well as in front before any such run. The reverse request goes through
+safety_node like every other command: safety_node now judges a reverse request on a rear
+corridor from the rear bumper line (chassis.rear_overhang_m, PROVISIONAL 0.12 m; records with
+source "ttc_reverse" on /safety/events). reverse_escape:=false on the gap_follow launch turns
+the escape off. See docs/notes/first-boot-runbook.md "Launch and drive".
+
 SAFETY, before running this on a real car (claude-docs/05-safety.md "Operational rules"):
 wheels off the ground, the RC kill switch armed and held by a second person, and the
 bench-calibration steps in docs/notes/first-boot-runbook.md done first. The mux is physically

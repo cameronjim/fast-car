@@ -27,6 +27,11 @@ if(BUILD_TESTING)
   # (and refused on a null mount field), the driver's /scan remap. Description inspection
   # only, so sllidar_ros2, which only the car image builds, is never started.
   ament_add_pytest_test(test_lidar_launch test/test_lidar_launch.py)
+  # L1 check of vesc_telemetry.launch.py, car_teleop.launch.py's `vesc` argument and recorder
+  # regex, and the read-only patch docker/car applies to the f1tenth vesc_driver: no remap of
+  # any driver command topic, all six command subscriptions removed, every set-command a no-op.
+  # Description and patch-text inspection only; vesc_driver exists only in the car image.
+  ament_add_pytest_test(test_vesc_telemetry_launch test/test_vesc_telemetry_launch.py)
 
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_car_teleop_launch.py

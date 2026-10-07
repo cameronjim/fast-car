@@ -183,11 +183,17 @@ def test_car_teleop_lidar_defaults_off():
 
 def test_car_teleop_includes_lidar_launch_only_when_asked():
     entities = _load("car_teleop.launch.py").generate_launch_description().entities
-    includes = [e for e in entities if isinstance(e, IncludeLaunchDescription)]
+    # car_teleop.launch.py also includes vesc_telemetry.launch.py (vesc:=true); pick the LiDAR
+    # one by file name. Loading each included description first resolves its location, and
+    # proves the file at that path imports cleanly.
+    includes = []
+    for e in entities:
+        if isinstance(e, IncludeLaunchDescription):
+            e.launch_description_source.get_launch_description(LaunchContext())
+            if pathlib.Path(e.launch_description_source.location).name == "lidar.launch.py":
+                includes.append(e)
     assert len(includes) == 1
     include = includes[0]
-    # Loading the included description proves lidar.launch.py at that path imports cleanly.
-    include.launch_description_source.get_launch_description(LaunchContext())
     source_path = include.launch_description_source.location
     assert pathlib.Path(source_path).name == "lidar.launch.py"
     assert pathlib.Path(source_path).is_file()

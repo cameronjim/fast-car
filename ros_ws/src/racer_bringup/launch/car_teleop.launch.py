@@ -79,6 +79,16 @@ launch when it is missing, so nothing argues for true yet. Two reasons for false
     direction but looks like a dead throttle if you do not expect it. Turn this on for a drive
     only after the returns have been looked at in Foxglove (docs/notes/first-boot-runbook.md
     "LiDAR first power-up").
+
+VESC TELEMETRY IS OFF BY DEFAULT (2026-10-07). `vesc:=true` includes vesc_telemetry.launch.py:
+the f1tenth vesc_driver, built READ-ONLY in the car image (no command subscriptions, every
+set-command a no-op), polling the VESC over the Jetson's 40-pin UART, plus
+racer_drivers/vesc_odometry_node publishing /odom/wheel and /telemetry/vesc/*. Both land in
+the bag (the recorder regex below names them). It changes nothing on the command path: the
+motor is still driven only by the PPM pulse through the mux. Default false because the UART
+is not wired yet and the VESC's app mode is still PPM only; with vesc:=true and no VESC on the
+port the driver exits and the rest of the launch keeps running. See
+docs/notes/first-boot-runbook.md "VESC telemetry".
 """
 
 import datetime
@@ -110,6 +120,11 @@ _FOXGLOVE_BRIDGE_PORT = 8765
 #: directory, so it is found relative to this file rather than through the ament index (which
 #: also keeps the L1 launch-description tests free of an installed racer_bringup).
 _LIDAR_LAUNCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lidar.launch.py")
+
+#: vesc_telemetry.launch.py, found the same way as lidar.launch.py.
+_VESC_LAUNCH_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "vesc_telemetry.launch.py"
+)
 
 #: FIRST-DRIVE TELEOP PROFILE (GitHub issue #72). keyboard_teleop_node's tap sizes default to
 #: a derivation from vehicle_params (one 50 Hz control period at the vehicle's maximum
@@ -154,10 +169,17 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.8
 #:   /telemetry/...    rail volts/amps -- invariant 5's second half, and the only way a
 #:                     brownout is distinguishable from a control fault after the fact
 #:   /scan             LiDAR, with lidar:=true (roadmap 2.3)
+#:   /odom/wheel       VESC wheel speed + along-track distance, with vesc:=true
+#:   /telemetry/vesc/.* VESC volts, amps, temperatures, ERPM, fault, with vesc:=true. Already
+#:                     matched by /telemetry/.*; named on its own so narrowing that pattern
+#:                     can never silently drop the VESC's temperatures and faults.
+#:   /vesc/sensors/core the driver's raw VescStateStamped, so /odom/wheel can be re-derived
+#:                     from the bag if gear_ratio or the tyre radius is re-measured later
 #:   /rosout           every node's log stream, in the same file as the data it explains
 #:   /parameter_events which parameters the run actually ran with
 _RECORDED_TOPIC_REGEX = (
     r"^(/drive_raw|/drive|/safety/events|/teleop/cmd_vel|/telemetry/.*|/scan"
+    r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core"
     r"|/rosout|/parameter_events)$"
 )
 
@@ -493,6 +515,25 @@ def generate_launch_description() -> LaunchDescription:
         ),
     )
 
+    vesc_arg = DeclareLaunchArgument(
+        "vesc",
+        default_value="false",
+        description=(
+            "Include vesc_telemetry.launch.py: the READ-ONLY vesc_driver on the VESC's UART plus "
+            "vesc_odometry_node (/odom/wheel, /telemetry/vesc/*, recorded in the bag). Sends "
+            "nothing to the VESC; the command path stays PPM through the mux. Default false "
+            "until the UART is wired and the VESC's app mode is PPM and UART."
+        ),
+    )
+    vesc_serial_port_arg = DeclareLaunchArgument(
+        "vesc_serial_port",
+        default_value="/dev/ttyTHS1",
+        description=(
+            "Serial device wired to the VESC's UART port, passed to vesc_telemetry.launch.py "
+            "as serial_port. /dev/ttyTHS1 = Jetson 40-pin header pins 8 (TXD) / 10 (RXD)."
+        ),
+    )
+
     safety_node = Node(
         package="racer_safety",
         executable="safety_node",
@@ -588,6 +629,11 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={"serial_port": LaunchConfiguration("lidar_serial_port")}.items(),
         condition=IfCondition(LaunchConfiguration("lidar")),
     )
+    vesc_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(_VESC_LAUNCH_FILE),
+        launch_arguments={"serial_port": LaunchConfiguration("vesc_serial_port")}.items(),
+        condition=IfCondition(LaunchConfiguration("vesc")),
+    )
     foxglove_bridge_node = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -620,6 +666,8 @@ def generate_launch_description() -> LaunchDescription:
             ina3221_root_arg,
             lidar_arg,
             lidar_serial_port_arg,
+            vesc_arg,
+            vesc_serial_port_arg,
             # rail_voltage_node BEFORE the recorder so its topics exist by the time
             # `ros2 bag record --regex` does its first discovery pass, and the recorder
             # before the command-path nodes for the same reason: rosbag2 does keep
@@ -629,6 +677,8 @@ def generate_launch_description() -> LaunchDescription:
             # After the recorder, like the command-path nodes: the log starts first, and the
             # recorder keeps discovering, so /scan is picked up once sllidar_node publishes.
             lidar_launch,
+            # Telemetry only, after the recorder for the same reason as the LiDAR.
+            vesc_launch,
             safety_node,
             pwm_output_node,
             teleop_node,

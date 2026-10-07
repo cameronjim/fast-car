@@ -42,6 +42,8 @@ constexpr double kCarYaw = kPi;         // sensors.lidar.mount_yaw_rad
 // (PROVISIONAL, schema 0.11.0). Forward only; the rear corridor's leading edge is the rear
 // bumper line.
 constexpr double kBodyFrontX = kWheelbase + 0.13;
+// limits.outer_corner_horizon_m (PROVISIONAL 0.45 m, schema 0.12.0), forward and rear alike.
+constexpr double kOuterCornerHorizon = 0.45;
 // The rear bumper line, in the head frame (x ahead of the head).
 constexpr double kBumperX = -(kMountX + kRearOverhang);
 
@@ -52,6 +54,7 @@ PathGeometry car_path() {
   path.lidar_mount_x_m = kMountX;
   path.lidar_mount_y_m = 0.0;
   path.body_front_x_m = kBodyFrontX;
+  path.outer_corner_horizon_m = kOuterCornerHorizon;
   return path;
 }
 
@@ -239,8 +242,11 @@ TEST(RearCorridorArc, APostStraightBehindIsOutOfThePathAtFullLock) {
 TEST(RearCorridorArc, TheOuterEdgeIsTheOuterRearCornersSweep) {
   // Backing up, the rear bumper line leads, so the band's outer edge is the outer REAR corner's
   // sweep, hypot(rear_overhang_m, R + half width) (forward_sector.hpp "OUTER BOUNDARY"), not
-  // R + half width and not the front corner's. At full lock: 0.954 m against 0.947 m.
+  // R + half width and not the front corner's. At full lock: 0.954 m against 0.947 m. At 0.6 rad
+  // of arc, 0.327 m from the bumper line, inside the outer-corner horizon (0.45 m; the horizon
+  // has its own tests below).
   constexpr double kEps = 5e-4;
+  constexpr double kPhi = 0.6;
   const double radius = full_lock_radius();
   const double old_outer = radius + kHalfWidth;
   const double corner_outer = std::hypot(kRearOverhang, radius + kHalfWidth);
@@ -250,15 +256,15 @@ TEST(RearCorridorArc, TheOuterEdgeIsTheOuterRearCornersSweep) {
     const double steer = left ? kMaxSteer : -kMaxSteer;
     // Inside the rear corner's sweep but outside the old band: in the path, at the reverse arc
     // length from the bumper line.
-    const Xy in = head_of_mirrored(on_mirrored_arc(radius, 0.9, between - radius, left), kMountX);
+    const Xy in = head_of_mirrored(on_mirrored_arc(radius, kPhi, between - radius, left), kMountX);
     EXPECT_NEAR(rear(OneReturn(in.x, in.y, kCarYaw), steer),
-                radius * (0.9 - std::atan2(kRearOverhang, radius)), 1e-5)
+                radius * (kPhi - std::atan2(kRearOverhang, radius)), 1e-5)
         << left;
     // With no overhang the leading corner is on the axle line: the old band, and it is out.
     EXPECT_EQ(rear(OneReturn(in.x, in.y, kCarYaw), steer, car_path(), 0.0), kInf) << left;
     // Just outside the rear corner's sweep: out.
-    const Xy out =
-        head_of_mirrored(on_mirrored_arc(radius, 0.9, corner_outer - radius + kEps, left), kMountX);
+    const Xy out = head_of_mirrored(
+        on_mirrored_arc(radius, kPhi, corner_outer - radius + kEps, left), kMountX);
     EXPECT_EQ(rear(OneReturn(out.x, out.y, kCarYaw), steer), kInf) << left;
     // The FRONT bumper's x plays no part behind the car, however large.
     PathGeometry long_nose = car_path();
@@ -267,6 +273,59 @@ TEST(RearCorridorArc, TheOuterEdgeIsTheOuterRearCornersSweep) {
     EXPECT_NEAR(rear(OneReturn(in.x, in.y, kCarYaw), steer, long_nose),
                 rear(OneReturn(in.x, in.y, kCarYaw), steer), 0.0)
         << left;
+  }
+}
+
+TEST(RearCorridorArc, TheOuterCornerBandCountsOnlyWithinTheHorizon) {
+  // The rear mirror of the forward split (forward_sector.hpp "OUTER-CORNER HORIZON"): between
+  // R + half width and the outer rear corner's sweep a return counts only within the horizon of
+  // reverse arc from the bumper line; the body band keeps the quarter turn.
+  const double radius = full_lock_radius();
+  const double phi_ref = std::atan2(kRearOverhang, radius);
+  const double outer_band =
+      0.5 * ((radius + kHalfWidth) + std::hypot(kRearOverhang, radius + kHalfWidth));
+  auto at = [&](double arc_m, double radial_m, bool left) {
+    const Xy h = head_of_mirrored(
+        on_mirrored_arc(radius, phi_ref + arc_m / radius, radial_m - radius, left), kMountX);
+    return OneReturn(h.x, h.y, kCarYaw);
+  };
+  constexpr double kEps = 1e-3;
+  for (const bool left : {true, false}) {
+    const double steer = left ? kMaxSteer : -kMaxSteer;
+    // Outer-corner band: in up to the horizon, out beyond it.
+    for (const double arc : {0.10, 0.30, kOuterCornerHorizon - kEps}) {
+      EXPECT_NEAR(rear(at(arc, outer_band, left), steer), arc, 1e-6) << left << " " << arc;
+    }
+    for (const double arc : {kOuterCornerHorizon + kEps, 0.6, 0.85}) {
+      EXPECT_EQ(rear(at(arc, outer_band, left), steer), kInf) << left << " " << arc;
+    }
+    // Body band: still in beyond the horizon (outer side and the rear-axle path itself).
+    for (const double radial : {radius + kHalfWidth - kEps, radius}) {
+      for (const double arc : {0.6, 0.85}) {
+        EXPECT_NEAR(rear(at(arc, radial, left), steer), arc, 1e-6)
+            << left << " " << radial << " " << arc;
+      }
+    }
+    // An infinite horizon is the pre-0.12.0 band.
+    PathGeometry no_cap = car_path();
+    no_cap.outer_corner_horizon_m = kInf;
+    EXPECT_NEAR(rear(at(0.6, outer_band, left), steer, no_cap), 0.6, 1e-6) << left;
+  }
+  // Left and right are mirror images, either side of the horizon.
+  for (const double arc : {0.3, 0.6}) {
+    const double left = rear(at(arc, outer_band, true), kMaxSteer);
+    const double right = rear(at(arc, outer_band, false), -kMaxSteer);
+    EXPECT_EQ(std::isinf(left), std::isinf(right)) << arc;
+    if (std::isfinite(left)) {
+      EXPECT_NEAR(left, right, 1e-9) << arc;
+    }
+  }
+  // The straight reverse corridor ignores the horizon.
+  for (const double horizon : {1e-3, kInf}) {
+    PathGeometry path = car_path();
+    path.outer_corner_horizon_m = horizon;
+    EXPECT_NEAR(rear(OneReturn(kBumperX - 1.5, kHalfWidth - kEps, kCarYaw), 0.0, path), 1.5, 1e-6)
+        << horizon;
   }
 }
 
@@ -335,6 +394,14 @@ TEST(RearCorridorGarbage, GarbageInputFallsBackToTheWholeScanConservatively) {
   EXPECT_NEAR(min_rear_path_distance_m(scene.geometry, scene.ranges, kCarYaw, kHalfAngle,
                                        kHalfWidth, bad_path, kRearOverhang, 0.0),
               whole, 1e-5);
+  for (const double horizon : {kNan, 0.0, -0.1}) {
+    bad_path = car_path();
+    bad_path.outer_corner_horizon_m = horizon;
+    EXPECT_NEAR(min_rear_path_distance_m(scene.geometry, scene.ranges, kCarYaw, kHalfAngle,
+                                         kHalfWidth, bad_path, kRearOverhang, 0.0),
+                whole, 1e-5)
+        << horizon;
+  }
   EXPECT_NEAR(min_rear_path_distance_m(scene.geometry, scene.ranges, kCarYaw, kHalfAngle, kNan,
                                        car_path(), kRearOverhang, 0.0),
               whole, 1e-5);

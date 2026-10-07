@@ -38,6 +38,8 @@ constexpr double kCarYaw = kPi;        // sensors.lidar.mount_yaw_rad
 // Rear axle to the front bumper line: chassis.wheelbase_m + chassis.front_overhang_m
 // (PROVISIONAL 0.13 m, schema 0.11.0).
 constexpr double kBodyFrontX = kWheelbase + 0.13;
+// limits.outer_corner_horizon_m (PROVISIONAL 0.45 m, schema 0.12.0).
+constexpr double kOuterCornerHorizon = 0.45;
 
 PathGeometry car_path() {
   PathGeometry path;
@@ -46,6 +48,7 @@ PathGeometry car_path() {
   path.lidar_mount_x_m = kMountX;
   path.lidar_mount_y_m = 0.0;
   path.body_front_x_m = kBodyFrontX;
+  path.outer_corner_horizon_m = kOuterCornerHorizon;
   return path;
 }
 
@@ -488,6 +491,156 @@ TEST(ArcCorridorOuterCorner, ARoundCornerWallIsSeenBeforeTheCornerReachesIt) {
 }
 
 // ---------------------------------------------------------------------------------------
+// The outer-corner horizon (forward_sector.hpp "OUTER-CORNER HORIZON", 2026-10-07 floor
+// finding: on a 1.1 m lane the outer-corner band projected a quarter turn ahead braked the car
+// mid-corner on walls it never reaches).
+// ---------------------------------------------------------------------------------------
+
+// A head-frame return at arc distance `arc_m` from the head along the full-lock path, `offset_m`
+// radially outward from the rear-axle path.
+OneReturn full_lock_return(double arc_m, double offset_m, bool left) {
+  const double radius = full_lock_radius();
+  const double phi = std::atan2(kMountX, radius) + arc_m / radius;
+  const Xy p = on_arc(radius, phi, offset_m, left);
+  return OneReturn(p.x - kMountX, p.y, kCarYaw);
+}
+
+// Radially between the body band's outer edge (R + 0.205) and the corner's sweep (1.053 m).
+constexpr double kOuterBandOffset = 0.25;
+// Inside the body band, toward its outer edge.
+constexpr double kBodyBandOffset = 0.15;
+
+TEST(ArcCorridorOuterCornerHorizon, OuterBandReturnsCountOnlyWithinTheHorizon) {
+  ASSERT_GT(full_lock_radius() + kOuterBandOffset, old_outer_radius());
+  ASSERT_LT(full_lock_radius() + kOuterBandOffset, corner_outer_radius());
+  constexpr double kEps = 1e-3;
+  for (const bool left : {true, false}) {
+    const double steer = left ? kMaxSteer : -kMaxSteer;
+    // Inside the horizon: counts, at the arc length from the head, as before.
+    for (const double arc : {0.10, 0.30, kOuterCornerHorizon - kEps}) {
+      EXPECT_NEAR(path_distance(full_lock_return(arc, kOuterBandOffset, left), steer, car_path()),
+                  arc, 1e-6)
+          << left << " " << arc;
+    }
+    // Beyond it: ignored, all the way to the quarter turn.
+    for (const double arc : {kOuterCornerHorizon + kEps, 0.6, 0.85}) {
+      EXPECT_EQ(path_distance(full_lock_return(arc, kOuterBandOffset, left), steer, car_path()),
+                kInf)
+          << left << " " << arc;
+    }
+  }
+}
+
+TEST(ArcCorridorOuterCornerHorizon, BodyBandReturnsBeyondTheHorizonStillCount) {
+  // The body band keeps the quarter turn: outer side, centre and inner flank, left and right.
+  // (A sector of pi: the inner flank far round the arc is wide of the head's axis.)
+  for (const bool left : {true, false}) {
+    const double steer = left ? kMaxSteer : -kMaxSteer;
+    for (const double offset : {kBodyBandOffset, kHalfWidth - 1e-3, 0.0, -0.15}) {
+      for (const double arc : {0.6, 0.85}) {
+        EXPECT_NEAR(
+            path_distance(full_lock_return(arc, offset, left), steer, car_path(), kCarYaw, kPi),
+            arc, 1e-6)
+            << left << " " << offset << " " << arc;
+      }
+    }
+  }
+}
+
+TEST(ArcCorridorOuterCornerHorizon, LeftAndRightAreMirrorImages) {
+  for (const double offset : {kBodyBandOffset, kOuterBandOffset}) {
+    for (const double arc : {0.2, 0.44, 0.46, 0.7}) {
+      const double left = path_distance(full_lock_return(arc, offset, true), kMaxSteer, car_path());
+      const double right =
+          path_distance(full_lock_return(arc, offset, false), -kMaxSteer, car_path());
+      EXPECT_EQ(std::isinf(left), std::isinf(right)) << offset << " " << arc;
+      if (std::isfinite(left)) {
+        EXPECT_NEAR(left, right, 1e-9) << offset << " " << arc;
+      }
+    }
+  }
+}
+
+TEST(ArcCorridorOuterCornerHorizon, AnInfiniteHorizonIsThePre012Band) {
+  PathGeometry no_cap = car_path();
+  no_cap.outer_corner_horizon_m = kInf;
+  for (const bool left : {true, false}) {
+    const double steer = left ? kMaxSteer : -kMaxSteer;
+    EXPECT_NEAR(path_distance(full_lock_return(0.7, kOuterBandOffset, left), steer, no_cap), 0.7,
+                1e-6);
+  }
+}
+
+TEST(ArcCorridorOuterCornerHorizon, TheStraightCorridorIsUnchanged) {
+  // The horizon is an arc-band rule: a straight request sees the same corridor for any value.
+  std::vector<Segment> scene = bag_wall();
+  scene.push_back(Segment{1.5, 0.19, 1.5, -0.19});
+  scene.push_back(Segment{0.6, 0.30, 0.9, 0.30});  // beside the path
+  const CastScan scan(scene);
+  const double reference =
+      min_corridor_distance_m(scan.geometry, scan.ranges, kCarYaw, kHalfAngle, kHalfWidth);
+  for (const double horizon : {1e-3, kOuterCornerHorizon, 2.0, kInf}) {
+    PathGeometry path = car_path();
+    path.outer_corner_horizon_m = horizon;
+    for (const double steer : {0.0, 5e-4, -5e-4}) {
+      EXPECT_EQ(min_path_distance_m(scan.geometry, scan.ranges, kCarYaw, kHalfAngle, kHalfWidth,
+                                    path, steer),
+                reference)
+          << horizon << " " << steer;
+      EXPECT_NEAR(path_distance(OneReturn(2.0, kHalfWidth - 1e-3, kCarYaw), steer, path), 2.0,
+                  1e-6);
+    }
+  }
+}
+
+TEST(ArcCorridorOuterCornerHorizon, TheLanesOuterWallFarRoundTheArcNoLongerBrakes) {
+  // The floor finding: a wall across the lane about 0.7 m ahead of the head (0.98 m ahead of the
+  // rear axle). At full lock the body band (out to 0.947 m from the turn centre) never reaches
+  // it; only the outer front corner's sweep does, and only near a quarter turn, about 0.62 m of
+  // arc from the head. Before the horizon that put it in the brake band; now it is ignored,
+  // while a wall the body itself would hit still counts.
+  const double wall_x = 0.98 - kMountX;
+  const CastScan scan({Segment{wall_x, -1.0, wall_x, 1.0}});
+  PathGeometry no_cap = car_path();
+  no_cap.outer_corner_horizon_m = kInf;
+  for (const double steer : {kMaxSteer, -kMaxSteer}) {
+    const double before = min_path_distance_m(scan.geometry, scan.ranges, kCarYaw, kHalfAngle,
+                                              kHalfWidth, no_cap, steer);
+    EXPECT_TRUE(std::isfinite(before)) << steer;
+    EXPECT_GT(before, kOuterCornerHorizon) << steer;
+    EXPECT_LT(before, 0.7) << steer;
+    EXPECT_EQ(scan.distance(steer), kInf) << steer;
+  }
+  // Straight at it: still in the straight corridor, 0.695 m ahead.
+  EXPECT_NEAR(scan.distance(0.0), wall_x, 1e-6);
+  // The same wall 0.85 m ahead of the rear axle is inside the body band's sweep: it counts at
+  // full lock, wherever round the arc that is.
+  const CastScan near_scan({Segment{0.85 - kMountX, -1.0, 0.85 - kMountX, 1.0}});
+  EXPECT_TRUE(std::isfinite(near_scan.distance(kMaxSteer)));
+  EXPECT_TRUE(std::isfinite(near_scan.distance(-kMaxSteer)));
+}
+
+TEST(ArcCorridorOuterCornerHorizon, TheRoundCornerWallIsStillSeenWithinTheHorizon) {
+  // The 2026-10-06 round-corner case (ARoundCornerWallIsSeenBeforeTheCornerReachesIt): the wall
+  // at the corner's no-margin sweep is all in the outer-corner band, and its nearest return is
+  // well inside the committed horizon, so the brake still sees it.
+  const double radius = full_lock_radius();
+  const double wall_r = std::hypot(kBodyFrontX, radius + 0.155);
+  ASSERT_GT(wall_r, old_outer_radius());
+  std::vector<Segment> wall;
+  for (int i = 0; i < 40; ++i) {
+    const double a0 = 0.3 + 0.03 * i;
+    const double a1 = a0 + 0.03;
+    wall.push_back(Segment{wall_r * std::sin(a0) - kMountX, radius - wall_r * std::cos(a0),
+                           wall_r * std::sin(a1) - kMountX, radius - wall_r * std::cos(a1)});
+  }
+  const CastScan scan(wall);
+  const double d = scan.distance(kMaxSteer);
+  EXPECT_TRUE(std::isfinite(d));
+  EXPECT_LT(d, kOuterCornerHorizon);
+}
+
+// ---------------------------------------------------------------------------------------
 // Invalid returns and garbage inputs.
 // ---------------------------------------------------------------------------------------
 
@@ -539,6 +692,14 @@ TEST(ArcCorridorGarbage, GarbagePathInputFallsBackToTheWholeScanConservatively) 
                   0.10f);
   EXPECT_FLOAT_EQ(static_cast<float>(with([](PathGeometry& p) { p.body_front_x_m = -0.01; }, 0.2)),
                   0.10f);
+  for (const double horizon : {kNan, 0.0, -0.1, -kInf}) {
+    EXPECT_FLOAT_EQ(
+        static_cast<float>(with([&](PathGeometry& p) { p.outer_corner_horizon_m = horizon; }, 0.2)),
+        0.10f)
+        << horizon;
+  }
+  // +infinity is not garbage: no cap, the pre-0.12.0 band.
+  EXPECT_EQ(with([](PathGeometry& p) { p.outer_corner_horizon_m = kInf; }, kMaxSteer), kInf);
   // Garbage scan geometry still falls back too, whatever the path.
   ScanGeometry bad_geometry = scan.geometry;
   bad_geometry.angle_increment_rad = 0.0;

@@ -79,7 +79,10 @@
 // straight corridor a car stopped against a wall at full lock away from it stayed latched for
 // 20 to 37 s.) Before the first scan the distance is +infinity, as before. Since schema 0.11.0
 // the band's outer edge is the outer front corner's sweep, hypot(wheelbase_m +
-// front_overhang_m, |R| + half width) (forward_sector.hpp "OUTER BOUNDARY").
+// front_overhang_m, |R| + half width) (forward_sector.hpp "OUTER BOUNDARY"). Since schema
+// 0.12.0 a return between |R| + half width and that edge (the outer-corner band) counts only
+// within limits.outer_corner_horizon_m of arc; the body band keeps the quarter turn
+// (forward_sector.hpp "OUTER-CORNER HORIZON"). The rear corridor gets the same split.
 //
 // REAR CORRIDOR (2026-10-06 night). A reverse request is now judged like a forward one, on the
 // arc corridor mirrored behind the car (forward_sector.hpp "REAR CORRIDOR") with the distance
@@ -175,16 +178,17 @@ class SafetyNode : public rclcpp::Node {
         this->get_logger(),
         "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
         "%.3f m, path corridor +/-%.3f m along the requested steering arc (wheelbase "
-        "%.4f m, lidar at x %.3f m y %.3f m, front bumper at x %.3f m from the rear axle) "
-        "inside a +/-%.3f rad "
+        "%.4f m, lidar at x %.3f m y %.3f m, front bumper at x %.3f m from the rear axle, "
+        "outer-corner band to %.3f m of arc) inside a +/-%.3f rad "
         "outer sector, rear corridor mirrored behind the car from the rear bumper line "
         "%.3f m behind the rear axle, laser yaw %.6f rad, steering hold after %.3f s on the "
         "obstacle latch, "
         "ttc_brake_s=%s, ttc_warning_s=%s",
         control_rate_hz, gate_limits_.watchdog_missed_cycles, *gate_limits_.min_forward_clearance_m,
         corridor_half_width_m_, path_geometry_.wheelbase_m, path_geometry_.lidar_mount_x_m,
-        path_geometry_.lidar_mount_y_m, path_geometry_.body_front_x_m, sector_half_angle_rad_,
-        rear_overhang_m_, laser_yaw_rad_, gate_limits_.obstacle_steering_hold_after_s,
+        path_geometry_.lidar_mount_y_m, path_geometry_.body_front_x_m,
+        path_geometry_.outer_corner_horizon_m, sector_half_angle_rad_, rear_overhang_m_,
+        laser_yaw_rad_, gate_limits_.obstacle_steering_hold_after_s,
         gate_limits_.ttc_brake_s.has_value()
             ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
             : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
@@ -309,6 +313,9 @@ class SafetyNode : public rclcpp::Node {
     // (forward_sector.hpp "OUTER BOUNDARY"; schema 0.11.0, required, so always set).
     path_geometry_.body_front_x_m =
         VEHICLE_PARAMS.chassis.wheelbase_m + VEHICLE_PARAMS.chassis.front_overhang_m;
+    // Arc horizon of the outer-corner band, forward and rear (forward_sector.hpp "OUTER-CORNER
+    // HORIZON"; schema 0.12.0, required, so always set).
+    path_geometry_.outer_corner_horizon_m = VEHICLE_PARAMS.limits.outer_corner_horizon_m;
     // The rear corridor's reference line (schema 0.10.0, required, so always set).
     rear_overhang_m_ = VEHICLE_PARAMS.chassis.rear_overhang_m;
 

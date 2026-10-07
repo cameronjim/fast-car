@@ -74,6 +74,7 @@ _EXPECTED = {
     "centering_gain": 0.6,
     "centering_sector_half_angle_rad": 1.0,
     "centering_max_range_m": 1.5,
+    "reverse_escape": True,
 }
 
 

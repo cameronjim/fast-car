@@ -39,6 +39,13 @@ while vehicle_params sensors.lidar.mount_x_m / mount_y_m is null.
 `centering_gain` (lane centring, [0, 5] rad, 0 = off; see include/racer_control/gap_follow.hpp
 measure_lane_walls) follows the same rule. The profile turns it on at 0.6.
 
+`reverse_escape` (true/false) and `escape_probe_distance_m` (see
+include/racer_control/reverse_escape.hpp) follow the same rule. WITH reverse_escape TRUE THE CAR
+CAN REVERSE ON ITS OWN: when safety_node has refused the forward request for escape_after_s and
+the follower sees no clear forward arc, gap_follow_node requests reverse through /drive_raw
+(gated by safety_node's rear corridor). The profile turns it on; `reverse_escape:=false` turns
+it off for a session.
+
 laser_yaw_from_vehicle_params (default true) must stay true on the real car, where the LiDAR
 yaw comes only from vehicle_params sensors.lidar.mount_yaw_rad. Set it false (in the params
 file) ONLY for the simulator and synthetic-scan tests, whose /scan is aligned to the vehicle
@@ -83,6 +90,11 @@ FLOOR_2026_10_06_PROFILE: dict[str, float | int | bool] = {
     "centering_gain": 0.6,
     "centering_sector_half_angle_rad": 1.0,
     "centering_max_range_m": 1.5,
+    # Reverse escape added after the same bags showed the car stuck nose-in to corners tighter
+    # than its turning circle. THE CAR CAN REVERSE ON ITS OWN WITH THIS PROFILE. The escape_*
+    # timings are the node defaults (1.5 s, -0.5 m/s, 0.4 m, 2.0 s, retry 3.0 s, 3 attempts).
+    # Not yet driven on the floor.
+    "reverse_escape": True,
 }
 """Checkpoint 2026-10-06: the first working floor laps.
 
@@ -90,9 +102,11 @@ gap_follow_node completed its first working laps on the floor of the owner's liv
 on the evening of 2026-10-06 with every value above up to and including target_deepest_ray.
 The rest were added later the same night, at the owner's request, and have NOT been driven on
 the floor yet: the speed smoothing (the speed surged and slowed with the scan-to-scan flicker
-of the target range) and the lane centring (the follower hugged the edges in the night's
-bags). To drive exactly the laps' parameters, override them back off:
-`speed_time_constant_s:=0 target_range_median_scans:=1 centering_gain:=0`. See
+of the target range), the lane centring (the follower hugged the edges in the night's bags)
+and the reverse escape (it ended nose-in to corners tighter than its turning circle; WITH IT
+ON THE CAR CAN REVERSE ON ITS OWN). To drive exactly the laps' parameters, override them back
+off: `speed_time_constant_s:=0 target_range_median_scans:=1 centering_gain:=0
+reverse_escape:=false`. See
 docs/notes/reactive-control-port-2026-10-05.md, "Checkpoint 2026-10-06: first working floor
 laps", for the known limits.
 
@@ -132,6 +146,11 @@ _OPTIONAL_FLOAT_ARGS = {
         "the steering clamp. Empty (default) leaves the profile value, the params file value or "
         "the node default 0.0 (off)."
     ),
+    "escape_probe_distance_m": (
+        "Reverse escape: the forward path is blocked when no steering gives this much clear "
+        "travel (m), [0.02, 3]. Empty (default) leaves the profile value, the params file value "
+        "or the node default 0.3."
+    ),
 }
 _OPTIONAL_INT_ARGS = {
     "target_range_median_scans": (
@@ -144,6 +163,11 @@ _OPTIONAL_BOOL_ARGS = {
         "true or false: reduce the steering so the car's swept area clears returns beside it "
         "on the turn-in side. Empty (default) leaves the profile value, the params file value "
         "or the node default (true)."
+    ),
+    "reverse_escape": (
+        "true or false: let gap_follow_node REVERSE ON ITS OWN out of a corner it cannot drive "
+        "round (through safety_node's rear corridor). Empty (default) leaves the profile value "
+        "(true in floor-2026-10-06), the params file value or the node default (false)."
     ),
 }
 

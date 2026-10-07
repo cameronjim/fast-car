@@ -270,6 +270,56 @@ struct SweptPathClamp {
 SweptPathClamp clamp_steering_to_swept_path(const ScanInput& scan, double laser_yaw_offset_rad,
                                             double steering_rad, const SweptPathGeometry& geometry);
 
+// Forward arc probe for the reverse escape (reverse_escape.hpp; 2026-10-06 night floor finding
+// (b): nose-in to a corner tighter than the turning circle). "Is there ANY steering that would
+// let the car drive forward `travel_m` without its body touching a return?" If not, the forward
+// path is blocked and backing out is the only way on.
+//
+// GEOMETRY. The same kinematic model as the swept-path clamp: for steering delta the rear axle
+// follows a circle of curvature k = tan(delta) / L (rear-axle frame, x forward, y left). The
+// body is the rectangle x in [-rear_x_m - margin_m, front_x_m + margin_m], |y| <= half_width_m +
+// margin_m about the rear axle, i.e. the bounding box inflated by the margin on every side.
+// Returns are taken from the RAW scan (invalid returns ignored, never filled), turned to the
+// vehicle frame with the laser yaw and shifted by the LiDAR mount into the rear-axle frame.
+// A return already inside the inflated body at the start pose is ignored: it is either the car
+// itself or contact the probe cannot judge (safety_node's job); everything else must stay out
+// of the body at every pose along the arc. The arc is sampled every kArcProbeStepM of
+// rear-axle travel up to and including travel_m; between samples a body corner moves at most
+// that step times hypot(front_x, R + c) / R, about 1.3 times the step at full lock, so a
+// return can only slip between samples within a couple of centimetres of the body, inside
+// the margin.
+//
+// CANDIDATES. kArcProbeCandidates steering angles evenly spaced over [-max, +max] (9: every
+// 0.105 rad at the 0.4189 rad lock), including straight ahead. This is a numerical resolution,
+// not a vehicle constant.
+//
+// forward_arc_clear: true when that one steering's arc is clear for travel_m.
+// any_forward_arc_clear: true when at least one candidate is.
+// Unusable input (scan, yaw, non-positive wheelbase / half width / travel / max steering at or
+// beyond pi/2, negative or non-finite margin / extents / mounts) reports CLEAR: the probe only
+// ever ADDS a reason to back up, so garbage must not invent one (the node refuses to start
+// without the geometry, so this is belt and braces).
+inline constexpr std::size_t kArcProbeCandidates = 9;
+inline constexpr double kArcProbeStepM = 0.02;
+
+struct ArcProbeGeometry {
+  double wheelbase_m = 0.0;      // chassis.wheelbase_m
+  double half_width_m = 0.0;     // chassis.width_m / 2
+  double margin_m = 0.0;         // the follower's safety_margin_m
+  double front_x_m = 0.0;        // rear axle to the front of the body (as for the clamp)
+  double rear_x_m = 0.0;         // rear axle to the rear bumper line, chassis.rear_overhang_m
+  double lidar_mount_x_m = 0.0;  // sensors.lidar.mount_x_m
+  double lidar_mount_y_m = 0.0;  // sensors.lidar.mount_y_m
+};
+
+// `points` is a working buffer (grown, never shrunk) for the returns in the rear-axle frame.
+bool forward_arc_clear(const ScanInput& scan, double laser_yaw_offset_rad, double steering_rad,
+                       double travel_m, const ArcProbeGeometry& geometry,
+                       std::vector<double>& points);
+bool any_forward_arc_clear(const ScanInput& scan, double laser_yaw_offset_rad,
+                           double max_steering_rad, double travel_m,
+                           const ArcProbeGeometry& geometry, std::vector<double>& points);
+
 // Discrete first-order low-pass y += dt / (tau + dt) * (x - y), stable for any dt > 0. A
 // non-finite or non-positive dt holds the previous output (same "no elapsed time, no change"
 // convention as SpeedRateLimiter), so the first sample after construction or reset() holds

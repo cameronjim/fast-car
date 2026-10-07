@@ -30,6 +30,7 @@ add_library(racer_control_core
   src/wall_follow.cpp
   src/pid.cpp
   src/reactive_speed.cpp
+  src/reverse_escape.cpp
 )
 target_include_directories(racer_control_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -131,6 +132,7 @@ if(BUILD_TESTING)
     test/test_laser_scan.cpp
     test/test_gap_follow.cpp
     test/test_wall_follow.cpp
+    test/test_reverse_escape.cpp
   )
   target_link_libraries(test_racer_control_core racer_control_core)
   target_compile_definitions(test_racer_control_core PRIVATE
@@ -157,6 +159,13 @@ if(BUILD_TESTING)
   # parameters take effect, through the real node and its parameter services.
   add_launch_test(test/test_gap_follow_node_profile_launch.py
     TARGET test_gap_follow_node_profile_launch
+    TIMEOUT 120
+  )
+  # Reverse escape (2026-10-06 night floor finding): nose-in with forward refused by a stand-in
+  # for safety_node, the node reverses, completes, resumes; with reverse refused too it aborts,
+  # waits, and holds after escape_max_attempts. Never publishes /drive.
+  add_launch_test(test/test_gap_follow_node_escape_launch.py
+    TARGET test_gap_follow_node_escape_launch
     TIMEOUT 120
   )
   # L1 check of the same argument: launch-description inspection only, no processes started

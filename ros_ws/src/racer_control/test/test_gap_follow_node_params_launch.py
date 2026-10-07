@@ -10,7 +10,8 @@ launch file forwarding them as floats. swept_path_lookahead_m (range [0.01, 10] 
 same check with 0. The speed smoothing parameters (2026-10-06 floor checkpoint) get it too:
 speed_time_constant_s (range [0, 5] s) with 6, and target_range_median_scans (integer range
 [1, 15]) with 0, which also covers the launch file forwarding it as an integer. Lane centring's
-centering_gain (range [0, 5] rad) gets it with -0.1.
+centering_gain (range [0, 5] rad) gets it with -0.1, and the reverse escape's
+escape_probe_distance_m (range [0.02, 3] m) with 0.
 
 Each node runs in its own scoped group so the includes' launch arguments do not leak into
 each other. They share the node name; neither gets far enough to matter.
@@ -67,6 +68,7 @@ def generate_test_description():
             _include(speed_time_constant_s="6"),
             _include(target_range_median_scans="0"),
             _include(centering_gain="-0.1"),
+            _include(escape_probe_distance_m="0"),
             launch_testing.actions.ReadyToTest(),
         ]
     )
@@ -81,10 +83,11 @@ class TestGapFollowNodeParameterRanges(unittest.TestCase):
         proc_output.assertWaitFor("speed_time_constant_s", timeout=30, stream="stderr")
         proc_output.assertWaitFor("target_range_median_scans", timeout=30, stream="stderr")
         proc_output.assertWaitFor("centering_gain", timeout=30, stream="stderr")
+        proc_output.assertWaitFor("escape_probe_distance_m", timeout=30, stream="stderr")
         # Let every process exit on their own before this test returns; otherwise launch
         # shuts them down with SIGINT and the exit code check below sees -2, not 1.
         processes = proc_info.processes()
-        self.assertEqual(len(processes), 6)
+        self.assertEqual(len(processes), 7)
         for process in processes:
             proc_info.assertWaitForShutdown(process=process, timeout=30)
 

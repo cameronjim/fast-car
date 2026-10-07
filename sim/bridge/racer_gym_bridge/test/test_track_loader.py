@@ -7,6 +7,7 @@ import pytest
 from racer_gym_bridge.track_loader import (
     RacelineLoadError,
     build_corridor_occupancy,
+    carve_pocket,
     load_raceline_xy_speed,
 )
 
@@ -118,3 +119,63 @@ def test_corridor_rejects_bad_shapes():
         build_corridor_occupancy(np.array([0.0]), np.array([0.0]), 0.5, 0.05)
     with pytest.raises(ValueError):
         build_corridor_occupancy(np.array([0.0, 1.0]), np.array([0.0]), 0.5, 0.05)
+
+
+# -- carve_pocket (roadmap 2.9: a parking slot for park_node's L5 scenario) --------------------
+
+_LONG_X = np.array([0.0, 10.0, 10.0, 0.0])
+_LONG_Y = np.array([0.0, 0.0, 3.0, 3.0])
+
+
+def _pocket_map(side: str):
+    res = 0.05
+    occ, origin = build_corridor_occupancy(_LONG_X, _LONG_Y, 0.5, res, border_m=1.5)
+    carved = carve_pocket(occ, origin, res, _LONG_X, _LONG_Y, 0.5, 2.0, 1.5, 0.7, side)
+    return occ, carved, origin, res
+
+
+def test_pocket_pushes_the_right_wall_back_over_its_length():
+    occ, carved, origin, res = _pocket_map("right")
+    # The bottom straight runs +x at y = 0; right of travel is -y.
+    assert _cell_value(occ, origin, res, 2.75, -0.9) == 0.0  # wall before carving
+    assert _cell_value(carved, origin, res, 2.75, -0.9) == 255.0  # inside the pocket
+    assert _cell_value(carved, origin, res, 2.75, -1.15) == 255.0  # near the back
+    assert _cell_value(carved, origin, res, 2.75, -1.3) == 0.0  # beyond the back
+    assert _cell_value(carved, origin, res, 1.9, -0.9) == 0.0  # before the pocket
+    assert _cell_value(carved, origin, res, 3.6, -0.9) == 0.0  # after it
+    assert _cell_value(carved, origin, res, 2.75, 0.9) == 0.0  # the left wall is untouched
+    # Nothing else changed, and the input map is not modified.
+    assert np.count_nonzero(carved != occ) > 0
+    assert np.all(carved[occ == 255.0] == 255.0)
+
+
+def test_pocket_on_the_left():
+    _, carved, origin, res = _pocket_map("left")
+    assert _cell_value(carved, origin, res, 2.75, 0.9) == 255.0
+    assert _cell_value(carved, origin, res, 2.75, -0.9) == 0.0
+
+
+def test_pocket_edges_are_within_half_a_cell():
+    _, carved, origin, res = _pocket_map("right")
+    free_x = [
+        x
+        for x in np.arange(1.5, 4.0, 0.01)
+        if _cell_value(carved, origin, res, float(x), -0.9) == 255.0
+    ]
+    assert min(free_x) == pytest.approx(2.0, abs=res / 2 + 0.01)
+    assert max(free_x) == pytest.approx(3.5, abs=res / 2 + 0.01)
+
+
+@pytest.mark.parametrize(
+    "start, length, depth, side",
+    [
+        (2.0, 0.0, 0.7, "right"),
+        (2.0, 1.5, 0.0, "right"),
+        (2.0, 1.5, 0.7, "up"),
+        (25.0, 2.0, 0.7, "right"),
+    ],
+)
+def test_pocket_rejects_bad_input(start, length, depth, side):
+    occ, origin = build_corridor_occupancy(_LONG_X, _LONG_Y, 0.5, 0.05, border_m=1.5)
+    with pytest.raises(ValueError):
+        carve_pocket(occ, origin, 0.05, _LONG_X, _LONG_Y, 0.5, start, length, depth, side)

@@ -179,3 +179,35 @@ def build_odom_fields(
         linear=(float(vx), float(vy), 0.0),
         angular=(0.0, 0.0, float(yaw_rate)),
     )
+
+
+def mirrored_speed_to_accel(
+    target_mps: float, current_mps: float, a_max: float, v_max: float, v_min: float
+) -> float:
+    """Longitudinal acceleration for a speed command, f1tenth_gym's FORWARD gains in both
+    directions (roadmap 2.9, bridge_node ``mirror_reverse_speed_control``).
+
+    f1tenth_gym's own speed controller (``dynamic_models.pid_accl``) uses a proportional gain of
+    ``10 a_max / v_max`` to speed up and ``10 a_max / -v_min`` to brake while the car moves
+    forward, but ``2 a_max / -v_min`` and ``2 a_max / v_max`` while it moves backward. With the
+    gym defaults (a_max 9.51, v_max 20, v_min -5) braking from reverse is 20 times weaker than
+    from forward: a car reversing at 0.5 m/s rolls on about 0.53 m after a zero command, where a
+    forward one stops in about 0.03 m. Nothing about the car says reverse brakes worse; it is the
+    model's asymmetry. This applies the forward branch to the speed's magnitude, so reversing
+    behaves like driving forward mirrored: magnitude growth at ``10 a_max / v_max``, magnitude
+    decay at ``10 a_max / -v_min``. Moving forward (or standing with a non-negative target) it is
+    exactly the gym's forward branch. The result is clipped to [-a_max, a_max]; the gym's own
+    acceleration constraints still apply after it.
+    """
+
+    def forward(target: float, current: float) -> float:
+        diff = target - current
+        if diff > 0.0:
+            return 10.0 * a_max / v_max * diff
+        return 10.0 * a_max / (-v_min) * diff
+
+    if current_mps > 0.0 or (current_mps == 0.0 and target_mps >= 0.0):
+        accel = forward(target_mps, current_mps)
+    else:
+        accel = -forward(-target_mps, -current_mps)
+    return float(min(max(accel, -a_max), a_max))

@@ -198,6 +198,8 @@ def test_car_teleop_includes_vesc_launch_only_when_asked():
         "/telemetry/vesc/temp_motor_degc",
         "/telemetry/vesc/fault",
         "/vesc/sensors/core",
+        # park_node's status line (roadmap 2.9), recorded with the drive it explains.
+        "/park_node/status",
         # Unchanged entries still match.
         "/drive",
         "/scan",
@@ -209,7 +211,9 @@ def test_recorder_regex_keeps_the_vesc_topics(topic):
     assert re.fullmatch(regex, topic), topic
 
 
-@pytest.mark.parametrize("topic", ["/odom", "/odom/wheel_extra", "/vesc/sensors/imu"])
+@pytest.mark.parametrize(
+    "topic", ["/odom", "/odom/wheel_extra", "/vesc/sensors/imu", "/park_node/status_extra"]
+)
 def test_recorder_regex_is_still_anchored(topic):
     regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX
     assert not re.fullmatch(regex, topic), topic

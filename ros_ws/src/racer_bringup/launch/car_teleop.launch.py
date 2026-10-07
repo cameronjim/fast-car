@@ -187,6 +187,9 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.8
 #:                     can never silently drop the VESC's temperatures and faults.
 #:   /vesc/sensors/core the driver's raw VescStateStamped, so /odom/wheel can be re-derived
 #:                     from the bag if gear_ratio or the tyre radius is re-measured later
+#:   /park_node/status park_node's one-line state (phase, stage, dead-reckoned pose, request),
+#:                     when racer_control's park.launch.py runs next to this (roadmap 2.9); its
+#:                     transitions are also in /rosout
 #:   /camera/.../compressed
 #:                     JPEG frames of every camera (optional, cameras:=true or the
 #:                     car-camera container). Only the compressed sub-topic: raw rgb8
@@ -195,7 +198,7 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.8
 #:   /parameter_events which parameters the run actually ran with
 _RECORDED_TOPIC_REGEX = (
     r"^(/drive_raw|/drive|/safety/events|/teleop/cmd_vel|/telemetry/.*|/scan"
-    r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core"
+    r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core|/park_node/status"
     r"|/camera/.*/compressed|/rosout|/parameter_events)$"
 )
 

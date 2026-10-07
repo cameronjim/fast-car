@@ -16,6 +16,7 @@ from racer_gym_bridge.conversions import (
     build_odom_fields,
     build_scan_fields,
     drive_cmd_to_action,
+    mirrored_speed_to_accel,
     quaternion_to_yaw,
     yaw_to_quaternion,
 )
@@ -209,3 +210,34 @@ class TestBuildOdomFields:
             pose_x=0.0, pose_y=0.0, yaw_rad=1.2, vx=0.0, vy=0.0, yaw_rate=0.0
         )
         assert fields.orientation == yaw_to_quaternion(1.2)
+
+
+class TestMirroredSpeedToAccel:
+    """Roadmap 2.9: the gym's forward speed-controller gains, mirrored for reverse."""
+
+    # f1tenth_gym's defaults (F110Env.default_config): a_max, v_max, v_min.
+    A_MAX, V_MAX, V_MIN = 9.51, 20.0, -5.0
+
+    def accel(self, target, current):
+        return mirrored_speed_to_accel(target, current, self.A_MAX, self.V_MAX, self.V_MIN)
+
+    def test_forward_is_the_gyms_forward_branch(self):
+        # Speeding up: 10 a_max / v_max per m/s; braking: 10 a_max / -v_min per m/s.
+        assert self.accel(1.0, 0.5) == pytest.approx(10 * 9.51 / 20 * 0.5)
+        assert self.accel(0.4, 0.5) == pytest.approx(-10 * 9.51 / 5 * 0.1)
+        assert self.accel(0.5, 0.0) == pytest.approx(10 * 9.51 / 20 * 0.5)
+
+    def test_reverse_mirrors_it(self):
+        assert self.accel(-1.0, -0.5) == pytest.approx(-self.accel(1.0, 0.5))
+        assert self.accel(-0.4, -0.5) == pytest.approx(-self.accel(0.4, 0.5))
+        assert self.accel(-0.5, 0.0) == pytest.approx(-self.accel(0.5, 0.0))
+
+    def test_braking_from_reverse_is_as_strong_as_from_forward(self):
+        # From -0.5 m/s to 0: the gym's own controller gives only 2 a_max / v_max * 0.5 = 0.48.
+        assert self.accel(0.0, -0.5) == pytest.approx(9.51)  # clipped at a_max
+        assert self.accel(0.0, -0.05) == pytest.approx(10 * 9.51 / 5 * 0.05)
+
+    def test_clipped_to_a_max(self):
+        assert self.accel(20.0, 0.0) == pytest.approx(9.51)
+        assert self.accel(-20.0, 0.0) == pytest.approx(-9.51)
+        assert self.accel(0.5, -0.5) == pytest.approx(9.51)

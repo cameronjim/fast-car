@@ -122,3 +122,77 @@ def build_corridor_occupancy(
 
     occupancy = np.where(distance <= half_width_m, 255.0, 0.0).astype(np.float32)
     return occupancy, (x0, y0, 0.0)
+
+
+def carve_pocket(
+    occupancy: np.ndarray,
+    origin: tuple[float, float, float],
+    resolution_m: float,
+    x_m: np.ndarray,
+    y_m: np.ndarray,
+    half_width_m: float,
+    start_s_m: float,
+    length_m: float,
+    depth_m: float,
+    side: str,
+) -> np.ndarray:
+    """A copy of a corridor map (``build_corridor_occupancy``) with a POCKET cut into one wall.
+
+    Roadmap 2.9 (park_node's L5 scenario): a parking slot is a recess in a row of obstacles.
+    Along the CLOSED centreline (x_m, y_m), from arc length ``start_s_m`` (measured from the
+    first point, in point order) for ``length_m``, every cell whose centre is on ``side``
+    ("right" or "left" of the direction of travel) at a perpendicular distance between 0 and
+    ``half_width_m + depth_m`` from the centreline is made free (255): the wall on that side is
+    pushed back by ``depth_m`` over that stretch. On a straight stretch the pocket is a
+    rectangle whose edges sit on cell boundaries, within half a cell (``resolution_m`` / 2) of
+    the nominal values. A cell is tested against the centreline segment it projects onto, so the
+    pocket must not span a corner (the caller's job).
+
+    Pure numpy, like ``build_corridor_occupancy``; the map must already be large enough (its
+    border at least ``depth_m`` beyond the corridor).
+    """
+    if side not in ("right", "left"):
+        raise ValueError(f"side must be right or left, got {side!r}")
+    if length_m <= 0.0 or depth_m <= 0.0 or half_width_m <= 0.0 or resolution_m <= 0.0:
+        raise ValueError("length_m, depth_m, half_width_m and resolution_m must be positive")
+    x = np.asarray(x_m, dtype=float)
+    y = np.asarray(y_m, dtype=float)
+    xs = np.append(x, x[0])
+    ys = np.append(y, y[0])
+    seg_len = np.hypot(np.diff(xs), np.diff(ys))
+    s_at = np.concatenate([[0.0], np.cumsum(seg_len)])
+    end_s = start_s_m + length_m
+    if start_s_m < 0.0 or end_s > s_at[-1]:
+        raise ValueError(f"pocket [{start_s_m}, {end_s}] m is outside the loop [0, {s_at[-1]}] m")
+    sign = -1.0 if side == "right" else 1.0
+    reach = half_width_m + depth_m
+    out = occupancy.copy()
+    rows, cols = out.shape
+    x0, y0, _ = origin
+    pad = int(np.ceil(reach / resolution_m)) + 1
+    for i in range(xs.size - 1):
+        if seg_len[i] <= 0.0 or s_at[i + 1] < start_s_m or s_at[i] > end_s:
+            continue
+        ax, ay, bx, by = xs[i], ys[i], xs[i + 1], ys[i + 1]
+        c_lo = max(int(np.floor((min(ax, bx) - x0) / resolution_m)) - pad, 0)
+        c_hi = min(int(np.floor((max(ax, bx) - x0) / resolution_m)) + pad, cols - 1)
+        r_lo = max(int(np.floor((min(ay, by) - y0) / resolution_m)) - pad, 0)
+        r_hi = min(int(np.floor((max(ay, by) - y0) / resolution_m)) + pad, rows - 1)
+        cx = x0 + (np.arange(c_lo, c_hi + 1) + 0.5) * resolution_m
+        cy = y0 + (np.arange(r_lo, r_hi + 1) + 0.5) * resolution_m
+        px, py = np.meshgrid(cx, cy)
+        ux, uy = (bx - ax) / seg_len[i], (by - ay) / seg_len[i]
+        along = (px - ax) * ux + (py - ay) * uy
+        lateral = ux * (py - ay) - uy * (px - ax)  # left positive
+        s = s_at[i] + along
+        inside = (
+            (along >= 0.0)
+            & (along <= seg_len[i])
+            & (s >= start_s_m)
+            & (s <= end_s)
+            & (sign * lateral >= 0.0)
+            & (sign * lateral <= reach)
+        )
+        window = out[r_lo : r_hi + 1, c_lo : c_hi + 1]
+        window[inside] = 255.0
+    return out

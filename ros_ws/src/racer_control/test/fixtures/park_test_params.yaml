@@ -1,0 +1,12 @@
+# Test-only parameters for park_node's launch tests (roadmap 2.9). Loaded through
+# park.launch.py's params_file argument, so the launch tests also cover that path. Short
+# timings keep the tests quick; they are not tuning advice.
+park_node:
+  ros__parameters:
+    blocked_abort_s: 0.5
+    final_hold_s: 0.5
+    settle_s: 0.2
+    search_max_distance_m: 20.0
+    # Synthetic scans here are aligned to the vehicle (yaw 0), not the real car's mount, so the
+    # vehicle_params mount yaw must not be applied.
+    laser_yaw_from_vehicle_params: false

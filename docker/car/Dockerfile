@@ -187,6 +187,97 @@ ENV AMENT_PREFIX_PATH=/opt/racer_thirdparty
 # Refuse the build if a sourced ROS environment cannot see the driver.
 RUN bash -c 'source /opt/ros/humble/setup.bash && ros2 pkg prefix sllidar_ros2'
 
+# --- VESC telemetry: f1tenth vesc_driver + vesc_msgs, pinned, READ-ONLY (added 2026-10-07) ---
+# Wheel odometry from the VESC's sensored motor over its UART (roadmap 2.9's parking and
+# three-point-turn work, and the wheel-speed input of 2.1/2.4). racer_drivers'
+# vesc_odometry_node turns the driver's VescStateStamped into /odom/wheel; see
+# racer_bringup/launch/vesc_telemetry.launch.py and docs/notes/first-boot-runbook.md "VESC
+# telemetry".
+#
+# ADOPTED, NOT WRITTEN (claude-docs/04-architecture.md "build vs adopt"). f1tenth/vesc is the
+# F1TENTH stack's own VESC driver. Of its three packages only vesc_msgs and vesc_driver are
+# built (--packages-select below); vesc_ackermann, which turns /drive into VESC speed and
+# servo commands, is never built, so it cannot be launched from this image by accident.
+#
+# WHICH BRANCH. Checked with `git ls-remote` on 2026-10-07: main (2023-02, ROS 1 lineage),
+# ros2 (2023-03-27), humble and jazzy (same commit, 2025-02-18). Between ros2 and humble,
+# vesc_driver and vesc_msgs differ only in include order, a version bump and one bit-shift
+# literal in the IMU parser (ros2 has the correct `1u << 31`); every functional difference is
+# in vesc_ackermann, which is not built. So the pin is the ros2 branch head, 153998df
+# "Merge pull request #33 from Mailamaca/ros2_humble" (2023-03-27), which already carries the
+# Humble compile fixes. The build refuses unless HEAD is exactly this commit.
+#
+# READ-ONLY PATCH (patches/vesc_driver-readonly.patch, see patches/README.md). Upstream
+# vesc_driver subscribes six command topics (commands/motor/{duty_cycle,current,brake,speed,
+# position}, commands/servo/position) and forwards each to the VESC over the serial link. On
+# this car the motor is commanded ONLY by PPM through the layer-1 mux (CLAUDE.md invariant 1;
+# claude-docs/11-hardware.md), so the patch removes those subscriptions and makes every
+# set-command in VescInterface a no-op: this driver can only ask the VESC for its firmware
+# version and its state. It also fixes three things for a UART link: a `baud` parameter
+# (upstream hard-codes 115200), NO flow control (upstream sets hardware flow control, which on
+# a 3-wire TX/RX/GND UART would wait on a CTS line that is not connected), and copies
+# temp_fet / temp_motor into the message (upstream parses them but leaves them 0). It drops
+# the IMU poll: the car's IMU is the dedicated one, never the VESC's. The RUN below refuses the
+# build if the patched source still contains a subscription or a set-command send.
+#
+# DEPENDENCIES. vesc_driver uses transport_drivers' serial_driver, which is a Humble apt
+# package; asio_cmake_module is listed separately because --no-install-recommends leaves out
+# the CMake module io_context's exported config needs (found replaying this layer in ros-dev,
+# 2026-10-07: "Could not find a package configuration file provided by asio_cmake_module").
+#
+# Same prefix and lookup as sllidar_ros2 above (AMENT_PREFIX_PATH=/opt/racer_thirdparty).
+# Unlike sllidar_node, which links only /opt/ros/humble libraries, these packages put shared
+# libraries and Python modules in the prefix, so three more variables are preset:
+# CMAKE_PREFIX_PATH (racer_drivers COMPILES against vesc_msgs with find_package),
+# LD_LIBRARY_PATH (vesc_driver_node and vesc_odometry_node load libvesc_driver.so and the
+# vesc_msgs typesupport libraries from it) and PYTHONPATH (vesc_msgs' Python module, for
+# `ros2 topic echo` and the launch tests). All three keep whatever the base image already set,
+# and /opt/ros/humble/setup.bash and a workspace's setup.bash prepend to them, never reset
+# them, so the usual two `source` lines still find everything. The car-runtime PYTHONPATH
+# line further down prepends to this one in turn. Replayed in the ros-dev image (jammy,
+# Humble, arm64) on 2026-10-07: both packages build, the checks pass, the patched driver runs
+# against a pseudo-terminal fake VESC with no subscriptions, and racer_drivers builds and
+# tests against it. The car image itself has not been rebuilt with this layer.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-serial-driver \
+        ros-humble-asio-cmake-module \
+    && rm -rf /var/lib/apt/lists/*
+ARG VESC_REPO=https://github.com/f1tenth/vesc.git
+ARG VESC_COMMIT=153998df8545fe1781b975df88e411b4e71d4bfe
+COPY patches/vesc_driver-readonly.patch /tmp/vesc_driver-readonly.patch
+# hadolint ignore=SC1091
+RUN set -e; \
+    git clone --quiet --no-checkout "$VESC_REPO" /tmp/thirdparty_ws/src/vesc; \
+    git -C /tmp/thirdparty_ws/src/vesc checkout --quiet --detach "$VESC_COMMIT"; \
+    test "$(git -C /tmp/thirdparty_ws/src/vesc rev-parse HEAD)" = "$VESC_COMMIT"; \
+    git -C /tmp/thirdparty_ws/src/vesc apply /tmp/vesc_driver-readonly.patch; \
+    if grep -n "create_subscription" /tmp/thirdparty_ws/src/vesc/vesc_driver/src/vesc_driver.cpp; then \
+        echo "ERROR: patched vesc_driver still subscribes a topic; refusing (read-only driver)." >&2; \
+        exit 1; \
+    fi; \
+    if grep -n "send(VescPacketSet" /tmp/thirdparty_ws/src/vesc/vesc_driver/src/vesc_interface.cpp; then \
+        echo "ERROR: patched vesc_driver can still send a set-command; refusing." >&2; \
+        exit 1; \
+    fi; \
+    . /opt/ros/humble/setup.sh; \
+    colcon --log-base /tmp/thirdparty_ws/log build --base-paths /tmp/thirdparty_ws/src \
+        --packages-select vesc_msgs vesc_driver \
+        --build-base /tmp/thirdparty_ws/build --merge-install --install-base /opt/racer_thirdparty \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF; \
+    rm -rf /tmp/thirdparty_ws /tmp/vesc_driver-readonly.patch
+ENV CMAKE_PREFIX_PATH=/opt/racer_thirdparty
+ENV LD_LIBRARY_PATH=/opt/racer_thirdparty/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+ENV PYTHONPATH=/opt/racer_thirdparty/local/lib/python3.10/dist-packages${PYTHONPATH:+:${PYTHONPATH}}
+# Refuse the build if a sourced ROS environment cannot see the driver, its executable, or the
+# message, or if vesc_ackermann got built after all.
+RUN bash -c 'source /opt/ros/humble/setup.bash \
+    && ros2 pkg prefix vesc_driver && ros2 pkg prefix vesc_msgs \
+    && ros2 pkg executables vesc_driver | grep -q vesc_driver_node \
+    && ros2 interface show vesc_msgs/msg/VescStateStamped > /dev/null \
+    && python3 -c "from vesc_msgs.msg import VescStateStamped" \
+    && ! ldd /opt/racer_thirdparty/lib/vesc_driver/vesc_driver_node | grep -q "not found" \
+    && ! ros2 pkg prefix vesc_ackermann 2>/dev/null'
+
 # --- Jetson torch: OPTIONAL for the control-stack phase ---------------------------------
 # NVIDIA publishes JetPack-version-matched torch wheels at
 # https://developer.download.nvidia.com/compute/redist/jp/ (one subdirectory per JetPack

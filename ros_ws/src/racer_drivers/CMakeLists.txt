@@ -14,6 +14,12 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(ackermann_msgs REQUIRED)
+# vesc_odometry_node (VESC telemetry, read-only). vesc_msgs is NOT an apt package: it is built
+# from f1tenth/vesc at a pinned commit into /opt/racer_thirdparty, by docker/car/Dockerfile on
+# the car and docker/ros-dev/Dockerfile for CI, and found through AMENT_PREFIX_PATH.
+find_package(nav_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(vesc_msgs REQUIRED)
 
 # -- ROS-free core library (claude-docs/10-conventions.md: decision logic separated from node
 #    plumbing; same shape as racer_safety's racer_safety_core) --------------------------------
@@ -69,7 +75,18 @@ target_include_directories(pwm_output_node PRIVATE "${RACER_GENERATED_DIR}")
 target_link_libraries(pwm_output_node racer_drivers_pwm_core)
 ament_target_dependencies(pwm_output_node rclcpp rcl_interfaces ackermann_msgs)
 
-install(TARGETS pwm_output_node
+# -- vesc_odometry_node executable (VESC UART telemetry -> /odom/wheel + /telemetry/vesc/*) ------
+# Header-only ROS-free conversion (include/racer_drivers/vesc_odometry.hpp); the node is the
+# only translation unit that sees the generated binding, like pwm_output_node.
+add_executable(vesc_odometry_node src/vesc_odometry_node.cpp)
+add_dependencies(vesc_odometry_node racer_drivers_generate_vehicle_params)
+target_include_directories(vesc_odometry_node PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${RACER_GENERATED_DIR}"
+)
+ament_target_dependencies(vesc_odometry_node rclcpp rcl_interfaces nav_msgs std_msgs vesc_msgs)
+
+install(TARGETS pwm_output_node vesc_odometry_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -92,6 +109,22 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_racer_drivers_pwm_core racer_drivers_pwm_core)
 
+  # L1: vesc_odometry.hpp arithmetic, integrator and fault names, on fixture values only.
+  ament_add_gtest(test_vesc_odometry test/test_vesc_odometry.cpp)
+  target_include_directories(test_vesc_odometry PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  # L1: the same conversion pinned against the REAL vehicle_params (generated binding) and the
+  # newest committed VESC Tool motor export's l_max_erpm, which must reproduce
+  # actuation.throttle_full_scale_mps.
+  ament_add_gtest(test_vesc_odometry_binding test/test_vesc_odometry_binding.cpp)
+  add_dependencies(test_vesc_odometry_binding racer_drivers_generate_vehicle_params)
+  target_include_directories(test_vesc_odometry_binding PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${RACER_GENERATED_DIR}"
+  )
+  target_compile_definitions(test_vesc_odometry_binding PRIVATE
+    RACER_VESC_CONFIG_DIR="${RACER_REPO_ROOT}/config/vesc"
+  )
+
   # L1 unit tests for the ROS-free INA3221 parsing/discovery half of rail_voltage_node.
   # racer_drivers is skipped by .github/scripts/run_python_tests.sh (see its comment), so
   # these run here, in the l3-and-cpp CI job's colcon test.
@@ -110,6 +143,11 @@ if(BUILD_TESTING)
   )
   add_launch_test(test/test_pwm_output_node_clock_launch.py
     TARGET test_pwm_output_node_clock_launch
+    TIMEOUT 120
+  )
+  # L3: vesc_odometry_node fed synthetic vesc_msgs/VescStateStamped (no driver, no serial).
+  add_launch_test(test/test_vesc_odometry_node_launch.py
+    TARGET test_vesc_odometry_node_launch
     TIMEOUT 120
   )
 endif()

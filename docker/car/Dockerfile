@@ -187,6 +187,51 @@ ENV AMENT_PREFIX_PATH=/opt/racer_thirdparty
 # Refuse the build if a sourced ROS environment cannot see the driver.
 RUN bash -c 'source /opt/ros/humble/setup.bash && ros2 pkg prefix sllidar_ros2'
 
+# --- Cameras: OPTIONAL subsystem, outside the thesis (added 2026-10-07) ------------------
+# Cameras are for detection experiments and training-data collection; nothing in the command
+# path reads them. Everything here comes from apt (both drivers are released for Humble on
+# arm64: ros-humble-usb-cam 0.8.1 and ros-humble-gscam 2.0.2, checked in the jammy arm64
+# package index on 2026-10-06), so unlike sllidar_ros2 above there is no source build to pin.
+#
+#   ros-humble-usb-cam                 the USB/UVC camera (ELP AR0234), camera_usb.launch.py
+#   ros-humble-gscam                   GStreamer -> ROS, used with an nvarguscamerasrc pipeline
+#                                      for the IMX219 CSI camera, camera_csi.launch.py. Chosen
+#                                      over gscam2 (not in apt) and isaac_ros_argus_camera (needs
+#                                      the Isaac ROS container); the launch file says why.
+#   ros-humble-image-transport-plugins the compressed (JPEG) transport, so every camera also
+#                                      publishes image_raw/compressed, the topic the bag takes
+#   gstreamer1.0-tools / -plugins-base / -plugins-good
+#                                      gst-inspect-1.0 and gst-launch-1.0 for the bring-up
+#                                      checks, videoconvert (the last element of the CSI
+#                                      pipeline), jpegenc for a one-frame snapshot test
+#   v4l-utils                          v4l2-ctl, to list the USB camera's modes
+#
+# nvarguscamerasrc and nvvidconv are NOT installed here and NOT checked at build time: they
+# are NVIDIA's L4T GStreamer plugins, and the libargus client they need is provided from the
+# HOST by the NVIDIA container runtime (`--runtime nvidia`) when the car-camera container
+# starts, together with the host's /tmp/argus_socket. A build has neither. Whether the runtime
+# on this JetPack 6.2.1 host actually exposes them is checked on first power-up with
+# `gst-inspect-1.0 nvarguscamerasrc` inside the container (docs/notes/first-boot-runbook.md
+# "Cameras first power-up"); UNVERIFIED until then.
+#
+# These are not exec_depends of racer_bringup, for the same reason as sllidar_ros2: CI's
+# ros-dev image does not carry them and nothing in the core stack needs them.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-usb-cam \
+        ros-humble-gscam \
+        ros-humble-image-transport-plugins \
+        gstreamer1.0-tools \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        v4l-utils \
+    && rm -rf /var/lib/apt/lists/*
+# Refuse the build if a sourced ROS environment cannot see either driver or the compressed
+# transport, or GStreamer has no videoconvert.
+RUN bash -c 'source /opt/ros/humble/setup.bash \
+    && ros2 pkg prefix usb_cam && ros2 pkg prefix gscam \
+    && ros2 pkg prefix compressed_image_transport \
+    && gst-inspect-1.0 videoconvert > /dev/null'
+
 # --- Jetson torch: OPTIONAL for the control-stack phase ---------------------------------
 # NVIDIA publishes JetPack-version-matched torch wheels at
 # https://developer.download.nvidia.com/compute/redist/jp/ (one subdirectory per JetPack

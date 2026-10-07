@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast DDS profile: UDPv4 only, no shared-memory transport. For the car-camera container
+  (docker/car/README.md "Cameras"; docs/notes/first-boot-runbook.md "Cameras first power-up").
+
+  Why: car-stack and car-camera both run with host networking but each has its own IPC
+  namespace and its own /dev/shm. Fast DDS sees the same host address on both sides, so by
+  default it moves data between them through shared-memory segments that the other container
+  cannot open: discovery works (topics are listed) but no messages arrive. Loading this profile
+  in car-camera only (FASTRTPS_DEFAULT_PROFILES_FILE) makes its participants announce UDP
+  locators only, so car-stack's recorder and Foxglove bridge talk to it over loopback UDP and
+  car-stack's own run command does not change. The alternative is `ipc: host` on BOTH
+  containers.
+
+  Pick it up with:
+    -e FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/ros_ws/src/racer_bringup/config/fastdds_udp_only.xml
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>racer_udpv4_only</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="racer_udpv4_only_participant" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>racer_udpv4_only</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

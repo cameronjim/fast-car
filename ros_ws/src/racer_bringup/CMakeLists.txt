@@ -27,6 +27,10 @@ if(BUILD_TESTING)
   # (and refused on a null mount field), the driver's /scan remap. Description inspection
   # only, so sllidar_ros2, which only the car image builds, is never started.
   ament_add_pytest_test(test_lidar_launch test/test_lidar_launch.py)
+  # L1 check of the optional camera launches (camera_usb, camera_csi, cameras) and
+  # car_teleop.launch.py's `cameras` argument and recorder regex. Description inspection only:
+  # usb_cam and gscam are installed in the car image, not in ros-dev, and are never started.
+  ament_add_pytest_test(test_camera_launch test/test_camera_launch.py)
 
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_car_teleop_launch.py

@@ -1896,6 +1896,34 @@ a corner it cannot make and watch one escape. Kill switch in a second person's h
 it. Details in `docs/notes/reactive-control-port-2026-10-05.md` ("Lane centring", "Reverse
 escape") and the runbook's "Gap follow from the launch file".
 
+## 2026-10-07: outer-corner band of the arc corridor gets a short horizon (vehicle_params 0.12.0)
+
+Floor finding (bags `2026-10-07T05-43-31` and later, floor 0.30 m, brake 0.45 s): on a 1.1 m
+lane the car still braked mid-corner. At full lock the brake band spanned radii 0.54 to 1.05 m
+from the turn centre, the whole lane, because the outer front corner's sweep was checked up to
+a quarter turn ahead; the follower straightens the steering within a few tenths of a second, so
+that outer wall is never reached.
+
+Change (racer_safety, not yet run on the car): the arc corridor is two bands. The body band
+(the rear-axle path, half width plus margin either side) is checked to the quarter turn as
+before; the outer-corner band (from there out to the corner's sweep) only within the new
+required `limits.outer_corner_horizon_m`, PROVISIONAL 0.45 m (about one body length), NOT
+tuned. The rear corridor gets the same split on `rear_overhang_m`. The distance for TTC and the
+floor is still the arc length; latches, hysteresis, steering hold and release are unchanged.
+Details in `docs/notes/ttc-limit-cycle-2026-10-06.md`, "Outer-corner horizon".
+
+Also fixed on this branch: the L3 test of the latch release by steering away put its wall
+0.345 m ahead (1.15 x the new 0.30 m floor) with its near end 2 cm right of the centreline,
+which since schema 0.11.0 is inside the outer front corner's sweep, so the latch rightly held
+and the test (and the two after it, which inherit the latch) failed on PR 102. The wall's near
+end is now 15 cm right of the centreline, the same scene as the gtest's `clear_wall()`.
+
+Sim (ros-dev image, before -> after): corridor lap canary 26.00 -> 26.11 s counter-clockwise
+and 26.08 -> 26.07 s clockwise for two laps; escape canary square corner 25.95 -> 26.04 s with
+1 -> 1 escape, round corner 26.40 -> 26.39 s with 1 -> 1 escape and no wall contact. The sim
+lane is the same 1.1 m but the canary counts escapes, not brakes, so the floor effect has to be
+checked on the floor: count brakes per lap against bag 05-43-31 (36 in 160 s), and check a car
+that turns in late toward the outer wall still brakes before the nose touches it.
 ## 2026-10-07: camera bring-up software (optional, outside the thesis), nothing run on the car
 
 Cameras are an optional side subsystem for detection experiments and training data. They are

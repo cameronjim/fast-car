@@ -446,7 +446,8 @@
         "envelope_fraction_speed", "envelope_fraction_lateral_accel",
         "mux_watchdog_timeout_s", "mux_kill_switch_threshold_us",
         "min_forward_clearance_m", "ttc_forward_sector_half_angle_rad",
-        "obstacle_steering_hold_after_s", "obstacle_corridor_margin_m"
+        "obstacle_steering_hold_after_s", "obstacle_corridor_margin_m",
+        "outer_corner_horizon_m"
       ],
       "properties": {
         "global_speed_cap_mps": {
@@ -487,6 +488,12 @@
           "units": "m",
           "sign_convention": "symmetric about the vehicle's +x axis (base_link, REP-103); applied to |y| of each return after sensors.lidar.mount_yaw_rad",
           "description": "Lateral margin of racer_safety/safety_node's obstacle-gate path corridor (added 2026-10-06, schema 0.9.0). A LiDAR return at vehicle bearing theta and range r (x = r cos theta ahead, y = r sin theta left) counts for the TTC brake and the distance floor only if x > 0, |theta| <= ttc_forward_sector_half_angle_rad (the outer bound) and |y| <= chassis.width_m / 2 + this margin (the primary filter); the distance used is x, not r. Added after the first floor test, where a bag 0.3 m beside the car's path braked it like a bag straight ahead. The committed value is PROVISIONAL, not tuned."
+        },
+        "outer_corner_horizon_m": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 5,
+          "units": "m",
+          "sign_convention": "arc length along the requested steering arc, measured like the obstacle gate's in-path distance (from the LiDAR head going forward, from the rear bumper line going backward); positive",
+          "description": "Arc horizon of the OUTER-CORNER band of racer_safety/safety_node's arc corridor (added 2026-10-07, schema 0.12.0). The arc corridor is split in two: the BODY band, the rear-axle path swept by chassis.width_m / 2 + obstacle_corridor_margin_m either side, checked out to a quarter turn; and the OUTER-CORNER band, from that band's outer edge out to the outer leading corner's sweep (hypot(wheelbase_m + front_overhang_m, R + half width) forward, hypot(rear_overhang_m, R + half width) backward), in which a return counts only if its arc distance is at most this value. Reason: on a 1.1 m lane the outer-corner band projected a quarter turn ahead put the whole lane in the brake band at full lock, and the car braked mid-corner on walls it never reaches because the follower straightens the steering within a few tenths of a second. The committed value is PROVISIONAL (about one body length), not tuned."
         },
         "obstacle_steering_hold_after_s": {
           "type": "number", "minimum": 0, "maximum": 10,

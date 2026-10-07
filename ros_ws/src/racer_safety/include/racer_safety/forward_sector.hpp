@@ -54,10 +54,13 @@
 //     from the turn centre is rho = hypot(xr, yr - R). It is in the swept band if
 //       |R| - corridor_half_width_m <= rho <= hypot(body_front_x_m, |R| + corridor_half_width_m)
 //     (corridor_half_width_m is the same half width as the straight corridor; see "OUTER
-//     BOUNDARY" below for the outer edge).
+//     BOUNDARY" below for the outer edge). The band is two bands (see "OUTER-CORNER HORIZON"
+//     below): the BODY band up to |R| + corridor_half_width_m, and the OUTER-CORNER band
+//     beyond it out to the corner's sweep.
 //   * Its arc angle from the car's position, measured around the turn centre in the direction
 //     of travel, is phi = atan2(xr, |R| - sign(R) yr). It counts only if 0 < phi < pi/2:
-//     nothing behind the rear axle and nothing beyond a quarter turn.
+//     nothing behind the rear axle and nothing beyond a quarter turn. A return in the
+//     outer-corner band also needs its distance (below) <= outer_corner_horizon_m.
 //   * The distance handed to the gate is the ARC LENGTH the rear axle travels until the head
 //     reaches the return's angle, |R| (phi - phi_head), phi_head being the head's own arc
 //     angle, and it must be > 0 (the return is ahead of the head along the arc). REFERENCE:
@@ -84,6 +87,27 @@
 // angle, like every other arc return: the reference is the head, as for the clearance floor,
 // not the corner. With body_front_x_m = 0 the band is the old |rho - |R|| <= half width.
 //
+// OUTER-CORNER HORIZON (2026-10-07, floor bags 2026-10-07T05-43-31 and later, floor 0.30 m,
+// brake 0.45 s). With the outer edge above, the brake band at full lock spans radii 0.54 to
+// 1.05 m from the turn centre, the whole 1.1 m lane, and the outer front corner's sweep was
+// projected out to a quarter turn (about 0.89 m of arc from the head at full lock). The
+// follower straightens the steering within a few tenths of a second, so the outer wall two car
+// lengths round the arc is never reached, yet it braked the car mid-corner on every lap. So the
+// band is split, with different horizons:
+//   * BODY band, |R| - corridor_half_width_m <= rho <= |R| + corridor_half_width_m: the path the
+//     body width sweeps along the rear-axle arc. Checked out to the quarter turn, as before.
+//   * OUTER-CORNER band, |R| + corridor_half_width_m < rho <= hypot(body_front_x_m,
+//     |R| + corridor_half_width_m): only the outer leading corner sweeps it. Checked only while
+//     the return's distance (the same arc length handed to the gate) is <= the short horizon
+//     PathGeometry::outer_corner_horizon_m, vehicle_params limits.outer_corner_horizon_m
+//     (schema 0.12.0, PROVISIONAL 0.45 m, about one body length). Beyond it the return is
+//     ignored. That still catches what the band was added for (2026-10-06 round corner: the
+//     corner meets the wall within the first few tenths of a metre of arc) and drops the far
+//     outer wall that a car holding full lock for a quarter turn would only reach in theory.
+// The distance for TTC and the floor is unchanged: the arc length from the head. The straight
+// corridor is unchanged. The rear corridor applies the same split with rear_overhang_m and the
+// same horizon. With the horizon at +infinity the band is the pre-0.12.0 one.
+//
 // WHICH STEERING. The path is the one the car is being ASKED to drive, the bounds-clamped
 // /drive_raw steering, not the gate's rate-limited or held output. That is what lets a latched
 // car release by steering away from what it braked for, even while the steering hold has
@@ -107,6 +131,7 @@
 #ifndef RACER_SAFETY_FORWARD_SECTOR_HPP_
 #define RACER_SAFETY_FORWARD_SECTOR_HPP_
 
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -154,6 +179,10 @@ struct PathGeometry {
   // outer front corner's sweep is the arc band's outer edge ("OUTER BOUNDARY"). 0 gives the
   // pre-0.11.0 band, |R| + half width.
   double body_front_x_m = 0.0;
+  // limits.outer_corner_horizon_m: a return in the outer-corner band counts only if its arc
+  // distance is at most this ("OUTER-CORNER HORIZON"); forward and rear alike. +infinity (the
+  // default) gives the pre-0.12.0 band, checked to the quarter turn.
+  double outer_corner_horizon_m = std::numeric_limits<double>::infinity();
 };
 
 // Below this |clamped steering| the path is treated as straight (a numerical guard, not a
@@ -172,8 +201,9 @@ inline constexpr double kStraightSteeringEpsilonRad = 1e-3;
 // angle_increment is not positive, laser_yaw_rad/half_angle_rad are non-finite or
 // half_angle_rad is not positive, corridor_half_width_m is non-finite or not positive, the
 // wheelbase is non-finite or not positive, the max steering angle is non-finite, negative or
-// not below pi/2, a mount offset is non-finite, body_front_x_m is non-finite or negative, or
-// the requested steering is non-finite, the in-path test cannot be trusted, so the result is
+// not below pi/2, a mount offset is non-finite, body_front_x_m is non-finite or negative,
+// outer_corner_horizon_m is NaN or not positive (+infinity is allowed: no cap), or the
+// requested steering is non-finite, the in-path test cannot be trusted, so the result is
 // the minimum slant range r over EVERY usable return (the pre-2026-10-06 whole-scan
 // behaviour). That sees every return either corridor could have counted, never fewer.
 double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
@@ -197,10 +227,11 @@ double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float
 //     corridor_half_width_m, and the distance is xm - rear_overhang_m, which must be > 0.
 //   * Arc: in the swept band if |R| - corridor_half_width_m <= hypot(xm, ym - R) <=
 //     hypot(rear_overhang_m, |R| + corridor_half_width_m) (the inner flank, and the OUTER REAR
-//     corner's sweep: backing up, the rear bumper line leads, "OUTER BOUNDARY"), arc angle
-//     phi = atan2(xm, |R| - sign(R) ym) in (0, pi/2), and the distance is the arc length the
-//     rear axle travels until the rear bumper line's centre reaches the return's angle,
-//     |R| (phi - atan2(rear_overhang_m, |R|)), which must be > 0.
+//     corner's sweep: backing up, the rear bumper line leads, "OUTER BOUNDARY"; beyond
+//     |R| + corridor_half_width_m only within outer_corner_horizon_m, "OUTER-CORNER HORIZON"),
+//     arc angle phi = atan2(xm, |R| - sign(R) ym) in (0, pi/2), and the distance is the arc
+//     length the rear axle travels until the rear bumper line's centre reaches the return's
+//     angle, |R| (phi - atan2(rear_overhang_m, |R|)), which must be > 0.
 //   * REFERENCE: the REAR BUMPER LINE, rear_overhang_m (chassis.rear_overhang_m, schema
 //     0.10.0) behind the rear axle. The forward corridor is measured from the LiDAR head (about
 //     0.15 m behind the front bumper on this car), the rear one from the bumper itself: the

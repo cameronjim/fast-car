@@ -111,6 +111,34 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# Values at 0.12.0 (same day, owner's floor pass): ttc_brake_s 0.3, ttc_warning_s 0.45,
+# min_forward_clearance_m 0.25. The owner drove 0.45/0.6/0.30 and still found the brake early
+# in corners; these are the numbers driven on the floor after that, edited on the Jetson and
+# committed here so the branch matches the car. 0.25 m from the head is about 0.10 m ahead of
+# the bumper: this is the floor of the floor. Do not go lower without the outer-corner horizon
+# evidence from a bag.
+#
+# schema_version bumped 0.11.1 -> 0.12.0 on 2026-10-07: new REQUIRED field
+# limits.outer_corner_horizon_m, PROVISIONAL 0.45 m (about one body length), NOT tuned. Floor
+# finding (bags 2026-10-07T05-43-31 and later, floor 0.30 m, brake 0.45 s): on a 1.1 m lane the
+# car still braked mid-corner. At full lock the brake band spanned radii 0.54 to 1.05 m from
+# the turn centre, the whole lane, because racer_safety projected the outer front corner's
+# sweep up to a quarter turn ahead; the follower straightens the steering within a few tenths
+# of a second, so the outer wall two car lengths round the arc is never reached. The arc
+# corridor is now two bands: the BODY band (the rear-axle path swept by the half width plus
+# margin) checked to the quarter turn as before, and the OUTER-CORNER band (from there out to
+# the corner's sweep) checked only within this many metres of arc. The rear corridor gets the
+# same split. A new required field changes the schema's required-field set, so this is a minor
+# bump per rule 5. No existing value changed.
+#
+# schema_version bumped 0.11.0 -> 0.11.1 on 2026-10-07: limits.ttc_brake_s 0.6 -> 0.45,
+# ttc_warning_s 0.75 -> 0.6, min_forward_clearance_m 0.40 -> 0.30. First laps with the full
+# PR 101 stack (bag 2026-10-07T05-43-31): 36 brakes in 160 s, 21 of them the clearance floor at
+# 0.39 to 0.40 m, nearly all mid-corner with the lane's outer wall 0.3 to 0.4 m away. With the
+# outer-front-corner sweep the brake band at full lock spans the whole 1.1 m lane, so a 0.40 m
+# floor along the arc fires on every corner and the car escapes and retries instead of turning.
+# Value change only: patch bump per rule 5. Still PROVISIONAL.
+#
 # schema_version bumped 0.10.0 -> 0.11.0 on 2026-10-06 (night): new REQUIRED field
 # chassis.front_overhang_m, PROVISIONAL 0.13 m, NOT measured. Sim finding (the escape scenario
 # on a round corner): at full lock the car's OUTER FRONT CORNER sweeps a circle of radius
@@ -551,8 +579,8 @@ limits:
   # bug, fixed in racer_safety, but the threshold was also too small. Release of the latched
   # brake needs the requested speed's TTC to exceed ttc_warning_s, so the warning value is
   # also the brake's release point.
-  ttc_warning_s: 0.75               # PROVISIONAL (crawl-speed pass 2026-10-06 late: release line, see 0.9.4 note)
-  ttc_brake_s: 0.6                  # PROVISIONAL (crawl-speed pass 2026-10-06 late, see 0.9.4 note)
+  ttc_warning_s: 0.45               # PROVISIONAL (owner floor pass 2026-10-07: release line, see 0.12.0 note)
+  ttc_brake_s: 0.3                  # PROVISIONAL (owner floor pass 2026-10-07, see 0.12.0 note)
   # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
   # nearest valid return inside the forward sector below is closer than this, forward throttle
   # is held at zero whatever the requested speed, with the same latch as the TTC brake
@@ -561,7 +589,7 @@ limits:
   # when the obstacle is centimetres away. PROVISIONAL, NOT measured: 0.30 m is the
   # 2026-10-06 bench obstacle distance (0.22 m) plus a margin, chosen so that case brakes.
   # Replace with a value from measured coast-down distance at teleop speeds (roadmap phase 2).
-  min_forward_clearance_m: 0.40     # PROVISIONAL (crawl-speed pass 2026-10-06 late; measured from the LiDAR head, about 0.25 m ahead of the bumper)
+  min_forward_clearance_m: 0.25     # PROVISIONAL (owner floor pass 2026-10-07; measured from the LiDAR head, about 0.10 m ahead of the bumper)
   # Half angle of the forward sector, in the VEHICLE frame (base_link, x forward, left
   # positive). Since schema 0.9.0 (2026-10-06 floor test) this is only the OUTER bound of the
   # obstacle gate's in-path test: no return outside it is ever considered, whatever
@@ -585,6 +613,20 @@ limits:
   # than the bounding box; widen it if the car clips things it should have braked for, narrow
   # it if bags beside the path still brake it.
   obstacle_corridor_margin_m: 0.05  # PROVISIONAL (floor-test choice 2026-10-06, NOT tuned) -- see above
+  # Arc horizon of the obstacle gate's OUTER-CORNER band (added 2026-10-07, schema 0.12.0).
+  # racer_safety's arc corridor is the BODY band (the rear-axle path, chassis.width_m / 2 +
+  # obstacle_corridor_margin_m either side), checked out to a quarter turn, plus the
+  # OUTER-CORNER band from there out to the outer leading corner's sweep, hypot(wheelbase_m +
+  # front_overhang_m, R + half width) forward (rear_overhang_m backward). A return in the
+  # outer-corner band counts only if its arc distance (the same distance the TTC brake and the
+  # floor use) is at most this. Reason: projected a quarter turn ahead, that band put the whole
+  # 1.1 m lane in the brake band at full lock and the car braked mid-corner on walls it never
+  # reaches (see the 0.12.0 header note). PROVISIONAL, NOT tuned: 0.45 m is about one body
+  # length (bumper to bumper 0.58 m, head to front bumper about 0.18 m), long enough for the
+  # 2026-10-06 round-corner sim escape canary to brake before the corner touches the wall.
+  # Lengthen it if the outer corner clips things on the floor; shorten it if outer walls still
+  # brake the car mid-corner.
+  outer_corner_horizon_m: 0.45      # PROVISIONAL (lane pass 2026-10-07, about one body length, NOT tuned) -- see above
   # Steering hold on the obstacle latch (added 2026-10-06 late, schema 0.8.0). A TTC or
   # clearance brake zeroes forward throttle and keeps steering live, because a car braking at
   # speed must keep steering authority. Once the latch has held the OUTPUT speed at exactly
@@ -626,10 +668,11 @@ meta:
   # limits.obstacle_corridor_margin_m is PROVISIONAL. Added 2026-10-06 night (schema 0.10.0):
   # chassis.rear_overhang_m is PROVISIONAL (a placeholder, not measured). Added 2026-10-06 night
   # (schema 0.11.0): chassis.front_overhang_m is PROVISIONAL (a placeholder, not measured).
+  # Added 2026-10-07 (schema 0.12.0): limits.outer_corner_horizon_m is PROVISIONAL (not tuned).
   # sysid_session_id stays
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.11.0"
+  schema_version: "0.12.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

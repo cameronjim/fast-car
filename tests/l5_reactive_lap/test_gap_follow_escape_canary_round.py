@@ -12,7 +12,10 @@ while safety_node's arc corridor used to end at R + half width + margin, 0.947 m
 scenario the outer corner scraped the outside wall before the brake fired. Since schema 0.11.0
 the corridor's outer edge is the outer front corner's sweep (with the margin, 1.053 m;
 racer_safety forward_sector.hpp "OUTER BOUNDARY"), so the brake must fire before contact, then
-the reverse escape backs the car out and the lap is finished. The floor profile's
+the reverse escape backs the car out and the lap is finished. Since schema 0.12.0 that
+outer-corner band is checked only within limits.outer_corner_horizon_m of arc (0.45 m,
+forward_sector.hpp "OUTER-CORNER HORIZON"); this canary is the check that the horizon is still
+long enough to brake before the corner touches the wall. The floor profile's
 escape_probe_distance_m is 0.5 m, not the node default 0.3 m, so the follower backs out
 instead of waiting on a latch that releases only at 0.6 m (gap_follow.launch.py).
 

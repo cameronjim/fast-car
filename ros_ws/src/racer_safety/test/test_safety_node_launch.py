@@ -796,16 +796,23 @@ class TestSafetyNode(unittest.TestCase):
         scan_pub = self.node.create_publisher(LaserScan, "/scan", _best_effort_qos())
         self._spin_for(0.3)
 
-        request_mps = 1.0
         # The bag's wall was 0.33 m ahead; keep it 15 percent beyond the configured clearance
-        # floor (0.40 m since the crawl-speed pass) so TTC, not the floor, engages. Further
-        # out the full-lock-LEFT arc clears the segment by more, not less.
+        # floor so TTC, not the floor, engages. Further out the full-lock-LEFT arc clears the
+        # segment by more, not less. The request is raised with the wall so the wall's TTC
+        # stays at 80 percent of the configured brake threshold as that threshold is tuned.
         wall_m = max(0.33, 1.15 * _MIN_FORWARD_CLEARANCE_M)
+        request_mps = max(1.0, wall_m / (0.8 * _TTC_BRAKE_S))
         self.assertLess(wall_m / request_mps, _TTC_BRAKE_S)
-        # 0.33 m ahead, from 2 cm right of the centreline out to 0.6 m right: in the straight
-        # corridor, clear of the full-lock-LEFT arc (its outer edge passes about 3 cm off the
-        # wall's inner end with the committed wheelbase, lock, mount and corridor width).
-        wall_scan = _make_segment_scan(x_m=wall_m, y_from_m=-0.02, y_to_m=-0.60)
+        # From 15 cm right of the centreline out to 0.6 m right: in the straight corridor
+        # (half width 0.205 m), and clear of the full-lock-LEFT arc including the outer
+        # (right) front corner's sweep (forward_sector.hpp "OUTER BOUNDARY", 1.053 m from the
+        # turn centre with the margin; the near end is about 1.09 m out at 0.345 m ahead). The
+        # bag's own near end, 2 cm right, is inside that sweep: steering away, the corner would
+        # clip it, so that latch rightly holds (test_arc_corridor.cpp
+        # TheBagsOwnWallHoldsTheLatchAtFullLockAwayBecauseTheCornerWouldClipIt). Same scene as
+        # the gtest's clear_wall(). With the 0.40 m floor the wall sat at 0.46 m, outside the
+        # sweep even from 2 cm; the 0.30 m floor (schema 0.11.1) brought it inside.
+        wall_scan = _make_segment_scan(x_m=wall_m, y_from_m=-0.15, y_to_m=-0.60)
         self.assertLess(wall_m / request_mps, _TTC_BRAKE_S)
         self.assertGreater(wall_m, _MIN_FORWARD_CLEARANCE_M)
         far_scan = _make_scan(range_m=100.0)
@@ -895,8 +902,10 @@ class TestSafetyNode(unittest.TestCase):
         clear_behind = _make_rear_wall_scan(behind_bumper_m=3.0)
         # 0.25 m behind the bumper: inside the clearance floor, so the floor trips at any
         # reverse speed (TTC 0.5 s at 0.5 m/s would trip too).
-        close_behind = _make_rear_wall_scan(behind_bumper_m=0.25)
-        self.assertLess(0.25, _MIN_FORWARD_CLEARANCE_M)
+        # Half the configured clearance floor behind the bumper: trips the floor whatever its value.
+        close_behind_m = 0.5 * _MIN_FORWARD_CLEARANCE_M
+        close_behind = _make_rear_wall_scan(behind_bumper_m=close_behind_m)
+        self.assertLess(close_behind_m, _MIN_FORWARD_CLEARANCE_M)
 
         # Reversing with the rear clear: passes, negative on /drive.
         self._publish_steadily(

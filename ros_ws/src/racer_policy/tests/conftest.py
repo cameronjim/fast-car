@@ -100,8 +100,10 @@ _TEMPLATE: dict[str, Any] = {
         # TTC and floor, value-only), then 0.9.4 -> 0.10.0 when the required
         # chassis.rear_overhang_m was added (racer_safety's rear corridor), then 0.10.0 ->
         # 0.11.0 when the required chassis.front_overhang_m was added (the forward arc
-        # corridor's outer front corner sweep).
-        "schema_version": "0.11.0",
+        # corridor's outer front corner sweep), then 0.11.0 -> 0.11.1 (lane pass, value-only),
+        # then 0.11.1 -> 0.12.0 when the required limits.outer_corner_horizon_m was added (the
+        # arc corridor's outer-corner band horizon).
+        "schema_version": "0.12.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

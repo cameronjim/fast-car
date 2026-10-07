@@ -111,6 +111,13 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# Values at 0.12.0 (same day, owner's floor pass): ttc_brake_s 0.3, ttc_warning_s 0.45,
+# min_forward_clearance_m 0.25. The owner drove 0.45/0.6/0.30 and still found the brake early
+# in corners; these are the numbers driven on the floor after that, edited on the Jetson and
+# committed here so the branch matches the car. 0.25 m from the head is about 0.10 m ahead of
+# the bumper: this is the floor of the floor. Do not go lower without the outer-corner horizon
+# evidence from a bag.
+#
 # schema_version bumped 0.11.1 -> 0.12.0 on 2026-10-07: new REQUIRED field
 # limits.outer_corner_horizon_m, PROVISIONAL 0.45 m (about one body length), NOT tuned. Floor
 # finding (bags 2026-10-07T05-43-31 and later, floor 0.30 m, brake 0.45 s): on a 1.1 m lane the
@@ -572,8 +579,8 @@ limits:
   # bug, fixed in racer_safety, but the threshold was also too small. Release of the latched
   # brake needs the requested speed's TTC to exceed ttc_warning_s, so the warning value is
   # also the brake's release point.
-  ttc_warning_s: 0.6                # PROVISIONAL (lane pass 2026-10-07: release line, see 0.11.1 note)
-  ttc_brake_s: 0.45                 # PROVISIONAL (lane pass 2026-10-07, see 0.11.1 note)
+  ttc_warning_s: 0.45               # PROVISIONAL (owner floor pass 2026-10-07: release line, see 0.12.0 note)
+  ttc_brake_s: 0.3                  # PROVISIONAL (owner floor pass 2026-10-07, see 0.12.0 note)
   # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
   # nearest valid return inside the forward sector below is closer than this, forward throttle
   # is held at zero whatever the requested speed, with the same latch as the TTC brake
@@ -582,7 +589,7 @@ limits:
   # when the obstacle is centimetres away. PROVISIONAL, NOT measured: 0.30 m is the
   # 2026-10-06 bench obstacle distance (0.22 m) plus a margin, chosen so that case brakes.
   # Replace with a value from measured coast-down distance at teleop speeds (roadmap phase 2).
-  min_forward_clearance_m: 0.30     # PROVISIONAL (lane pass 2026-10-07; measured from the LiDAR head, about 0.15 m ahead of the bumper)
+  min_forward_clearance_m: 0.25     # PROVISIONAL (owner floor pass 2026-10-07; measured from the LiDAR head, about 0.10 m ahead of the bumper)
   # Half angle of the forward sector, in the VEHICLE frame (base_link, x forward, left
   # positive). Since schema 0.9.0 (2026-10-06 floor test) this is only the OUTER bound of the
   # obstacle gate's in-path test: no return outside it is ever considered, whatever

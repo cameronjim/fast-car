@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
+#include <limits>
 
 namespace racer_control {
 
@@ -312,6 +314,85 @@ SweptPathClamp clamp_steering_to_swept_path(const ScanInput& scan, double laser_
   return out;
 }
 
+namespace {
+
+// Median of values[0, count), reordering them. count must be > 0. Even count: the mean of
+// the two middle values (same convention as RollingMedian).
+double median_in_place(std::vector<double>& values, std::size_t count) {
+  const auto first = values.begin();
+  const auto mid = first + static_cast<std::ptrdiff_t>(count / 2);
+  const auto last = first + static_cast<std::ptrdiff_t>(count);
+  std::nth_element(first, mid, last);
+  const double upper = *mid;
+  if (count % 2 == 1) {
+    return upper;
+  }
+  const double lower = *std::max_element(first, mid);
+  return 0.5 * (lower + upper);
+}
+
+}  // namespace
+
+LaneWalls measure_lane_walls(const ScanInput& scan, double laser_yaw_offset_rad,
+                             double sector_half_angle_rad, double max_range_m,
+                             double lidar_mount_y_m, std::vector<double>& left_scratch,
+                             std::vector<double>& right_scratch) {
+  LaneWalls walls;
+  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  if (!is_usable(scan) || !std::isfinite(laser_yaw_offset_rad) ||
+      !positive(sector_half_angle_rad) || !positive(max_range_m) ||
+      !std::isfinite(lidar_mount_y_m)) {
+    return walls;
+  }
+  const std::size_t n = scan.ranges.size();
+  if (left_scratch.size() < n) {
+    left_scratch.resize(n);
+  }
+  if (right_scratch.size() < n) {
+    right_scratch.resize(n);
+  }
+  std::size_t n_left = 0;
+  std::size_t n_right = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (!is_valid_return(scan.ranges[i], scan)) {
+      continue;
+    }
+    const double r = static_cast<double>(scan.ranges[i]);
+    if (r > max_range_m) {
+      continue;
+    }
+    const double bearing = wrap_angle(laser_bearing_of_index(scan, i) + laser_yaw_offset_rad);
+    const double lateral = r * std::sin(bearing) + lidar_mount_y_m;  // left positive
+    if (bearing > 0.0 && bearing <= sector_half_angle_rad) {
+      if (lateral > 0.0) {
+        left_scratch[n_left++] = lateral;
+      }
+    } else if (bearing < 0.0 && bearing >= -sector_half_angle_rad) {
+      if (lateral < 0.0) {
+        right_scratch[n_right++] = -lateral;
+      }
+    }
+  }
+  if (n_left > 0) {
+    walls.left_m = median_in_place(left_scratch, n_left);
+  }
+  if (n_right > 0) {
+    walls.right_m = median_in_place(right_scratch, n_right);
+  }
+  return walls;
+}
+
+double centering_steering(const LaneWalls& walls, double centering_gain) {
+  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  if (!std::isfinite(centering_gain) || centering_gain == 0.0 || !walls.left_m || !walls.right_m ||
+      !positive(*walls.left_m) || !positive(*walls.right_m)) {
+    return 0.0;
+  }
+  const double left = *walls.left_m;
+  const double right = *walls.right_m;
+  return centering_gain * (left - right) / (left + right);
+}
+
 double FirstOrderLowPass::update(double input, double dt_s) {
   if (!std::isfinite(input) || !std::isfinite(dt_s) || dt_s <= 0.0) {
     return output_;
@@ -354,8 +435,27 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
   result.gap_found = selection->gap_found;
   result.target_vehicle_bearing_rad = selection->target_vehicle_bearing_rad;
   result.target_range_m = extended_[selection->target_index];
-  result.steering_rad = steering_from_bearing(
-      selection->target_vehicle_bearing_rad, config_.steering_gain, config_.max_steering_angle_rad);
+  if (config_.centering_gain == 0.0) {
+    // Centring off: exactly the pipeline without it, bit for bit.
+    result.steering_rad =
+        steering_from_bearing(selection->target_vehicle_bearing_rad, config_.steering_gain,
+                              config_.max_steering_angle_rad);
+  } else {
+    result.lane_walls = measure_lane_walls(
+        scan, config_.laser_yaw_offset_rad, config_.centering_sector_half_angle_rad,
+        config_.centering_max_range_m, config_.swept_path.lidar_mount_y_m, lane_left_, lane_right_);
+    result.centering_steering_rad = centering_steering(result.lane_walls, config_.centering_gain);
+    // The push is added to gain * bearing BEFORE the clamp, so the sum saturates at the
+    // steering limit (a hard gap turn is not undone by the push).
+    // steering_from_bearing with an infinite limit is the unclamped gain * bearing (0 for a
+    // non-finite input), and the centring push is always finite.
+    const double gap_steering =
+        steering_from_bearing(selection->target_vehicle_bearing_rad, config_.steering_gain,
+                              std::numeric_limits<double>::infinity());
+    const double max_rad = config_.max_steering_angle_rad;
+    result.steering_rad =
+        std::min(std::max(gap_steering + result.centering_steering_rad, -max_rad), max_rad);
+  }
   result.wanted_steering_rad = result.steering_rad;
   if (config_.swept_path_clamp) {
     SweptPathGeometry geometry = config_.swept_path;

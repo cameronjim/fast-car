@@ -36,6 +36,9 @@ while vehicle_params sensors.lidar.mount_x_m / mount_y_m is null.
 0 = off) and `target_range_median_scans` (median of the last N scans' target ranges, integer
 [1, 15], 1 = off) follow the same rule too; see include/racer_control/reactive_speed.hpp.
 
+`centering_gain` (lane centring, [0, 5] rad, 0 = off; see include/racer_control/gap_follow.hpp
+measure_lane_walls) follows the same rule. The profile turns it on at 0.6.
+
 laser_yaw_from_vehicle_params (default true) must stay true on the real car, where the LiDAR
 yaw comes only from vehicle_params sensors.lidar.mount_yaw_rad. Set it false (in the params
 file) ONLY for the simulator and synthetic-scan tests, whose /scan is aligned to the vehicle
@@ -72,19 +75,31 @@ FLOOR_2026_10_06_PROFILE: dict[str, float | int | bool] = {
     # Speed smoothing added after the laps, for the surging the owner reported on them.
     "speed_time_constant_s": 0.5,
     "target_range_median_scans": 5,
+    # Lane centring added after the night's bags (2026-10-06T23-19-41 and 23-25-38) showed the
+    # follower hugging the edges. 0.6 rad on the 1.0 to 1.2 m lane: an offset e from the lane
+    # centre pushes 2 * 0.6 / W, about 1.1 rad per metre at W = 1.1 m, which is the steering a
+    # pure-pursuit point about 0.8 m ahead would ask for (2 L e / Ld^2 with L = 0.33 m), about
+    # the turning radius and the swept-path lookahead. Not yet driven on the floor.
+    "centering_gain": 0.6,
+    "centering_sector_half_angle_rad": 1.0,
+    "centering_max_range_m": 1.5,
 }
 """Checkpoint 2026-10-06: the first working floor laps.
 
 gap_follow_node completed its first working laps on the floor of the owner's living-room lane
-on the evening of 2026-10-06 with every value above except the last two, which were added the
-same night to smooth the speed (it surged and slowed with the scan-to-scan flicker of the
-target range). See docs/notes/reactive-control-port-2026-10-05.md, "Checkpoint 2026-10-06:
-first working floor laps", for the known limits.
+on the evening of 2026-10-06 with every value above up to and including target_deepest_ray.
+The rest were added later the same night, at the owner's request, and have NOT been driven on
+the floor yet: the speed smoothing (the speed surged and slowed with the scan-to-scan flicker
+of the target range) and the lane centring (the follower hugged the edges in the night's
+bags). To drive exactly the laps' parameters, override them back off:
+`speed_time_constant_s:=0 target_range_median_scans:=1 centering_gain:=0`. See
+docs/notes/reactive-control-port-2026-10-05.md, "Checkpoint 2026-10-06: first working floor
+laps", for the known limits.
 
 This is a CHECKPOINT to get back to a known working state, NOT a tuned optimum: it is one
-evening's hand tuning on one lane at 0.5 to 0.9 m/s. Change it only to record a new
-checkpoint (add a new profile with its own date rather than editing this one); try new values
-with launch arguments or a params file on top of it.
+evening's hand tuning on one lane at 0.5 to 0.9 m/s. Record a later tuned set as a new profile
+with its own date rather than editing the values above; try new values with launch arguments
+or a params file on top of it.
 """
 
 PROFILES: dict[str, dict[str, float | int | bool]] = {
@@ -111,6 +126,11 @@ _OPTIONAL_FLOAT_ARGS = {
         "Low-pass time constant on the speed command (s), before the rate limiter, [0, 5]. "
         "Empty (default) leaves the profile value, the params file value or the node default "
         "0.0 (off)."
+    ),
+    "centering_gain": (
+        "Lane centring gain (rad), [0, 5]: a push away from the nearer side wall, added before "
+        "the steering clamp. Empty (default) leaves the profile value, the params file value or "
+        "the node default 0.0 (off)."
     ),
 }
 _OPTIONAL_INT_ARGS = {

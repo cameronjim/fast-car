@@ -71,6 +71,9 @@ _EXPECTED = {
     "target_deepest_ray": False,
     "speed_time_constant_s": 0.5,
     "target_range_median_scans": 3,
+    "centering_gain": 0.6,
+    "centering_sector_half_angle_rad": 1.0,
+    "centering_max_range_m": 1.5,
 }
 
 

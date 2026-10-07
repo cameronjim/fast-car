@@ -48,6 +48,9 @@ _FLOOR_2026_10_06 = {
     "target_deepest_ray": False,
     "speed_time_constant_s": 0.5,
     "target_range_median_scans": 5,
+    "centering_gain": 0.6,
+    "centering_sector_half_angle_rad": 1.0,
+    "centering_max_range_m": 1.5,
 }
 _INT_PARAMETERS = {"target_range_median_scans"}
 _BOOL_PARAMETERS = {"swept_path_clamp", "target_deepest_ray"}
@@ -142,6 +145,7 @@ def test_explicit_launch_arguments_override_the_profile():
             swept_path_lookahead_m="1",
             speed_time_constant_s="0",
             target_range_median_scans="3",
+            centering_gain="0",
         )
     )
     expected = dict(_FLOOR_2026_10_06)
@@ -153,11 +157,13 @@ def test_explicit_launch_arguments_override_the_profile():
         swept_path_lookahead_m=1.0,
         speed_time_constant_s=0.0,
         target_range_median_scans=3,
+        centering_gain=0.0,
     )
     assert merged == expected
     assert type(merged["swept_path_lookahead_m"]) is float
     assert type(merged["speed_time_constant_s"]) is float
     assert type(merged["target_range_median_scans"]) is int
+    assert type(merged["centering_gain"]) is float
 
 
 def test_profile_comes_after_params_file_and_before_explicit_arguments():

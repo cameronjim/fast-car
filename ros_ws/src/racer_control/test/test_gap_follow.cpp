@@ -1653,5 +1653,323 @@ TEST(SweptPathClamp, GapFollowerClampsAndDisabledReproducesTheOldOutput) {
                 .steering_rad);
 }
 
+// -- Lane centring (2026-10-06 night floor finding (a)) -----------------------------------------
+
+// A straight lane in the head-centred vehicle frame: left wall at y = +left_m, right wall at
+// y = -right_m, both from 3 m behind to 20 m ahead (so the cone sees a lane, not an opening).
+// A wall given as a negative distance is left out (that side is open).
+std::vector<Segment> lane_walls(double left_m, double right_m) {
+  std::vector<Segment> walls;
+  if (left_m > 0.0) {
+    walls.push_back({-3.0, left_m, 20.0, left_m});
+  }
+  if (right_m > 0.0) {
+    walls.push_back({-3.0, -right_m, 20.0, -right_m});
+  }
+  return walls;
+}
+
+// The same scene for a forward-facing LiDAR (yaw 0), to check the vehicle frame is used.
+ScanInput yaw0_scan_with(const std::vector<Segment>& segments) {
+  ScanInput scan = make_scan(720, -M_PI, 2.0 * M_PI / 720.0, 0.0f, 12.0);
+  for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
+    scan.ranges[i] = static_cast<float>(ray_cast(laser_bearing_of_index(scan, i), segments));
+  }
+  return scan;
+}
+
+constexpr double kCentringGain = 0.6;      // the floor profile's value
+constexpr double kCentringSector = 1.0;    // centering_sector_half_angle_rad default
+constexpr double kCentringMaxRange = 1.5;  // centering_max_range_m default
+
+LaneWalls measure(const ScanInput& scan, double yaw = kC1Yaw, double mount_y = 0.0) {
+  std::vector<double> left, right;
+  return measure_lane_walls(scan, yaw, kCentringSector, kCentringMaxRange, mount_y, left, right);
+}
+
+// The floor lane: about 1.1 m wide (the 23-19-41 / 23-25-38 bags), real C1 geometry, with the
+// floor profile's gap settings and centring on.
+GapFollowConfig centring_config(double gain) {
+  GapFollowConfig c = floor_config(0.0);
+  c.free_space_threshold_m = 0.6;
+  c.cone_half_angle_rad = 1.2;
+  c.steering_gain = 1.6;
+  c.disparity_threshold_m = 0.3;
+  c.corner_sector_inner_rad = 0.4;
+  c.corner_sector_outer_rad = 1.6;
+  c.corner_min_clearance_m = 0.35;
+  c.swept_path_clamp = true;
+  c.swept_path = swept_geometry(0.6);
+  c.centering_gain = gain;
+  c.centering_sector_half_angle_rad = kCentringSector;
+  c.centering_max_range_m = kCentringMaxRange;
+  return c;
+}
+
+TEST(LaneCentring, MeasuresBothWallsOfAStraightLane) {
+  // Car 0.2 m right of the centre of a 1.1 m lane.
+  const LaneWalls walls = measure(c1_scan_with(lane_walls(0.75, 0.35)));
+  ASSERT_TRUE(walls.left_m.has_value());
+  ASSERT_TRUE(walls.right_m.has_value());
+  EXPECT_NEAR(*walls.left_m, 0.75, 1e-6);
+  EXPECT_NEAR(*walls.right_m, 0.35, 1e-6);
+}
+
+TEST(LaneCentring, CarOffsetRightInAStraightLaneSteersLeft) {
+  const LaneWalls walls = measure(c1_scan_with(lane_walls(0.75, 0.35)));
+  const double push = centering_steering(walls, kCentringGain);
+  // 0.6 * (0.75 - 0.35) / 1.1, i.e. 2 * gain / W per metre of offset (0.2 m).
+  EXPECT_NEAR(push, kCentringGain * 0.4 / 1.1, 1e-6);
+  EXPECT_GT(push, 0.0);
+}
+
+TEST(LaneCentring, LeftAndRightAreMirrorImages) {
+  const double right_offset =
+      centering_steering(measure(c1_scan_with(lane_walls(0.75, 0.35))), kCentringGain);
+  const double left_offset =
+      centering_steering(measure(c1_scan_with(lane_walls(0.35, 0.75))), kCentringGain);
+  EXPECT_LT(left_offset, 0.0);
+  EXPECT_NEAR(left_offset, -right_offset, 1e-9);
+}
+
+TEST(LaneCentring, CentredGivesZero) {
+  const LaneWalls walls = measure(c1_scan_with(lane_walls(0.55, 0.55)));
+  ASSERT_TRUE(walls.left_m && walls.right_m);
+  EXPECT_NEAR(centering_steering(walls, kCentringGain), 0.0, 1e-9);
+}
+
+TEST(LaneCentring, OneOpenSideGivesNoPush) {
+  // No left wall at all: the left side is open, so there is no push even with the right wall
+  // close (pushing toward an opening is the first floor test's failure).
+  const LaneWalls no_left = measure(c1_scan_with(lane_walls(-1.0, 0.3)));
+  EXPECT_FALSE(no_left.left_m.has_value());
+  ASSERT_TRUE(no_left.right_m.has_value());
+  EXPECT_EQ(centering_steering(no_left, kCentringGain), 0.0);
+  // A left wall farther than centering_max_range_m from every ray in the sector is open too.
+  const LaneWalls far_left = measure(c1_scan_with(lane_walls(1.6, 0.3)));
+  EXPECT_FALSE(far_left.left_m.has_value());
+  EXPECT_EQ(centering_steering(far_left, kCentringGain), 0.0);
+  // Mirror: right open.
+  const LaneWalls no_right = measure(c1_scan_with(lane_walls(0.3, -1.0)));
+  EXPECT_FALSE(no_right.right_m.has_value());
+  EXPECT_EQ(centering_steering(no_right, kCentringGain), 0.0);
+}
+
+TEST(LaneCentring, UsesTheVehicleFrameWhateverTheMountYaw) {
+  const LaneWalls c1 = measure(c1_scan_with(lane_walls(0.75, 0.35)), kC1Yaw);
+  const LaneWalls forward = measure(yaw0_scan_with(lane_walls(0.75, 0.35)), 0.0);
+  ASSERT_TRUE(c1.left_m && forward.left_m && c1.right_m && forward.right_m);
+  EXPECT_NEAR(*c1.left_m, *forward.left_m, 1e-6);
+  EXPECT_NEAR(*c1.right_m, *forward.right_m, 1e-6);
+  // The C1 scan read with yaw 0 looks backwards: left and right swap.
+  const LaneWalls wrong = measure(c1_scan_with(lane_walls(0.75, 0.35)), 0.0);
+  ASSERT_TRUE(wrong.left_m && wrong.right_m);
+  EXPECT_NEAR(*wrong.left_m, 0.35, 1e-6);
+  EXPECT_NEAR(*wrong.right_m, 0.75, 1e-6);
+}
+
+TEST(LaneCentring, LateralMountShiftsTheCentreline) {
+  // A head mounted 0.05 m left of the centreline reads the left wall 0.05 m nearer than the
+  // car's centreline is; the measured distances are from the centreline.
+  const LaneWalls walls = measure(c1_scan_with(lane_walls(0.50, 0.60)), kC1Yaw, 0.05);
+  ASSERT_TRUE(walls.left_m && walls.right_m);
+  EXPECT_NEAR(*walls.left_m, 0.55, 1e-6);
+  EXPECT_NEAR(*walls.right_m, 0.55, 1e-6);
+}
+
+TEST(LaneCentring, AWallAcrossTheLaneAheadDoesNotSaturateThePush) {
+  // A centred car 0.8 m from the outside wall of a corner (a wall across the lane ahead, both
+  // side walls continuing up to it). The rays just off the centreline hit that wall with a
+  // perpendicular distance near zero: the nearest return on a side would read a wall at about
+  // 0 m and saturate the push. The median keeps it near zero.
+  std::vector<Segment> scene = {
+      {-3.0, 0.55, 0.8, 0.55}, {-3.0, -0.55, 0.8, -0.55}, {0.8, -0.55, 0.8, 0.55}};
+  const ScanInput scan = c1_scan_with(scene);
+  const LaneWalls walls = measure(scan);
+  ASSERT_TRUE(walls.left_m && walls.right_m);
+  EXPECT_NEAR(centering_steering(walls, kCentringGain), 0.0, 1e-6);
+  // An off-centre car (0.15 m right) in the same corner: the push still points away from the
+  // nearer (right) wall and stays well inside the gain.
+  scene = {{-3.0, 0.70, 0.8, 0.70}, {-3.0, -0.40, 0.8, -0.40}, {0.8, -0.40, 0.8, 0.70}};
+  const double push = centering_steering(measure(c1_scan_with(scene)), kCentringGain);
+  EXPECT_GT(push, 0.0);
+  EXPECT_LT(push, 0.5 * kCentringGain);
+  // For contrast, the smallest perpendicular distance r |sin b| on the left: almost 0 (the ray
+  // just left of forward, on the wall ahead), which would saturate the push to the right.
+  double min_left_lateral = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
+    const double r = scan.ranges[i];
+    const double b = wrap_angle(laser_bearing_of_index(scan, i) + kC1Yaw);
+    if (std::isfinite(r) && r <= kCentringMaxRange && b > 0.0 && b <= kCentringSector) {
+      min_left_lateral = std::min(min_left_lateral, r * std::sin(b));
+    }
+  }
+  EXPECT_LT(min_left_lateral, 0.02);
+  // And with the wall ahead nearer than the side wall's nearest in-sector return (0.55 / sin
+  // 1.0 = 0.65 m), the nearest return itself is on the wall ahead, just off the centreline.
+  const ScanInput close =
+      c1_scan_with({{-3.0, 0.55, 0.5, 0.55}, {-3.0, -0.55, 0.5, -0.55}, {0.5, -0.55, 0.5, 0.55}});
+  double nearest_left = std::numeric_limits<double>::infinity();
+  double nearest_left_lateral = 0.0;
+  for (std::size_t i = 0; i < close.ranges.size(); ++i) {
+    const double r = close.ranges[i];
+    const double b = wrap_angle(laser_bearing_of_index(close, i) + kC1Yaw);
+    if (std::isfinite(r) && b > 0.0 && b <= kCentringSector && r < nearest_left) {
+      nearest_left = r;
+      nearest_left_lateral = r * std::sin(b);
+    }
+  }
+  EXPECT_LT(nearest_left_lateral, 0.02);
+  const LaneWalls close_walls = measure(close);
+  ASSERT_TRUE(close_walls.left_m && close_walls.right_m);
+  EXPECT_NEAR(centering_steering(close_walls, kCentringGain), 0.0, 1e-6);
+}
+
+TEST(LaneCentring, ReturnsOutsideTheSectorOrInvalidAreIgnored) {
+  // Only side walls beside and behind the car (vehicle bearing beyond 1.0 rad): open.
+  const LaneWalls beside = measure(c1_scan_with({{-3.0, 0.5, 0.2, 0.5}, {-3.0, -0.5, 0.2, -0.5}}));
+  EXPECT_FALSE(beside.left_m.has_value());
+  EXPECT_FALSE(beside.right_m.has_value());
+  // Invalid returns never count.
+  const ScanInput scan = c1_scan_with(lane_walls(0.75, 0.35));
+  for (const float bad : {kNaNF, -kInfF, 0.0f, -1.0f, 0.01f, 20.0f}) {
+    ScanInput s = scan;
+    for (float& r : s.ranges) {
+      r = std::isfinite(r) ? bad : r;
+    }
+    const LaneWalls walls = measure(s);
+    EXPECT_FALSE(walls.left_m.has_value()) << bad;
+    EXPECT_FALSE(walls.right_m.has_value()) << bad;
+  }
+}
+
+TEST(LaneCentring, GarbageMeasuresBothSidesOpenAndGivesNoPush) {
+  const ScanInput scan = c1_scan_with(lane_walls(0.75, 0.35));
+  std::vector<double> left, right;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  struct Garbage {
+    double yaw, sector, max_range, mount_y;
+  };
+  for (const Garbage& g : {Garbage{nan, 1.0, 1.5, 0.0}, Garbage{M_PI, 0.0, 1.5, 0.0},
+                           Garbage{M_PI, nan, 1.5, 0.0}, Garbage{M_PI, 1.0, -1.0, 0.0},
+                           Garbage{M_PI, 1.0, inf, 0.0}, Garbage{M_PI, 1.0, 1.5, nan}}) {
+    const LaneWalls walls =
+        measure_lane_walls(scan, g.yaw, g.sector, g.max_range, g.mount_y, left, right);
+    EXPECT_FALSE(walls.left_m.has_value());
+    EXPECT_FALSE(walls.right_m.has_value());
+  }
+  ScanInput unusable = scan;
+  unusable.angle_increment = 0.0;
+  EXPECT_FALSE(measure(unusable).left_m.has_value());
+  LaneWalls good = measure(scan);
+  EXPECT_EQ(centering_steering(good, 0.0), 0.0);
+  EXPECT_EQ(centering_steering(good, nan), 0.0);
+  good.left_m = 0.0;
+  EXPECT_EQ(centering_steering(good, kCentringGain), 0.0);
+  good.left_m = nan;
+  EXPECT_EQ(centering_steering(good, kCentringGain), 0.0);
+}
+
+TEST(LaneCentring, GapFollowerAddsThePushBeforeTheClampAndReportsIt) {
+  // Car 0.2 m right of centre in a straight 1.1 m lane. Centring adds a push left on top of
+  // whatever the gap asks for. Free-space threshold 1.5 m and steering gain 1.0 here (the
+  // node defaults) so the gap steering alone is not already at full lock.
+  const ScanInput scan = c1_scan_with(lane_walls(0.75, 0.35));
+  GapFollowConfig off_config = centring_config(0.0);
+  off_config.free_space_threshold_m = 1.5;
+  off_config.steering_gain = 1.0;
+  GapFollowConfig on_config = off_config;
+  on_config.centering_gain = kCentringGain;
+  GapFollower off(off_config);
+  GapFollower on(on_config);
+  const GapFollowResult a = off.process(scan);
+  const GapFollowResult b = on.process(scan);
+  ASSERT_TRUE(a.valid && b.valid);
+  ASSERT_TRUE(b.gap_found);
+  EXPECT_EQ(a.target_vehicle_bearing_rad, b.target_vehicle_bearing_rad);
+  EXPECT_FALSE(a.lane_walls.left_m.has_value());  // off: nothing measured
+  EXPECT_EQ(a.centering_steering_rad, 0.0);
+  ASSERT_TRUE(b.lane_walls.left_m && b.lane_walls.right_m);
+  EXPECT_NEAR(b.centering_steering_rad, kCentringGain * 0.4 / 1.1, 1e-6);
+  const double expected = std::min(
+      std::max(1.0 * b.target_vehicle_bearing_rad + b.centering_steering_rad, -0.4189), 0.4189);
+  EXPECT_DOUBLE_EQ(b.wanted_steering_rad, expected);
+  ASSERT_LT(a.wanted_steering_rad, 0.4189 - b.centering_steering_rad);  // not saturated
+  EXPECT_NEAR(b.wanted_steering_rad - a.wanted_steering_rad, b.centering_steering_rad, 1e-12);
+}
+
+TEST(LaneCentring, ThePushSaturatesAtTheSteeringLimit) {
+  // Hard against the right wall (0.18 m, the car's edge 2.5 cm off it): gap steering plus a
+  // large push is past full lock and is clamped there, never beyond.
+  GapFollowConfig config = centring_config(5.0);
+  config.swept_path_clamp = false;  // isolate the clamp at the steering limit
+  GapFollower follower(config);
+  const GapFollowResult r = follower.process(c1_scan_with(lane_walls(0.92, 0.18)));
+  ASSERT_TRUE(r.valid);
+  EXPECT_GT(1.6 * r.target_vehicle_bearing_rad + r.centering_steering_rad, 0.4189);
+  EXPECT_DOUBLE_EQ(r.wanted_steering_rad, 0.4189);
+  GapFollower mirror(config);
+  const GapFollowResult m = mirror.process(c1_scan_with(lane_walls(0.18, 0.92)));
+  ASSERT_TRUE(m.valid);
+  EXPECT_DOUBLE_EQ(m.wanted_steering_rad, -0.4189);
+}
+
+TEST(LaneCentring, GainZeroIsBitIdenticalToThePipelineWithoutCentring) {
+  // centering_gain 0 skips the measurement: every output field equals both a follower whose
+  // other centring fields differ and the pipeline rebuilt from its parts (steering_from_bearing
+  // -> swept-path clamp -> corner override), on seeded random scans of the C1 geometry, both
+  // yaws.
+  std::mt19937 rng(20261007u);
+  std::uniform_real_distribution<double> range(0.15, 4.0);
+  std::uniform_int_distribution<int> block(1, 12);
+  int compared = 0;
+  for (const double yaw : {M_PI, 0.0}) {
+    for (int trial = 0; trial < 100; ++trial) {
+      ScanInput s = make_scan(720, -M_PI, 2.0 * M_PI / 720.0, 1.0f, 12.0);
+      std::size_t i = 0;
+      while (i < s.ranges.size()) {
+        const auto len = static_cast<std::size_t>(block(rng));
+        const auto value = static_cast<float>(range(rng));
+        for (std::size_t k = i; k < std::min(s.ranges.size(), i + len); ++k) {
+          s.ranges[k] = value;
+        }
+        i += len;
+      }
+      GapFollowConfig base = centring_config(0.0);
+      base.laser_yaw_offset_rad = yaw;
+      GapFollowConfig odd = base;
+      odd.centering_sector_half_angle_rad = 0.3;  // ignored at gain 0
+      odd.centering_max_range_m = 9.0;
+      GapFollower a(base);
+      GapFollower b(odd);
+      const GapFollowResult ra = a.process(s);
+      const GapFollowResult rb = b.process(s);
+      ASSERT_TRUE(ra.valid);
+      EXPECT_EQ(ra.steering_rad, rb.steering_rad);
+      EXPECT_EQ(ra.wanted_steering_rad, rb.wanted_steering_rad);
+      EXPECT_EQ(ra.target_vehicle_bearing_rad, rb.target_vehicle_bearing_rad);
+      EXPECT_EQ(ra.corner_blocked, rb.corner_blocked);
+      EXPECT_EQ(ra.swept_path_clamped, rb.swept_path_clamped);
+      EXPECT_FALSE(rb.lane_walls.left_m.has_value());
+      EXPECT_FALSE(rb.lane_walls.right_m.has_value());
+      EXPECT_EQ(rb.centering_steering_rad, 0.0);
+      // Rebuilt from the parts, exactly as before centring existed.
+      const double wanted = steering_from_bearing(ra.target_vehicle_bearing_rad, 1.6, 0.4189);
+      EXPECT_EQ(ra.wanted_steering_rad, wanted);
+      double steering =
+          clamp_steering_to_swept_path(s, yaw, wanted, swept_geometry(0.6)).steering_rad;
+      std::vector<double> sanitized;
+      sanitize_ranges(s, base.clip_max_range_m, sanitized);
+      if (corner_blocked(s, sanitized, steering, 0.4, 1.6, 0.35, yaw)) {
+        steering = 0.0;
+      }
+      EXPECT_EQ(ra.steering_rad, steering);
+      ++compared;
+    }
+  }
+  EXPECT_EQ(compared, 200);
+}
+
 }  // namespace
 }  // namespace racer_control

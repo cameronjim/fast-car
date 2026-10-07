@@ -133,13 +133,15 @@ class GapFollowNode : public rclcpp::Node {
                 "gap_follow_node up: %.1f Hz, half width %.3f m + margin %.3f m, cone +/- %.3f "
                 "rad, laser yaw %.3f rad, %s target, forward preference %.3f, gap switch "
                 "margin %.3f, swept-path clamp %s (lookahead %.2f m, wheelbase %.4f m, "
-                "LiDAR at x %.3f y %.3f m, body front x %.3f m), max speed %.2f m/s, speed "
-                "time constant %.3f s, target range median over %zu scans",
+                "LiDAR at x %.3f y %.3f m, body front x %.3f m), lane centring gain %.3f "
+                "(sector +/- %.3f rad, max range %.2f m), max speed %.2f m/s, speed time "
+                "constant %.3f s, target range median over %zu scans",
                 control_rate_hz, c.half_width_m, c.safety_margin_m, c.cone_half_angle_rad,
                 c.laser_yaw_offset_rad, c.target == GapTarget::kDeepest ? "deepest" : "centre",
                 c.forward_preference, c.gap_switch_margin, c.swept_path_clamp ? "on" : "off",
                 c.swept_path.lookahead_m, c.swept_path.wheelbase_m, c.swept_path.lidar_mount_x_m,
-                c.swept_path.lidar_mount_y_m, c.swept_path.body_front_x_m,
+                c.swept_path.lidar_mount_y_m, c.swept_path.body_front_x_m, c.centering_gain,
+                c.centering_sector_half_angle_rad, c.centering_max_range_m,
                 speed_command_.config().max_speed_mps,
                 speed_command_.config().speed_time_constant_s, target_range_median_.window());
   }
@@ -181,6 +183,22 @@ class GapFollowNode : public rclcpp::Node {
         "(default) = off.");
     c.steering_gain = declare_ranged_double(*this, "steering_gain", 1.0, 0.0, 10.0,
                                             "steering = clamp(gain * target bearing, +/- max).");
+    // Lane centring (gap_follow.hpp measure_lane_walls / centering_steering).
+    c.centering_gain = declare_ranged_double(
+        *this, "centering_gain", 0.0, 0.0, 5.0,
+        "Lane centring gain (rad). Adds centering_gain * (d_left - d_right) / (d_left + "
+        "d_right) to steering_gain * target bearing before the steering clamp: a push away from "
+        "the nearer side wall, left when the right wall is nearer. d_left / d_right are the "
+        "median perpendicular distances of the returns on each side of the front sector. No "
+        "push while either side has no return within centering_max_range_m (an open side). 0 "
+        "(default) = off, bit-identical to the follower without centring.");
+    c.centering_sector_half_angle_rad = declare_ranged_double(
+        *this, "centering_sector_half_angle_rad", 1.0, 0.01, M_PI / 2.0,
+        "Lane centring: returns with vehicle bearing in (0, this] are the left wall and in "
+        "[-this, 0) the right wall (rad).");
+    c.centering_max_range_m = declare_ranged_double(
+        *this, "centering_max_range_m", 1.5, 0.05, 20.0,
+        "Lane centring: only returns within this range count (m); a side with none is open.");
     c.corner_sector_inner_rad = declare_ranged_double(
         *this, "corner_sector_inner_rad", M_PI / 2.0, 0.0, M_PI,
         "Inner edge of the turn-in side sector for the corner override (rad, magnitude).");
@@ -298,6 +316,13 @@ class GapFollowNode : public rclcpp::Node {
                            "gap_follow_node: /scan rejected (unusable geometry, no valid "
                            "returns, or forward not covered); treating as no scan.");
       return;
+    }
+    if (result.centering_steering_rad != 0.0) {
+      RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                            "gap_follow_node: lane centring %+.3f rad (left wall %.2f m, right "
+                            "wall %.2f m)",
+                            result.centering_steering_rad, result.lane_walls.left_m.value_or(0.0),
+                            result.lane_walls.right_m.value_or(0.0));
     }
     if (result.swept_path_clamped) {
       RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,

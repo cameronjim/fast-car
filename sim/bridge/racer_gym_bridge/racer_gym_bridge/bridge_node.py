@@ -12,6 +12,12 @@ Bridges the gym simulator to the standard racer topics
     reliable) and steps the sim from the latest received command.
   - offers ``/sim/reset`` (std_srvs/Trigger) so tests and tooling can reset
     the episode deterministically.
+  - (roadmap 2.9, all off by default) for park_node's L5 scenario: a POCKET cut into
+    one corridor wall (``pocket_*``), ``/odom/wheel`` standing in for
+    racer_drivers/vesc_odometry_node (``publish_wheel_odom``), a /scan cast from a
+    LiDAR mounted like the real car's (``lidar_*``), and the gym's speed controller
+    mirrored for reverse (``mirror_reverse_speed_control``). See the parameter
+    descriptions below.
   - (milestone 2) publishes ``/sim/map`` (nav_msgs/OccupancyGrid, latched
     via transient_local) once, built from the env's own ``Track``
     (``track.occupancy_map`` / ``track.spec``) -- see
@@ -40,6 +46,7 @@ map, which would fetch from api.f1tenth.org on first use.
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import gymnasium as gym
 import numpy as np
@@ -60,14 +67,24 @@ from racer_gym_bridge.conversions import (
     build_odom_fields,
     build_scan_fields,
     drive_cmd_to_action,
+    mirrored_speed_to_accel,
+    yaw_to_quaternion,
 )
-from racer_gym_bridge.track_loader import build_corridor_occupancy, load_raceline_xy_speed
+from racer_gym_bridge.track_loader import (
+    build_corridor_occupancy,
+    carve_pocket,
+    load_raceline_xy_speed,
+)
 
 _MAP_FRAME_ID = "map"
 _BASE_LINK_FRAME_ID = "base_link"
 _LASER_FRAME_ID = "laser"
 
+_ODOM_FRAME_ID = "odom"
 _GYM_ENV_ID = "f1tenth_gym:f1tenth-v0"
+# f1tenth_gym's default control input is ["speed", "steering_angle"]; with
+# mirror_reverse_speed_control the bridge computes the acceleration itself.
+_ACCEL_CONTROL_INPUT = ["accl", "steering_angle"]
 _EGO_AGENT_ID = "agent_0"
 _OBSERVATION_FEATURES = [
     "scan",
@@ -95,8 +112,21 @@ def build_synthetic_track() -> Track:
     return Track.from_refline(x=xs, y=ys, velx=velxs)
 
 
+@dataclasses.dataclass(frozen=True)
+class Pocket:
+    """A pocket cut into one corridor wall (roadmap 2.9, ``track_loader.carve_pocket``)."""
+
+    start_s_m: float
+    length_m: float
+    depth_m: float
+    side: str
+
+
 def build_track_from_raceline(
-    raceline_path: str, track_half_width_m: float = 0.0, reverse_direction: bool = False
+    raceline_path: str,
+    track_half_width_m: float = 0.0,
+    reverse_direction: bool = False,
+    pocket: Pocket | None = None,
 ) -> Track:
     """A closed-loop track from a committed raceline file (roadmap task S.2).
 
@@ -127,15 +157,35 @@ def build_track_from_raceline(
     order is what turns the car round: it starts at the old last waypoint (next to the old
     first one on a closed loop) facing the other way round the loop. The corridor walls are
     built from the same points, so they do not change.
+
+    ``pocket`` (roadmap 2.9, park_node's L5 scenario; needs ``track_half_width_m`` > 0): a
+    recess in one wall, measured along the raceline AS DRIVEN (after ``reverse_direction``)
+    from its first point (``track_loader.carve_pocket``). The map border grows to fit it.
     """
     x, y, velx = load_raceline_xy_speed(raceline_path)
     if reverse_direction:
         x, y, velx = x[::-1].copy(), y[::-1].copy(), velx[::-1].copy()
     track = Track.from_refline(x=x, y=y, velx=velx)
+    if pocket is not None and track_half_width_m <= 0.0:
+        raise ValueError("a pocket needs a walled corridor (track_half_width_m > 0)")
     if track_half_width_m > 0.0:
+        border_m = 1.0 if pocket is None else max(1.0, pocket.depth_m + 0.5)
         occupancy, origin = build_corridor_occupancy(
-            x, y, track_half_width_m, track.spec.resolution
+            x, y, track_half_width_m, track.spec.resolution, border_m=border_m
         )
+        if pocket is not None:
+            occupancy = carve_pocket(
+                occupancy,
+                origin,
+                track.spec.resolution,
+                x,
+                y,
+                track_half_width_m,
+                pocket.start_s_m,
+                pocket.length_m,
+                pocket.depth_m,
+                pocket.side,
+            )
         track.occupancy_map = occupancy
         track.spec = dataclasses.replace(track.spec, origin=origin)
     return track
@@ -146,6 +196,8 @@ def build_env(
     raceline_path: str = "",
     track_half_width_m: float = 0.0,
     reverse_direction: bool = False,
+    pocket: Pocket | None = None,
+    accel_control: bool = False,
 ) -> gym.Env:
     """Construct the pinned f1tenth_gym env: single ego agent, headless.
 
@@ -157,21 +209,20 @@ def build_env(
     tracker can complete laps of.
     """
     track = (
-        build_track_from_raceline(raceline_path, track_half_width_m, reverse_direction)
+        build_track_from_raceline(raceline_path, track_half_width_m, reverse_direction, pocket)
         if raceline_path
         else build_synthetic_track()
     )
-    return gym.make(
-        _GYM_ENV_ID,
-        config={
-            "seed": seed,
-            "map": track,
-            "num_agents": 1,
-            "ego_idx": 0,
-            "observation_config": {"type": "features", "features": _OBSERVATION_FEATURES},
-        },
-        render_mode=None,
-    )
+    config = {
+        "seed": seed,
+        "map": track,
+        "num_agents": 1,
+        "ego_idx": 0,
+        "observation_config": {"type": "features", "features": _OBSERVATION_FEATURES},
+    }
+    if accel_control:
+        config["control_input"] = list(_ACCEL_CONTROL_INPUT)
+    return gym.make(_GYM_ENV_ID, config=config, render_mode=None)
 
 
 class BridgeNode(Node):
@@ -222,8 +273,16 @@ class BridgeNode(Node):
             self.declare_parameter("reverse_direction", False, reverse_direction_descriptor).value
         )
 
+        pocket = self._declare_pocket()
+        self._declare_park_scenario_parameters()
+
         self.env = build_env(
-            self._seed, self._raceline_path, self._track_half_width_m, self._reverse_direction
+            self._seed,
+            self._raceline_path,
+            self._track_half_width_m,
+            self._reverse_direction,
+            pocket,
+            self._mirror_reverse_speed_control,
         )
 
         scan_sim = self.env.unwrapped.sim.agents[0].scan_simulator
@@ -231,6 +290,19 @@ class BridgeNode(Node):
         self._range_min = 0.0
         self._range_max = float(scan_sim.max_range)
         self._env_timestep = float(self.env.unwrapped.timestep)
+        # The mounted LiDAR (roadmap 2.9): a second ScanSimulator2D on the same map, cast from the
+        # mount instead of the gym pose. None keeps the gym's own scan.
+        self._mounted_scan = None
+        if self._lidar_mounted:
+            from f1tenth_gym.envs.laser_models import ScanSimulator2D
+
+            fov = self._lidar_fov_rad if self._lidar_fov_rad > 0.0 else self._fov_rad
+            beams = self._lidar_num_beams if self._lidar_num_beams > 0 else int(scan_sim.num_beams)
+            self._mounted_scan = ScanSimulator2D(beams, fov, max_range=self._range_max)
+            self._mounted_scan.set_map(self.env.unwrapped.track)
+            self._mounted_scan_rng = np.random.default_rng(self._seed)
+            self._fov_rad = float(fov)
+        self._wheel_distance_m = 0.0
 
         step_rate_descriptor = ParameterDescriptor(
             description=(
@@ -274,6 +346,12 @@ class BridgeNode(Node):
 
         self._scan_pub = self.create_publisher(LaserScan, "/scan", scan_qos)
         self._odom_pub = self.create_publisher(Odometry, "/sim/ground_truth_odom", odom_qos)
+        # /odom/wheel only when asked for: on the car it belongs to vesc_odometry_node.
+        self._wheel_odom_pub = (
+            self.create_publisher(Odometry, "/odom/wheel", odom_qos)
+            if self._publish_wheel_odom
+            else None
+        )
         self._map_pub = self.create_publisher(OccupancyGrid, "/sim/map", map_qos)
         self._drive_sub = self.create_subscription(
             AckermannDriveStamped, "/drive", self._on_drive, drive_qos
@@ -313,7 +391,17 @@ class BridgeNode(Node):
         return response
 
     def _on_timer(self) -> None:
-        action = drive_cmd_to_action(self._latest_steering_angle, self._latest_speed)
+        longitudinal = self._latest_speed
+        if self._mirror_reverse_speed_control:
+            params = self.env.unwrapped.params
+            longitudinal = mirrored_speed_to_accel(
+                self._latest_speed,
+                float(self.env.unwrapped.sim.agents[0].state[3]),
+                float(params["a_max"]),
+                float(params["v_max"]),
+                float(params["v_min"]),
+            )
+        action = drive_cmd_to_action(self._latest_steering_angle, longitudinal)
         obs, _reward, terminated, truncated, _info = self.env.step(action)
         if terminated or truncated:
             if not self._warned_terminated:
@@ -337,8 +425,19 @@ class BridgeNode(Node):
         agent_obs = obs[_EGO_AGENT_ID]
         now = self.get_clock().now().to_msg()
 
+        ranges = agent_obs["scan"]
+        if self._mounted_scan is not None:
+            yaw = float(agent_obs["pose_theta"])
+            lidar_pose = np.array(
+                [
+                    float(agent_obs["pose_x"]) + self._lidar_offset_x_m * math.cos(yaw),
+                    float(agent_obs["pose_y"]) + self._lidar_offset_x_m * math.sin(yaw),
+                    yaw + self._lidar_yaw_rad,
+                ]
+            )
+            ranges = self._mounted_scan.scan(lidar_pose, self._mounted_scan_rng)
         scan_fields = build_scan_fields(
-            ranges=agent_obs["scan"],
+            ranges=ranges,
             fov_rad=self._fov_rad,
             range_min=self._range_min,
             range_max=self._range_max,
@@ -378,6 +477,9 @@ class BridgeNode(Node):
         angular.x, angular.y, angular.z = odom_fields.angular
         self._odom_pub.publish(odom_msg)
 
+        if self._wheel_odom_pub is not None:
+            self._publish_wheel_odom_msg(now, float(agent_obs["linear_vel_x"]))
+
         # Milestone 2: map -> base_link from the same ground-truth pose, every step (no
         # localization stack exists yet -- see this module's docstring).
         transform = TransformStamped()
@@ -394,6 +496,145 @@ class BridgeNode(Node):
             transform.transform.rotation.w,
         ) = odom_fields.orientation
         self._tf_broadcaster.sendTransform(transform)
+
+    def _publish_wheel_odom_msg(self, stamp, speed_mps: float) -> None:
+        """/odom/wheel in vesc_odometry_node's shape (roadmap 2.9): twist.linear.x the speed,
+        pose.position.x the SIGNED along-track distance since the node started (not an x
+        coordinate). The speed is the gym's longitudinal body speed, ``linear_vel_x`` (v cos beta at
+        the gym's reference point); in the gym's kinematic regime that is exactly the rear axle's
+        speed, the distance park_node's arcs are measured in. Integrated per step over the env
+        timestep; /sim/reset does not zero it (the real driver does not either)."""
+        self._wheel_distance_m += speed_mps * self._env_timestep
+        msg = Odometry()
+        msg.header.stamp = stamp
+        msg.header.frame_id = _ODOM_FRAME_ID
+        msg.child_frame_id = _BASE_LINK_FRAME_ID
+        msg.pose.pose.position.x = self._wheel_distance_m
+        msg.pose.pose.orientation.w = 1.0
+        msg.twist.twist.linear.x = speed_mps
+        self._wheel_odom_pub.publish(msg)
+
+    def _declare_pocket(self) -> Pocket | None:
+        descriptor = ParameterDescriptor(
+            description=(
+                "Roadmap 2.9: a pocket (parking slot) cut into one corridor wall, starting this "
+                "far (m) along the raceline as driven from its first point. Used only when "
+                "pocket_length_m > 0 (needs raceline_path and track_half_width_m)."
+            ),
+            floating_point_range=[FloatingPointRange(from_value=0.0, to_value=1000.0, step=0.0)],
+        )
+        start = float(self.declare_parameter("pocket_start_m", 0.0, descriptor).value)
+        descriptor = ParameterDescriptor(
+            description="Pocket length along the raceline (m); 0.0 (default) = no pocket.",
+            floating_point_range=[FloatingPointRange(from_value=0.0, to_value=100.0, step=0.0)],
+        )
+        length = float(self.declare_parameter("pocket_length_m", 0.0, descriptor).value)
+        descriptor = ParameterDescriptor(
+            description="How far the pocket pushes the wall back beyond the corridor (m).",
+            floating_point_range=[FloatingPointRange(from_value=0.0, to_value=20.0, step=0.0)],
+        )
+        depth = float(self.declare_parameter("pocket_depth_m", 0.5, descriptor).value)
+        descriptor = ParameterDescriptor(
+            description="Which wall, relative to the direction of travel: right or left."
+        )
+        side = str(self.declare_parameter("pocket_side", "right", descriptor).value)
+        if length <= 0.0:
+            return None
+        if not self._raceline_path or self._track_half_width_m <= 0.0:
+            raise ValueError("pocket_length_m > 0 needs raceline_path and track_half_width_m > 0")
+        return Pocket(start_s_m=start, length_m=length, depth_m=depth, side=side)
+
+    def _declare_park_scenario_parameters(self) -> None:
+        """The rest of the roadmap 2.9 parameters; every default keeps the old behaviour."""
+        self._publish_wheel_odom = bool(
+            self.declare_parameter(
+                "publish_wheel_odom",
+                False,
+                ParameterDescriptor(
+                    description=(
+                        "Publish /odom/wheel like racer_drivers/vesc_odometry_node (twist.linear.x "
+                        "the speed, pose.position.x the signed along-track distance). SIM ONLY: on "
+                        "the car that topic is the VESC's. Default false."
+                    )
+                ),
+            ).value
+        )
+        self._mirror_reverse_speed_control = bool(
+            self.declare_parameter(
+                "mirror_reverse_speed_control",
+                False,
+                ParameterDescriptor(
+                    description=(
+                        "Drive the gym in acceleration mode with its forward speed-controller "
+                        "gains mirrored for reverse (conversions.mirrored_speed_to_accel): the "
+                        "gym's own controller brakes a reversing car 20 times more weakly than a "
+                        "forward one. Default false (the gym's controller, unchanged)."
+                    )
+                ),
+            ).value
+        )
+        self._lidar_offset_x_m = float(
+            self.declare_parameter(
+                "lidar_offset_x_m",
+                0.0,
+                ParameterDescriptor(
+                    description=(
+                        "Cast /scan from this far ahead of the gym's pose (m; the gym's pose is "
+                        "its centre of gravity, chassis.cg_to_rear_axle_m ahead of the rear "
+                        "axle). The caller passes it from vehicle_params; nothing physical is "
+                        "typed here."
+                    ),
+                    floating_point_range=[
+                        FloatingPointRange(from_value=-2.0, to_value=2.0, step=0.0)
+                    ],
+                ),
+            ).value
+        )
+        self._lidar_yaw_rad = float(
+            self.declare_parameter(
+                "lidar_yaw_rad",
+                0.0,
+                ParameterDescriptor(
+                    description=(
+                        "Mounting yaw of the cast /scan (rad; pi = facing backwards, like the "
+                        "car's sensors.lidar.mount_yaw_rad)."
+                    ),
+                    floating_point_range=[
+                        FloatingPointRange(
+                            from_value=-2.0 * math.pi, to_value=2.0 * math.pi, step=0.0
+                        )
+                    ],
+                ),
+            ).value
+        )
+        self._lidar_fov_rad = float(
+            self.declare_parameter(
+                "lidar_fov_rad",
+                0.0,
+                ParameterDescriptor(
+                    description="Field of view of the cast /scan (rad); 0.0 = the gym's own.",
+                    floating_point_range=[
+                        FloatingPointRange(from_value=0.0, to_value=2.0 * math.pi, step=0.0)
+                    ],
+                ),
+            ).value
+        )
+        self._lidar_num_beams = int(
+            self.declare_parameter(
+                "lidar_num_beams",
+                0,
+                ParameterDescriptor(
+                    description="Beams of the cast /scan; 0 = the gym's own.",
+                    integer_range=[IntegerRange(from_value=0, to_value=10000, step=1)],
+                ),
+            ).value
+        )
+        self._lidar_mounted = (
+            self._lidar_offset_x_m != 0.0
+            or self._lidar_yaw_rad != 0.0
+            or self._lidar_fov_rad > 0.0
+            or self._lidar_num_beams > 0
+        )
 
     def _publish_map_once(self) -> None:
         """Publish ``/sim/map`` once (transient_local latches it for later subscribers).
@@ -446,7 +687,15 @@ class BridgeNode(Node):
         transform.header.stamp = self.get_clock().now().to_msg()
         transform.header.frame_id = _BASE_LINK_FRAME_ID
         transform.child_frame_id = _LASER_FRAME_ID
-        transform.transform.rotation.w = 1.0
+        # The mounted LiDAR's pose relative to the gym's pose when one is configured (roadmap
+        # 2.9); identity otherwise.
+        transform.transform.translation.x = self._lidar_offset_x_m
+        (
+            transform.transform.rotation.x,
+            transform.transform.rotation.y,
+            transform.transform.rotation.z,
+            transform.transform.rotation.w,
+        ) = yaw_to_quaternion(self._lidar_yaw_rad)
         self._static_tf_broadcaster.sendTransform(transform)
 
     def destroy_node(self) -> bool:

@@ -39,7 +39,7 @@ import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
 from nav_msgs.msg import OccupancyGrid, Odometry
-from racer_gym_bridge.bridge_node import build_track_from_raceline
+from racer_gym_bridge.bridge_node import Pocket, build_track_from_raceline
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
@@ -133,6 +133,29 @@ class TestBuildTrackFromRaceline(unittest.TestCase):
         self.assertGreater(signed_area(forward), 0.0)  # counter-clockwise
         self.assertLess(signed_area(backward), 0.0)  # clockwise
         self.assertTrue((forward.occupancy_map == backward.occupancy_map).all())
+
+    def test_pocket_is_cut_into_the_right_wall(self):
+        """Roadmap 2.9: park_node's L5 slot. The square's first side runs +x along y = 0, so the
+        right wall is at y = -0.4; a 0.6 m deep pocket from s = 0.5 to 1.5 frees y down to -1.0."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            raceline_path = f"{tmp_dir}/raceline.csv"
+            with open(raceline_path, "w") as f:
+                f.write(_SQUARE_RACELINE_CSV)
+            pocket = Pocket(start_s_m=0.5, length_m=1.0, depth_m=0.6, side="right")
+            track = build_track_from_raceline(raceline_path, track_half_width_m=0.4, pocket=pocket)
+            with self.assertRaises(ValueError):
+                build_track_from_raceline(raceline_path, pocket=pocket)
+        occupancy = track.occupancy_map
+        res = track.spec.resolution
+        ox, oy, _ = track.spec.origin
+
+        def cell(x: float, y: float) -> float:
+            return occupancy[int((y - oy) / res), int((x - ox) / res)]
+
+        self.assertEqual(cell(1.0, -0.7), 255.0)  # inside the pocket
+        self.assertEqual(cell(1.0, -1.1), 0.0)  # beyond its back
+        self.assertEqual(cell(0.3, -0.7), 0.0)  # before it
+        self.assertEqual(cell(1.7, -0.7), 0.0)  # after it
 
 
 @pytest.mark.launch_test

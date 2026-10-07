@@ -220,6 +220,25 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_reactive_lap_test.sh"
 
+  l5-park:
+    name: L5 park canary (racer_gym_bridge pocket + park_node + safety_node, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # Roadmap 2.9: park_node, with its floor-2026-10-07 profile and safety_node in the loop,
+    # finds a pocket cut into the bridge's walled corridor and parallel parks in it: parallel
+    # within 3 degrees, inside the pocket, no contact, no obstacle brake. The bridge casts /scan
+    # like the car's mounted 360 degree LiDAR and publishes /odom/wheel. Same
+    # workspace-combination pattern as l5-reactive-lap (see .github/scripts/l5_park_test.sh); a
+    # sibling job so the canaries fail independently.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 park workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_park_test.sh"
+
   e2e-sim-safety:
     name: Milestone 1 e2e (bridge_node + safety_node, real command path, ros-dev + gym)
     runs-on: ubuntu-latest

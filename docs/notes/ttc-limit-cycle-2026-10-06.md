@@ -275,6 +275,66 @@ floor profile (`escape_probe_distance_m` 0.5 m, see the reactive-control note) a
 in the loop; the brake now fires before contact, one escape backs the car out, and the lap
 completes without wall contact. The square-corner canary still runs.
 
+### Outer-corner horizon (2026-10-07, vehicle_params 0.12.0)
+
+Floor finding (bags `2026-10-07T05-43-31` and later, with the 0.11.1 lane pass: floor 0.30 m,
+brake 0.45 s): on a 1.1 m lane the car still braked mid-corner. At full lock the brake band
+spanned radii 0.54 to 1.05 m from the turn centre, the whole lane, and the outer front corner's
+sweep was projected up to a quarter turn ahead (about 0.89 m of arc from the head). The
+follower straightens the steering within a few tenths of a second, so the outer wall two car
+lengths round the arc is never reached, yet it tripped the brake. The owner reports the car
+could have stepped on the gas and cleared these corners; the escape then fired for nothing.
+
+Change (racer_safety, vehicle_params 0.12.0, not yet run on the car):
+
+- **Two bands, two horizons** (forward_sector.hpp "OUTER-CORNER HORIZON"). The BODY band,
+  `|R| - 0.205 <= rho <= |R| + 0.205` (the rear-axle path swept by the half width plus margin,
+  0.54 to 0.947 m at full lock), is checked to the quarter turn as before. The OUTER-CORNER
+  band, `|R| + 0.205 < rho <= hypot(front_x, |R| + 0.205)` (0.947 to 1.053 m at full lock), is
+  checked only while the return's arc distance is at most `limits.outer_corner_horizon_m`.
+  Beyond it the return is ignored.
+- **`limits.outer_corner_horizon_m`** is a NEW REQUIRED field, PROVISIONAL 0.45 m (about one
+  body length), NOT tuned (schema 0.11.1 -> 0.12.0). The horizon is measured in the same arc
+  distance the gate uses for TTC and the floor (from the head forward, from the rear bumper line
+  backward), and that distance is unchanged.
+- **The rear corridor mirrors it**: the band between `|R| + 0.205` and the outer rear corner's
+  sweep (0.947 to 0.954 m at full lock) counts only within the same horizon of reverse arc.
+- **Unchanged**: the straight corridor, the inner edge, the outer edge itself, the sector bound,
+  the invalid-return policy, and everything in gate_logic (latches, hysteresis, steering hold,
+  release line). A NaN, zero or negative horizon is garbage and falls back to the whole-scan
+  minimum like every other bad path input; +infinity is accepted and gives the 0.11.x band.
+
+What it does to the lane case: a wall across the lane 0.98 m ahead of the rear axle (about
+0.7 m ahead of the head) is outside the body band's sweep at full lock and inside the corner's
+only near a quarter turn, about 0.62 m of arc from the head. It was in the brake band; it is
+not now. The same wall 0.85 m ahead of the rear axle is in the body band's sweep and still
+counts (`TheLanesOuterWallFarRoundTheArcNoLongerBrakes`). The 2026-10-06 round-corner wall is
+still seen, its nearest return well inside the horizon
+(`TheRoundCornerWallIsStillSeenWithinTheHorizon`).
+
+Tests: `test_arc_corridor.cpp` "ArcCorridorOuterCornerHorizon" (an outer-band return inside the
+horizon counts at its arc length and beyond it is ignored out to the quarter turn; body-band
+returns beyond the horizon still count, outer side, centre and inner flank; left and right are
+mirror images; an infinite horizon is the 0.11.x band; the straight corridor is the same for any
+horizon; the lane wall and the round-corner wall above), the garbage fallback for a NaN, zero,
+negative or -infinite horizon, and in `test_rear_corridor.cpp` the mirrored rear split (inside
+and beyond the horizon, the body band beyond it, left/right, the straight reverse corridor, the
+garbage fallback). The existing rear outer-edge test moved from 0.9 rad of arc (0.55 m from the
+bumper line, now beyond the horizon) to 0.6 rad (0.33 m). Branch coverage of gate_logic.cpp and
+forward_sector.cpp stays at 100 percent (333 of 333). L5: the round-corner escape canary passes
+with no wall contact at 0.45 m, and both lap directions pass; numbers in the build log.
+
+The L3 release test (`test_latch_releases_when_the_request_steers_away_and_the_arc_is_clear`)
+was failing on PR 102 before this change: with the 0.30 m floor its wall moved in to 0.345 m,
+and its near end, 2 cm right of the centreline, came inside the outer front corner's sweep
+(arc distance about 0.24 m, inside the horizon too), so the latch held. Its near end is now
+15 cm right of the centreline, clear of the sweep, like the gtest's `clear_wall()`.
+
+Floor check still to do: the same 1.1 m lane at the 0.11.1 speeds, with the kill switch in a
+second person's hand. Count TTC and clearance brakes per lap against bag 05-43-31 (36 brakes in
+160 s); the mid-corner brakes with the outer wall 0.3 to 0.4 m away should be gone, and a car
+that turns in late toward the outer wall must still brake before the nose touches it.
+
 ## Rear corridor (2026-10-06, night floor test)
 
 Bags `2026-10-06T23-19-41` and `23-25-38`, replayed through the follower core: in both lap

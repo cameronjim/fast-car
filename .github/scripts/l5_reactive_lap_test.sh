@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# L5 reactive lap canary (GitHub issue 26, claude-docs/12-testing.md): builds
-# sim/bridge/racer_gym_bridge, ros_ws/src/racer_control, and tests/l5_reactive_lap together
-# in ONE colcon workspace inside the repo's own `ros-dev` image and runs the gap_follow_node
-# lap canary. A copy of .github/scripts/l5_tracker_lap_test.sh with the test package swapped;
+# L5 reactive lap canaries (GitHub issue 26, claude-docs/12-testing.md): builds
+# sim/bridge/racer_gym_bridge, ros_ws (racer_control, racer_safety, racer_msgs, ...), and
+# tests/l5_reactive_lap together in ONE colcon workspace inside the repo's own `ros-dev` image
+# and runs every test in tests/l5_reactive_lap: the gap_follow_node lap canary in both
+# directions (counter-clockwise and clockwise, lane centring on) and the reverse escape canary
+# (a corner tighter than the turning circle, safety_node in the loop). A copy of .github/scripts/l5_tracker_lap_test.sh with the test package swapped;
 # see that script for the reasoning behind every step (kept identical on purpose).
 #
 # Same f1tenth_gym-importable-to-system-python3 approach as sim_bridge_build_test.sh (see
@@ -60,7 +62,10 @@ apt-get update
 
 echo "Resolving ROS package dependencies with rosdep..."
 rosdep update >/dev/null
+# racer_safety and racer_msgs too: the escape canary (test_gap_follow_escape_canary.py) runs
+# safety_node in the loop. They are built from the same ros_ws base path below.
 rosdep install --from-paths "$REPO_ROOT/sim/bridge" "$REPO_ROOT/ros_ws/src/racer_control" \
+  "$REPO_ROOT/ros_ws/src/racer_safety" "$REPO_ROOT/ros_ws/src/racer_msgs" \
   "$REPO_ROOT/tests/l5_reactive_lap" --ignore-src -r -y
 
 echo "Building the combined L5 workspace (sim/bridge + racer_control + l5_reactive_lap)..."

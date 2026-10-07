@@ -203,7 +203,10 @@ jobs:
     runs-on: ubuntu-latest
     # GitHub issue 26: gap_follow_node drives the gym car around config/tracks/gym_oval from
     # the bridge's /scan alone, inside a walled corridor (bridge_node track_half_width_m), and
-    # must complete two laps within a time budget without leaving the corridor. Same
+    # must complete two laps within a time budget without leaving the corridor, in both lap
+    # directions with lane centring on (2026-10-06 night). A second scenario, with safety_node
+    # in the loop, drives a loop with a corner tighter than the turning circle where the
+    # reverse escape must fire and the lap must still be completed. Same
     # workspace-combination pattern as l5-tracker-lap (see
     # .github/scripts/l5_reactive_lap_test.sh); a sibling job so the two canaries fail
     # independently.

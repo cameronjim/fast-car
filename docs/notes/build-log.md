@@ -1895,3 +1895,48 @@ record); drive the lane with the profile and check the edge hugging is gone; par
 a corner it cannot make and watch one escape. Kill switch in a second person's hand for all of
 it. Details in `docs/notes/reactive-control-port-2026-10-05.md` ("Lane centring", "Reverse
 escape") and the runbook's "Gap follow from the launch file".
+
+## 2026-10-07: VESC UART telemetry and wheel odometry, read-only (software only, not on the car)
+
+Goal: the car knows how far it has moved, from the VESC's sensored motor, without touching the
+command path (needed for roadmap 2.9's parking and three-point turn, and as the wheel-speed
+input of 2.1 / 2.4).
+
+Adopted, not written: f1tenth/vesc `vesc_driver` + `vesc_msgs`, ros2 branch head `153998df`
+(2023-03-27), built in `docker/car/Dockerfile` into `/opt/racer_thirdparty` like sllidar_ros2.
+`vesc_ackermann` is not built. The humble/jazzy branch (2025-02) differs from ros2 only in
+vesc_ackermann for these two packages. The driver is patched read-only
+(`docker/car/patches/vesc_driver-readonly.patch`): no command subscriptions, every set-command
+a no-op, plus a `baud` parameter, no hardware flow control (upstream's would stall a 3-wire
+UART), temp_fet / temp_motor copied into the message (upstream left them 0), no IMU poll.
+`docker/ros-dev/Dockerfile` builds `vesc_msgs` from the same commit so CI compiles and tests
+the new node.
+
+New: `racer_drivers/vesc_odometry_node` (`/odom/wheel`, `/telemetry/vesc/*`), ROS-free
+conversion in `vesc_odometry.hpp`, `racer_bringup/launch/vesc_telemetry.launch.py` (serial
+port default `/dev/ttyTHS1` = Jetson header pins 8/10 on JetPack 6, baud 115200), a `vesc`
+argument on `car_teleop.launch.py` (default false) and recorder regex entries for
+`/odom/wheel`, `/telemetry/vesc/.*` and `/vesc/sensors/core`. With the PROVISIONAL gear ratio
+and tyre radius: 0.000485 m/s per ERPM, so l_max_erpm 6000 reads 2.91 m/s, which the L1
+binding test pins against `actuation.throttle_full_scale_mps`.
+
+Baud stays a launch argument, not a `vehicle_params` field: it is how this Jetson is wired to
+this VESC, per-machine configuration, and `claude-docs/10-conventions.md` puts that in launch
+arguments; `vehicle_params` is for physical properties of the car. No physical constant
+changed and no schema bump.
+
+Verified in the ros-dev container (jammy, Humble, arm64): the car image's new layer replayed
+with `docker build` on top of ros-dev (apt deps, pinned checkout, patch, the no-subscription /
+no-send checks, build, lookup checks all pass); the patched driver ran against a fake VESC on a
+pseudo-terminal: `Connected to VESC with firmware version 6.2`, `/odom/wheel` at 49.9 Hz with
+1.4552 m/s for 3000 ERPM, telemetry correct, `ros2 node info` shows no subscriber but
+`/parameter_events`, and with publishers on `/vesc/commands/motor/{current,duty_cycle,speed}`,
+`/vesc/commands/servo/position` and `/commands/motor/current` the fake VESC still received only
+COMM_FW_VERSION and COMM_GET_VALUES. Not run: anything on the Jetson, the real UART, a real
+VESC, the car image build itself.
+
+Open, in order (runbook "VESC telemetry"): read the FSESC 6.7 COMM pinout off the silkscreen
+and measure it (UNVERIFIED in the runbook); VESC Tool App to Use `PPM` -> `PPM and UART`,
+re-export and commit the app XML; disable nvgetty if it holds `/dev/ttyTHS1`; wire pins 8/10/GND
+crossed, never the VESC's 5 V; run the bench checks (no subscribers, 50 Hz, sign by hand-turned
+wheel, 10-turn distance check).

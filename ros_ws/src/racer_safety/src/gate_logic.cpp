@@ -158,16 +158,44 @@ DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
   const double clamped_steer_delta = clamp_value(steer_delta, steer_delta_min, steer_delta_max);
   out.steering_angle_rad = previous_output.steering_angle_rad + clamped_steer_delta;
 
-  const double speed_delta = cmd.speed_mps - previous_output.speed_mps;
-  if (speed_delta > 0.0) {
-    // Only accelerating (increasing commanded speed) is rate-limited; decelerating/braking is
-    // never rate-limited (claude-docs/05-safety.md never asks for slower braking).
-    const double max_speed_delta = limits_.max_acceleration_mps2 * dt_s;
-    if (speed_delta > max_speed_delta) {
-      out.speed_mps = previous_output.speed_mps + max_speed_delta;
-    } else {
-      out.speed_mps = previous_output.speed_mps + speed_delta;
+  // Speed: only growth of the speed's MAGNITUDE (accelerating away from zero, forward or
+  // reverse) is rate-limited; a change toward zero (braking, either direction) never is
+  // (claude-docs/05-safety.md never asks for slower braking). A request across zero brakes to
+  // zero at once and grows from zero. See gate_logic.hpp "SPEED RATE LIMIT IN BOTH
+  // DIRECTIONS". With the previous output and the request both >= 0 this is exactly the old
+  // forward-only rule.
+  double base_mps = previous_output.speed_mps;
+  if (previous_output.speed_mps < 0.0) {
+    if (cmd.speed_mps >= 0.0) {
+      base_mps = 0.0;  // reverse to stop or forward: the brake to zero is free
     }
+  } else if (previous_output.speed_mps > 0.0) {
+    if (cmd.speed_mps <= 0.0) {
+      base_mps = 0.0;  // forward to stop or reverse: the brake to zero is free
+    }
+  }
+  const double speed_delta = cmd.speed_mps - base_mps;
+  const double max_speed_delta = limits_.max_acceleration_mps2 * dt_s;
+  if (speed_delta > 0.0) {
+    if (base_mps >= 0.0) {
+      // Forward growth from base_mps.
+      if (speed_delta > max_speed_delta) {
+        out.speed_mps = base_mps + max_speed_delta;
+      } else {
+        out.speed_mps = base_mps + speed_delta;
+      }
+    }
+    // base_mps < 0 here means braking in reverse toward the request: never limited.
+  } else if (speed_delta < 0.0) {
+    if (base_mps <= 0.0) {
+      // Reverse growth from base_mps.
+      if (-speed_delta > max_speed_delta) {
+        out.speed_mps = base_mps - max_speed_delta;
+      } else {
+        out.speed_mps = base_mps + speed_delta;
+      }
+    }
+    // base_mps > 0 here means braking forward toward the request: never limited.
   }
   return out;
 }
@@ -193,11 +221,16 @@ GateActivation SafetyGateLogic::steering_hold_activation(double held_steering_an
 void SafetyGateLogic::hold_obstacle_state(const GateInput& input,
                                           const DriveCommand& previous_output,
                                           GateResult& result) const {
-  // result.ttc_brake_latched already carries the input's latch. Without a latch the hold timer
-  // stays cleared (GateResult's default) and the hold does not apply.
+  // result.ttc_brake_latched / reverse_brake_latched already carry the input's latches.
+  // Without the forward latch the hold timer stays cleared (GateResult's default) and the hold
+  // does not apply.
+  if (input.reverse_brake_latched) {
+    result.activations.push_back(GateActivation{GateSource::kTtcReverse, EventSeverity::kBrake,
+                                                formatting::ttc_latch_held_detail(true)});
+  }
   if (input.ttc_brake_latched) {
     result.activations.push_back(GateActivation{GateSource::kTtc, EventSeverity::kBrake,
-                                                formatting::ttc_latch_held_detail()});
+                                                formatting::ttc_latch_held_detail(false)});
     result.obstacle_hold_timer_s = input.obstacle_hold_timer_s;
     if (steering_hold_engaged(input.obstacle_hold_timer_s)) {
       // The short-circuit output already holds the previous steering (zero_throttle_command),
@@ -247,23 +280,27 @@ double SafetyGateLogic::ttc_release_threshold_s() const {
   return *limits_.ttc_brake_s * limits_.ttc_release_hysteresis_factor;
 }
 
-void SafetyGateLogic::apply_obstacle_gate(const DriveCommand& requested, const GateInput& input,
+bool SafetyGateLogic::apply_obstacle_gate(double direction, GateSource source, double range_m,
+                                          bool latched_in, const DriveCommand& requested,
                                           DriveCommand& target, GateResult& result) const {
-  // No state estimator (/odom) feeds safety_node yet (the EKF is roadmap phase 2), so the
-  // REQUESTED speed is the forward-speed estimate. Reversing/stopped is never TTC-braked.
-  const double range_m = input.min_scan_range_m;
-  const double forward_speed_mps = requested.speed_mps > 0.0 ? requested.speed_mps : 0.0;
-  bool moving_forward = false;
-  if (forward_speed_mps > kMinForwardSpeedMps) {
-    moving_forward = true;
+  // One implementation for both directions (gate_logic.hpp "THE REAR OBSTACLE GATE"):
+  // direction +1.0 is the forward gate, -1.0 the rear gate. No state estimator (/odom) feeds
+  // safety_node yet (the EKF is roadmap phase 2), so the REQUESTED speed toward this side is
+  // the speed estimate. A request away from this side, or stopped, is never braked by it.
+  const bool reverse = direction < 0.0;
+  const double toward_mps = direction * requested.speed_mps;
+  const double speed_toward_mps = toward_mps > 0.0 ? toward_mps : 0.0;
+  bool moving_toward = false;
+  if (speed_toward_mps > kMinForwardSpeedMps) {
+    moving_toward = true;
   }
   const bool obstacle = is_valid_range(range_m);  // finite and > 0
 
-  // TTC of the REQUEST. +inf when there is no obstacle or the request is not forward.
+  // TTC of the REQUEST. +inf when there is no obstacle or the request is not toward it.
   double ttc_s = std::numeric_limits<double>::infinity();
   if (obstacle) {
-    if (moving_forward) {
-      ttc_s = range_m / forward_speed_mps;
+    if (moving_toward) {
+      ttc_s = range_m / speed_toward_mps;
     }
   }
 
@@ -277,7 +314,7 @@ void SafetyGateLogic::apply_obstacle_gate(const DriveCommand& requested, const G
   bool floor_trip = false;
   if (limits_.min_forward_clearance_m.has_value()) {
     if (obstacle) {
-      if (moving_forward) {
+      if (moving_toward) {
         if (range_m < *limits_.min_forward_clearance_m) {
           floor_trip = true;
         }
@@ -313,36 +350,37 @@ void SafetyGateLogic::apply_obstacle_gate(const DriveCommand& requested, const G
     latched = true;
   } else if (floor_trip) {
     latched = true;
-  } else if (input.ttc_brake_latched) {
+  } else if (latched_in) {
     if (!release_ok) {
       latched = true;
     }
   }
 
   if (latched) {
-    // Only forward throttle is held; a zero/reverse request passes (gate_logic.hpp).
-    if (target.speed_mps > 0.0) {
+    // Only speed toward this side is held; a request the other way, or stopped, passes
+    // (gate_logic.hpp).
+    if (direction * target.speed_mps > 0.0) {
       target.speed_mps = 0.0;
     }
     result.zero_throttle = true;
     std::string detail;
     if (ttc_trip) {
-      detail = formatting::ttc_brake_detail(ttc_s, *limits_.ttc_brake_s);
+      detail = formatting::ttc_brake_detail(ttc_s, *limits_.ttc_brake_s, reverse);
     } else if (floor_trip) {
-      detail = formatting::clearance_brake_detail(range_m, *limits_.min_forward_clearance_m);
+      detail =
+          formatting::clearance_brake_detail(range_m, *limits_.min_forward_clearance_m, reverse);
     } else {
-      detail = formatting::ttc_latch_held_detail();
+      detail = formatting::ttc_latch_held_detail(reverse);
     }
-    result.activations.push_back(
-        GateActivation{GateSource::kTtc, EventSeverity::kBrake, std::move(detail)});
-  } else if (input.ttc_brake_latched) {
+    result.activations.push_back(GateActivation{source, EventSeverity::kBrake, std::move(detail)});
+  } else if (latched_in) {
     // The latch released on this cycle: the "ttc brake released" note that becomes the
     // PHASE_RELEASE record's detail.
-    result.releases.push_back(GateActivation{
-        GateSource::kTtc, EventSeverity::kBrake,
-        formatting::ttc_release_detail(ttc_s, release_ttc_s, range_m, release_clearance_m)});
+    result.releases.push_back(
+        GateActivation{source, EventSeverity::kBrake,
+                       formatting::ttc_release_detail(ttc_s, release_ttc_s, range_m,
+                                                      release_clearance_m, reverse)});
   }
-  result.ttc_brake_latched = latched;
 
   // Advisory warning zone: only when not latched, and only when the TTC brake is configured
   // (an unconfigured TTC gate is a documented no-op, CLAUDE.md invariant 2).
@@ -350,20 +388,23 @@ void SafetyGateLogic::apply_obstacle_gate(const DriveCommand& requested, const G
     if (limits_.ttc_brake_s.has_value()) {
       if (limits_.ttc_warning_s.has_value()) {
         if (ttc_s <= *limits_.ttc_warning_s) {
-          result.activations.push_back(
-              GateActivation{GateSource::kTtc, EventSeverity::kInfo,
-                             formatting::ttc_warning_detail(ttc_s, *limits_.ttc_warning_s)});
+          result.activations.push_back(GateActivation{
+              source, EventSeverity::kInfo,
+              formatting::ttc_warning_detail(ttc_s, *limits_.ttc_warning_s, reverse)});
         }
       }
     }
   }
+  return latched;
 }
 
 GateResult SafetyGateLogic::evaluate(const GateInput& input,
                                      const DriveCommand& previous_output) const {
   GateResult result;
-  // Every return path below either recomputes the latch (step 3b) or holds it as it came in.
+  // Every return path below either recomputes the latches (step 3b) or holds them as they came
+  // in.
   result.ttc_brake_latched = input.ttc_brake_latched;
+  result.reverse_brake_latched = input.reverse_brake_latched;
 
   // 1. Watchdog (claude-docs/04-architecture.md: "missing /drive_raw for 3 cycles -> brake
   // command") -- short-circuits everything else below; a stale/garbage age means there is no
@@ -417,10 +458,17 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
 
   // 3b. Obstacle gate (TTC brake on the REQUESTED speed + distance floor, one latch). See
   // gate_logic.hpp "THE OBSTACLE GATE AND ITS LATCH" for why this runs BEFORE the rate
-  // limiter and on the request, not the output (the 2026-10-06 limit cycle).
+  // limiter and on the request, not the output (the 2026-10-06 limit cycle). Then the rear
+  // gate, the same logic mirrored for a reverse request on the rear corridor with its own
+  // latch (gate_logic.hpp "THE REAR OBSTACLE GATE").
   const DriveCommand requested = cmd;
   DriveCommand target = requested;
-  apply_obstacle_gate(requested, input, target, result);
+  result.ttc_brake_latched =
+      apply_obstacle_gate(1.0, GateSource::kTtc, input.min_scan_range_m, input.ttc_brake_latched,
+                          requested, target, result);
+  result.reverse_brake_latched =
+      apply_obstacle_gate(-1.0, GateSource::kTtcReverse, input.min_rear_scan_range_m,
+                          input.reverse_brake_latched, requested, target, result);
 
   // 3c. Rate-limit clamp relative to the previous OUTPUT (what was actually commanded last
   // cycle, not what was requested), applied to whatever the obstacle gate left, then

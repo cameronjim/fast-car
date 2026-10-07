@@ -1,4 +1,6 @@
-// In-path obstacle distance for racer_safety's obstacle gate (TTC brake + distance floor).
+// In-path obstacle distance for racer_safety's obstacle gate (TTC brake + distance floor),
+// ahead of the car for a forward request and, since 2026-10-06 night, behind it for a reverse
+// request ("REAR CORRIDOR" below; the file keeps its name).
 //
 // ROS-free, like gate_logic.hpp, so it is gtest-unit-testable with no ROS install and sits
 // under the same 100% branch-coverage gate (.github/scripts/racer_safety_coverage.sh).
@@ -154,6 +156,40 @@ double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float
                            double laser_yaw_rad, double half_angle_rad,
                            double corridor_half_width_m, const PathGeometry& path,
                            double requested_steering_rad);
+
+// REAR CORRIDOR (2026-10-06 night floor finding). In both lap directions the car ended nose-in
+// to a corner tighter than its turning circle (full lock 0.4189 rad on the 0.3302 m wheelbase):
+// the arc corridor braked correctly, then no steering gave a clear forward arc and the latch
+// held forever. gap_follow_node can now back out (its reverse escape), so safety_node needs a
+// rear check: until now nothing judged a reverse request at all. min_rear_path_distance_m is
+// the same in-path test mirrored behind the car, for the arc a REVERSE request sweeps:
+//   * Mirror the rear-axle frame front to back: a return at head-relative (x, y) becomes
+//     xm = -(x + mount_x) (behind the rear axle is positive) and ym = y + mount_y. Backing up
+//     with steering delta, the rear axle follows the same circle of signed radius
+//     R = L / tan(delta) about (0, R) as driving forward with delta, only in the other
+//     direction; in the mirrored frame that is exactly the forward case. So the forward
+//     formulas apply unchanged to (xm, ym).
+//   * Straight (|delta| < kStraightSteeringEpsilonRad): in the path if |ym| <=
+//     corridor_half_width_m, and the distance is xm - rear_overhang_m, which must be > 0.
+//   * Arc: in the swept band if |hypot(xm, ym - R) - |R|| <= corridor_half_width_m, arc angle
+//     phi = atan2(xm, |R| - sign(R) ym) in (0, pi/2), and the distance is the arc length the
+//     rear axle travels until the rear bumper line's centre reaches the return's angle,
+//     |R| (phi - atan2(rear_overhang_m, |R|)), which must be > 0.
+//   * REFERENCE: the REAR BUMPER LINE, rear_overhang_m (chassis.rear_overhang_m, schema
+//     0.10.0) behind the rear axle. The forward corridor is measured from the LiDAR head (about
+//     0.15 m behind the front bumper on this car), the rear one from the bumper itself: the
+//     head sits far forward, so measuring the rear from it would put 0.4 m of car inside the
+//     distance. Returns inside the car's own footprint behind the head (the body, cables) have
+//     a distance <= 0 and never count.
+//   * Outer bound: the same half angle as the forward sector, centred on the car's -x axis:
+//     |wrap(vehicle bearing - pi)| <= half_angle_rad, as seen from the head.
+// Same invalid-return policy, same +infinity for "nothing in the path", and the same
+// conservative fallback (minimum slant range over every usable return) on garbage input, which
+// here also covers a non-finite or negative rear_overhang_m.
+double min_rear_path_distance_m(const ScanGeometry& geometry, const std::vector<float>& ranges,
+                                double laser_yaw_rad, double half_angle_rad,
+                                double corridor_half_width_m, const PathGeometry& path,
+                                double rear_overhang_m, double requested_steering_rad);
 
 // The straight corridor on its own: min_path_distance_m with a straight request and the head
 // on the centreline (mount_y 0). The arc corridor reduces to this as the steering goes to

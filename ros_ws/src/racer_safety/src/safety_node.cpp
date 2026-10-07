@@ -79,6 +79,17 @@
 // straight corridor a car stopped against a wall at full lock away from it stayed latched for
 // 20 to 37 s.) Before the first scan the distance is +infinity, as before.
 //
+// REAR CORRIDOR (2026-10-06 night). A reverse request is now judged like a forward one, on the
+// arc corridor mirrored behind the car (forward_sector.hpp "REAR CORRIDOR") with the distance
+// measured from the rear bumper line, chassis.rear_overhang_m behind the rear axle (schema
+// 0.10.0). on_timer reduces the last scan a second time each cycle, along the reverse arc of
+// the cached request's steering, and hands it to the gate's rear obstacle gate, which has its
+// own latch (gate_logic.hpp "THE REAR OBSTACLE GATE"). It is computed every cycle, whatever the
+// request's direction, because the rear latch's release needs it too; a forward or zero
+// request never trips the rear gate. This node threads the rear latch like the forward one and
+// holds it across an internal fault. gap_follow_node's reverse escape backs the car out of a
+// corner it cannot drive round; it goes through this gate like every other command.
+//
 // STEERING HOLD (2026-10-06 late). Once the obstacle latch has held the /drive speed at zero
 // for vehicle_params limits.obstacle_steering_hold_after_s, the gate freezes the steering
 // output until the latch releases (a car parked against an obstacle stops hunting its servo).
@@ -163,12 +174,13 @@ class SafetyNode : public rclcpp::Node {
         "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
         "%.3f m, path corridor +/-%.3f m along the requested steering arc (wheelbase "
         "%.4f m, lidar at x %.3f m y %.3f m from the rear axle) inside a +/-%.3f rad "
-        "outer sector, laser yaw %.6f rad, steering hold after %.3f s on the obstacle "
-        "latch, "
+        "outer sector, rear corridor mirrored behind the car from the rear bumper line "
+        "%.3f m behind the rear axle, laser yaw %.6f rad, steering hold after %.3f s on the "
+        "obstacle latch, "
         "ttc_brake_s=%s, ttc_warning_s=%s",
         control_rate_hz, gate_limits_.watchdog_missed_cycles, *gate_limits_.min_forward_clearance_m,
         corridor_half_width_m_, path_geometry_.wheelbase_m, path_geometry_.lidar_mount_x_m,
-        path_geometry_.lidar_mount_y_m, sector_half_angle_rad_, laser_yaw_rad_,
+        path_geometry_.lidar_mount_y_m, sector_half_angle_rad_, rear_overhang_m_, laser_yaw_rad_,
         gate_limits_.obstacle_steering_hold_after_s,
         gate_limits_.ttc_brake_s.has_value()
             ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
@@ -290,6 +302,8 @@ class SafetyNode : public rclcpp::Node {
     path_geometry_.max_steering_angle_rad = VEHICLE_PARAMS.steering.max_angle_rad;
     path_geometry_.lidar_mount_x_m = *VEHICLE_PARAMS.sensors.lidar.mount_x_m;
     path_geometry_.lidar_mount_y_m = *VEHICLE_PARAMS.sensors.lidar.mount_y_m;
+    // The rear corridor's reference line (schema 0.10.0, required, so always set).
+    rear_overhang_m_ = VEHICLE_PARAMS.chassis.rear_overhang_m;
 
     rcl_interfaces::msg::ParameterDescriptor yaw_descriptor;
     yaw_descriptor.description =
@@ -356,6 +370,23 @@ class SafetyNode : public rclcpp::Node {
     geometry.range_max_m = static_cast<double>(last_scan_->range_max);
     return min_path_distance_m(geometry, last_scan_->ranges, laser_yaw_rad_, sector_half_angle_rad_,
                                corridor_half_width_m_, path_geometry_, requested_steering_rad);
+  }
+
+  // The same for the rear corridor: the last scan along the REVERSE arc of
+  // `requested_steering_rad`, from the rear bumper line (forward_sector.hpp "REAR CORRIDOR").
+  // +infinity before the first scan.
+  double rear_path_distance_m(double requested_steering_rad) const {
+    if (!last_scan_) {
+      return std::numeric_limits<double>::infinity();
+    }
+    ScanGeometry geometry;
+    geometry.angle_min_rad = static_cast<double>(last_scan_->angle_min);
+    geometry.angle_increment_rad = static_cast<double>(last_scan_->angle_increment);
+    geometry.range_min_m = static_cast<double>(last_scan_->range_min);
+    geometry.range_max_m = static_cast<double>(last_scan_->range_max);
+    return min_rear_path_distance_m(geometry, last_scan_->ranges, laser_yaw_rad_,
+                                    sector_half_angle_rad_, corridor_half_width_m_, path_geometry_,
+                                    rear_overhang_m_, requested_steering_rad);
   }
 
   void publish_event(const SafetyEventRecord& record, const rclcpp::Time& stamp) {
@@ -431,7 +462,9 @@ class SafetyNode : public rclcpp::Node {
           has_evaluated_before_ ? (steady_now - last_eval_steady_).seconds() : control_period_s_;
       // Reduced HERE, every cycle, with this cycle's requested steering (the arc corridor).
       input.min_scan_range_m = in_path_distance_m(input.command.steering_angle_rad);
+      input.min_rear_scan_range_m = rear_path_distance_m(input.command.steering_angle_rad);
       input.ttc_brake_latched = ttc_brake_latched_;
+      input.reverse_brake_latched = reverse_brake_latched_;
       input.obstacle_hold_timer_s = obstacle_hold_timer_s_;
       input.has_pose_input = false;  // TODO(roadmap 2.6): wire from /pose once it exists.
       input.pose_covariance_trace = 0.0;
@@ -441,6 +474,7 @@ class SafetyNode : public rclcpp::Node {
       publish_transitions(result.activations, result.releases, steady_now, now);
       previous_output_ = result.output;
       ttc_brake_latched_ = result.ttc_brake_latched;
+      reverse_brake_latched_ = result.reverse_brake_latched;
       obstacle_hold_timer_s_ = result.obstacle_hold_timer_s;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
@@ -461,6 +495,11 @@ class SafetyNode : public rclcpp::Node {
       // The obstacle-gate latch is HELD across a fault (the gate did not run, so nothing can
       // judge a release) and its engagement keeps being reported, same as the watchdog and
       // command-sanity short-circuits do in gate_logic.cpp.
+      if (reverse_brake_latched_) {
+        fault_activations.push_back(
+            GateActivation{GateSource::kTtcReverse, EventSeverity::kBrake,
+                           "reverse ttc brake latch held across an internal fault"});
+      }
       if (ttc_brake_latched_) {
         fault_activations.push_back(
             GateActivation{GateSource::kTtc, EventSeverity::kBrake,
@@ -499,6 +538,9 @@ class SafetyNode : public rclcpp::Node {
   sensor_msgs::msg::LaserScan::SharedPtr last_scan_;
   // Obstacle-gate latch, threaded through evaluate() like previous_output_ (gate_logic.hpp).
   bool ttc_brake_latched_{false};
+  // The rear obstacle gate's latch, threaded the same way (gate_logic.hpp "THE REAR OBSTACLE
+  // GATE").
+  bool reverse_brake_latched_{false};
   // Steering-hold timer on that latch, threaded the same way (gate_logic.hpp).
   std::optional<double> obstacle_hold_timer_s_;
   // In-path test (configure_scan_sector).
@@ -506,6 +548,7 @@ class SafetyNode : public rclcpp::Node {
   double corridor_half_width_m_{0.0};
   double laser_yaw_rad_{0.0};
   PathGeometry path_geometry_;
+  double rear_overhang_m_{0.0};
   bool has_received_command_;
   bool has_evaluated_before_;
 

@@ -23,6 +23,8 @@ std::string gate_source_to_string(GateSource source) {
       return "covariance";
     case GateSource::kInternalFault:
       return "internal_fault";
+    case GateSource::kTtcReverse:
+      return "ttc_reverse";
   }
   // Defensive only: every GateSource enumerator is handled above, and no code anywhere in
   // this repo constructs a GateSource outside that set.
@@ -51,31 +53,39 @@ std::string rate_limit_detail(double dt_s) {
   return "command rate-limited relative to previous output (dt=" + std::to_string(dt_s) + "s)";
 }
 
-std::string ttc_brake_detail(double ttc_s, double brake_threshold_s) {
-  return "time-to-collision " + std::to_string(ttc_s) + "s <= brake threshold " +
-         std::to_string(brake_threshold_s) + "s at the requested speed; braking (latched)";
+std::string ttc_brake_detail(double ttc_s, double brake_threshold_s, bool reverse) {
+  return std::string(reverse ? "reverse " : "") + "time-to-collision " + std::to_string(ttc_s) +
+         "s <= brake threshold " + std::to_string(brake_threshold_s) +
+         "s at the requested speed; braking (latched)";
 }
 
-std::string ttc_warning_detail(double ttc_s, double warning_threshold_s) {
-  return "time-to-collision " + std::to_string(ttc_s) + "s <= warning threshold " +
-         std::to_string(warning_threshold_s) + "s (advisory only, no command change)";
+std::string ttc_warning_detail(double ttc_s, double warning_threshold_s, bool reverse) {
+  return std::string(reverse ? "reverse " : "") + "time-to-collision " + std::to_string(ttc_s) +
+         "s <= warning threshold " + std::to_string(warning_threshold_s) +
+         "s (advisory only, no command change)";
 }
 
-std::string clearance_brake_detail(double range_m, double min_clearance_m) {
-  return "forward clearance " + std::to_string(range_m) + "m < minimum " +
-         std::to_string(min_clearance_m) + "m; braking (latched)";
+std::string clearance_brake_detail(double range_m, double min_clearance_m, bool reverse) {
+  return std::string(reverse ? "rear clearance " : "forward clearance ") + std::to_string(range_m) +
+         "m < minimum " + std::to_string(min_clearance_m) + "m; braking (latched)";
 }
 
-std::string ttc_latch_held_detail() {
+std::string ttc_latch_held_detail(bool reverse) {
+  if (reverse) {
+    return "reverse ttc brake latch held (release needs requested-speed reverse TTC above the "
+           "release threshold and rear clearance above the release clearance)";
+  }
   return "ttc brake latch held (release needs requested-speed TTC above the release threshold "
          "and forward clearance above the release clearance)";
 }
 
 std::string ttc_release_detail(double ttc_s, double release_ttc_s, double range_m,
-                               double release_clearance_m) {
-  return "ttc brake released: requested-speed TTC " + std::to_string(ttc_s) +
-         "s > release threshold " + std::to_string(release_ttc_s) + "s, forward clearance " +
-         std::to_string(range_m) + "m > release clearance " + std::to_string(release_clearance_m) +
+                               double release_clearance_m, bool reverse) {
+  return std::string(reverse ? "reverse ttc brake released: requested-speed reverse TTC "
+                             : "ttc brake released: requested-speed TTC ") +
+         std::to_string(ttc_s) + "s > release threshold " + std::to_string(release_ttc_s) +
+         (reverse ? "s, rear clearance " : "s, forward clearance ") + std::to_string(range_m) +
+         "m > release clearance " + std::to_string(release_clearance_m) +
          "m (nan = that half of the gate is disabled)";
 }
 

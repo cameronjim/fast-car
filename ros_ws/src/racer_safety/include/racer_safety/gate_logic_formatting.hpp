@@ -24,12 +24,14 @@ std::string command_sanity_detail();
 std::string bounds_clamp_detail(double steering_min_rad, double steering_max_rad,
                                 double speed_min_mps, double speed_max_mps);
 std::string rate_limit_detail(double dt_s);
-std::string ttc_brake_detail(double ttc_s, double brake_threshold_s);
-std::string ttc_warning_detail(double ttc_s, double warning_threshold_s);
-std::string clearance_brake_detail(double range_m, double min_clearance_m);
-std::string ttc_latch_held_detail();
+// `reverse` selects the rear obstacle gate's wording (gate_logic.hpp "THE REAR OBSTACLE
+// GATE"); the forward wording is unchanged.
+std::string ttc_brake_detail(double ttc_s, double brake_threshold_s, bool reverse);
+std::string ttc_warning_detail(double ttc_s, double warning_threshold_s, bool reverse);
+std::string clearance_brake_detail(double range_m, double min_clearance_m, bool reverse);
+std::string ttc_latch_held_detail(bool reverse);
 std::string ttc_release_detail(double ttc_s, double release_ttc_s, double range_m,
-                               double release_clearance_m);
+                               double release_clearance_m, bool reverse);
 std::string steering_hold_detail(double held_steering_angle_rad, double hold_after_s);
 std::string steering_hold_release_detail();
 std::string covariance_detail(double speed_fraction);

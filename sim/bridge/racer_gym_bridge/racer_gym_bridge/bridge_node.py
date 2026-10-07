@@ -95,7 +95,9 @@ def build_synthetic_track() -> Track:
     return Track.from_refline(x=xs, y=ys, velx=velxs)
 
 
-def build_track_from_raceline(raceline_path: str, track_half_width_m: float = 0.0) -> Track:
+def build_track_from_raceline(
+    raceline_path: str, track_half_width_m: float = 0.0, reverse_direction: bool = False
+) -> Track:
     """A closed-loop track from a committed raceline file (roadmap task S.2).
 
     Reuses the raceline's own x/y centerline and target-speed columns as the reference
@@ -117,8 +119,18 @@ def build_track_from_raceline(raceline_path: str, track_half_width_m: float = 0.
     ``from_refline`` uses, so a LiDAR-driven controller has real walls to react to. The
     corridor width is a property of the simulated TRACK, not of the vehicle, so it is a
     bridge parameter rather than a vehicle_params field.
+
+    ``reverse_direction`` (2026-10-06 night, the reactive canary in both lap directions):
+    False (the default) keeps the raceline's own order. True reverses the waypoint order before
+    the track is built. f1tenth_gym's reset (the default ``rl_grid_static`` reset function)
+    puts the car on the raceline's FIRST waypoint facing along the raceline, so reversing the
+    order is what turns the car round: it starts at the old last waypoint (next to the old
+    first one on a closed loop) facing the other way round the loop. The corridor walls are
+    built from the same points, so they do not change.
     """
     x, y, velx = load_raceline_xy_speed(raceline_path)
+    if reverse_direction:
+        x, y, velx = x[::-1].copy(), y[::-1].copy(), velx[::-1].copy()
     track = Track.from_refline(x=x, y=y, velx=velx)
     if track_half_width_m > 0.0:
         occupancy, origin = build_corridor_occupancy(
@@ -129,7 +141,12 @@ def build_track_from_raceline(raceline_path: str, track_half_width_m: float = 0.
     return track
 
 
-def build_env(seed: int, raceline_path: str = "", track_half_width_m: float = 0.0) -> gym.Env:
+def build_env(
+    seed: int,
+    raceline_path: str = "",
+    track_half_width_m: float = 0.0,
+    reverse_direction: bool = False,
+) -> gym.Env:
     """Construct the pinned f1tenth_gym env: single ego agent, headless.
 
     ``raceline_path`` is optional: empty (the default) keeps this node's original
@@ -140,7 +157,7 @@ def build_env(seed: int, raceline_path: str = "", track_half_width_m: float = 0.
     tracker can complete laps of.
     """
     track = (
-        build_track_from_raceline(raceline_path, track_half_width_m)
+        build_track_from_raceline(raceline_path, track_half_width_m, reverse_direction)
         if raceline_path
         else build_synthetic_track()
     )
@@ -193,7 +210,21 @@ class BridgeNode(Node):
             self.declare_parameter("track_half_width_m", 0.0, track_half_width_descriptor).value
         )
 
-        self.env = build_env(self._seed, self._raceline_path, self._track_half_width_m)
+        reverse_direction_descriptor = ParameterDescriptor(
+            description=(
+                "Drive the raceline the other way round: false (default) keeps its order; true "
+                "reverses the waypoints before the track is built, so the reset pose (first "
+                "waypoint, facing along the raceline) faces the other way. Only used with "
+                "raceline_path."
+            ),
+        )
+        self._reverse_direction = bool(
+            self.declare_parameter("reverse_direction", False, reverse_direction_descriptor).value
+        )
+
+        self.env = build_env(
+            self._seed, self._raceline_path, self._track_half_width_m, self._reverse_direction
+        )
 
         scan_sim = self.env.unwrapped.sim.agents[0].scan_simulator
         self._fov_rad = float(scan_sim.fov)

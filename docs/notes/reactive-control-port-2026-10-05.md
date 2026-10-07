@@ -142,9 +142,10 @@ forward, y left), worked for a left turn (a right turn is the mirror image):
   L = `chassis.wheelbase_m`. Same model as racer_safety's arc corridor; no code is shared.
 - With c = `chassis.width_m / 2` + `safety_margin_m`, the inside flank sweeps the circle of
   radius R - c (the body point nearest the centre is (0, half width)), and the outside front
-  corner sweeps hypot(body_front_x, R + c), with body_front_x = `cg_to_rear_axle_m` +
-  `length_m / 2` (the bounding box taken as centred on the CG, the f1tenth_gym convention its
-  values come from).
+  corner sweeps hypot(body_front_x, R + c), with body_front_x = `chassis.wheelbase_m` +
+  `chassis.front_overhang_m` (schema 0.11.0, PROVISIONAL 0.13 m; until then it was
+  `cg_to_rear_axle_m` + `length_m / 2`, the bounding box taken as centred on the CG, which the
+  provisional value matches within 1.3 mm).
 - Returns are taken from the raw scan (invalid returns ignored, not filled), turned to the
   vehicle frame with the laser yaw and shifted by `sensors.lidar.mount_x_m / mount_y_m`. The
   node refuses to start while those are null.
@@ -224,9 +225,10 @@ passes nothing extra and keeps the node defaults (and `max_speed_mps` 2.0) exact
 | `centering_sector_half_angle_rad` (new, night) | 1.0 | 1.0 |
 | `centering_max_range_m` (new, night) | 1.5 | 1.5 |
 | `reverse_escape` (new, night, see "Reverse escape") | true | false |
+| `escape_probe_distance_m` (new, night, see "Reverse escape") | 0.5 | 0.3 |
 
 Everything not listed (`k_speed_per_s` 1.0, `safety_margin_m`, `clip_max_range_m`, the control
-rate, the watchdog, the `escape_*` timings) stays at the node default.
+rate, the watchdog, the other `escape_*` timings) stays at the node default.
 
 The laps were driven with every row down to `target_deepest_ray`. The rows marked "new" were
 added afterwards, at the owner's request, and none of them has been on the floor yet. To drive
@@ -332,11 +334,11 @@ at INFO:
 - **Trigger.** safety_node has refused the node's forward request (its own last request > 0,
   the GATED `/drive` speed 0) for `escape_after_s` (1.5 s) AND the follower sees no way
   forward: its corner override fired, or no steering gives a clear forward arc for
-  `escape_probe_distance_m` (0.3 m). The node subscribes `/drive` (read only) for this; it
+  `escape_probe_distance_m` (node default 0.3 m, 0.5 m in the floor profile). The node subscribes `/drive` (read only) for this; it
   never publishes it. Without safety_node in the loop there is no gated `/drive` and the escape
   never fires.
 - **Clear arc.** `any_forward_arc_clear` in `gap_follow.hpp`: nine steering angles evenly over
-  +/- full lock; for each, the body (the bounding box, `cg_to_rear_axle_m + length_m / 2` ahead
+  +/- full lock; for each, the body (`wheelbase_m + front_overhang_m` ahead
   and `chassis.rear_overhang_m` behind the rear axle, inflated by `safety_margin_m` on every
   side) is moved along the arc in 2 cm steps of rear-axle travel and must not contain a return
   at any step. Returns already inside the body at the start are ignored (the car itself, or
@@ -370,8 +372,9 @@ Known limits:
   REQUESTED arc is clear for 1.5 x `limits.min_forward_clearance_m` (0.60 m from the head,
   about 0.45 m from the bumper). In the narrow band where some arc gives 0.3 m but the
   follower's requested arc is not clear for the gate, the node waits instead of backing up,
-  exactly as before this change. `escape_probe_distance_m` is a launch argument for the floor;
-  0.5 m would close most of that band.
+  exactly as before this change. The floor profile therefore sets `escape_probe_distance_m`
+  to 0.5 m (the sim escape scenario on a round corner waited instead of escaping at 0.3 m),
+  which closes most of that band; the node default stays 0.3 m.
 - No odometry, so no closed-loop distance (above). No rear check in the follower itself: the
   rear is safety_node's job.
 - Sim only so far (L5 below). The floor check: park the car nose-in to a corner it cannot make,
@@ -403,13 +406,21 @@ finishes the lap inside 150 s without leaving the corridor or touching a wall. M
 reproduces the floor finding: braked nose-in at 0.40 m, latched, the follower asking for full
 lock for the rest of the run.
 
-Why a square corner and not a merely tight round one: with a 0.25 m centreline radius the
-follower turns in early and the car's outer FRONT CORNER scrapes the outside wall before
-safety_node brakes, because the arc corridor is a band of 0.205 m about the rear-axle path and
-the outer front corner sweeps about 6 cm outside it at full lock (ttc-limit-cycle note, "Rear
-corridor", finding). In a square corner the outside wall is met head-on, inside the band, which
-is the floor's nose-in case. The corridor can express any corner; the limitation is that
-layer-3 gap, not the bridge.
+Round corner (`test_gap_follow_escape_canary_round.py`, vehicle_params 0.11.0): the same loop
+with the tight corner at a 0.25 m centreline radius. Before 0.11.0 the follower turned in early
+and the car's outer FRONT CORNER scraped the outside wall before safety_node braked, because
+the arc corridor ended at |R| + 0.205 m about the rear-axle path and the outer front corner
+sweeps about 6 cm further out at full lock. safety_node's band now ends at the outer front
+corner's sweep (ttc-limit-cycle note, Arc corridor, "Outer boundary"), and the floor profile's
+`escape_probe_distance_m` is 0.5 m. Measured locally after both changes, two runs: round
+corner 36.94 s and 28.12 s, one escape each, worst distance from the centreline 0.196 to
+0.203 m, no wall contact; square corner on the same build 36.84 s and 36.93 s, two escapes
+each, worst 0.263 to 0.267 m. Control run, the same build with only
+safety_node's band put back to the old outer edge (probe still 0.5 m): the round corner fails
+on wall contact at (5.32, 0.48), and the square corner is 26.03 s with one escape. So the
+wider band is what lets the round corner pass, and it is also what costs the square corner a
+second escape and about 11 s (it brakes earlier in the hard turn). The square corner stays as
+the floor's head-on nose-in case.
 
 The original canary text, still true: `tests/l5_reactive_lap` runs `bridge_node` and `gap_follow_node` (which sees only `/scan`) on
 `config/tracks/gym_oval` and asserts two laps inside a time band without leaving the track.

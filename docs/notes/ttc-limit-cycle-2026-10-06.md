@@ -191,8 +191,8 @@ Change (racer_safety, vehicle_params 0.9.2, not yet run on the car):
 - The distance for TTC, the floor and the release clearance is the arc length from the LiDAR
   head (the same reference as the straight corridor's x and the clearance floor, not the
   bumper), never the straight-line range. At full lock R is about 0.74 m, the swept band runs
-  0.54 to 0.95 m from the turn centre, and a quarter turn is about 0.89 m of arc ahead of the
-  head.
+  0.54 to 0.95 m from the turn centre (to 1.05 m since schema 0.11.0, see "Outer boundary"
+  below), and a quarter turn is about 0.89 m of arc ahead of the head.
 - Which steering: the REQUEST's, not the gate's output. The output lags the request through
   the steering rate limiter, and while parked it is frozen by the steering hold; judging the
   path on the output would keep a latched car latched for exactly the reason seen in the bag.
@@ -223,6 +223,57 @@ Floor check still to do: same track, same speeds. Park the car on a wall with ga
 running and check that it releases and drives off as soon as the planner steers away from the
 wall, with one "ttc brake released" record; check that a bag on the inside of a turn still
 latches it.
+
+### Outer boundary: the outer front corner's sweep (2026-10-06 night, vehicle_params 0.11.0)
+
+Sim finding (the L5 escape scenario on a ROUND tight corner, 0.25 m centreline radius in a
+1.1 m lane): the follower turned in at full lock and the car's outer FRONT CORNER scraped the
+outside wall before safety_node braked. The band above is centred on the rear-axle path, so its
+outer edge was |R| + 0.205 m, 0.947 m from the turn centre at full lock. But the body point
+furthest from the turn centre is the outer front corner, at (front x, -/+ half width) in the
+rear-axle frame, and it sweeps the circle of radius `hypot(front_x, |R| + half_width)`: about
+1.008 m without the margin. A round wall between 0.947 and 1.008 m was never in the corridor.
+
+Change (racer_safety and racer_control, vehicle_params 0.11.0, not yet run on the car):
+
+- **The band's outer edge is the outer front corner's sweep**, with the corridor margin on the
+  half width as everywhere else: `|R| - 0.205 <= rho <= hypot(front_x, |R| + 0.205)`, 0.54 to
+  1.053 m at full lock (forward_sector.hpp "OUTER BOUNDARY"). The inner edge (the inside flank)
+  is unchanged. The straight corridor is unchanged: going straight the corner moves along the
+  side line, already inside the half width. The distance for a return in the new outer strip
+  is still the arc length to the head's arc angle, like every arc return.
+- **front_x = `chassis.wheelbase_m` + `chassis.front_overhang_m`**, the rear axle to the front
+  bumper line. `front_overhang_m` is a NEW REQUIRED field, PROVISIONAL 0.13 m, NOT measured
+  (schema 0.10.0 -> 0.11.0). 0.13 m keeps front_x (0.4602 m) within 1.3 mm of the old
+  `cg_to_rear_axle_m + length_m / 2` (0.46145 m) that racer_control's swept-path clamp used for
+  the same point, which assumed the bounding box is centred on the CG. The clamp and the
+  follower's forward arc probe now take front_x from the new field too, so safety_node and the
+  follower agree on where the nose is.
+- **The rear corridor mirrors it**: backing up, the rear bumper line leads, so the rear band's
+  outer edge is the outer REAR corner's sweep, `hypot(rear_overhang_m, |R| + 0.205)`, 0.954 m
+  at full lock (it was 0.947 m).
+- **Consequence for the bag geometry above.** The L1 reproduction of bag 22-12-40 had the wall
+  0.33 m ahead of the head from 2 cm right of the centreline outwards, and the car released by
+  steering full lock left. With the corner's sweep the wall's near end (2 to 5.7 cm right of the
+  centreline, inside the no-margin 1.008 m circle) is in the full-lock-left path at about
+  0.19 m: steering away, the right front corner would have clipped it. That latch now holds
+  (`TheBagsOwnWallHoldsTheLatchAtFullLockAwayBecauseTheCornerWouldClipIt`) and the car has to
+  back out first (gap_follow_node's reverse escape). The release test now uses the same wall
+  with its near end 15 cm right of the centreline, clear of the sweep. On the floor this means
+  more latches in tight spots that steering alone used to clear, each one a case where the
+  nose would have touched.
+
+Tests: `test_arc_corridor.cpp` "ArcCorridorOuterCorner" (a return inside the corner's sweep but
+outside the old band is in the full-lock path, left and right; the outer edge is exactly the
+sweep with the margin; the inner edge and the straight corridor are unchanged for any front x;
+a ray-cast round wall at the corner's no-margin sweep is in the path, and was not with the old
+band), the garbage fallback for a non-finite or negative front x, and in
+`test_rear_corridor.cpp` the mirrored rear case on `rear_overhang_m` (the front x plays no part
+behind the car). Branch coverage of gate_logic.cpp and forward_sector.cpp stays at 100 percent
+(325 of 325). L5: `test_gap_follow_escape_canary_round.py` drives the round corner with the
+floor profile (`escape_probe_distance_m` 0.5 m, see the reactive-control note) and safety_node
+in the loop; the brake now fires before contact, one escape backs the car out, and the lap
+completes without wall contact. The square-corner canary still runs.
 
 ## Rear corridor (2026-10-06, night floor test)
 
@@ -294,17 +345,15 @@ latch, and the release. Branch coverage of gate_logic.cpp and forward_sector.cpp
 percent (319 of 319 branches; the rear code lives in forward_sector.cpp, so no new file needed
 adding to the gate).
 
-Finding, NOT changed here (forward behaviour was to be kept): the forward arc band is centred on
-the REAR-AXLE path, half width 0.205 m. At full lock (rear-axle radius 0.742 m) its outer edge
-is 0.947 m from the turn centre, but the body's outer front corner (0.46 m ahead of the rear
-axle by the gym convention, 0.155 m out) sweeps `hypot(0.46, 0.742 + 0.155)` = 1.008 m, about
-6 cm outside the band. In the sim, on a corner of 0.25 m centreline radius in a 1.1 m lane, the
-car turned in at full lock and scraped the outside wall with that corner before safety_node
-braked (f1tenth_gym's collision handler then zeroed its heading). Widening the band's OUTER edge
-to the swept outer front corner (`hypot(front_x, |R| + half_width) + margin`) would close it;
-that changes when the forward gate brakes in every hard turn, so it is the owner's call and a
-separate change. The escape canary uses a square corner, met head-on inside the band, for that
-reason.
+Finding, not changed in this step (forward behaviour was to be kept): the forward arc band was
+centred on the REAR-AXLE path, half width 0.205 m. At full lock (rear-axle radius 0.742 m) its
+outer edge was 0.947 m from the turn centre, but the body's outer front corner (0.46 m ahead of
+the rear axle, 0.155 m out) sweeps `hypot(0.46, 0.742 + 0.155)` = 1.008 m, about 6 cm outside
+the band. In the sim, on a corner of 0.25 m centreline radius in a 1.1 m lane, the car turned
+in at full lock and scraped the outside wall with that corner before safety_node braked
+(f1tenth_gym's collision handler then zeroed its heading). FIXED in vehicle_params 0.11.0: the
+band's outer edge is now that corner's sweep (Arc corridor, "Outer boundary" above), and the
+escape canary runs a round corner alongside the square one.
 
 Sim limits: racer_gym_bridge's scan covers 4.7 rad, so in the sim the rear corridor sees only
 the two rear-quarter wedges (bearings 1.94 to 2.35 rad off ahead), not straight behind. The L5

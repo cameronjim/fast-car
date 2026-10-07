@@ -16,7 +16,10 @@
     (racer_tools/twist_teleop.py is the pure, L1-tested conversion/timeout logic). Roadmap
     2.3 adds lidar_check: listens to /scan for a few seconds and fails on a low scan rate or a
     beam count / field of view that disagrees with vehicle_params sensors.lidar_spec
-    (racer_tools/scan_check.py is the pure, L1-tested statistics and pass/fail logic).
+    (racer_tools/scan_check.py is the pure, L1-tested statistics and pass/fail logic). The
+    optional camera bring-up (outside the thesis) adds camera_check: listens to a
+    sensor_msgs/CompressedImage topic and fails below a frame-rate threshold or on an
+    unexpected resolution (racer_tools/frame_check.py is the pure, L1-tested logic).
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>

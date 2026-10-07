@@ -20,6 +20,12 @@ if(BUILD_TESTING)
     TARGET test_gap_follow_escape_canary
     TIMEOUT 300
   )
+  # The same with the tight corner round (0.25 m): the car's outer front corner meets the
+  # outside wall, so safety_node's corridor must cover the outer front corner's sweep.
+  add_launch_test(test_gap_follow_escape_canary_round.py
+    TARGET test_gap_follow_escape_canary_round
+    TIMEOUT 300
+  )
 endif()
 
 ament_package()

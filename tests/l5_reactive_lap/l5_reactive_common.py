@@ -6,9 +6,11 @@ test file by path, so this directory is not on sys.path) and keeps only its own 
   * test_gap_follow_lap_canary.py: config/tracks/gym_oval counter-clockwise (the raceline's own
     direction), lane centring on.
   * test_gap_follow_lap_canary_cw.py: the same track clockwise (bridge_node reverse_direction).
-  * test_gap_follow_escape_canary.py: a walled loop with one corner tighter than the car's
-    turning circle, the full floor profile and safety_node in the loop; the reverse escape has
-    to fire.
+  * test_gap_follow_escape_canary.py: a walled loop with one SQUARE corner tighter than the
+    car's turning circle, the full floor profile and safety_node in the loop; the reverse
+    escape has to fire.
+  * test_gap_follow_escape_canary_round.py: the same loop with that corner ROUND (0.25 m
+    centreline radius), where the car's outer front corner meets the outside wall.
 
 Everything physical is read from config/vehicle_params.yaml or the launch file's floor
 profile, never typed in here.
@@ -19,12 +21,14 @@ from __future__ import annotations
 import csv
 import importlib.util
 import math
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import rclpy
 import yaml
+from ackermann_msgs.msg import AckermannDriveStamped
 from nav_msgs.msg import Odometry
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
@@ -466,3 +470,129 @@ def run_laps(
         lap_time_s=lap_walltimes[target_laps - 1] - first_walltime,
         worst_lateral_m=worst_lateral_m,
     )
+
+
+# -- The reverse escape canary: a loop with one corner tighter than the turning circle ---------
+
+ESCAPE_SEED = 13
+ESCAPE_TRACK_HALF_WIDTH_M = 0.55
+ESCAPE_TRACK_WIDTH_M = 5.0
+ESCAPE_TRACK_HEIGHT_M = 3.5
+ESCAPE_EASY_RADIUS_M = 1.2
+ESCAPE_CENTRELINE_DS_M = 0.05
+ESCAPE_TARGET_LAPS = 1
+# Generous: the floor profile tops out at 0.9 m/s (a lap of about 15 m is at least 17 s), and
+# each escape costs escape_after_s (1.5 s) of waiting plus a couple of seconds of backing and
+# re-trying. Measured locally: see docs/notes/reactive-control-port-2026-10-05.md.
+ESCAPE_MAX_LAP_S = 150.0
+ESCAPE_MAX_TEST_WALL_S = 200.0
+# A corner that needs several back-and-forth legs makes no NEW forward progress for a while.
+ESCAPE_STALL_TIMEOUT_S = 30.0
+
+
+def escape_track_points(tight_radius_m: float) -> tuple[list[float], list[float]]:
+    """The escape loop's centreline: three ESCAPE_EASY_RADIUS_M corners and, first after the
+    start, one of `tight_radius_m`."""
+    return rounded_rectangle(
+        ESCAPE_TRACK_WIDTH_M,
+        ESCAPE_TRACK_HEIGHT_M,
+        # (bottom-right, top-right, top-left, bottom-left): the tight corner comes first.
+        (tight_radius_m, ESCAPE_EASY_RADIUS_M, ESCAPE_EASY_RADIUS_M, ESCAPE_EASY_RADIUS_M),
+        ESCAPE_CENTRELINE_DS_M,
+    )
+
+
+def escape_canary_launch(tight_radius_m: float, launch, launch_testing, LaunchNode):
+    """bridge_node -> /scan -> gap_follow_node (the full floor profile) -> /drive_raw ->
+    safety_node -> /drive -> bridge_node: the real command path, no test-only remap."""
+    raceline = (
+        Path(tempfile.gettempdir())
+        / f"l5_reactive_tight_corner_{round(tight_radius_m * 1000)}mm_raceline.csv"
+    )
+    xs, ys = escape_track_points(tight_radius_m)
+    write_raceline_csv(raceline, xs, ys, speed_mps=1.0)
+    bridge_node = LaunchNode(
+        package="racer_gym_bridge",
+        executable="bridge_node",
+        name="bridge_node",
+        parameters=[
+            {
+                "seed": ESCAPE_SEED,
+                "raceline_path": str(raceline),
+                "track_half_width_m": ESCAPE_TRACK_HALF_WIDTH_M,
+            }
+        ],
+    )
+    safety_node = LaunchNode(
+        package="racer_safety",
+        executable="safety_node",
+        name="safety_node",
+        parameters=[{"laser_yaw_from_vehicle_params": False}],
+    )
+    gap_params = floor_profile()
+    # racer_gym_bridge's /scan is aligned to the vehicle (yaw 0), not the real car's mount.
+    gap_params["laser_yaw_from_vehicle_params"] = False
+    gap_follow_node = LaunchNode(
+        package="racer_control",
+        executable="gap_follow_node",
+        name="gap_follow_node",
+        parameters=[gap_params],
+        output="screen",
+    )
+    return launch.LaunchDescription(
+        [bridge_node, safety_node, gap_follow_node, launch_testing.actions.ReadyToTest()]
+    )
+
+
+def run_escape_canary(test, tight_radius_m: float, label: str) -> None:
+    """PASS: the escape fires at least once (a reverse request on /drive_raw AND a reverse
+    command on the gated /drive), and the car still completes a lap inside ESCAPE_MAX_LAP_S
+    without leaving the corridor and without touching a wall (run_laps)."""
+    test.assertTrue(floor_profile()["reverse_escape"], "profile lost reverse_escape")
+    xs, ys = escape_track_points(tight_radius_m)
+    loop = Loop(xs, ys)
+    max_lateral_m = ESCAPE_TRACK_HALF_WIDTH_M - chassis_half_width_m()
+    node = rclpy.create_node("l5_reactive_escape_test")
+    try:
+        reset_sim(test, node)
+        check_walls(test, node, ESCAPE_TRACK_HALF_WIDTH_M)
+        requests: list[float] = []
+        gated: list[float] = []
+        node.create_subscription(
+            AckermannDriveStamped,
+            "/drive_raw",
+            lambda m: requests.append(m.drive.speed),
+            reliable_qos(),
+        )
+        node.create_subscription(
+            AckermannDriveStamped,
+            "/drive",
+            lambda m: gated.append(m.drive.speed),
+            reliable_qos(),
+        )
+        start = time.monotonic()
+        result = run_laps(
+            test,
+            node,
+            loop,
+            target_laps=ESCAPE_TARGET_LAPS,
+            max_wall_s=ESCAPE_MAX_TEST_WALL_S,
+            stall_timeout_s=ESCAPE_STALL_TIMEOUT_S,
+            max_lateral_m=max_lateral_m,
+            lateral_windowed=False,
+        )
+        escapes = sum(1 for a, b in zip([0.0, *requests], requests, strict=False) if a >= 0.0 > b)
+        print(
+            f"[l5_reactive_escape {label}] lap time {result.lap_time_s:.3f}s (limit "
+            f"{ESCAPE_MAX_LAP_S}s), {escapes} reverse escape(s) requested, worst distance from "
+            f"the centreline {result.worst_lateral_m:.3f} m (limit {max_lateral_m:.3f} m), wall "
+            f"{time.monotonic() - start:.1f}s"
+        )
+        test.assertGreaterEqual(escapes, 1, "the reverse escape never fired")
+        test.assertTrue(
+            any(s < 0.0 for s in gated), "no reverse command ever reached the gated /drive"
+        )
+        test.assertLessEqual(result.lap_time_s, ESCAPE_MAX_LAP_S)
+        test.assertTrue(math.isfinite(result.lap_time_s))
+    finally:
+        node.destroy_node()

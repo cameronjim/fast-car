@@ -95,6 +95,12 @@ FLOOR_2026_10_06_PROFILE: dict[str, float | int | bool] = {
     # timings are the node defaults (1.5 s, -0.5 m/s, 0.4 m, 2.0 s, retry 3.0 s, 3 attempts).
     # Not yet driven on the floor.
     "reverse_escape": True,
+    # 0.5 m, not the node default 0.3 m (sim escape scenario, 2026-10-06 night): safety_node
+    # releases its latch only once the requested arc is clear for 1.5 x
+    # limits.min_forward_clearance_m (0.60 m from the head), so with 0.3 m the follower found
+    # "some arc gives 0.3 m" and waited on a latch that would never release instead of backing
+    # out. 0.5 m closes most of that band. Not yet driven on the floor.
+    "escape_probe_distance_m": 0.5,
 }
 """Checkpoint 2026-10-06: the first working floor laps.
 
@@ -103,10 +109,10 @@ on the evening of 2026-10-06 with every value above up to and including target_d
 The rest were added later the same night, at the owner's request, and have NOT been driven on
 the floor yet: the speed smoothing (the speed surged and slowed with the scan-to-scan flicker
 of the target range), the lane centring (the follower hugged the edges in the night's bags)
-and the reverse escape (it ended nose-in to corners tighter than its turning circle; WITH IT
-ON THE CAR CAN REVERSE ON ITS OWN). To drive exactly the laps' parameters, override them back
-off: `speed_time_constant_s:=0 target_range_median_scans:=1 centering_gain:=0
-reverse_escape:=false`. See
+and the reverse escape with its 0.5 m probe distance (it ended nose-in to corners tighter than
+its turning circle; WITH IT ON THE CAR CAN REVERSE ON ITS OWN). To drive exactly the laps'
+parameters, override them back off: `speed_time_constant_s:=0 target_range_median_scans:=1
+centering_gain:=0 reverse_escape:=false`. See
 docs/notes/reactive-control-port-2026-10-05.md, "Checkpoint 2026-10-06: first working floor
 laps", for the known limits.
 

@@ -18,6 +18,9 @@ Bridges the gym simulator to the standard racer topics
     LiDAR mounted like the real car's (``lidar_*``), and the gym's speed controller
     mirrored for reverse (``mirror_reverse_speed_control``). See the parameter
     descriptions below.
+  - (reactive bench, off by default) ``synthetic_track``: a parametric synthetic track as thin
+    wall segments (``track_loader.build_synthetic_track``: lane_square, lane_round,
+    lane_open_side, chicane, open_room) instead of a raceline corridor.
   - (milestone 2) publishes ``/sim/map`` (nav_msgs/OccupancyGrid, latched
     via transient_local) once, built from the env's own ``Track``
     (``track.occupancy_map`` / ``track.spec``) -- see
@@ -62,6 +65,7 @@ from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
+from racer_gym_bridge import track_loader
 from racer_gym_bridge.conversions import (
     build_occupancy_grid_fields,
     build_odom_fields,
@@ -71,9 +75,12 @@ from racer_gym_bridge.conversions import (
     yaw_to_quaternion,
 )
 from racer_gym_bridge.track_loader import (
+    SYNTHETIC_TRACK_NAMES,
+    SyntheticTrack,
     build_corridor_occupancy,
     carve_pocket,
     load_raceline_xy_speed,
+    rasterize_walls,
 )
 
 _MAP_FRAME_ID = "map"
@@ -191,6 +198,27 @@ def build_track_from_raceline(
     return track
 
 
+def build_track_from_synthetic(synthetic: SyntheticTrack, reverse_direction: bool = False) -> Track:
+    """A track from one of ``track_loader``'s parametric synthetic tracks (the reactive bench).
+
+    The reference line the gym starts the car on is the synthetic track's centreline (the car
+    starts on its first point facing the second; ``reverse_direction`` starts it on the last
+    point facing back, the walls unchanged), and the occupancy map is the track's wall segments
+    rasterised at the gym's own 0.05 m resolution.
+    """
+    if reverse_direction:
+        synthetic = synthetic.reversed()
+    track = Track.from_refline(
+        x=synthetic.centreline_x,
+        y=synthetic.centreline_y,
+        velx=np.full_like(synthetic.centreline_x, 1.0),
+    )
+    occupancy, origin = rasterize_walls(synthetic.walls, synthetic.bounds(), track.spec.resolution)
+    track.occupancy_map = occupancy
+    track.spec = dataclasses.replace(track.spec, origin=origin)
+    return track
+
+
 def build_env(
     seed: int,
     raceline_path: str = "",
@@ -198,6 +226,7 @@ def build_env(
     reverse_direction: bool = False,
     pocket: Pocket | None = None,
     accel_control: bool = False,
+    synthetic: SyntheticTrack | None = None,
 ) -> gym.Env:
     """Construct the pinned f1tenth_gym env: single ego agent, headless.
 
@@ -207,12 +236,18 @@ def build_env(
     current caller -- see its launch file), the env's map is built from that raceline
     file instead via ``build_track_from_raceline``, giving a real closed-loop track a
     tracker can complete laps of.
+
+    ``synthetic`` (the reactive bench): a ``track_loader.SyntheticTrack``, which takes
+    precedence over ``raceline_path``.
     """
-    track = (
-        build_track_from_raceline(raceline_path, track_half_width_m, reverse_direction, pocket)
-        if raceline_path
-        else build_synthetic_track()
-    )
+    if synthetic is not None:
+        track = build_track_from_synthetic(synthetic, reverse_direction)
+    elif raceline_path:
+        track = build_track_from_raceline(
+            raceline_path, track_half_width_m, reverse_direction, pocket
+        )
+    else:
+        track = build_synthetic_track()
     config = {
         "seed": seed,
         "map": track,
@@ -266,7 +301,7 @@ class BridgeNode(Node):
                 "Drive the raceline the other way round: false (default) keeps its order; true "
                 "reverses the waypoints before the track is built, so the reset pose (first "
                 "waypoint, facing along the raceline) faces the other way. Only used with "
-                "raceline_path."
+                "raceline_path or synthetic_track."
             ),
         )
         self._reverse_direction = bool(
@@ -275,6 +310,7 @@ class BridgeNode(Node):
 
         pocket = self._declare_pocket()
         self._declare_park_scenario_parameters()
+        synthetic = self._declare_synthetic_track()
 
         self.env = build_env(
             self._seed,
@@ -283,6 +319,7 @@ class BridgeNode(Node):
             self._reverse_direction,
             pocket,
             self._mirror_reverse_speed_control,
+            synthetic,
         )
 
         scan_sim = self.env.unwrapped.sim.agents[0].scan_simulator
@@ -543,6 +580,103 @@ class BridgeNode(Node):
         if not self._raceline_path or self._track_half_width_m <= 0.0:
             raise ValueError("pocket_length_m > 0 needs raceline_path and track_half_width_m > 0")
         return Pocket(start_s_m=start, length_m=length, depth_m=depth, side=side)
+
+    def _declare_synthetic_track(self) -> SyntheticTrack | None:
+        """The reactive bench's parameters (track_loader.build_synthetic_track); empty
+        ``synthetic_track`` (default) keeps every other track option as it was."""
+
+        def float_range(low: float, high: float) -> list[FloatingPointRange]:
+            return [FloatingPointRange(from_value=low, to_value=high, step=0.0)]
+
+        name = str(
+            self.declare_parameter(
+                "synthetic_track",
+                "",
+                ParameterDescriptor(
+                    description=(
+                        "Reactive bench: a parametric synthetic track instead of a raceline, one "
+                        f"of {', '.join(SYNTHETIC_TRACK_NAMES)} (see "
+                        "track_loader.build_synthetic_track). Empty (default) = off. Takes "
+                        "precedence over raceline_path; reverse_direction applies."
+                    )
+                ),
+            ).value
+        )
+        lane_width = float(
+            self.declare_parameter(
+                "synthetic_lane_width_m",
+                1.1,
+                ParameterDescriptor(
+                    description="Lane width (m) of the synthetic lane tracks.",
+                    floating_point_range=float_range(0.3, 3.0),
+                ),
+            ).value
+        )
+        radius = float(
+            self.declare_parameter(
+                "synthetic_corner_radius_m",
+                -1.0,
+                ParameterDescriptor(
+                    description=(
+                        "Centreline corner radius (m) of the synthetic lane tracks; negative "
+                        "(default) = the track's own: 0 lane_square, 0.25 lane_round, 0.8 for "
+                        "lane_open_side and chicane."
+                    ),
+                    floating_point_range=float_range(-1.0, 3.0),
+                ),
+            ).value
+        )
+        box_length = float(
+            self.declare_parameter(
+                "synthetic_box_length_m",
+                0.4,
+                ParameterDescriptor(
+                    description="lane_open_side: length (m) of each box along the lane.",
+                    floating_point_range=float_range(0.05, 2.0),
+                ),
+            ).value
+        )
+        box_gap = float(
+            self.declare_parameter(
+                "synthetic_box_gap_m",
+                0.6,
+                ParameterDescriptor(
+                    description="lane_open_side: gap (m) between boxes.",
+                    floating_point_range=float_range(0.05, 3.0),
+                ),
+            ).value
+        )
+        jog_offset = float(
+            self.declare_parameter(
+                "synthetic_jog_offset_m",
+                0.5,
+                ParameterDescriptor(
+                    description="chicane: sideways offset (m) of each of the two jogs.",
+                    floating_point_range=float_range(0.0, 2.0),
+                ),
+            ).value
+        )
+        room_size = float(
+            self.declare_parameter(
+                "synthetic_room_size_m",
+                4.0,
+                ParameterDescriptor(
+                    description="open_room: side (m) of the square room.",
+                    floating_point_range=float_range(3.0, 30.0),
+                ),
+            ).value
+        )
+        if not name:
+            return None
+        return track_loader.build_synthetic_track(
+            name,
+            lane_width_m=lane_width,
+            corner_radius_m=radius if radius >= 0.0 else None,
+            box_length_m=box_length,
+            box_gap_m=box_gap,
+            jog_offset_m=jog_offset,
+            room_size_m=room_size,
+        )
 
     def _declare_park_scenario_parameters(self) -> None:
         """The rest of the roadmap 2.9 parameters; every default keeps the old behaviour."""

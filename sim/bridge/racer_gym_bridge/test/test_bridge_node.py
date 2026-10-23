@@ -39,7 +39,13 @@ import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
 from nav_msgs.msg import OccupancyGrid, Odometry
-from racer_gym_bridge.bridge_node import Pocket, build_track_from_raceline
+from racer_gym_bridge.bridge_node import (
+    Pocket,
+    build_env,
+    build_track_from_raceline,
+    build_track_from_synthetic,
+)
+from racer_gym_bridge.track_loader import build_synthetic_track
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
@@ -156,6 +162,47 @@ class TestBuildTrackFromRaceline(unittest.TestCase):
         self.assertEqual(cell(1.0, -1.1), 0.0)  # beyond its back
         self.assertEqual(cell(0.3, -0.7), 0.0)  # before it
         self.assertEqual(cell(1.7, -0.7), 0.0)  # after it
+
+
+class TestBuildTrackFromSynthetic(unittest.TestCase):
+    """Not launch_testing-dependent: the reactive bench's synthetic tracks as gym tracks."""
+
+    def test_the_map_has_the_walls_and_the_car_starts_on_free_floor(self):
+        synthetic = build_synthetic_track("lane_square")
+        track = build_track_from_synthetic(synthetic)
+        occupancy = track.occupancy_map
+        res = track.spec.resolution
+        ox, oy, _ = track.spec.origin
+
+        def cell(x: float, y: float) -> float:
+            return occupancy[int((y - oy) / res), int((x - ox) / res)]
+
+        self.assertEqual(
+            cell(float(synthetic.centreline_x[0]), float(synthetic.centreline_y[0])), 255.0
+        )
+        self.assertEqual(cell(2.75, -0.55), 0.0)  # the right wall
+        self.assertEqual(cell(2.75, 0.55), 0.0)  # the left wall
+        self.assertEqual(cell(2.75, 2.0), 255.0)  # infield: free floor, the walls are thin
+
+    def test_reverse_direction_starts_clockwise_and_keeps_the_walls(self):
+        synthetic = build_synthetic_track("lane_round")
+        forward = build_track_from_synthetic(synthetic)
+        backward = build_track_from_synthetic(synthetic, reverse_direction=True)
+        self.assertTrue((forward.occupancy_map == backward.occupancy_map).all())
+        self.assertNotEqual(
+            float(forward.raceline.xs[0]) - float(forward.raceline.xs[1]) > 0.0,
+            float(backward.raceline.xs[0]) - float(backward.raceline.xs[1]) > 0.0,
+        )
+
+    def test_the_gym_runs_on_it_and_the_scan_sees_the_walls(self):
+        env = build_env(3, synthetic=build_synthetic_track("lane_square"))
+        try:
+            obs, _ = env.reset(seed=3)
+            scan = obs["agent_0"]["scan"]
+            # The car starts mid lane facing +x: the nearest returns are the lane walls.
+            self.assertAlmostEqual(float(min(scan)), 0.55, delta=0.15)
+        finally:
+            env.close()
 
 
 @pytest.mark.launch_test

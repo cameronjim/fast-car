@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_perception</name>
+  <version>0.1.0</version>
+  <description>
+    Roadmap 5.1, camera perception (OPTIONAL, outside the thesis; docs/notes/perception-2026-10-23.md).
+    detector_node runs a YOLO detector (ultralytics, PyTorch: only in a car image built with
+    INSTALL_PERCEPTION=required) on a CompressedImage topic and publishes
+    vision_msgs/Detection2DArray. fusion_node fuses the detections with the LiDAR scan into
+    racer_msgs/ObjectDetectionArray (vehicle-frame bearing, robust range) and publishes the
+    nearest person as /perception/target. The maths (racer_perception/fusion.py,
+    person_tracker.py, throttle.py) are pure Python and L1-tested without ROS. Nothing here
+    publishes to the command path.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>sensor_msgs</depend>
+  <depend>vision_msgs</depend>
+  <depend>racer_msgs</depend>
+  <!-- The LiDAR mount yaw comes from vehicle_params through racer_tools' loader (CLAUDE.md
+       invariant 2). -->
+  <depend>racer_tools</depend>
+  <!-- ultralytics and torch are NOT rosdep keys: the car image installs them with pip, see
+       docker/car/Dockerfile (INSTALL_PERCEPTION). detector_node reports their absence. -->
+
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

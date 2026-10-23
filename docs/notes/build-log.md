@@ -2070,3 +2070,26 @@ No physical constant changed and no schema bump. Before the first floor run: VES
 `/odom/wheel` checked (runbook "VESC telemetry"), `chassis.front_overhang_m` and
 `rear_overhang_m` measured (both still placeholders, the swept-body check uses them), the real
 turning radius at 0.95 lock measured against 0.786 m, and the L6 wheels-off-ground sweep.
+
+## 2026-10-23: racer_perception, YOLO detector and LiDAR fusion (roadmap 5.1, software only)
+
+Optional, outside the thesis. Nothing ran on the car, no camera frame went through the detector
+and no weights were downloaded. New `ros_ws/src/racer_perception`: `detector_node`
+(`ultralytics` YOLO on `/camera/usb/image_raw/compressed`, 10 Hz with frame drops, publishes
+`vision_msgs/Detection2DArray` on `/perception/detections`, optional debug image),
+`fusion_node` (pinhole bearing, hfov 1.48 rad default, plus a LiDAR range from the window of
+plus/minus half the box width, median of the closest 30 percent of the valid returns, using
+`sensors.lidar.mount_yaw_rad` through the generated binding; flags `no_scan`, `stale_scan`,
+`no_returns`) publishing the new `racer_msgs/ObjectDetectionArray` on `/perception/objects`, and
+the nearest person with a 1 s hold-over on `/perception/target`. Launch:
+`perception.launch.py`, run in the car-camera container, not in car-stack.
+
+The detector needs `ultralytics` and torch, so the car image gained an `INSTALL_PERCEPTION`
+build arg (needs `INSTALL_TORCH=required` and a torchvision wheel URL, installs ultralytics with
+`pip --no-deps` so the Jetson torch wheel survives); the default image only gains
+`ros-humble-vision-msgs`, and `detector_node` there exits 3 with a message naming the flags.
+`ros-humble-vision-msgs` also went into the `ros-dev` image. No physical constant changed and
+no schema bump. Before the first run on the car: build the image with both wheels (never done),
+run `device:=cpu` then `device:=cuda` and record inference time and `tegrastats`, check the
+bearing sign with a person standing left of the car, and measure the camera yaw. Details:
+`docs/notes/perception-2026-10-23.md`.

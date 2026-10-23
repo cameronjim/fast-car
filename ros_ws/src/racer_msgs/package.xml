@@ -6,7 +6,9 @@
   <description>
     Custom messages ONLY where std/ackermann messages won't do (claude-docs/02-repo-
     layout.md). Milestone 1 (claude-docs/04-architecture.md, claude-docs/05-safety.md) adds
-    SafetyEvent: racer_safety/safety_node emits one on every gate intervention.
+    SafetyEvent: racer_safety/safety_node emits one on every gate intervention. Roadmap 5.1 adds
+    ObjectDetection / ObjectDetectionArray: a camera detection with a vehicle-frame bearing and
+    a LiDAR range, published by racer_perception/fusion_node.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
   <license>TODO: License declaration</license>
@@ -15,6 +17,7 @@
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <depend>builtin_interfaces</depend>
+  <depend>std_msgs</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
 

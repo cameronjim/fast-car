@@ -1,0 +1,22 @@
+[project]
+name = "racer-perception-tests"
+version = "0.1.0"
+description = """
+Standalone L1 test manifest for ros_ws/src/racer_perception (roadmap 5.1), same pattern as
+racer_tools/pyproject.toml: NOT the colcon packaging (package.xml/setup.py), only so a bare
+`uv run pytest` runs the pure, ROS-free logic (fusion.py, person_tracker.py, throttle.py,
+yolo_backend.py's path and device helpers) with no ROS and no ultralytics. The node and launch
+tests are pytest.importorskip-guarded: skipped here, run for real under `colcon test` in the
+ros-dev image.
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

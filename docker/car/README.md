@@ -156,6 +156,35 @@ camera flags above, which widens the one container that drives the car; prefer c
 out, wherever the cameras run. Expected bag growth at 720p60 is in the runbook ("Cameras first
 power-up"): roughly 5 to 10 MB/s per camera, an estimate until `camera_check` measures it.
 
+## Perception (added 2026-10-23; OPTIONAL, outside the thesis; UNVERIFIED)
+
+`racer_perception` (roadmap 5.1, `docs/notes/perception-2026-10-23.md`) runs a YOLO detector on
+a camera topic and fuses it with the LiDAR. **The detector needs `ultralytics` and PyTorch, so it
+needs a different build of this image**, and it runs in the car-camera container, never in
+car-stack.
+
+| Build | What you get |
+|---|---|
+| default (`INSTALL_TORCH=skip`, `INSTALL_PERCEPTION=skip`) | `ros-humble-vision-msgs` (message package) so `racer_perception` builds, `fusion_node` works, `detector_node` exits with code 3 and an error naming the flags below. |
+| `INSTALL_TORCH=required` + `TORCH_WHEEL_URL` + `INSTALL_PERCEPTION=required` + `TORCHVISION_WHEEL_URL` | `ultralytics` 8.3.40 and its non-torch dependencies from `perception-requirements.txt`, installed with `pip3 --no-deps` so the Jetson torch wheel is never replaced. The build fails if torch is absent, the torchvision URL is empty, or `torch`, `torchvision`, `cv2` and `ultralytics` do not all import. |
+
+```
+docker build \
+  --build-arg INSTALL_TORCH=required --build-arg TORCH_WHEEL_URL=<torch wheel, build_on_jetson.md> \
+  --build-arg INSTALL_PERCEPTION=required --build-arg TORCHVISION_WHEEL_URL=<matching torchvision wheel> \
+  -t car:perception docker/car
+```
+
+Why `--no-deps` and not the uv lockfile: ultralytics depends on torch, and `uv lock` would pick
+PyPI's generic aarch64 build over NVIDIA's CUDA wheel, which uv cannot see. Weights are **not**
+in the image: `detector_node` downloads `yolov8n.pt` on first run into its `model_cache_dir`
+(mount a volume at `$HOME/.cache/racer_perception`, see the note for the run command). The
+run needs the same flags as car-camera (`--runtime nvidia`, host network, the UDP-only DDS
+profile). Not verified: the layer has not been built (no torch or torchvision wheel URL has ever
+been supplied), the apt layer for `vision_msgs` was checked in the `ros-dev` image only
+(4.1.1, `ros2 interface show vision_msgs/msg/Detection2DArray` works there), and the pins were
+only checked to exist on PyPI.
+
 ## Base image tag vs. the device (decided 2026-09-13)
 
 The bench Jetson runs L4T R36.4.4 (JetPack 6.2.1); this image pins r36.4.0 (JetPack 6.1).
@@ -180,6 +209,7 @@ stack needs no CUDA, so it gates phase 5, not first boot.
 | A `colcon build` of `ros_ws` succeeds inside this image | **Yes** -- 2026-09-21, 6 packages in 68 s, after two fixes: `apt-get update` before `rosdep install` (the image deletes the apt lists), and `cmake -E env --unset=PYTHONPATH` around the vehicle_params codegen (this image's `ENV PYTHONPATH` was shadowing the `tools/` uv venv). |
 | The `sllidar_ros2` layer builds and is found by `ros2` | **Partly** -- the layer's exact commands were replayed in the `ros-dev` image (Ubuntu 22.04, Humble, arm64) on 2026-10-05: it builds, `ros2 pkg prefix sllidar_ros2` resolves after sourcing `/opt/ros/humble` and an overlay workspace, and `ldd` finds every library. The car image itself has not been rebuilt with it, and the driver has never talked to a real C1. |
 | The camera apt layer installs and the camera launch files work | **Partly** -- 2026-10-06, in the `ros-dev` image (Ubuntu 22.04, Humble, arm64) on the Mac: the same apt packages install (`usb_cam` 0.8.1, `gscam` 2.0.2, `image_transport` 3.1.13), `camera_csi.launch.py` with `videotestsrc` substituted for `nvarguscamerasrc` publishes `/camera/csi0/image_raw`, `/image_raw/compressed` and `/camera_info` only (no theora / compressedDepth), best_effort, `camera_check` PASSES at 60.00 Hz 1280x720, and a bag with `car_teleop.launch.py`'s regex holds the compressed topic and not the raw one. `camera_usb.launch.py` starts `usb_cam` with its parameters accepted and stops at the missing V4L2 device, as it must with no camera. The car image itself has not been rebuilt with the layer, Argus has never run in a container here, and neither camera has been plugged in. |
+| The perception layer (`INSTALL_PERCEPTION=required`) builds and `ultralytics` runs | **No** -- written 2026-10-23, never built: needs the torch and torchvision wheels, which have never been supplied. Only the `skip` path and hadolint were run (hadolint clean). |
 | The Jetson torch wheel installs and imports `torch` correctly | **No** -- and with the new default (`INSTALL_TORCH=skip`) it is not even attempted. Unchanged from before: no real `TORCH_WHEEL_URL` has ever been supplied. |
 | The `INSTALL_TORCH` skip/required/invalid branches behave as documented | Yes, for the shell logic only -- the RUN step's script was extracted and executed in a plain `ubuntu:22.04` container on 2026-09-13: `skip` prints the notice, writes the marker and exports `RACER_TORCH=absent` in a login shell; `required` with no URL exits 1; an invalid value exits 1. That is the branch logic, NOT a build of this image. |
 | `nvcr.io/nvidia/l4t-jetpack` has no tag matching the device's JetPack 6.2.1 | Yes -- registry tag list queried 2026-09-13, newest is `r36.4.0`. See "Base image tag vs. the device" above. |

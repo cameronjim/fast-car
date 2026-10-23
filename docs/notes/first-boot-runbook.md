@@ -1026,6 +1026,12 @@ rsync -av racer@10.0.0.226:~/car/data/bags/2026-09-21T19-42-20_car_teleop/ \
 `ros-dev` does not have -- `pip install mcap` and the `mcap` CLI, or re-record with
 `bag_storage:=sqlite3`, are the two ways round that until `ros-dev` gains the plugin).
 
+**Replaying a bag through the gap follower** (what would it have steered on these scans, how
+often did the swept-path clamp and corner override fire, how many brakes and how long the
+latches were): `tools/replay_follower.py`, which reads mcap directly, including a bag whose
+recorder was killed and has no footer. Run it on the Mac against the copied bag, never on the
+Jetson: `docs/notes/replay-follower.md`.
+
 ## LiDAR first power-up (roadmap 2.3; UNVERIFIED, written 2026-10-05 before the C1 arrived)
 
 **Nothing in this section has been run.** It is the procedure for the RPLIDAR C1's first

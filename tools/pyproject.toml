@@ -12,12 +12,24 @@ package with its own src layout).
 Also covers tools/raceline/ (roadmap task S.2): the offline raceline optimizer. It imports
 gen_params the same sys.path way and adds numpy for the geometry/speed-profile math; see
 tools/raceline/__init__.py for the pipeline.
+
+Also covers tools/replay_follower.py and tools/follower_replay/: bag replay for the gap
+follower (docs/notes/replay-follower.md). It reads mcap with mcap + mcap-ros2-support; the PNG
+plots need matplotlib, which is the optional `plots` extra so the codegen environment the
+colcon build syncs stays small (`uv sync --extra plots`; CI uses --all-extras).
 """
 requires-python = ">=3.11"
 dependencies = [
     "pyyaml>=6.0",
     "jsonschema>=4.20",
     "numpy>=1.26",
+    "mcap>=1.6.0",
+    "mcap-ros2-support>=0.6.0",
+]
+
+[project.optional-dependencies]
+plots = [
+    "matplotlib>=3.11.2",
 ]
 
 [tool.uv]

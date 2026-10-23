@@ -138,6 +138,19 @@ install(TARGETS pure_pursuit_cli
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# -- gap_follow_replay_cli: replays recorded /scan messages through GapFollower, the code
+#    gap_follow_node runs, for tools/replay_follower.py (docs/notes/replay-follower.md). Same
+#    treatment as pure_pursuit_cli: ROS-free, built unconditionally, constants from the
+#    generated binding. -------------------------------------------------------------------
+add_executable(gap_follow_replay_cli src/gap_follow_replay_cli.cpp)
+add_dependencies(gap_follow_replay_cli racer_control_generate_vehicle_params)
+target_include_directories(gap_follow_replay_cli PRIVATE "${RACER_GENERATED_DIR}")
+target_link_libraries(gap_follow_replay_cli racer_control_core)
+
+install(TARGETS gap_follow_replay_cli
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
   install(DIRECTORY launch
     DESTINATION share/${PROJECT_NAME}
@@ -247,6 +260,15 @@ if(BUILD_TESTING)
   )
   set_tests_properties(test_pure_pursuit_cli_divergence PROPERTIES
     LABELS "racer_control_divergence"
+  )
+  # gap_follow_replay_cli on a tiny synthetic scan file: sign convention, clamp, corner
+  # override, parameter validation, and the low-pass (test/replay/check_replay_cli.py).
+  add_test(
+    NAME test_gap_follow_replay_cli
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/check_replay_cli.py"
+            --cli "$<TARGET_FILE:gap_follow_replay_cli>"
+            --fixture-dir "${CMAKE_CURRENT_SOURCE_DIR}/test/replay"
   )
 endif()
 

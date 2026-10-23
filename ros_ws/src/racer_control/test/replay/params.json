@@ -1,0 +1,1 @@
+{"min_speed_mps": 0.5, "max_speed_mps": 0.9, "free_space_threshold_m": 0.6, "steering_gain": 1.6, "steering_time_constant_s": 0.15, "disparity_threshold_m": 0.3, "cone_half_angle_rad": 1.2, "swept_path_clamp": true, "swept_path_lookahead_m": 0.6, "corner_sector_inner_rad": 0.4, "corner_sector_outer_rad": 1.6, "corner_min_clearance_m": 0.35}

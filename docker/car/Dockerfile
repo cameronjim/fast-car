@@ -323,6 +323,17 @@ RUN bash -c 'source /opt/ros/humble/setup.bash \
     && ros2 pkg prefix compressed_image_transport \
     && gst-inspect-1.0 videoconvert > /dev/null'
 
+# --- vision_msgs for racer_perception (roadmap 5.1, OPTIONAL) -----------------------------
+# detector_node publishes vision_msgs/Detection2DArray. A message package only (155 kB, 4.1.1
+# in the jammy arm64 repo on 2026-10-23, checked in the ros-dev image): it is installed in every
+# car image so `colcon build` of racer_perception works, but the DETECTOR itself needs the
+# INSTALL_PERCEPTION=required layer below. Its own layer so the camera layer above stays cached.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-vision-msgs \
+    && rm -rf /var/lib/apt/lists/*
+RUN bash -c 'source /opt/ros/humble/setup.bash \
+    && ros2 interface show vision_msgs/msg/Detection2DArray > /dev/null'
+
 # --- Jetson torch: OPTIONAL for the control-stack phase ---------------------------------
 # NVIDIA publishes JetPack-version-matched torch wheels at
 # https://developer.download.nvidia.com/compute/redist/jp/ (one subdirectory per JetPack
@@ -396,6 +407,59 @@ RUN set -eu; \
       echo 'fi'; \
     } > /etc/profile.d/racer-torch.sh; \
     chmod 0644 /etc/profile.d/racer-torch.sh
+
+# --- Perception: ultralytics (YOLO) for racer_perception's detector_node (roadmap 5.1) ----
+# OPTIONAL, default skip. ultralytics needs PyTorch and torchvision, so INSTALL_PERCEPTION=
+# required REQUIRES INSTALL_TORCH=required (the JetPack-matched torch wheel above) and a
+# JetPack-matched torchvision wheel in TORCHVISION_WHEEL_URL (same NVIDIA/pytorch.org wheel
+# source and the same "refuse rather than guess" rule as TORCH_WHEEL_URL; docker/car/
+# build_on_jetson.md). Anything else fails the build.
+#
+# WHY NOT THE UV LOCKFILE. ultralytics lists torch and torchvision as dependencies; resolving
+# it through `uv lock` would pull PyPI's generic aarch64 torch and shadow the Jetson CUDA wheel
+# (NVIDIA's wheel is not on any index uv can see, see pyproject.toml's note). So the pinned
+# packages in perception-requirements.txt are installed with `pip3 --no-deps`: pip cannot
+# replace torch because it never resolves it. Every dependency ultralytics needs besides torch
+# and torchvision is listed there with an exact pin. numpy is held below 2 (ROS 2 Humble's
+# compiled Python packages are built against numpy 1.x).
+#
+# The final import check is the refusal: torch (with a CUDA build), torchvision, cv2 and
+# ultralytics must all import, or the image does not build. Model WEIGHTS are not baked in:
+# detector_node downloads yolov8n.pt into its model_cache_dir on first run.
+#
+# UNVERIFIED: this layer has not been built anywhere (no torch wheel has ever been supplied,
+# see README "What is and isn't verified"). The pins were checked to exist on PyPI on
+# 2026-10-23, nothing more.
+ARG INSTALL_PERCEPTION=skip
+ARG TORCHVISION_WHEEL_URL=""
+COPY perception-requirements.txt /tmp/perception-requirements.txt
+RUN set -eu; \
+    case "$INSTALL_PERCEPTION" in \
+      required) \
+        if [ "$(cat /etc/racer/torch-status)" != present ]; then \
+            echo "ERROR: INSTALL_PERCEPTION=required needs INSTALL_TORCH=required (ultralytics runs on torch)." >&2; \
+            exit 1; \
+        fi; \
+        if [ -z "$TORCHVISION_WHEEL_URL" ]; then \
+            echo "ERROR: INSTALL_PERCEPTION=required but --build-arg TORCHVISION_WHEEL_URL=<url> was not supplied." >&2; \
+            echo "Refusing to guess a torchvision wheel that matches the torch wheel (CLAUDE.md invariant 3)." >&2; \
+            exit 1; \
+        fi; \
+        pip3 install --no-cache-dir "$TORCHVISION_WHEEL_URL"; \
+        pip3 install --no-cache-dir --no-deps -r /tmp/perception-requirements.txt; \
+        python3 -c "import torch, torchvision, cv2, ultralytics; assert torch.version.cuda, 'torch has no CUDA build'"; \
+        echo present > /etc/racer/perception-status; \
+        ;; \
+      skip) \
+        echo "# NOTICE: BUILDING WITHOUT PERCEPTION (INSTALL_PERCEPTION=skip): racer_perception's detector_node cannot run in this image." >&2; \
+        echo absent > /etc/racer/perception-status; \
+        ;; \
+      *) \
+        echo "ERROR: INSTALL_PERCEPTION must be 'required' or 'skip', got '$INSTALL_PERCEPTION'." >&2; \
+        exit 1; \
+        ;; \
+    esac; \
+    rm -f /tmp/perception-requirements.txt
 
 # --- Racer runtime Python deps (uv lockfile, linux/aarch64) -----------------------------
 # Pin the uv binary itself, matching every other image (docker/sim-cpu, docker/train-cuda,

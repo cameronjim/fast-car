@@ -92,6 +92,9 @@ FROM ros:humble-ros-base@sha256:75dd3aba34a3838dadbb31a9f7bef769bdfa8713e6cec686
 #   full remaining gap via `rosdep install --simulate --from-paths ros_ws/src --ignore-src`
 #   in this image; every other package.xml dependency is already covered above or by the
 #   base image.
+# ros-humble-vision-msgs: racer_perception (roadmap 5.1) publishes vision_msgs/Detection2DArray.
+#   ros_build_test.sh's rosdep install would fetch it anyway; baking it in keeps the L3 run
+#   independent of the apt mirror.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
@@ -107,6 +110,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-ament-cmake-pytest \
         ros-humble-foxglove-bridge \
         ros-humble-ackermann-msgs \
+        ros-humble-vision-msgs \
         python3-jsonschema \
         gcovr \
         libgl1 \

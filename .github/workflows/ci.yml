@@ -220,6 +220,28 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_reactive_lap_test.sh"
 
+  l5-reactive-bench:
+    name: L5 reactive bench, reduced battery (synthetic tracks + gap_follow_node, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # Reactive benchmark (docs/notes/reactive-bench-2026-10-23.md): bridge_node on synthetic
+    # tracks (lane_square, lane_open_side, chicane: the corners and the open side that failed on
+    # the owner's living-room floor), safety_node and gap_follow_node with the floor-2026-10-06
+    # profile on the real command path. Each run stops at its first lap; the job fails on any
+    # wall contact or a missing lap. Bounded to about 5 minutes of battery. Same
+    # workspace-combination pattern as l5-reactive-lap (see
+    # .github/scripts/l5_reactive_bench_test.sh); a sibling job so the canaries fail
+    # independently.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build the combined L5 workspace, run the smoke test and the reduced battery
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_reactive_bench_test.sh"
+
   l5-park:
     name: L5 park canary (racer_gym_bridge pocket + park_node + safety_node, ros-dev + gym)
     runs-on: ubuntu-latest

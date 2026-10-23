@@ -46,6 +46,7 @@ run "sim/racer_gym" report
 run "tests/replay_harness" report
 run "tests/sim_in_loop" report
 run "tests/bench" report
+run "tests/l5_reactive_bench" report
 
 # tests/sim_regression (roadmap task S.6) is deliberately NOT run here: it installs and
 # steps the pinned f1tenth_gym through several maneuvers (like sim/racer_gym above), which

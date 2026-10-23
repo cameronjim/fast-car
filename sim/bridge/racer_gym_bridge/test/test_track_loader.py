@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import itertools
+import math
+
 import numpy as np
 import pytest
 from racer_gym_bridge.track_loader import (
+    BOX_DEPTH_M,
+    LOOP_HEIGHT_M,
+    LOOP_WIDTH_M,
+    SYNTHETIC_TRACK_NAMES,
     RacelineLoadError,
+    SyntheticTrack,
     build_corridor_occupancy,
+    build_synthetic_track,
     carve_pocket,
     load_raceline_xy_speed,
+    rasterize_walls,
+    rounded_rect_points,
 )
 
 _FIXTURE_CSV = """\
@@ -179,3 +190,291 @@ def test_pocket_rejects_bad_input(start, length, depth, side):
     occ, origin = build_corridor_occupancy(_LONG_X, _LONG_Y, 0.5, 0.05, border_m=1.5)
     with pytest.raises(ValueError):
         carve_pocket(occ, origin, 0.05, _LONG_X, _LONG_Y, 0.5, start, length, depth, side)
+
+
+# -- Synthetic benchmark tracks (reactive bench) ---------------------------------------------------
+
+_LANE_TRACKS = ("lane_square", "lane_round", "lane_open_side", "chicane")
+_RES = 0.05
+_HALF = 1.1 / 2.0
+
+
+def _point_segment_distances(px: float, py: float, walls: np.ndarray) -> np.ndarray:
+    ax, ay, bx, by = walls.T
+    dx, dy = bx - ax, by - ay
+    len2 = dx * dx + dy * dy
+    t = np.clip(((px - ax) * dx + (py - ay) * dy) / np.where(len2 > 0.0, len2, 1.0), 0.0, 1.0)
+    return np.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _clearance(track: SyntheticTrack) -> np.ndarray:
+    """Distance from every centreline point to the nearest wall."""
+    return np.array(
+        [
+            _point_segment_distances(x, y, track.walls).min()
+            for x, y in zip(track.centreline_x, track.centreline_y, strict=True)
+        ]
+    )
+
+
+def _ray(occ: np.ndarray, origin, x: float, y: float, dx: float, dy: float, max_m: float = 10.0):
+    """Distance along (dx, dy) from (x, y) to the first wall cell (max_m if none)."""
+    ox, oy, _ = origin
+    d = 0.0
+    while d < max_m:
+        c, r = int((x + dx * d - ox) / _RES), int((y + dy * d - oy) / _RES)
+        if not (0 <= r < occ.shape[0] and 0 <= c < occ.shape[1]):
+            return max_m
+        if occ[r, c] == 0.0:
+            return d
+        d += _RES / 2.0
+    return max_m
+
+
+def _degrees(walls: np.ndarray) -> dict[tuple[float, float], int]:
+    """How many segment ends meet at each (rounded) point."""
+    ends: dict[tuple[float, float], int] = {}
+    for ax, ay, bx, by in walls:
+        for p in ((round(ax, 6), round(ay, 6)), (round(bx, 6), round(by, 6))):
+            ends[p] = ends.get(p, 0) + 1
+    return ends
+
+
+def _box_fronts(track: SyntheticTrack) -> list[tuple[float, float]]:
+    """x extents of the lane_open_side boxes' lane-facing sides (horizontal, on y = w / 2)."""
+    return sorted(
+        (min(w[0], w[2]), max(w[0], w[2]))
+        for w in track.walls
+        if abs(w[1] - _HALF) < 1e-9 and abs(w[3] - _HALF) < 1e-9 and 0.7 < w[0] < 4.8
+    )
+
+
+@pytest.mark.parametrize("name", SYNTHETIC_TRACK_NAMES)
+def test_every_synthetic_track_builds_finite_walls_and_a_centreline(name):
+    track = build_synthetic_track(name)
+    assert track.name == name
+    assert track.walls.ndim == 2 and track.walls.shape[1] == 4
+    assert np.isfinite(track.walls).all()
+    assert track.centreline_x.shape == track.centreline_y.shape
+    assert len(track.centreline_x) > 10
+    # No zero-length wall segment (a repeated point would be a bug in the generator).
+    lengths = np.hypot(track.walls[:, 2] - track.walls[:, 0], track.walls[:, 3] - track.walls[:, 1])
+    assert lengths.min() > 1e-6
+
+
+@pytest.mark.parametrize("name", _LANE_TRACKS)
+def test_lane_tracks_are_closed_loops_starting_mid_bottom_straight_facing_plus_x(name):
+    track = build_synthetic_track(name)
+    assert track.loop
+    x, y = track.centreline_x, track.centreline_y
+    # The centreline closes: the last point is one sample from the first.
+    assert np.hypot(x[0] - x[-1], y[0] - y[-1]) < 0.1
+    assert np.hypot(np.diff(x), np.diff(y)).max() < 0.1
+    # Start: mid bottom straight (x = loop width / 2) facing +x; the loop runs counter-clockwise.
+    assert x[0] == pytest.approx(LOOP_WIDTH_M / 2.0, abs=0.03)
+    assert x[1] > x[0]
+    assert y[1] == pytest.approx(y[0], abs=1e-9)
+    assert 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y) > 0.0
+
+
+@pytest.mark.parametrize("name", ("lane_square", "lane_round", "chicane"))
+def test_closed_wall_loops_close(name):
+    """Every wall point joins exactly two segments: both the outer and the inner wall close."""
+    assert set(_degrees(build_synthetic_track(name).walls).values()) == {2}
+
+
+def test_lane_open_side_inner_wall_is_open_where_the_boxes_stand():
+    degrees = _degrees(build_synthetic_track("lane_open_side").walls)
+    # The outer wall and the four-sided boxes close; the inner wall is an open polyline, so
+    # exactly its two ends are loose.
+    assert sorted(degrees.values()) == sorted([1, 1] + [2] * (len(degrees) - 2))
+
+
+@pytest.mark.parametrize("width", (0.8, 1.1, 1.4))
+@pytest.mark.parametrize("name", ("lane_square", "lane_round"))
+def test_lane_width_is_the_wall_to_wall_distance(name, width):
+    track = build_synthetic_track(name, lane_width_m=width)
+    # The centreline never gets closer to a wall than half the lane width ...
+    # (rounded corners are polylines: the chord cuts at most a few mm)
+    assert _clearance(track).min() == pytest.approx(width / 2.0, abs=5e-3)
+    # ... and from the start a ray to each side meets a wall half the lane width away.
+    occ, origin = rasterize_walls(track.walls, track.bounds(), _RES)
+    x, y = float(track.centreline_x[0]), float(track.centreline_y[0])
+    assert _ray(occ, origin, x, y, 0.0, 1.0) == pytest.approx(width / 2.0, abs=0.06)
+    assert _ray(occ, origin, x, y, 0.0, -1.0) == pytest.approx(width / 2.0, abs=0.06)
+
+
+@pytest.mark.parametrize(
+    "name, radius, outer_radius, inner_radius",
+    [
+        ("lane_square", None, _HALF, 0.0),
+        ("lane_round", None, 0.25 + _HALF, 0.0),
+        ("lane_round", 0.9, 0.9 + _HALF, 0.9 - _HALF),
+    ],
+)
+def test_corner_radii_of_the_walls(name, radius, outer_radius, inner_radius):
+    """Outside wall radius r + w/2, inside max(r - w/2, 0) (so lane_square, r = 0, has square
+    inside corners and an arc of radius w/2 outside, as the escape canary's corner). A wall
+    corner of radius R misses its bounding-box corner by R * (sqrt(2) - 1)."""
+    track = build_synthetic_track(name, corner_radius_m=radius)
+    for corner, wall_radius in (((-_HALF, -_HALF), outer_radius), ((_HALF, _HALF), inner_radius)):
+        miss = _point_segment_distances(*corner, track.walls).min()
+        assert miss == pytest.approx(wall_radius * (math.sqrt(2.0) - 1.0), abs=0.02)
+
+
+def test_lane_open_side_boxes_have_the_asked_length_and_gap():
+    track = build_synthetic_track("lane_open_side", box_length_m=0.4, box_gap_m=0.6)
+    fronts = _box_fronts(track)
+    assert len(fronts) == 3
+    for lo, hi in fronts:
+        assert hi - lo == pytest.approx(0.4, abs=1e-9)
+    for (_, hi), (lo, _) in itertools.pairwise(fronts):
+        assert lo - hi == pytest.approx(0.6, abs=1e-9)
+    # The boxes are BOX_DEPTH_M deep and centred on the straight.
+    backs = [
+        w
+        for w in track.walls
+        if abs(w[1] - (_HALF + BOX_DEPTH_M)) < 1e-9 and abs(w[3] - w[1]) < 1e-9
+    ]
+    assert len(backs) == 3
+    assert (fronts[0][0] + fronts[-1][1]) / 2.0 == pytest.approx(LOOP_WIDTH_M / 2.0, abs=1e-9)
+
+
+def test_lane_open_side_box_dimensions_follow_the_parameters():
+    fronts = _box_fronts(build_synthetic_track("lane_open_side", box_length_m=0.3, box_gap_m=0.9))
+    assert len(fronts) == 2
+    assert fronts[0][1] - fronts[0][0] == pytest.approx(0.3, abs=1e-9)
+    assert fronts[1][0] - fronts[0][1] == pytest.approx(0.9, abs=1e-9)
+
+
+def test_lane_open_side_lets_a_ray_through_a_gap_into_open_floor_but_not_through_a_box():
+    track = build_synthetic_track("lane_open_side")
+    occ, origin = rasterize_walls(track.walls, track.bounds(), _RES)
+    fronts = _box_fronts(track)
+    gap_x = (fronts[0][1] + fronts[1][0]) / 2.0
+    box_x = (fronts[1][0] + fronts[1][1]) / 2.0
+    # Looking left (+y) from the lane's centreline: through a box the ray stops at it, through a
+    # gap it crosses the whole infield to its far wall.
+    assert _ray(occ, origin, box_x, 0.0, 0.0, 1.0) == pytest.approx(_HALF, abs=0.1)
+    assert _ray(occ, origin, gap_x, 0.0, 0.0, 1.0) > LOOP_HEIGHT_M - 1.1 - 0.2
+    # The right wall is continuous: looking right from anywhere on the straight meets it.
+    for x in np.arange(1.0, 4.5, 0.1):
+        assert _ray(occ, origin, float(x), 0.0, 0.0, -1.0) == pytest.approx(_HALF, abs=0.1)
+
+
+def test_chicane_jogs_by_the_offset_and_comes_back():
+    track = build_synthetic_track("chicane", jog_offset_m=0.5, jog_length_m=1.0)
+    x, y = track.centreline_x, track.centreline_y
+    # The start (mid straight) is on the plateau, 0.5 m left of the straight's own line, which
+    # the loop is back on before the corner.
+    assert y[0] == pytest.approx(0.5, abs=1e-9)
+    on_straight = (x > 0.8 + 1e-6) & (x < 4.7 - 1e-6) & (y < 1.0)
+    assert y[on_straight].max() == pytest.approx(0.5, abs=1e-9)
+    assert y[on_straight].min() == pytest.approx(0.0, abs=1e-9)
+    # Each jog takes jog_length of track: slope 0.5 / 1.0.
+    order = np.argsort(x[on_straight])
+    slopes = np.diff(y[on_straight][order]) / np.diff(x[on_straight][order])
+    assert np.abs(slopes).max() == pytest.approx(0.5, abs=0.02)
+    assert (slopes > 0.4).any() and (slopes < -0.4).any()  # one jog up, one back down
+    # The walls follow: the lane keeps its width W across the jog (measured upward from the
+    # centreline), and the walls' own extent along the straight is unchanged.
+    occ, origin = rasterize_walls(track.walls, track.bounds(), _RES)
+    for xq in (1.2, 1.7, 2.75, 3.8):
+        i = int(np.argmin(np.abs(x - xq) + (y > 1.0) * 10.0))
+        up = _ray(occ, origin, float(x[i]), float(y[i]), 0.0, 1.0)
+        down = _ray(occ, origin, float(x[i]), float(y[i]), 0.0, -1.0)
+        assert up + down == pytest.approx(1.1, abs=0.1)
+
+
+def test_open_room_is_a_four_metre_room_with_three_boxes():
+    track = build_synthetic_track("open_room")
+    assert not track.loop
+    assert track.bounds() == (0.0, 0.0, 4.0, 4.0)
+    assert len(track.walls) == 16  # four room walls, three boxes of four sides
+    occ, origin = rasterize_walls(track.walls, track.bounds(), _RES)
+    # The start and the whole reference line are free floor.
+    for x, y in zip(track.centreline_x, track.centreline_y, strict=True):
+        assert _cell_value(occ, origin, _RES, float(x), float(y)) == 255.0
+    # Boxes inside the room, none touching its walls, three of them.
+    inner = track.walls[4:]
+    assert inner.min() > 0.5 and inner.max() < 3.5
+    assert len(_degrees(inner)) == 12
+
+
+def test_room_size_parameter_scales_the_room():
+    assert build_synthetic_track("open_room", room_size_m=6.0).bounds() == (0.0, 0.0, 6.0, 6.0)
+
+
+def test_reversed_keeps_the_walls_and_flips_the_centreline():
+    track = build_synthetic_track("lane_round")
+    back = track.reversed()
+    np.testing.assert_array_equal(back.walls, track.walls)
+    np.testing.assert_array_equal(back.centreline_x, track.centreline_x[::-1])
+    area = 0.5 * np.sum(
+        back.centreline_x * np.roll(back.centreline_y, -1)
+        - np.roll(back.centreline_x, -1) * back.centreline_y
+    )
+    assert area < 0.0  # clockwise
+
+
+@pytest.mark.parametrize("name", SYNTHETIC_TRACK_NAMES)
+def test_centreline_is_free_and_walls_are_solid_in_the_raster(name):
+    track = build_synthetic_track(name)
+    occ, origin = rasterize_walls(track.walls, track.bounds(), _RES)
+    assert occ.dtype == np.float32
+    assert set(np.unique(occ)) == {0.0, 255.0}
+    for x, y in zip(track.centreline_x, track.centreline_y, strict=True):
+        assert _cell_value(occ, origin, _RES, float(x), float(y)) == 255.0
+    # The midpoint of every wall segment is a wall cell.
+    for x, y in (track.walls[:, :2] + track.walls[:, 2:]) / 2.0:
+        assert _cell_value(occ, origin, _RES, float(x), float(y)) == 0.0
+
+
+def test_rasterised_walls_have_no_gaps_for_a_ray_to_slip_through():
+    # A wall off the cell grid still fills a cell in every column ...
+    occ, _ = rasterize_walls(
+        np.array([[0.0, 0.013, 2.0, 0.013]]), (0.0, 0.0, 2.0, 0.013), _RES, border_m=0.5
+    )
+    assert ((occ == 0.0).any(axis=0)[int(0.5 / _RES) : int(2.5 / _RES)]).all()
+    # ... and a diagonal wall is a connected band: consecutive columns both have wall cells.
+    occ, _ = rasterize_walls(
+        np.array([[0.0, 0.0, 2.0, 1.0]]), (0.0, 0.0, 2.0, 1.0), _RES, border_m=0.5
+    )
+    cols = np.flatnonzero((occ == 0.0).any(axis=0))
+    assert (np.diff(cols) == 1).all()
+
+
+def test_rasterize_origin_and_extent_include_the_border():
+    walls = np.array([[0.0, 0.0, 1.0, 0.0]])
+    occ, origin = rasterize_walls(walls, (0.0, 0.0, 1.0, 0.0), _RES, border_m=1.0)
+    assert origin == (-1.0, -1.0, 0.0)
+    assert occ.shape == (40, 60)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"name": "no_such_track"},
+        {"name": "lane_square", "lane_width_m": 4.5},
+        {"name": "lane_square", "lane_width_m": 0.0},
+        {"name": "lane_round", "corner_radius_m": 2.5},
+        {"name": "lane_open_side", "box_length_m": 4.0},
+        {"name": "lane_open_side", "box_gap_m": 0.0},
+        {"name": "chicane", "jog_length_m": 2.0},
+        {"name": "chicane", "jog_length_m": 0.0},
+        {"name": "open_room", "room_size_m": 2.0},
+    ],
+)
+def test_synthetic_track_rejects_bad_parameters(kwargs):
+    with pytest.raises(ValueError):
+        build_synthetic_track(**kwargs)
+
+
+def test_rasterize_walls_rejects_bad_resolution():
+    with pytest.raises(ValueError):
+        rasterize_walls(np.array([[0.0, 0.0, 1.0, 0.0]]), (0.0, 0.0, 1.0, 0.0), 0.0)
+
+
+def test_rounded_rect_points_rejects_a_radius_that_does_not_fit():
+    with pytest.raises(ValueError):
+        rounded_rect_points(0.0, 0.0, 1.0, 1.0, 0.6)

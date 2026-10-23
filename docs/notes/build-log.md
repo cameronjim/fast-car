@@ -2093,3 +2093,25 @@ no schema bump. Before the first run on the car: build the image with both wheel
 run `device:=cpu` then `device:=cuda` and record inference time and `tegrastats`, check the
 bearing sign with a person standing left of the car, and measure the camera yaw. Details:
 `docs/notes/perception-2026-10-23.md`.
+## 2026-10-23: reactive benchmark battery for gap_follow_node (sim only)
+
+Owner-requested simulator battery that reproduces what failed on the living-room floor, so the
+follower can be tuned without the car. Nothing ran on the Jetson or the car.
+
+racer_gym_bridge gained five parametric synthetic tracks as thin wall segments
+(`track_loader.build_synthetic_track`, bridge parameter `synthetic_track`): `lane_square`,
+`lane_round`, `lane_open_side` (the left wall replaced by 0.4 m boxes with 0.6 m gaps and open
+floor behind), `chicane` and `open_room`. `tests/l5_reactive_bench` runs bridge_node,
+safety_node and gap_follow_node on one of them for a fixed time and prints JSON (laps, lap time,
+obstacle brakes, escapes, minimum body clearance, wall contacts, mean abs steering, steering
+reversals per minute); `tools/reactive_bench.py` runs the battery for named profiles, ranks a
+parameter sweep (no contact, then brakes per lap, then lap time) and writes the note;
+`tools/reactive_bench_docker.sh` does it in the ros-dev image on an isolated network.
+
+Result (`docs/notes/reactive-bench-2026-10-23.md`): the floor profile reproduces the corner
+behaviour (one brake and one escape per tight corner) and no sweep set of steering gain
+{1.0, 1.6, 2.4}, cone {0.8, 1.2}, centering {0, 0.4, 0.6}, margin {0.05, 0.1} beats it beyond
+noise; cone 0.8 is clearly worse. The first-pass sweep winner (cone 0.8, no open-room contact)
+was luck: 9 contacts in three repeats. No new profile. CI job `l5-reactive-bench` runs the floor
+profile on `lane_square`, `lane_open_side` and `chicane` to the first lap and fails on a wall
+contact (91 s of sim time).

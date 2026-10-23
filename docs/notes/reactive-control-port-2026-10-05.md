@@ -434,6 +434,14 @@ committed band is 20 s (physical floor at the speed cap) to 60 s. Same test-only
 tracker canary: `/drive_raw` is remapped to `/drive`, no safety_node in the loop (the lap
 canaries; the escape canary runs safety_node).
 
+## Simulator benchmark battery (2026-10-23)
+
+`docs/notes/reactive-bench-2026-10-23.md`: five synthetic tracks (square and round lane corners,
+an open side, a chicane, an open room), a runner and a CLI that report laps, obstacle brakes,
+reverse escapes, body clearance, wall contacts and steering statistics per track, a
+parameter sweep over the floor profile (no set beat `floor-2026-10-06`, so no new profile), and
+a reduced battery in CI (job `l5-reactive-bench`).
+
 ## Not done here
 
 - The roadmap note: `claude-docs/01-roadmap.md` is gitignored, so it is not updated in this PR.

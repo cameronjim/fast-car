@@ -1,0 +1,24 @@
+[project]
+name = "l5-reactive-bench"
+version = "0.1.0"
+description = """
+Reactive benchmark battery for gap_follow_node (tests/l5_reactive_bench): drives the real
+command path (bridge_node + safety_node + gap_follow_node) round synthetic tracks and reports
+laps, brakes, escapes, clearance and steering as JSON. This manifest covers only the pure,
+ROS-free metric logic (bench_metrics.py) and its L1 tests; the runner needs a sourced ROS
+workspace and runs in the l5-reactive-bench CI job and in the ros-dev container.
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pyyaml",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+# Dependency manifest only, not a wheel to build (same pattern as tests/bench).
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

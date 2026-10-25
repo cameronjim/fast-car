@@ -67,18 +67,6 @@
 
 namespace racer_control {
 
-namespace {
-
-std::string declare_described_string(rclcpp::Node& node, const std::string& name,
-                                     const std::string& default_value,
-                                     const std::string& description) {
-  rcl_interfaces::msg::ParameterDescriptor descriptor;
-  descriptor.description = description;
-  return node.declare_parameter<std::string>(name, default_value, descriptor);
-}
-
-}  // namespace
-
 class ParkNode : public rclcpp::Node {
  public:
   ParkNode() : Node("park_node"), controller_(build_config()) {

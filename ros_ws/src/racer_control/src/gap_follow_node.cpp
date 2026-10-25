@@ -162,15 +162,16 @@ class GapFollowNode : public rclcpp::Node {
                 "rad, laser yaw %.3f rad, %s target, forward preference %.3f, gap switch "
                 "margin %.3f, swept-path clamp %s (lookahead %.2f m, wheelbase %.4f m, "
                 "LiDAR at x %.3f y %.3f m, body front x %.3f m), lane centring gain %.3f "
-                "(sector +/- %.3f rad, max range %.2f m), max speed %.2f m/s, speed time "
-                "constant %.3f s, target range median over %zu scans",
+                "(sector +/- %.3f rad, max range %.2f m), lane lookahead %.2f m, default lane "
+                "half width %.2f m, max speed %.2f m/s, speed time constant %.3f s, target "
+                "range median over %zu scans",
                 control_rate_hz, c.half_width_m, c.safety_margin_m, c.cone_half_angle_rad,
-                c.laser_yaw_offset_rad, c.target == GapTarget::kDeepest ? "deepest" : "centre",
-                c.forward_preference, c.gap_switch_margin, c.swept_path_clamp ? "on" : "off",
-                c.swept_path.lookahead_m, c.swept_path.wheelbase_m, c.swept_path.lidar_mount_x_m,
+                c.laser_yaw_offset_rad, target_mode_name(c.target_mode), c.forward_preference,
+                c.gap_switch_margin, c.swept_path_clamp ? "on" : "off", c.swept_path.lookahead_m,
+                c.swept_path.wheelbase_m, c.swept_path.lidar_mount_x_m,
                 c.swept_path.lidar_mount_y_m, c.swept_path.body_front_x_m, c.centering_gain,
-                c.centering_sector_half_angle_rad, c.centering_max_range_m,
-                speed_command_.config().max_speed_mps,
+                c.centering_sector_half_angle_rad, c.centering_max_range_m, c.lane_lookahead_m,
+                c.lane_default_half_width_m, speed_command_.config().max_speed_mps,
                 speed_command_.config().speed_time_constant_s, target_range_median_.window());
     if (escape_) {
       const ReverseEscapeConfig& e = escape_->config();
@@ -209,11 +210,41 @@ class GapFollowNode : public rclcpp::Node {
     c.cone_half_angle_rad = declare_ranged_double(
         *this, "cone_half_angle_rad", 1.57, 0.0, M_PI,
         "Gap search cone half-angle around the vehicle's forward direction (rad).");
-    c.target = declare_described_bool(
-                   *this, "target_deepest_ray", false,
-                   "Aim at the deepest ray of the chosen gap instead of its centre ray.")
-                   ? GapTarget::kDeepest
-                   : GapTarget::kCentre;
+    // What to steer toward (gap_follow.hpp TargetMode, resolve_target_mode). target_deepest_ray
+    // is the old bool, still accepted: true means gap_deepest, with one warning.
+    const std::string target_mode = declare_described_string(
+        *this, "target_mode", "gap_centre",
+        "What the follower steers toward: gap_centre (default, the centre ray of the chosen "
+        "gap), gap_deepest (its deepest ray) or lane_centre (pure pursuit to the lane "
+        "centreline lane_lookahead_m ahead along the lane; steering_gain and centering_gain are "
+        "then unused). See gap_follow.hpp trace_lane_centre.");
+    const bool target_deepest_ray = declare_described_bool(
+        *this, "target_deepest_ray", false,
+        "DEPRECATED, use target_mode. true = target_mode gap_deepest (warns once); true with "
+        "target_mode lane_centre refuses to start.");
+    const auto mode = resolve_target_mode(target_mode, target_deepest_ray);
+    if (!mode) {
+      throw std::invalid_argument(
+          "gap_follow_node: target_mode '" + target_mode +
+          "' is not gap_centre, gap_deepest or lane_centre, or target_deepest_ray is true with "
+          "target_mode lane_centre; refusing to start");
+    }
+    if (mode->deprecated_mapping) {
+      RCLCPP_WARN(this->get_logger(),
+                  "gap_follow_node: target_deepest_ray is deprecated; true is taken as "
+                  "target_mode gap_deepest (target_mode was '%s'). Set target_mode instead.",
+                  target_mode.c_str());
+    }
+    c.target_mode = mode->mode;
+    c.lane_lookahead_m = declare_ranged_double(
+        *this, "lane_lookahead_m", 0.6, 0.1, 3.0,
+        "target_mode lane_centre: distance along the lane to the aim point on the centreline "
+        "(m); the steering is the pure-pursuit angle to it.");
+    c.lane_default_half_width_m = declare_ranged_double(
+        *this, "lane_default_half_width_m", 0.55, 0.1, 2.0,
+        "target_mode lane_centre: half lane width held from the one visible wall when the "
+        "other side is open, until a lane width has been measured beside the car (then half "
+        "the last measured width) (m).");
     c.forward_preference = declare_ranged_double(
         *this, "forward_preference", 0.0, 0.0, 1.0,
         "Weights gap selection toward the vehicle's forward direction: each gap scores "

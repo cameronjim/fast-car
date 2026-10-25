@@ -1971,5 +1971,356 @@ TEST(LaneCentring, GainZeroIsBitIdenticalToThePipelineWithoutCentring) {
   EXPECT_EQ(compared, 200);
 }
 
+// -- Lane-centre target (2026-10-24 floor finding) ----------------------------------------------
+
+// The floor lane geometry (real C1 layout, yaw pi), target_mode lane_centre at the 0.6 m
+// default lookahead. The swept-path clamp is off so these cases see the target alone (it has
+// its own cases; LaneCentreTarget.KeepsTheClampAndTheCornerOverrideAfterIt checks the order).
+constexpr double kLaneLookahead = 0.6;
+constexpr double kLaneDefaultHalfWidth = 0.55;
+
+GapFollowConfig lane_config(double yaw = kC1Yaw) {
+  GapFollowConfig c = centring_config(0.0);
+  c.laser_yaw_offset_rad = yaw;
+  c.target_mode = TargetMode::kLaneCentre;
+  c.lane_lookahead_m = kLaneLookahead;
+  c.lane_default_half_width_m = kLaneDefaultHalfWidth;
+  c.swept_path_clamp = false;
+  return c;
+}
+
+// Pure pursuit to an aim point (lookahead, e) on a straight centreline (gap_follow.hpp).
+double straight_lane_pure_pursuit(double e) {
+  return std::atan(2.0 * kWheelbase * e / (kLaneLookahead * kLaneLookahead + e * e));
+}
+
+// A circular lane turning LEFT: centreline radius `radius`, width 1.1 m, the car's rear axle
+// `offset_right` to the right of the centreline (outward), heading along the tangent. Walls
+// are 2-degree polyline circles about the turn centre (0, radius + offset_right) in the
+// rear-axle frame, given here in the head-centred frame c1_scan_with takes.
+std::vector<Segment> circular_lane(double radius, double offset_right = 0.0) {
+  std::vector<Segment> walls;
+  const double cx = -kMountX;
+  const double cy = radius + offset_right;
+  for (const double r : {radius - 0.55, radius + 0.55}) {
+    for (int k = 0; k < 180; ++k) {
+      const double a0 = 2.0 * M_PI * k / 180.0;
+      const double a1 = 2.0 * M_PI * (k + 1) / 180.0;
+      walls.push_back({cx + r * std::cos(a0), cy + r * std::sin(a0), cx + r * std::cos(a1),
+                       cy + r * std::sin(a1)});
+    }
+  }
+  return walls;
+}
+
+TEST(LaneCentreTarget, TargetModeNamesAndTheDeprecatedBool) {
+  EXPECT_EQ(target_mode_from_string("gap_centre"), TargetMode::kGapCentre);
+  EXPECT_EQ(target_mode_from_string("gap_deepest"), TargetMode::kGapDeepest);
+  EXPECT_EQ(target_mode_from_string("lane_centre"), TargetMode::kLaneCentre);
+  EXPECT_FALSE(target_mode_from_string("lane_center").has_value());
+  EXPECT_FALSE(target_mode_from_string("").has_value());
+  for (const TargetMode m :
+       {TargetMode::kGapCentre, TargetMode::kGapDeepest, TargetMode::kLaneCentre}) {
+    EXPECT_EQ(target_mode_from_string(target_mode_name(m)), m);
+  }
+  // target_deepest_ray false: target_mode as given, no warning.
+  const auto plain = resolve_target_mode("lane_centre", false);
+  ASSERT_TRUE(plain.has_value());
+  EXPECT_EQ(plain->mode, TargetMode::kLaneCentre);
+  EXPECT_FALSE(plain->deprecated_mapping);
+  // true maps to gap_deepest and asks for the one warning.
+  for (const char* name : {"gap_centre", "gap_deepest"}) {
+    const auto mapped = resolve_target_mode(name, true);
+    ASSERT_TRUE(mapped.has_value()) << name;
+    EXPECT_EQ(mapped->mode, TargetMode::kGapDeepest) << name;
+    EXPECT_TRUE(mapped->deprecated_mapping) << name;
+  }
+  // true with lane_centre disagrees, and an unknown name is refused either way.
+  EXPECT_FALSE(resolve_target_mode("lane_centre", true).has_value());
+  EXPECT_FALSE(resolve_target_mode("deepest", false).has_value());
+  EXPECT_FALSE(resolve_target_mode("deepest", true).has_value());
+}
+
+TEST(LaneCentreTarget, GapModesReportNoLane) {
+  for (const TargetMode m : {TargetMode::kGapCentre, TargetMode::kGapDeepest}) {
+    GapFollowConfig c = lane_config();
+    c.target_mode = m;
+    GapFollower follower(c);
+    const GapFollowResult r = follower.process(c1_scan_with(lane_walls(0.75, 0.35)));
+    ASSERT_TRUE(r.valid);
+    EXPECT_FALSE(r.lane_valid);
+    EXPECT_TRUE(follower.lane_trace().empty());
+  }
+}
+
+TEST(LaneCentreTarget, StraightLaneCentredGivesZeroSteering) {
+  GapFollower follower(lane_config());
+  const GapFollowResult r = follower.process(c1_scan_with(lane_walls(0.55, 0.55)));
+  ASSERT_TRUE(r.valid);
+  ASSERT_TRUE(r.lane_valid);
+  ASSERT_TRUE(r.lane_measured_width_m.has_value());
+  EXPECT_NEAR(*r.lane_measured_width_m, 1.1, 0.005);
+  EXPECT_NEAR(r.lane_half_width_m, 0.55, 0.0025);
+  EXPECT_NEAR(r.lane_aim.x, kLaneLookahead, 1e-9);
+  EXPECT_NEAR(r.lane_aim.y, 0.0, 1e-6);
+  EXPECT_NEAR(r.wanted_steering_rad, 0.0, 1e-6);
+  EXPECT_NEAR(r.steering_rad, 0.0, 1e-6);
+  // The trace runs down the middle: start at the rear axle, then every 5 cm.
+  const auto& trace = follower.lane_trace();
+  ASSERT_EQ(trace.size(), 13u);
+  for (const LanePoint& p : trace) {
+    EXPECT_NEAR(p.y, 0.0, 1e-6);
+  }
+}
+
+TEST(LaneCentreTarget, CarOffsetRightSteersLeftByThePurePursuitAmount) {
+  // 0.2 m right of the centre of a 1.1 m lane: the aim point is the centreline 0.6 m ahead,
+  // (0.6, 0.2), and the steering is atan(2 L sin(alpha) / l_d) to it.
+  GapFollower follower(lane_config());
+  const GapFollowResult r = follower.process(c1_scan_with(lane_walls(0.75, 0.35)));
+  ASSERT_TRUE(r.valid && r.lane_valid);
+  EXPECT_NEAR(r.lane_aim.x, kLaneLookahead, 0.005);
+  EXPECT_NEAR(r.lane_aim.y, 0.2, 0.005);
+  EXPECT_DOUBLE_EQ(r.wanted_steering_rad, pure_pursuit_steering(r.lane_aim, kWheelbase, kFullLeft));
+  EXPECT_NEAR(r.wanted_steering_rad, straight_lane_pure_pursuit(0.2), 0.01);
+  EXPECT_GT(r.wanted_steering_rad, 0.0);
+  EXPECT_LT(r.wanted_steering_rad, kFullLeft);  // a real pure-pursuit amount, not the lock
+  EXPECT_EQ(r.steering_rad, r.wanted_steering_rad);
+  // No proportional gain is involved: steering_gain and centering_gain change nothing.
+  GapFollowConfig other = lane_config();
+  other.steering_gain = 5.0;
+  other.centering_gain = 1.5;
+  GapFollower ignoring(other);
+  const GapFollowResult same = ignoring.process(c1_scan_with(lane_walls(0.75, 0.35)));
+  EXPECT_EQ(same.wanted_steering_rad, r.wanted_steering_rad);
+  EXPECT_EQ(same.centering_steering_rad, 0.0);
+}
+
+TEST(LaneCentreTarget, OffsetLeftIsTheMirrorImage) {
+  GapFollower right_offset(lane_config());
+  GapFollower left_offset(lane_config());
+  const double steer_left =
+      right_offset.process(c1_scan_with(lane_walls(0.75, 0.35))).wanted_steering_rad;
+  const double steer_right =
+      left_offset.process(c1_scan_with(lane_walls(0.35, 0.75))).wanted_steering_rad;
+  EXPECT_LT(steer_right, 0.0);
+  EXPECT_NEAR(steer_right, -steer_left, 1e-3);
+}
+
+TEST(LaneCentreTarget, SignConventionIsLeftPositiveWithTheRealScanLayout) {
+  // The same scene through the real C1 layout (360 degrees from -pi, mounted backwards, yaw
+  // pi) and through a forward-facing LiDAR (yaw 0): the same steering, LEFT positive.
+  GapFollower c1(lane_config(kC1Yaw));
+  GapFollower forward(lane_config(0.0));
+  const GapFollowResult a = c1.process(c1_scan_with(lane_walls(0.75, 0.35)));
+  const GapFollowResult b = forward.process(yaw0_scan_with(lane_walls(0.75, 0.35)));
+  ASSERT_TRUE(a.lane_valid && b.lane_valid);
+  EXPECT_GT(a.wanted_steering_rad, 0.0);
+  EXPECT_NEAR(a.wanted_steering_rad, b.wanted_steering_rad, 1e-6);
+  EXPECT_NEAR(a.lane_aim.y, b.lane_aim.y, 1e-6);
+  // The C1 scan read as if the LiDAR faced forward looks backwards: left and right swap.
+  GapFollower wrong(lane_config(0.0));
+  EXPECT_LT(wrong.process(c1_scan_with(lane_walls(0.75, 0.35))).wanted_steering_rad, 0.0);
+}
+
+TEST(LaneCentreTarget, CurvedLaneGivesASmoothUnsaturatedCommand) {
+  // A car on the centreline of a circular lane of radius R aims at a point of that circle, so
+  // pure pursuit asks for exactly the lane's curvature: atan(L / R), within the steering limit
+  // for any R above the turning radius (L / tan(max) = 0.74 m).
+  for (const double radius : {1.0, 1.5, 2.0}) {
+    GapFollower follower(lane_config());
+    const GapFollowResult r = follower.process(c1_scan_with(circular_lane(radius)));
+    ASSERT_TRUE(r.valid && r.lane_valid) << radius;
+    EXPECT_NEAR(r.wanted_steering_rad, std::atan(kWheelbase / radius), 0.02) << radius;
+    EXPECT_LT(r.wanted_steering_rad, kFullLeft - 0.05) << radius;
+    // The aim point is in the middle of the lane round the bend: on the centreline circle.
+    EXPECT_NEAR(std::hypot(r.lane_aim.x, r.lane_aim.y - radius), radius, 0.02) << radius;
+  }
+  // Moving across the R = 2 m lane changes the command smoothly: monotonic in the offset (more
+  // left the further out), each 5 cm worth no more than the pure-pursuit sensitivity d(steering)
+  // / de = 2 L / l_d^2 (1.83 rad/m at 0.6 m, 0.092 rad per 5 cm) with a quarter of slack,
+  // never at the lock.
+  const double per_step = 2.0 * kWheelbase * 0.05 / (kLaneLookahead * kLaneLookahead);
+  double previous = -1.0;
+  for (const double offset : {-0.1, -0.05, 0.0, 0.05, 0.1}) {
+    GapFollower follower(lane_config());
+    const GapFollowResult r = follower.process(c1_scan_with(circular_lane(2.0, offset)));
+    ASSERT_TRUE(r.lane_valid) << offset;
+    EXPECT_LT(r.wanted_steering_rad, kFullLeft) << offset;
+    if (previous >= 0.0) {
+      EXPECT_GT(r.wanted_steering_rad - previous, 0.25 * per_step) << offset;
+      EXPECT_LT(r.wanted_steering_rad - previous, 1.25 * per_step) << offset;
+    }
+    previous = r.wanted_steering_rad;
+  }
+}
+
+TEST(LaneCentreTarget, OneSidedLaneHoldsTheOffset) {
+  // No lane width measured yet: the right wall alone, 0.35 m away. The car holds
+  // lane_default_half_width_m (0.55 m) from it, so it aims 0.2 m left and steers left.
+  {
+    GapFollower follower(lane_config());
+    const GapFollowResult r = follower.process(c1_scan_with(lane_walls(-1.0, 0.35)));
+    ASSERT_TRUE(r.lane_valid);
+    EXPECT_FALSE(r.lane_measured_width_m.has_value());
+    EXPECT_DOUBLE_EQ(r.lane_half_width_m, kLaneDefaultHalfWidth);
+    EXPECT_NEAR(r.lane_aim.y, 0.2, 0.005);
+    EXPECT_NEAR(r.wanted_steering_rad, straight_lane_pure_pursuit(0.2), 0.01);
+  }
+  // After a 0.9 m lane (h = 0.45 m) the half width last measured applies: at 0.45 m from the
+  // lone right wall the car is where it should be (no steering), at 0.35 m it steers left
+  // toward 0.45 m, and the mirror case steers right.
+  GapFollower follower(lane_config());
+  const GapFollowResult measured = follower.process(c1_scan_with(lane_walls(0.45, 0.45)));
+  ASSERT_TRUE(measured.lane_measured_width_m.has_value());
+  EXPECT_NEAR(*measured.lane_measured_width_m, 0.9, 0.005);
+  const GapFollowResult hold = follower.process(c1_scan_with(lane_walls(-1.0, 0.45)));
+  EXPECT_NEAR(hold.lane_half_width_m, 0.45, 0.0025);
+  EXPECT_NEAR(hold.lane_aim.y, 0.0, 0.006);
+  EXPECT_NEAR(hold.wanted_steering_rad, 0.0, 0.015);
+  const GapFollowResult close = follower.process(c1_scan_with(lane_walls(-1.0, 0.35)));
+  EXPECT_NEAR(close.lane_aim.y, 0.1, 0.006);
+  EXPECT_NEAR(close.wanted_steering_rad, straight_lane_pure_pursuit(0.1), 0.015);
+  const GapFollowResult mirror = follower.process(c1_scan_with(lane_walls(0.35, -1.0)));
+  EXPECT_NEAR(mirror.wanted_steering_rad, -close.wanted_steering_rad, 0.015);
+}
+
+TEST(LaneCentreTarget, AnOpeningPastTheEndOfAWallIsNotFollowed) {
+  // A centred 1.1 m lane whose left wall stops, open beyond (a doorway, the gap between two
+  // boxes). The curve midway between the right wall and the left wall's END POINT bends round
+  // that end into the opening (by 0.12 m at 0.5 m past it); with the wall continued straight
+  // for h and not counted beyond, the aim stays on the old centreline wherever the end is.
+  for (const double end_x : {-0.5, -0.2, 0.1, 0.3}) {
+    GapFollower follower(lane_config());
+    const std::vector<Segment> walls{{-3.0, 0.55, end_x, 0.55}, {-3.0, -0.55, 20.0, -0.55}};
+    const GapFollowResult r = follower.process(c1_scan_with(walls));
+    ASSERT_TRUE(r.lane_valid) << end_x;
+    // A width is measured only while the car is beside both walls (the wall ends ahead of its
+    // centre, 0.23 m ahead of the rear axle, 0.055 m behind the head); otherwise h is the
+    // default 0.55 m, the same here.
+    EXPECT_EQ(r.lane_measured_width_m.has_value(), end_x > -0.05) << end_x;
+    EXPECT_NEAR(r.lane_aim.y, 0.0, 0.005) << end_x;
+    EXPECT_LT(std::abs(r.wanted_steering_rad), 0.01) << end_x;
+    for (const LanePoint& p : follower.lane_trace()) {
+      EXPECT_NEAR(p.y, 0.0, 0.005) << end_x << " at x " << p.x;
+    }
+  }
+}
+
+TEST(LaneCentreTarget, BoxesAlongAnOpenSideDoNotPullTheTraceIntoTheGaps) {
+  // The sim's lane_open_side: on the left, 0.4 m boxes 0.3 m deep with 0.6 m gaps instead of a
+  // wall (each box's front and side faces are one chain, so its corner is not a chain end), a
+  // continuous right wall, a 1.1 m lane. Wherever the car is along the boxes, the aim point
+  // stays on the centreline (the midway curve round each box corner would lean into the gap).
+  for (double shift = 0.0; shift < 1.0; shift += 0.1) {
+    std::vector<Segment> scene{{-3.0, -0.55, 20.0, -0.55}};
+    for (double x0 = -3.0 - shift; x0 < 6.0; x0 += 1.0) {
+      scene.push_back({x0, 0.55, x0 + 0.4, 0.55});
+      scene.push_back({x0, 0.55, x0, 0.85});
+      scene.push_back({x0 + 0.4, 0.55, x0 + 0.4, 0.85});
+    }
+    GapFollower follower(lane_config());
+    const GapFollowResult r = follower.process(c1_scan_with(scene));
+    ASSERT_TRUE(r.lane_valid) << shift;
+    EXPECT_NEAR(r.lane_aim.y, 0.0, 0.01) << shift;
+    EXPECT_LT(std::abs(r.wanted_steering_rad), 0.02) << shift;
+  }
+}
+
+TEST(LaneCentreTarget, OpenSpaceDrivesStraight) {
+  GapFollower follower(lane_config());
+  const GapFollowResult r = follower.process(c1_scan_with({}));
+  ASSERT_TRUE(r.valid && r.lane_valid);
+  EXPECT_EQ(r.lane_aim.y, 0.0);
+  EXPECT_EQ(r.wanted_steering_rad, 0.0);
+}
+
+TEST(LaneCentreTarget, KeepsTheClampAndTheCornerOverrideAfterIt) {
+  // The pipeline after the target is unchanged: the swept-path clamp then the corner override
+  // act on the pure-pursuit steering exactly as they act on the gap steering.
+  for (const double radius : {1.0, 2.0}) {
+    GapFollowConfig c = lane_config();
+    c.swept_path_clamp = true;
+    GapFollower follower(c);
+    const ScanInput scan = c1_scan_with(circular_lane(radius, -0.3));  // hugging the inside
+    const GapFollowResult r = follower.process(scan);
+    ASSERT_TRUE(r.lane_valid);
+    SweptPathGeometry g = c.swept_path;
+    g.half_width_m = c.half_width_m;
+    g.margin_m = c.safety_margin_m;
+    const SweptPathClamp clamp =
+        clamp_steering_to_swept_path(scan, kC1Yaw, r.wanted_steering_rad, g);
+    EXPECT_EQ(r.swept_path_clamped, clamp.clamped) << radius;
+    EXPECT_EQ(r.steering_rad, r.corner_blocked ? 0.0 : clamp.steering_rad) << radius;
+  }
+  // A corner sector that is all "too close" zeroes a non-zero lane steering.
+  GapFollowConfig c = lane_config();
+  c.corner_min_clearance_m = 10.0;
+  GapFollower follower(c);
+  const GapFollowResult r = follower.process(c1_scan_with(lane_walls(0.75, 0.35)));
+  EXPECT_GT(r.wanted_steering_rad, 0.1);
+  EXPECT_TRUE(r.corner_blocked);
+  EXPECT_EQ(r.steering_rad, 0.0);
+}
+
+TEST(LaneCentreTarget, ChainsEndpointsAndBoundaries) {
+  // Two straight walls and a box: three chains (sizes adding up to every return), the walls beside
+  // the car are the boundaries, the box (ahead) is not.
+  const std::vector<Segment> scene{
+      {-1.0, 0.55, 2.0, 0.55}, {-1.0, -0.55, 2.0, -0.55}, {1.5, -0.1, 1.5, 0.1}};
+  const ScanInput scan = c1_scan_with(scene);
+  LaneGeometry g;
+  g.half_width_m = 0.155;
+  g.body_front_x_m = 0.4602;
+  g.lidar_mount_x_m = kMountX;
+  LanePoints points;
+  ASSERT_GT(load_lane_points(scan, kC1Yaw, 5.0, g, points), 100u);
+  std::vector<std::size_t> chains(points.chain.begin(), points.chain.begin() + points.count);
+  std::sort(chains.begin(), chains.end());
+  chains.erase(std::unique(chains.begin(), chains.end()), chains.end());
+  EXPECT_EQ(chains.size(), 3u);
+  std::size_t total = 0;
+  for (const std::size_t c : chains) {
+    total += points.chain_size[c];
+  }
+  EXPECT_EQ(total, points.count);
+  const LaneBoundaries b = find_lane_boundaries(points, g, 2.2, 0.55);
+  ASSERT_TRUE(b.left_chain && b.right_chain);
+  EXPECT_NE(*b.left_chain, *b.right_chain);
+  EXPECT_NEAR(b.left_m, 0.55, 0.005);
+  EXPECT_NEAR(b.right_m, 0.55, 0.005);
+  ASSERT_TRUE(b.width_m.has_value());
+  // A lane wider than the limit keeps only the nearer side; garbage loads nothing.
+  const LaneBoundaries narrow_limit = find_lane_boundaries(points, g, 1.0, 0.55);
+  EXPECT_FALSE(narrow_limit.width_m.has_value());
+  EXPECT_TRUE(narrow_limit.left_chain.has_value() != narrow_limit.right_chain.has_value());
+  ScanInput bad = scan;
+  bad.angle_increment = 0.0;
+  EXPECT_EQ(load_lane_points(bad, kC1Yaw, 5.0, g, points), 0u);
+  EXPECT_EQ(load_lane_points(scan, std::nan(""), 5.0, g, points), 0u);
+}
+
+TEST(LaneCentreTarget, PurePursuitFormulaAndGuards) {
+  EXPECT_EQ(pure_pursuit_steering({0.6, 0.0}, kWheelbase, kFullLeft), 0.0);
+  const double expected =
+      std::atan(2.0 * kWheelbase * std::sin(std::atan2(0.1, 0.5)) / std::hypot(0.5, 0.1));
+  EXPECT_DOUBLE_EQ(pure_pursuit_steering({0.5, 0.1}, kWheelbase, kFullLeft), expected);
+  EXPECT_DOUBLE_EQ(pure_pursuit_steering({0.5, -0.1}, kWheelbase, kFullLeft), -expected);
+  EXPECT_EQ(pure_pursuit_steering({0.1, 0.5}, kWheelbase, kFullLeft), kFullLeft);  // clamped
+  EXPECT_EQ(pure_pursuit_steering({0.0, 0.0}, kWheelbase, kFullLeft), 0.0);
+  EXPECT_EQ(pure_pursuit_steering({0.5, std::nan("")}, kWheelbase, kFullLeft), 0.0);
+  EXPECT_EQ(pure_pursuit_steering({0.5, 0.1}, 0.0, kFullLeft), 0.0);
+}
+
+TEST(LaneCentreTarget, SteadyStateProcessDoesNotAllocate) {
+  // Same scan twice: the second call reuses every buffer (capacities do not change).
+  GapFollower follower(lane_config());
+  const ScanInput scan = c1_scan_with(circular_lane(1.5));
+  follower.process(scan);
+  const std::size_t capacity = follower.lane_trace().capacity();
+  follower.process(scan);
+  EXPECT_EQ(follower.lane_trace().capacity(), capacity);
+}
+
 }  // namespace
 }  // namespace racer_control

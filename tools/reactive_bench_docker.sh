@@ -11,6 +11,9 @@
 #   REBUILD   set to 1 to rebuild the workspace (needed after C++ changes; Python edits are
 #             symlinked and picked up without it)
 #   DOMAIN_BASE  first ROS_DOMAIN_ID (default 60); the container is the only thing on its network.
+#   VOLUME, NETWORK  the workspace volume and the internal network (defaults
+#             racer-reactive-bench-ws, racer-reactive-bench-net); give another checkout its own
+#             so two can run at once.
 #
 # The network is `--internal` (no route out), so nothing the benchmark starts can discover or be
 # discovered by other ROS graphs on the machine, and the distinct ROS_DOMAIN_IDs keep runs inside
@@ -20,8 +23,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${IMAGE:-ros-dev:local}"
-VOLUME="racer-reactive-bench-ws"
-NETWORK="racer-reactive-bench-net"
+VOLUME="${VOLUME:-racer-reactive-bench-ws}"
+NETWORK="${NETWORK:-racer-reactive-bench-net}"
 DOMAIN_BASE="${DOMAIN_BASE:-60}"
 
 COMMON=(--rm --shm-size=1gb -v "$REPO_ROOT:/workspace" -v "$VOLUME:/ws" -w /workspace)

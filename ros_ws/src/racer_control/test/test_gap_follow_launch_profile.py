@@ -150,6 +150,9 @@ def test_explicit_launch_arguments_override_the_profile():
             centering_gain="0",
             reverse_escape="false",
             escape_probe_distance_m="0.8",
+            target_mode="lane_centre",
+            lane_lookahead_m="1",
+            lane_default_half_width_m="0.5",
         )
     )
     expected = dict(_FLOOR_2026_10_06)
@@ -164,8 +167,14 @@ def test_explicit_launch_arguments_override_the_profile():
         centering_gain=0.0,
         reverse_escape=False,
         escape_probe_distance_m=0.8,
+        target_mode="lane_centre",
+        lane_lookahead_m=1.0,
+        lane_default_half_width_m=0.5,
     )
     assert merged == expected
+    assert type(merged["target_mode"]) is str
+    assert type(merged["lane_lookahead_m"]) is float
+    assert type(merged["lane_default_half_width_m"]) is float
     assert type(merged["swept_path_lookahead_m"]) is float
     assert type(merged["speed_time_constant_s"]) is float
     assert type(merged["target_range_median_scans"]) is int
@@ -191,3 +200,12 @@ def test_unknown_profile_is_refused():
 def test_median_scans_must_be_an_integer():
     with pytest.raises(ValueError):
         _node_parameters(target_range_median_scans="5.0")
+
+
+def test_target_mode_must_be_one_of_the_three_names():
+    for mode in ("gap_centre", "gap_deepest", "lane_centre"):
+        assert _merged(_node_parameters(target_mode=mode))["target_mode"] == mode
+    with pytest.raises(ValueError, match="target_mode"):
+        _node_parameters(target_mode="lane_center")
+    # Not set: nothing is passed, the profile or node default applies.
+    assert "target_mode" not in _merged(_node_parameters())

@@ -5,7 +5,8 @@ turns those records into the benchmark's numbers lives here so it is unit-tested
 simulator (tools/tests/test_reactive_bench.py):
 
   * ``body_clearance_m``: gap from the car's body to the nearest wall face.
-  * ``LapTracker``: laps and lap times from the car's position along a loop.
+  * ``LapTracker``: laps, lap times and the distance from the centreline (per lap and over the
+    run) from the car's position along a loop.
   * ``count_reversals``: zig-zag count of a steering signal with a hysteresis.
   * ``Recording`` and ``compute_metrics``: the run's record and the JSON-ready result.
 
@@ -20,7 +21,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-SCHEMA_VERSION = 1
+# 2: mean_centreline_offset_m and lap_centreline_offsets_m (2026-10-24).
+SCHEMA_VERSION = 2
 
 # A wall segment is a zero-width line in the track description; the simulator draws it
 # WALL_THICKNESS_M thick (racer_gym_bridge.track_loader.WALL_THICKNESS_M), so the wall's face is
@@ -158,6 +160,13 @@ class LapTracker:
     def reset(self) -> None:
         """Forget the run so far (the car was put back at the start)."""
         self.lap_times_s: list[float] = []
+        # Mean distance from the centreline over each completed lap (m), and the sums behind
+        # the lap in progress and the whole run since the last reset.
+        self.lap_centreline_offsets_m: list[float] = []
+        self._lap_lateral_sum = 0.0
+        self._lap_lateral_n = 0
+        self.run_lateral_sum_m = 0.0
+        self.run_lateral_samples = 0
         self.progress_m = 0.0
         self.best_progress_m = 0.0
         self.lateral_m = 0.0
@@ -167,6 +176,9 @@ class LapTracker:
         self._index = 0
 
     def _nearest(self, x: float, y: float, windowed: bool) -> tuple[int, float]:
+        """(index of the nearest centreline point, distance from the centreline POLYLINE): the
+        exact distance to the two segments either side of that point, not to the point (the
+        points are 5 cm apart on the synthetic tracks)."""
         n = len(self._xs)
         indices = (
             (self._index + np.arange(-self._window, self._window + 1)) % n
@@ -174,17 +186,36 @@ class LapTracker:
             else np.arange(n)
         )
         d = np.hypot(self._xs[indices] - x, self._ys[indices] - y)
-        k = int(np.argmin(d))
-        return int(indices[k]), float(d[k])
+        k = int(indices[int(np.argmin(d))])
+        ends = np.array([(k - 1) % n, (k + 1) % n])
+        lateral = _point_segment_distance(
+            x, y, self._xs[k], self._ys[k], self._xs[ends], self._ys[ends]
+        )
+        return k, float(lateral.min())
+
+    def _record_lateral(self) -> None:
+        self._lap_lateral_sum += self.lateral_m
+        self._lap_lateral_n += 1
+        self.run_lateral_sum_m += self.lateral_m
+        self.run_lateral_samples += 1
+
+    @property
+    def mean_centreline_offset_m(self) -> float | None:
+        """Mean distance from the centreline over every sample since the last reset."""
+        if not self.run_lateral_samples:
+            return None
+        return self.run_lateral_sum_m / self.run_lateral_samples
 
     def update(self, x: float, y: float, t: float) -> None:
         if self._unwrapped is None:
             self._index, self.lateral_m = self._nearest(x, y, windowed=False)
+            self._record_lateral()
             self._unwrapped = self._start_s = float(self._ss[self._index])
             self._start_t = t
             self._crossings: list[float] = []
             return
         self._index, self.lateral_m = self._nearest(x, y, windowed=True)
+        self._record_lateral()
         delta = float(self._ss[self._index]) - (self._unwrapped % self.length_m)
         if delta < -self.length_m / 2.0:
             delta += self.length_m
@@ -197,6 +228,11 @@ class LapTracker:
             self._crossings.append(t)
             previous = self._crossings[-2] if len(self._crossings) > 1 else self._start_t
             self.lap_times_s.append(t - previous)
+            self.lap_centreline_offsets_m.append(
+                self._lap_lateral_sum / max(1, self._lap_lateral_n)
+            )
+            self._lap_lateral_sum = 0.0
+            self._lap_lateral_n = 0
 
     @property
     def laps(self) -> int:
@@ -299,6 +335,8 @@ def compute_metrics(
         result["lap_time_s"] = None
         result["lap_times_s"] = []
         result["progress_m"] = None
+        result["mean_centreline_offset_m"] = None
+        result["lap_centreline_offsets_m"] = []
     else:
         times = list(lap_tracker.lap_times_s)
         result["laps"] = len(times)
@@ -306,6 +344,15 @@ def compute_metrics(
         result["lap_times_s"] = [round(t, 3) for t in times]
         result["progress_m"] = round(lap_tracker.best_progress_m, 3)
         result["loop_length_m"] = round(lap_tracker.length_m, 3)
+        # Distance of the car's CG from the lane centreline: the mean over every lap-tracked
+        # sample of the run, and the mean over each completed lap.
+        mean_offset = lap_tracker.mean_centreline_offset_m
+        result["mean_centreline_offset_m"] = (
+            round(mean_offset, 4) if mean_offset is not None else None
+        )
+        result["lap_centreline_offsets_m"] = [
+            round(v, 4) for v in lap_tracker.lap_centreline_offsets_m
+        ]
 
     # Obstacle brakes (safety_node's TTC gates, forward or reverse) and reverse escapes.
     brakes = [

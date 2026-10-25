@@ -393,6 +393,464 @@ double centering_steering(const LaneWalls& walls, double centering_gain) {
   return centering_gain * (left - right) / (left + right);
 }
 
+std::optional<TargetMode> target_mode_from_string(std::string_view name) {
+  if (name == "gap_centre") {
+    return TargetMode::kGapCentre;
+  }
+  if (name == "gap_deepest") {
+    return TargetMode::kGapDeepest;
+  }
+  if (name == "lane_centre") {
+    return TargetMode::kLaneCentre;
+  }
+  return std::nullopt;
+}
+
+const char* target_mode_name(TargetMode mode) {
+  switch (mode) {
+    case TargetMode::kGapCentre:
+      return "gap_centre";
+    case TargetMode::kGapDeepest:
+      return "gap_deepest";
+    case TargetMode::kLaneCentre:
+      return "lane_centre";
+  }
+  return "gap_centre";
+}
+
+std::optional<TargetModeResolution> resolve_target_mode(std::string_view target_mode,
+                                                        bool target_deepest_ray) {
+  const auto mode = target_mode_from_string(target_mode);
+  if (!mode) {
+    return std::nullopt;
+  }
+  if (!target_deepest_ray) {
+    return TargetModeResolution{*mode, false};
+  }
+  if (*mode == TargetMode::kLaneCentre) {
+    return std::nullopt;
+  }
+  return TargetModeResolution{TargetMode::kGapDeepest, true};
+}
+
+std::size_t load_lane_points(const ScanInput& scan, double laser_yaw_offset_rad,
+                             double clip_max_range_m, const LaneGeometry& g, LanePoints& out) {
+  out.count = 0;
+  out.wraps = false;
+  const auto finite = [](double v) { return std::isfinite(v); };
+  if (!is_usable(scan) || !finite(laser_yaw_offset_rad) || !finite(clip_max_range_m) ||
+      !(clip_max_range_m > 0.0) || !finite(g.half_width_m) || !finite(g.body_front_x_m) ||
+      !finite(g.lidar_mount_x_m) || !finite(g.lidar_mount_y_m)) {
+    return 0;
+  }
+  const std::size_t n = scan.ranges.size();
+  if (out.x.size() < n) {
+    out.x.resize(n);
+    out.y.resize(n);
+    out.chain.resize(n);
+    out.chain_size.resize(n);
+  }
+  std::size_t count = 0;
+  std::size_t chain = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (!is_valid_return(scan.ranges[i], scan)) {
+      continue;
+    }
+    const double r = static_cast<double>(scan.ranges[i]);
+    if (!(r < clip_max_range_m)) {
+      continue;  // free space
+    }
+    const double bearing = laser_bearing_of_index(scan, i) + laser_yaw_offset_rad;
+    const double x = r * std::cos(bearing) + g.lidar_mount_x_m;
+    const double y = r * std::sin(bearing) + g.lidar_mount_y_m;
+    if (x >= 0.0 && x <= g.body_front_x_m && std::abs(y) <= g.half_width_m) {
+      continue;  // the car itself
+    }
+    if (count > 0 && std::hypot(x - out.x[count - 1], y - out.y[count - 1]) > kLaneChainGapM) {
+      ++chain;
+    }
+    out.x[count] = x;
+    out.y[count] = y;
+    out.chain[count] = chain;
+    ++count;
+  }
+  // A full-circle scan whose last and first returns are close is continuous across the seam:
+  // the last chain is the first one continued.
+  const bool wrap =
+      count > 1 && is_full_circle(scan) &&
+      std::hypot(out.x[0] - out.x[count - 1], out.y[0] - out.y[count - 1]) <= kLaneChainGapM;
+  if (wrap) {
+    const std::size_t last = out.chain[count - 1];
+    for (std::size_t k = count; k-- > 0 && out.chain[k] == last;) {
+      out.chain[k] = 0;
+    }
+  }
+  for (std::size_t c = 0; c <= chain && c < n; ++c) {
+    out.chain_size[c] = 0;
+  }
+  for (std::size_t k = 0; k < count; ++k) {
+    ++out.chain_size[out.chain[k]];
+  }
+  out.wraps = wrap;
+  out.count = count;
+  return count;
+}
+
+namespace {
+
+// Index of the point of `chain` nearest q among those within reach2 (squared, of the rear
+// axle), or nullopt.
+std::optional<std::size_t> nearest_on_chain(const LanePoints& points, std::size_t chain, double qx,
+                                            double qy, double reach2) {
+  double best2 = std::numeric_limits<double>::infinity();
+  std::optional<std::size_t> best;
+  for (std::size_t i = 0; i < points.count; ++i) {
+    if (points.chain[i] != chain) {
+      continue;
+    }
+    const double px = points.x[i];
+    const double py = points.y[i];
+    if (px * px + py * py > reach2) {
+      continue;
+    }
+    const double d2 = (px - qx) * (px - qx) + (py - qy) * (py - qy);
+    if (d2 < best2) {
+      best2 = d2;
+      best = i;
+    }
+  }
+  return best;
+}
+
+// Distance from q to the chain whose nearest point to q is k, gap_follow.hpp WALL DISTANCE.
+// `opposite` is the nearest point of the other boundary's chain, if there is one. nullopt when
+// the chain does not count at q.
+std::optional<double> wall_distance(const LanePoints& points, std::size_t k, double qx, double qy,
+                                    std::optional<std::size_t> opposite, double end_reach_m,
+                                    double closed_ahead_m, bool* beside_face = nullptr) {
+  if (beside_face != nullptr) {
+    *beside_face = false;
+  }
+  const double ex = qx - points.x[k];
+  const double ey = qy - points.y[k];
+  const double euclid = std::hypot(ex, ey);
+  // The faces either side of k: the outward unit direction from the first point of the chain
+  // at least kLaneFaceSpanM away on that side, through k.
+  const std::size_t chain = points.chain[k];
+  std::size_t faces = 0;
+  bool past_every_face = true;
+  double face_x[2] = {0.0, 0.0};
+  double face_y[2] = {0.0, 0.0};
+  for (const int step : {1, -1}) {
+    std::size_t j = k;
+    for (std::size_t s = 0; s < points.count; ++s) {
+      if (!points.wraps && ((step > 0 && j + 1 >= points.count) || (step < 0 && j == 0))) {
+        break;  // the end of the scan's points, and the scan does not wrap
+      }
+      j = step > 0 ? (j + 1) % points.count : (j + points.count - 1) % points.count;
+      if (j == k || points.chain[j] != chain) {
+        break;
+      }
+      const double fx = points.x[k] - points.x[j];
+      const double fy = points.y[k] - points.y[j];
+      const double length = std::hypot(fx, fy);
+      if (length < kLaneFaceSpanM) {
+        continue;
+      }
+      face_x[faces] = fx / length;
+      face_y[faces] = fy / length;
+      if (!(ex * face_x[faces] + ey * face_y[faces] > kLaneVertexMarginM)) {
+        past_every_face = false;
+      }
+      ++faces;
+      break;
+    }
+  }
+  if (faces == 0 || !past_every_face) {
+    if (beside_face != nullptr) {
+      *beside_face = true;
+    }
+    return euclid;  // q is beside a face
+  }
+  std::size_t continued = 0;
+  if (faces == 2) {
+    // A convex corner q has gone past. Across the lane from the opposite wall's nearest point
+    // through q (the cross-section at q), the corner itself is the boundary: Euclidean.
+    // Otherwise the face running most nearly parallel to the opposite wall (most
+    // perpendicular to that cross-section) is continued.
+    if (!opposite) {
+      return euclid;
+    }
+    const double ox = points.x[*opposite] - qx;
+    const double oy = points.y[*opposite] - qy;
+    const double on = std::hypot(ox, oy);
+    if (!(on > 0.0) || !(euclid > 0.0) ||
+        (ex * ox + ey * oy) / (euclid * on) >= kLaneCornerOnSectionCos) {
+      return euclid;
+    }
+    continued =
+        std::abs(face_x[1] * ox + face_y[1] * oy) < std::abs(face_x[0] * ox + face_y[0] * oy) ? 1
+                                                                                              : 0;
+    // The continued face must run parallel to the opposite wall where it is nearest q (its local
+    // direction from the first return at least kLaneFaceSpanM away along its chain): beside a
+    // box on a straight it does; in the diagonal region of a bend the opposite wall turns and
+    // neither face does. Otherwise Euclidean.
+    const std::size_t opposite_chain = points.chain[*opposite];
+    bool parallel = false;
+    for (const int step : {1, -1}) {
+      std::size_t j = *opposite;
+      for (std::size_t s = 0; s < points.count && !parallel; ++s) {
+        if (!points.wraps && ((step > 0 && j + 1 >= points.count) || (step < 0 && j == 0))) {
+          break;
+        }
+        j = step > 0 ? (j + 1) % points.count : (j + points.count - 1) % points.count;
+        if (j == *opposite || points.chain[j] != opposite_chain) {
+          break;
+        }
+        const double wx = points.x[j] - points.x[*opposite];
+        const double wy = points.y[j] - points.y[*opposite];
+        const double wn = std::hypot(wx, wy);
+        if (wn < kLaneFaceSpanM) {
+          continue;
+        }
+        parallel =
+            std::abs(wx * face_y[continued] - wy * face_x[continued]) / wn < kLaneParallelSin;
+        break;
+      }
+      if (parallel) {
+        break;
+      }
+    }
+    if (!parallel) {
+      return euclid;
+    }
+    // The opposite wall crosses the continued line ahead (within closed_ahead_m of the corner,
+    // closer to the line than end_reach_m): the lane turns here, a bend, not a gap. Euclidean.
+    for (std::size_t i = 0; i < points.count; ++i) {
+      if (points.chain[i] != opposite_chain) {
+        continue;
+      }
+      const double dx = points.x[i] - points.x[k];
+      const double dy = points.y[i] - points.y[k];
+      const double along = dx * face_x[continued] + dy * face_y[continued];
+      if (along > 0.0 && along <= closed_ahead_m &&
+          std::abs(dx * face_y[continued] - dy * face_x[continued]) < end_reach_m) {
+        return euclid;
+      }
+    }
+  }
+  // Continue the face straight on for end_reach_m, and no further.
+  const double ux = face_x[continued];
+  const double uy = face_y[continued];
+  const double past = ex * ux + ey * uy;
+  if (past > end_reach_m) {
+    return std::nullopt;
+  }
+  if (!(past > 0.0)) {
+    return euclid;
+  }
+  return std::abs(ex * uy - ey * ux);
+}
+
+}  // namespace
+
+LaneBoundaries find_lane_boundaries(const LanePoints& points, const LaneGeometry& g,
+                                    double max_width_m, double end_reach_m) {
+  LaneBoundaries b;
+  if (points.count == 0 || !std::isfinite(max_width_m) || !(max_width_m > 0.0) ||
+      !std::isfinite(g.body_front_x_m) || !std::isfinite(end_reach_m) || end_reach_m < 0.0) {
+    return b;
+  }
+  const double cx = 0.5 * g.body_front_x_m;
+  double best_left = std::numeric_limits<double>::infinity();
+  double best_right = std::numeric_limits<double>::infinity();
+  for (std::size_t k = 0; k < points.count; ++k) {
+    if (points.chain_size[points.chain[k]] < kLaneMinChainPoints) {
+      continue;
+    }
+    const double dx = points.x[k] - cx;
+    const double y = points.y[k];
+    if (y > 0.0 && std::abs(dx) <= y) {
+      const double d = std::hypot(dx, y);
+      if (d < best_left) {
+        best_left = d;
+        b.left_chain = points.chain[k];
+      }
+    } else if (y < 0.0 && std::abs(dx) <= -y) {
+      const double d = std::hypot(dx, y);
+      if (d < best_right) {
+        best_right = d;
+        b.right_chain = points.chain[k];
+      }
+    }
+  }
+  // The side distances by the WALL DISTANCE rule (a wall that ended behind the car reads its
+  // continued line, and the side is open more than end_reach_m past its end).
+  const double everywhere = std::numeric_limits<double>::infinity();
+  // How far ahead a corner's continued line is checked for the opposite wall (a bend).
+  const double closed_ahead_m = kLaneMaxWidthFactor * end_reach_m;
+  const auto left_k =
+      b.left_chain ? nearest_on_chain(points, *b.left_chain, cx, 0.0, everywhere) : std::nullopt;
+  const auto right_k =
+      b.right_chain ? nearest_on_chain(points, *b.right_chain, cx, 0.0, everywhere) : std::nullopt;
+  bool left_beside = false;
+  bool right_beside = false;
+  if (left_k) {
+    const auto d =
+        wall_distance(points, *left_k, cx, 0.0, right_k, end_reach_m, closed_ahead_m, &left_beside);
+    if (d) {
+      b.left_m = *d;
+    } else {
+      b.left_chain.reset();
+    }
+  }
+  if (right_k) {
+    const auto d = wall_distance(points, *right_k, cx, 0.0, left_k, end_reach_m, closed_ahead_m,
+                                 &right_beside);
+    if (d) {
+      b.right_m = *d;
+    } else {
+      b.right_chain.reset();
+    }
+  }
+  if (b.left_chain && b.right_chain) {
+    // One wall on both sides (a ring, a dead end), or a lane too wide to be one: keep the
+    // nearer side only.
+    if (*b.left_chain == *b.right_chain || b.left_m + b.right_m > max_width_m) {
+      if (b.left_m <= b.right_m) {
+        b.right_chain.reset();
+        b.right_m = 0.0;
+      } else {
+        b.left_chain.reset();
+        b.left_m = 0.0;
+      }
+    } else if (left_beside && right_beside) {
+      // A width is measured only with the car beside both walls: beside the end of one, the
+      // distance to its continued line is a guide for the trace, not a lane width.
+      b.width_m = b.left_m + b.right_m;
+    }
+  }
+  return b;
+}
+
+LanePoint trace_lane_centre(const LanePoints& points, const LaneBoundaries& boundaries,
+                            double lookahead_m, double half_width_m,
+                            std::vector<LanePoint>& trace) {
+  trace.clear();
+  LanePoint at;
+  if (!std::isfinite(lookahead_m) || !(lookahead_m > 0.0) || !std::isfinite(half_width_m) ||
+      !(half_width_m > 0.0)) {
+    return at;
+  }
+  const double h = half_width_m;
+  const double reach = lookahead_m + kLaneMaxWidthFactor * h;
+  const double reach2 = reach * reach;
+  const auto score_at = [&](double qx, double qy) {
+    // The WALL DISTANCE to each boundary, if it counts at q.
+    const auto left_k = boundaries.left_chain
+                            ? nearest_on_chain(points, *boundaries.left_chain, qx, qy, reach2)
+                            : std::nullopt;
+    const auto right_k = boundaries.right_chain
+                             ? nearest_on_chain(points, *boundaries.right_chain, qx, qy, reach2)
+                             : std::nullopt;
+    const auto left = left_k ? wall_distance(points, *left_k, qx, qy, right_k, h, lookahead_m + h)
+                             : std::optional<double>();
+    const auto right = right_k ? wall_distance(points, *right_k, qx, qy, left_k, h, lookahead_m + h)
+                               : std::optional<double>();
+    if (left && right) {
+      return -std::abs(*left - *right);
+    }
+    if (left || right) {
+      return -std::abs((left ? *left : *right) - h);
+    }
+    return -std::numeric_limits<double>::infinity();
+  };
+  // Start: the best-scoring point of the rear-axle line x = 0, searched outward from the car
+  // both ways in kLaneStartStepM steps up to 2 h, never through a return (a direction stops at
+  // the first point within kLaneStartStepM of one). Ties go to the point nearest the car, then
+  // to the left.
+  const auto clearance_at = [&](double qx, double qy) {
+    double best2 = std::numeric_limits<double>::infinity();
+    for (std::size_t k = 0; k < points.count; ++k) {
+      const double dx = points.x[k] - qx;
+      const double dy = points.y[k] - qy;
+      best2 = std::min(best2, dx * dx + dy * dy);
+    }
+    return std::sqrt(best2);
+  };
+  {
+    double best_score = score_at(0.0, 0.0);
+    const auto offsets = static_cast<std::size_t>(std::floor(2.0 * h / kLaneStartStepM));
+    bool open[2] = {true, true};  // left, right
+    for (std::size_t j = 1; j <= offsets && (open[0] || open[1]); ++j) {
+      for (int side = 0; side < 2; ++side) {
+        if (!open[side]) {
+          continue;
+        }
+        const double y = (side == 0 ? 1.0 : -1.0) * static_cast<double>(j) * kLaneStartStepM;
+        if (clearance_at(0.0, y) < kLaneStartStepM) {
+          open[side] = false;
+          continue;
+        }
+        const double score = score_at(0.0, y);
+        if (score > best_score) {
+          best_score = score;
+          at.y = y;
+        }
+      }
+    }
+  }
+  const auto steps = static_cast<std::size_t>(std::ceil(lookahead_m / kLaneTraceStepM - 1e-9));
+  if (trace.capacity() < steps + 1) {
+    trace.reserve(steps + 1);
+  }
+  trace.push_back(at);
+  constexpr std::size_t kHalf = kLaneTraceCandidates / 2;
+  const double turn_step = kLaneTraceMaxTurnRad / static_cast<double>(kHalf);
+  double heading = 0.0;
+  double walked = 0.0;
+  for (std::size_t k = 0; k < steps; ++k) {
+    const double ds = std::min(kLaneTraceStepM, lookahead_m - walked);
+    // Candidates in tie-break order: delta = 0, then +1, -1, +2, -2, ... turn steps (left
+    // first), so a strictly better score is needed to move away from an earlier one.
+    double best_score = -std::numeric_limits<double>::infinity();
+    double best_heading = heading;
+    for (std::size_t c = 0; c < kLaneTraceCandidates; ++c) {
+      const auto magnitude = static_cast<double>((c + 1) / 2);
+      const double sign = (c % 2 == 1) ? 1.0 : -1.0;
+      const double candidate = heading + sign * magnitude * turn_step;
+      if (std::abs(candidate) > M_PI_2) {
+        continue;  // never back toward the car (c == 0 keeps the current heading, always legal)
+      }
+      const double score =
+          score_at(at.x + ds * std::cos(candidate), at.y + ds * std::sin(candidate));
+      if (c == 0 || score > best_score) {
+        best_score = score;
+        best_heading = candidate;
+      }
+    }
+    heading = best_heading;
+    at.x += ds * std::cos(heading);
+    at.y += ds * std::sin(heading);
+    walked += ds;
+    trace.push_back(at);
+  }
+  return at;
+}
+double pure_pursuit_steering(const LanePoint& aim, double wheelbase_m, double max_steering_rad) {
+  if (!std::isfinite(aim.x) || !std::isfinite(aim.y) || !std::isfinite(wheelbase_m) ||
+      !(wheelbase_m > 0.0) || !std::isfinite(max_steering_rad)) {
+    return 0.0;
+  }
+  const double chord = std::hypot(aim.x, aim.y);
+  if (chord < 1e-9) {
+    return 0.0;
+  }
+  const double sin_alpha = aim.y / chord;
+  const double steering = std::atan(2.0 * wheelbase_m * sin_alpha / chord);
+  return std::min(std::max(steering, -max_steering_rad), max_steering_rad);
+}
+
 namespace {
 
 bool probe_geometry_usable(const ScanInput& scan, double laser_yaw_offset_rad, double travel_m,
@@ -531,9 +989,11 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
   preference.forward_preference = config_.forward_preference;
   preference.switch_margin = config_.gap_switch_margin;
   preference.previous_target_vehicle_bearing_rad = previous_target_vehicle_bearing_rad_;
-  const auto selection =
-      select_gap(scan, extended_, config_.free_space_threshold_m, config_.cone_half_angle_rad,
-                 config_.laser_yaw_offset_rad, config_.target, preference);
+  const auto selection = select_gap(
+      scan, extended_, config_.free_space_threshold_m, config_.cone_half_angle_rad,
+      config_.laser_yaw_offset_rad,
+      config_.target_mode == TargetMode::kGapDeepest ? GapTarget::kDeepest : GapTarget::kCentre,
+      preference);
   if (!selection) {
     return result;
   }
@@ -546,7 +1006,36 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
   result.gap_found = selection->gap_found;
   result.target_vehicle_bearing_rad = selection->target_vehicle_bearing_rad;
   result.target_range_m = extended_[selection->target_index];
-  if (config_.centering_gain == 0.0) {
+  if (config_.target_mode == TargetMode::kLaneCentre) {
+    // Step 4' (gap_follow.hpp trace_lane_centre): pure pursuit to the lane centreline.
+    LaneGeometry geometry;
+    geometry.half_width_m = config_.half_width_m;
+    geometry.body_front_x_m = config_.swept_path.body_front_x_m;
+    geometry.lidar_mount_x_m = config_.swept_path.lidar_mount_x_m;
+    geometry.lidar_mount_y_m = config_.swept_path.lidar_mount_y_m;
+    load_lane_points(scan, config_.laser_yaw_offset_rad, config_.clip_max_range_m, geometry,
+                     lane_points_);
+    const LaneBoundaries boundaries = find_lane_boundaries(
+        lane_points_, geometry, kLaneMaxWidthFactor * config_.lane_default_half_width_m,
+        lane_half_width_m_.value_or(config_.lane_default_half_width_m));
+    result.lane_measured_width_m = boundaries.width_m;
+    if (boundaries.width_m) {
+      lane_half_width_m_ = 0.5 * *boundaries.width_m;
+    }
+    result.lane_half_width_m = lane_half_width_m_.value_or(config_.lane_default_half_width_m);
+    result.lane_aim = trace_lane_centre(lane_points_, boundaries, config_.lane_lookahead_m,
+                                        result.lane_half_width_m, lane_trace_);
+    result.lane_valid = true;
+    result.steering_rad = pure_pursuit_steering(result.lane_aim, config_.swept_path.wheelbase_m,
+                                                config_.max_steering_angle_rad);
+    // The speed law reads the free range toward the aim point, seen from the LiDAR head.
+    const double bearing = std::atan2(result.lane_aim.y - config_.swept_path.lidar_mount_y_m,
+                                      result.lane_aim.x - config_.swept_path.lidar_mount_x_m);
+    result.target_vehicle_bearing_rad = wrap_angle(bearing);
+    if (const auto index = index_for_vehicle_bearing(scan, bearing, config_.laser_yaw_offset_rad)) {
+      result.target_range_m = extended_[*index];
+    }
+  } else if (config_.centering_gain == 0.0) {
     // Centring off: exactly the pipeline without it, bit for bit.
     result.steering_rad =
         steering_from_bearing(selection->target_vehicle_bearing_rad, config_.steering_gain,

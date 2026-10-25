@@ -345,6 +345,12 @@ def test_parse_sweep_types():
     assert all(isinstance(v, int) for v in grid["target_range_median_scans"])
 
 
+def test_parse_sweep_keeps_a_string_parameter_as_written():
+    grid = rb.parse_sweep(["target_mode=gap_centre,lane_centre", "lane_lookahead_m=0.4,0.6"])
+    assert grid["target_mode"] == ["gap_centre", "lane_centre"]
+    assert grid["lane_lookahead_m"] == [0.4, 0.6]
+
+
 @pytest.mark.parametrize("spec", ["steering_gain", "=1,2", "steering_gain=", "steering_gain=a"])
 def test_parse_sweep_rejects_bad_specs(spec):
     with pytest.raises(ValueError):
@@ -376,28 +382,56 @@ def test_the_task_grid_has_thirty_six_points():
 def test_results_table_has_a_row_per_track_and_dashes_for_missing_values():
     table = rb.results_table(
         [
-            result("lane_square", obstacle_brakes=3, escapes=4),
+            result(
+                "lane_square",
+                obstacle_brakes=3,
+                brakes_per_lap=1.5,
+                escapes=4,
+                mean_centreline_offset_m=0.0412,
+                lap_centreline_offsets_m=[0.0401, 0.0423],
+            ),
             result("open_room", laps=None, lap_time_s=None),
             {"track": "chicane", "error": "x | y"},
         ]
     )
     lines = table.splitlines()
     assert lines[0].startswith("| Track |") and lines[1].startswith("|---")
-    assert "| lane_square | 2 | 30.0 | 3 | 4 | 0.120 | 0 | 0.200 | 40.0 | 90 |" in lines
-    assert "| open_room | - | - |" in table
+    assert (
+        "| lane_square | 2 | 30.0 | 3 | 1.50 | 4 | 0.120 | 0 | 0.041 | 0.040, 0.042 | 0.200 "
+        "| 40.0 | 90 |" in lines
+    )
+    # A run from before the centreline metric (no such keys) prints dashes there.
+    assert "| open_room | - | - | 0 | - | 0 | 0.120 | 0 | - | - |" in table
     assert "ERROR" in lines[-1] and "x / y" in lines[-1]  # a pipe must not break the table
     assert len({line.count("|") for line in lines[:-1]}) == 1  # every full row has every column
 
 
 def test_sweep_table_lists_the_parameters_and_the_totals():
-    agg = rb.aggregate([result("lane_square", obstacle_brakes=2, laps=2, lap_time_s=40.0)])
+    agg = rb.aggregate(
+        [
+            result(
+                "lane_square",
+                obstacle_brakes=2,
+                laps=2,
+                lap_time_s=40.0,
+                mean_centreline_offset_m=0.05,
+            ),
+            result("chicane", mean_centreline_offset_m=0.03),
+        ]
+    )
+    assert agg["mean_centreline_offset_m"] == pytest.approx(0.04)
     table = rb.sweep_table(
         [({"steering_gain": 1.6, "centering_gain": 0.4}, agg)], ["steering_gain", "centering_gain"]
     )
     lines = table.splitlines()
     assert lines[0].startswith("| # | steering_gain | centering_gain |")
-    assert lines[2].startswith("| 1 | 1.6 | 0.4 | 0 | 0 | 0 | 2 | 2 | 1.00 | 40.0 |")
+    assert lines[2].startswith("| 1 | 1.6 | 0.4 | 0 | 0 | 0 | 4 | 2 | 0.50 | 70.0 |")
+    assert lines[2].endswith("| 0.120 | 0.040 |")
     assert lines[0].count("|") == lines[1].count("|") == lines[2].count("|")
+
+
+def test_aggregate_without_the_centreline_metric_is_nan():
+    assert math.isnan(rb.aggregate([result()])["mean_centreline_offset_m"])
 
 
 def test_contact_lines_name_the_track_and_time():

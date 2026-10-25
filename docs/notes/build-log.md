@@ -2115,3 +2115,17 @@ noise; cone 0.8 is clearly worse. The first-pass sweep winner (cone 0.8, no open
 was luck: 9 contacts in three repeats. No new profile. CI job `l5-reactive-bench` runs the floor
 profile on `lane_square`, `lane_open_side` and `chicane` to the first lap and fails on a wall
 contact (91 s of sim time).
+## 2026-10-24: lane-centre target for gap_follow_node (replay and sim only)
+
+The floor test that evening (bag `2026-10-24T23-13-18_car_teleop`, a foam-board loop about
+1.0 to 1.1 m wide) showed the floor profile riding the inside edge all lap. `gap_follow_node`
+gained `target_mode` (`gap_centre` default, `gap_deepest`, `lane_centre`; the old
+`target_deepest_ray` still works and warns): `lane_centre` traces the curve midway between the
+two walls beside the car (or h from the one visible wall), walks `lane_lookahead_m` along it and
+steers to its end with pure pursuit (wheelbase from the binding). On the bag's driving section
+it sits at full lock on 38.6 % of scans against 64.2 % for the gap centre and 93.4 % for the
+deepest ray, with the aim point mid lane round each bend. In the simulator bench it is clean at
+a 1.0 m lookahead but brakes on the open side and touches walls at 1.0 m box gaps, and sits
+further from the centreline than the floor profile, so no new profile was added; try it on the
+floor with `target_mode:=lane_centre`. The bench gained a centreline-offset metric. Nothing ran
+on the Jetson or the car. Details: `docs/notes/lane-centre-2026-10-24.md`.

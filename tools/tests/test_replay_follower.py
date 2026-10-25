@@ -267,6 +267,17 @@ def test_profile_overrides():
             replay.parse_overrides([bad])
 
 
+def test_target_mode_is_the_one_string_parameter():
+    # The CLI, like the node, checks the name; here it is only passed through as text.
+    assert replay.parse_overrides(["target_mode=lane_centre", "lane_lookahead_m=0.8"]) == {
+        "target_mode": "lane_centre",
+        "lane_lookahead_m": 0.8,
+    }
+    assert replay.parse_value(" gap_deepest ", "target_mode") == "gap_deepest"
+    with pytest.raises(replay.ReplayError):
+        replay.parse_value("lane_centre", "steering_gain")
+
+
 def test_load_profiles_resolves_names_and_rejects_no_profiles(tmp_path):
     launch = tmp_path / "x.launch.py"
     launch.write_text(
@@ -331,6 +342,10 @@ def test_cli_defaults_match_the_node():
         assert table[name][3] and table[name][0] == (1.0 if m.group(2) == "true" else 0.0), name
     cli_only = {"range_min_m", "range_max_m"}
     assert set(table) - seen == cli_only, set(table) - seen - cli_only
+    # The one string parameter: same name and default in both.
+    node_mode = re.search(r'declare_described_string\(\s*\*this, "target_mode", "(\w+)"', flat)
+    cli_mode = re.search(r'std::string g_target_mode = "(\w+)";', cpp)
+    assert node_mode and cli_mode and node_mode.group(1) == cli_mode.group(1) == "gap_centre"
 
 
 def test_scan_line_format():
@@ -459,6 +474,42 @@ def test_table_summary_and_csv(tmp_path):
     json.dumps(summary)  # serialisable as written to summary.json
 
 
+def test_steering_stats_full_lock_mean_and_sign_changes():
+    values = [0.4189, 0.4189, 0.2, 0.01, -0.3, None, -0.4185, 0.03, 0.1, float("nan")]
+    stats = analysis.steering_stats(values, 0.4189, 0.05)
+    assert stats["samples"] == 8
+    # 0.4185 is within FULL_LOCK_TOLERANCE_RAD of the limit, so 3 of 8 are at full lock.
+    assert stats["full_lock_fraction"] == pytest.approx(3 / 8)
+    assert stats["mean_abs_rad"] == pytest.approx(
+        (0.4189 * 2 + 0.2 + 0.01 + 0.3 + 0.4185 + 0.03 + 0.1) / 8
+    )
+    # Turning values only (|s| > 0.05): + + + - - +: two sign changes.
+    assert stats["sign_changes"] == 2
+    assert analysis.steering_stats(values, None, 0.05)["full_lock_fraction"] is None
+    empty = analysis.steering_stats([], 0.4189, 0.05)
+    assert empty["samples"] == 0 and empty["mean_abs_rad"] is None
+
+
+def test_summary_reports_steering_stats_and_lane_columns(tmp_path):
+    scans = [_scan(10.0 + 0.1 * k) for k in range(3)]
+    rows = [_row(steer=0.4189, filtered=0.3), _row(steer=-0.2, filtered=0.1), _row(steer=0.2)]
+    rows[0].update(lane_aim_x_m=0.6, lane_aim_y_m=0.1, lane_half_width_m=0.5, lane_width_m=1.0)
+    rows[0]["lane_trace"] = [[0.0, 0.0], [0.6, 0.1]]
+    table = analysis.build_table(scans, rows, [], [])
+    assert table[0]["lane_aim_y_m"] == 0.1 and table[0]["lane_trace"] == [[0.0, 0.0], [0.6, 0.1]]
+    assert table[1]["lane_aim_x_m"] is None and table[1]["lane_trace"] == []
+    analysis.write_csv(table, tmp_path / "t.csv")
+    header = (tmp_path / "t.csv").read_text().splitlines()[0].split(",")
+    assert "lane_aim_x_m" in header and "lane_trace" not in header
+    summary = analysis.summarise(
+        bag.BagData(scans=scans, files=["x.mcap"]), table, "p", {}, max_steering_rad=0.4189
+    )
+    assert summary["steering_stats"]["full_lock_fraction"] == pytest.approx(1 / 3)
+    assert summary["steering_stats"]["sign_changes"] == 2
+    text = analysis.format_summary(summary)
+    assert "full lock 33.3 %" in text and "sign changes 2" in text
+
+
 def test_summary_of_a_quiet_bag():
     data = bag.BagData(files=["q.mcap"])
     summary = analysis.summarise(data, [], "none", {})
@@ -535,6 +586,9 @@ def test_plots_write_pngs(tmp_path):
         for k, (_, a, inc, r) in enumerate(fixture_scans())
     ]
     rows = [_row(steer=0.1 * k, filtered=0.05 * k, clamped=k == 3) for k in range(5)]
+    # One lane_centre row: the trace and the aim point are drawn too.
+    rows[1].update(lane_aim_x_m=0.6, lane_aim_y_m=0.1, lane_half_width_m=0.5, lane_width_m=None)
+    rows[1]["lane_trace"] = [[0.0, 0.05], [0.3, 0.08], [0.6, 0.1]]
     table = analysis.build_table(
         scans, rows, [analysis.DriveRecord(T0 + 0.05 * k, 0.1, 0.5) for k in range(10)], []
     )
@@ -667,3 +721,41 @@ def test_real_cli_reproduces_the_committed_golden(indexed_bag, tmp_path):
         assert got["clamped"] == want["clamped"] and got["valid"] == want["valid"]
     assert result.summary["clamped_scans"] == 1
     assert os.path.exists(result.files["csv"])
+
+
+FLOOR_EXCERPT = REPO_ROOT / "tools/tests/fixtures/floor_2026-10-24_corners.txt"
+
+
+@pytest.mark.skipif(_real_cli() is None, reason="gap_follow_replay_cli is not built")
+def test_lane_centre_on_the_floor_bag_corners_aims_mid_lane(tmp_path):
+    """The 2026-10-24 floor finding, on seven scans of that bag (the loop's corners, the car on
+    the inside edge): lane_centre turns LEFT round every corner of the counter-clockwise loop,
+    aims at a point in the middle of the lane (at least 0.8 h from every return, where the gap
+    centre aims at the outer wall), and stays off the lock where the lane allows it."""
+    cli = _real_cli()
+    assert cli is not None
+    params = replay.resolve_params(
+        "floor-2026-10-06",
+        {"target_mode": "lane_centre", "range_min_m": 0.05, "range_max_m": 16.0},
+    )
+    params_file = tmp_path / "params.json"
+    replay.write_params_file(params, params_file)
+    rows = replay.run_cli(cli, FLOOR_EXCERPT, params_file)
+    geometry = replay.describe_cli(cli, params_file)
+    lines = [ln for ln in FLOOR_EXCERPT.read_text().splitlines() if not ln.startswith("#")]
+    assert len(rows) == len(lines) == 7
+    for line, row in zip(lines, rows, strict=True):
+        w = line.split()
+        scan = bag.ScanRecord(
+            float(w[0]), float(w[1]), float(w[2]), 0.05, 16.0, tuple(float(r) for r in w[4:])
+        )
+        xs, ys = plots.vehicle_points(scan, geometry)
+        aim = (row["lane_aim_x_m"], row["lane_aim_y_m"])
+        clearance = min(math.hypot(x - aim[0], y - aim[1]) for x, y in zip(xs, ys, strict=True))
+        assert row["valid"] and row["lane_trace"], row["stamp_s"]
+        assert clearance >= 0.8 * row["lane_half_width_m"], (row["stamp_s"], clearance)
+        # Never away from the bend (46.04 s is just before it, about straight).
+        assert row["wanted_steering_rad"] > -0.05, row["stamp_s"]
+    assert sum(1 for r in rows if r["wanted_steering_rad"] > 0.1) >= 5
+    unsaturated = [r for r in rows if r["wanted_steering_rad"] < geometry["max_steering_rad"]]
+    assert len(unsaturated) >= 4

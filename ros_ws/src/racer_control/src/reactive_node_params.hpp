@@ -47,6 +47,14 @@ inline bool declare_described_bool(rclcpp::Node& node, const std::string& name, 
   return node.declare_parameter<bool>(name, default_value, descriptor);
 }
 
+inline std::string declare_described_string(rclcpp::Node& node, const std::string& name,
+                                            const std::string& default_value,
+                                            const std::string& description) {
+  rcl_interfaces::msg::ParameterDescriptor descriptor;
+  descriptor.description = description;
+  return node.declare_parameter<std::string>(name, default_value, descriptor);
+}
+
 }  // namespace racer_control
 
 #endif  // RACER_CONTROL_REACTIVE_NODE_PARAMS_HPP_

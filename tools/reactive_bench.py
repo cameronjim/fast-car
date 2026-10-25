@@ -54,6 +54,8 @@ CI_BATTERY = (("lane_square", 120.0), ("lane_open_side", 80.0), ("chicane", 80.0
 
 # Integer-typed gap_follow_node parameters (a sweep value for anything else is a float).
 INT_PARAMETERS = {"target_range_median_scans"}
+# String-typed gap_follow_node parameters (a sweep value is taken as written).
+STRING_PARAMETERS = {"target_mode"}
 
 Result = dict
 
@@ -218,6 +220,11 @@ def aggregate(results: list[Result]) -> dict:
     for r in loops:
         if r["lap_time_s"] is not None:
             lap_times.setdefault(r["track"], []).append(r["lap_time_s"])
+    offsets = [
+        r["mean_centreline_offset_m"]
+        for r in loops
+        if r.get("mean_centreline_offset_m") is not None
+    ]
     return {
         "errors": len(results) - len(ok),
         "wall_contacts": sum(r["wall_contacts"] for r in ok),
@@ -230,6 +237,8 @@ def aggregate(results: list[Result]) -> dict:
         "lap_time_sum_s": sum(sum(v) / len(v) for v in lap_times.values()),
         "escapes": sum(r["escapes"] for r in ok),
         "min_clearance_m": min((r["min_body_clearance_m"] for r in ok), default=math.nan),
+        # Mean over the loop runs of each run's mean distance from the centreline (m).
+        "mean_centreline_offset_m": sum(offsets) / len(offsets) if offsets else math.nan,
     }
 
 
@@ -254,7 +263,9 @@ def parse_sweep(specs: list[str]) -> dict[str, list]:
         parsed: list = []
         for token in values.split(","):
             token = token.strip()
-            if token.lower() in ("true", "false"):
+            if name in STRING_PARAMETERS:
+                parsed.append(token)
+            elif token.lower() in ("true", "false"):
                 parsed.append(token.lower() == "true")
             elif name in INT_PARAMETERS:
                 parsed.append(int(token))
@@ -286,19 +297,26 @@ def results_table(results: list[Result]) -> str:
     """The markdown results table of one parameter set, one row per track."""
     lines = [
         (
-            "| Track | Laps | Lap time (s) | Brakes | Escapes | Min clearance (m) | Contacts "
+            "| Track | Laps | Lap time (s) | Brakes | Brakes/lap | Escapes | Min clearance (m) "
+            "| Contacts | Centre offset, mean (m) | Centre offset per lap (m) "
             "| Mean abs steer (rad) | Reversals/min | Run (s) |"
         ),
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         if "error" in r:
-            lines.append(f"| {r['track']} | ERROR | {r['error'][:80].replace('|', '/')} |||||||| ")
+            lines.append(
+                f"| {r['track']} | ERROR | {r['error'][:80].replace('|', '/')} |||||||||||| "
+            )
             continue
+        per_lap = r.get("lap_centreline_offsets_m") or []
         lines.append(
             f"| {r['track']} | {_fmt(r['laps'])} | {_fmt(r['lap_time_s'], 1)} "
-            f"| {r['obstacle_brakes']} | {r['escapes']} | {_fmt(r['min_body_clearance_m'], 3)} "
-            f"| {r['wall_contacts']} | {_fmt(r['mean_abs_steering_rad'], 3)} "
+            f"| {r['obstacle_brakes']} | {_fmt(r.get('brakes_per_lap'), 2)} | {r['escapes']} "
+            f"| {_fmt(r['min_body_clearance_m'], 3)} | {r['wall_contacts']} "
+            f"| {_fmt(r.get('mean_centreline_offset_m'), 3)} "
+            f"| {', '.join(f'{v:.3f}' for v in per_lap) or '-'} "
+            f"| {_fmt(r['mean_abs_steering_rad'], 3)} "
             f"| {_fmt(r['steering_reversals_per_min'], 1)} | {_fmt(r['duration_s'], 0)} |"
         )
     return "\n".join(lines)
@@ -310,9 +328,9 @@ def sweep_table(rows: list[tuple[dict, dict]], names: list[str]) -> str:
         (
             "| # | " + " | ".join(names) + " | Contacts | Loop contacts | Loop runs without a lap "
             "| Laps | Loop brakes | Brakes/lap | Lap time, loops summed (s) | Escapes "
-            "| Min clearance (m) |"
+            "| Min clearance (m) | Centre offset (m) |"
         ),
-        "|" + "---|" * (len(names) + 10),
+        "|" + "---|" * (len(names) + 11),
     ]
     for i, (params, agg) in enumerate(rows, start=1):
         lines.append(
@@ -321,7 +339,8 @@ def sweep_table(rows: list[tuple[dict, dict]], names: list[str]) -> str:
             + f" | {agg['wall_contacts']} | {agg['loop_wall_contacts']} | {agg['incomplete_loops']} "
             f"| {agg['laps']} | {agg['loop_brakes']} | {_fmt(agg['brakes_per_lap'], 2)} "
             f"| {_fmt(agg['lap_time_sum_s'], 1)} | {agg['escapes']} "
-            f"| {_fmt(agg['min_clearance_m'], 3)} |"
+            f"| {_fmt(agg['min_clearance_m'], 3)} "
+            f"| {_fmt(agg.get('mean_centreline_offset_m', math.nan), 3)} |"
         )
     return "\n".join(lines)
 

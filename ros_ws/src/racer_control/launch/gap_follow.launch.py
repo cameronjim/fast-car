@@ -39,6 +39,12 @@ while vehicle_params sensors.lidar.mount_x_m / mount_y_m is null.
 `centering_gain` (lane centring, [0, 5] rad, 0 = off; see include/racer_control/gap_follow.hpp
 measure_lane_walls) follows the same rule. The profile turns it on at 0.6.
 
+`target_mode` (gap_centre, gap_deepest or lane_centre; see include/racer_control/gap_follow.hpp
+TargetMode and trace_lane_centre), `lane_lookahead_m` ([0.1, 3] m) and
+`lane_default_half_width_m` ([0.1, 2] m) follow the same rule. target_mode is checked here
+against the three names; the node refuses anything else too. The old bool
+`target_deepest_ray` is still accepted by the node (true means gap_deepest, with a warning).
+
 `reverse_escape` (true/false) and `escape_probe_distance_m` (see
 include/racer_control/reverse_escape.hpp) follow the same rule. WITH reverse_escape TRUE THE CAR
 CAN REVERSE ON ITS OWN: when safety_node has refused the forward request for escape_after_s and
@@ -157,6 +163,26 @@ _OPTIONAL_FLOAT_ARGS = {
         "travel (m), [0.02, 3]. Empty (default) leaves the profile value, the params file value "
         "or the node default 0.3."
     ),
+    "lane_lookahead_m": (
+        "target_mode lane_centre: distance along the lane to the aim point (m), [0.1, 3]. Empty "
+        "(default) leaves the profile value, the params file value or the node default 0.6."
+    ),
+    "lane_default_half_width_m": (
+        "target_mode lane_centre: offset held from the one visible wall before a lane width has "
+        "been measured (m), [0.1, 2]. Empty (default) leaves the profile value, the params file "
+        "value or the node default 0.55."
+    ),
+}
+# Launch arguments forwarded as strings when set, with the values the node accepts.
+_OPTIONAL_CHOICE_ARGS = {
+    "target_mode": (
+        ("gap_centre", "gap_deepest", "lane_centre"),
+        (
+            "What the follower steers toward: gap_centre, gap_deepest or lane_centre (pure "
+            "pursuit to the lane centreline). Empty (default) leaves the profile value, the "
+            "params file value or the node default gap_centre."
+        ),
+    ),
 }
 _OPTIONAL_INT_ARGS = {
     "target_range_median_scans": (
@@ -218,6 +244,12 @@ def _make_node(context: LaunchContext) -> list[Node]:
             if value not in ("true", "false"):
                 raise ValueError(f"{name} must be true or false, got {value!r}")
             overrides[name] = value == "true"
+    for name, (choices, _) in _OPTIONAL_CHOICE_ARGS.items():
+        value = LaunchConfiguration(name).perform(context).strip()
+        if value:
+            if value not in choices:
+                raise ValueError(f"{name} must be one of {list(choices)}, got {value!r}")
+            overrides[name] = value
     if overrides:
         parameters.append(overrides)
     return [
@@ -261,6 +293,7 @@ def generate_launch_description() -> LaunchDescription:
             **_OPTIONAL_FLOAT_ARGS,
             **_OPTIONAL_INT_ARGS,
             **_OPTIONAL_BOOL_ARGS,
+            **{name: description for name, (_, description) in _OPTIONAL_CHOICE_ARGS.items()},
         }.items()
     ]
     return LaunchDescription(

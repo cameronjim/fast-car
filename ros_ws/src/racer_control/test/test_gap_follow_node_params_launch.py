@@ -11,7 +11,8 @@ same check with 0. The speed smoothing parameters (2026-10-06 floor checkpoint) 
 speed_time_constant_s (range [0, 5] s) with 6, and target_range_median_scans (integer range
 [1, 15]) with 0, which also covers the launch file forwarding it as an integer. Lane centring's
 centering_gain (range [0, 5] rad) gets it with -0.1, and the reverse escape's
-escape_probe_distance_m (range [0.02, 3] m) with 0.
+escape_probe_distance_m (range [0.02, 3] m) with 0. The lane-centre target's lane_lookahead_m
+(range [0.1, 3] m) and lane_default_half_width_m (range [0.1, 2] m) get it with 0 and 5.
 
 Each node runs in its own scoped group so the includes' launch arguments do not leak into
 each other. They share the node name; neither gets far enough to matter.
@@ -69,6 +70,8 @@ def generate_test_description():
             _include(target_range_median_scans="0"),
             _include(centering_gain="-0.1"),
             _include(escape_probe_distance_m="0"),
+            _include(lane_lookahead_m="0"),
+            _include(lane_default_half_width_m="5"),
             launch_testing.actions.ReadyToTest(),
         ]
     )
@@ -84,10 +87,12 @@ class TestGapFollowNodeParameterRanges(unittest.TestCase):
         proc_output.assertWaitFor("target_range_median_scans", timeout=30, stream="stderr")
         proc_output.assertWaitFor("centering_gain", timeout=30, stream="stderr")
         proc_output.assertWaitFor("escape_probe_distance_m", timeout=30, stream="stderr")
+        proc_output.assertWaitFor("lane_lookahead_m", timeout=30, stream="stderr")
+        proc_output.assertWaitFor("lane_default_half_width_m", timeout=30, stream="stderr")
         # Let every process exit on their own before this test returns; otherwise launch
         # shuts them down with SIGINT and the exit code check below sees -2, not 1.
         processes = proc_info.processes()
-        self.assertEqual(len(processes), 7)
+        self.assertEqual(len(processes), 9)
         for process in processes:
             proc_info.assertWaitForShutdown(process=process, timeout=30)
 

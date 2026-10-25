@@ -17,6 +17,9 @@ with params.json (the steering part of the floor-2026-10-06 profile), and checks
   * the low-pass against its closed form, stepped the way gap_follow_node's timer steps it;
   * parameter validation (unknown key, out of range, yaw disagreeing with the binding) and the
     key=value params format, stdin input and malformed scan lines;
+  * target_mode lane_centre (2026-10-24): the centred lane of scan 0.0 gives zero pure-pursuit
+    steering, target_mode quoted in JSON and bare in --set, the deprecated target_deepest_ray,
+    refusals, and (with --floor-excerpt) seven corner scans of the 2026-10-24 floor bag;
   * the whole output against expected.jsonl within 1e-6. Regenerate that file only on purpose
     (--write-expected) and say why in the PR: a silent golden refresh is a defect
     (claude-docs/12-testing.md, L4).
@@ -32,6 +35,9 @@ from pathlib import Path
 
 TOLERANCE = 1e-6
 MAX_STEERING_RAD = 0.4189  # config/vehicle_params.yaml steering.max_angle_rad
+WHEELBASE_M = 0.3302  # config/vehicle_params.yaml chassis.wheelbase_m
+# The target_mode lane_centre output keys (null / [] in the gap modes).
+LANE_KEYS = {"lane_aim_x_m", "lane_aim_y_m", "lane_half_width_m", "lane_width_m", "lane_trace"}
 
 
 def run(cli, args, stdin=None):
@@ -50,9 +56,14 @@ def close(a, b):
 
 
 def check_close_rows(got, expected):
+    """Every key of the expected rows matches. The lane_centre keys added on 2026-10-24 are not
+    in expected.jsonl (it predates them and was NOT regenerated); in the gap modes it covers
+    they must be null / empty, which is checked here instead."""
     assert len(got) == len(expected), (len(got), len(expected))
     for i, (g, e) in enumerate(zip(got, expected)):
-        assert g.keys() == e.keys(), (i, g.keys(), e.keys())
+        assert set(g) - set(e) <= LANE_KEYS and set(e) <= set(g), (i, g.keys(), e.keys())
+        for key in set(g) - set(e):
+            assert g[key] in (None, []), (i, key, g[key])
         for key, ev in e.items():
             gv = g[key]
             if isinstance(ev, float) and gv is not None:
@@ -66,6 +77,9 @@ def main():
     parser.add_argument("--cli", required=True, type=Path)
     parser.add_argument("--fixture-dir", required=True, type=Path)
     parser.add_argument("--write-expected", action="store_true")
+    parser.add_argument(
+        "--floor-excerpt", type=Path, help="tools/tests/fixtures/floor_2026-10-24_corners.txt"
+    )
     args = parser.parse_args()
     cli = args.cli
     scenes = args.fixture_dir / "scenes.txt"
@@ -196,6 +210,76 @@ def main():
         broken.write_text("0.0 -3.14 0.01 5 1 2 3\n", encoding="utf-8")
         proc = run(cli, ["--params", str(params), "--scans", str(broken)])
         assert proc.returncode == 3 and "line 1" in proc.stderr, proc.stderr
+
+        # target_mode lane_centre on scene 0 (walls 0.6 m either side, open ahead): the lane is
+        # 1.2 m wide, the car is on its centreline, the aim point is straight ahead and the
+        # pure-pursuit steering is zero. Quoted in a JSON params file or bare in --set.
+        lane_json = Path(tmp) / "lane.json"
+        loaded = json.loads(params.read_text(encoding="utf-8"))
+        lane_json.write_text(json.dumps({**loaded, "target_mode": "lane_centre"}), encoding="utf-8")
+        zero = Path(tmp) / "zero.txt"
+        zero.write_text(scene_lines[0] + "\n", encoding="utf-8")
+        lane = rows(run(cli, ["--params", str(lane_json), "--scans", str(zero)]))[0]
+        assert lane["valid"] and abs(lane["lane_width_m"] - 1.2) < 0.02, lane
+        assert abs(lane["lane_aim_y_m"]) < 0.01 and abs(lane["wanted_steering_rad"]) < 0.01, lane
+        assert len(lane["lane_trace"]) == 13 and abs(lane["lane_trace"][-1][0] - 0.6) < 0.01
+        same = rows(
+            run(
+                cli,
+                ["--params", str(params), "--scans", str(zero), "--set", "target_mode=lane_centre"],
+            )
+        )[0]
+        check_close_rows([same], [lane])
+        # The aim point is the pure-pursuit target: steering = atan(2 L sin(alpha) / l_d).
+        ax, ay = lane["lane_aim_x_m"], lane["lane_aim_y_m"]
+        pp = math.atan(2.0 * WHEELBASE_M * ay / (ax * ax + ay * ay))
+        assert abs(lane["wanted_steering_rad"] - pp) < 1e-6, (lane, pp)
+        # The deprecated bool: true means gap_deepest (with a warning), and disagrees with
+        # lane_centre (refused, as the node refuses to start).
+        deepest = run(
+            cli, ["--params", str(params), "--scans", str(one), "--set", "target_deepest_ray=true"]
+        )
+        assert deepest.returncode == 0 and "deprecated" in deepest.stderr, deepest.stderr
+        explicit = rows(
+            run(
+                cli,
+                ["--params", str(params), "--scans", str(one), "--set", "target_mode=gap_deepest"],
+            )
+        )
+        check_close_rows(rows(deepest), explicit)
+        for bad in (
+            ["--set", "target_mode=lane_center"],
+            ["--set", "target_mode=lane_centre", "--set", "target_deepest_ray=true"],
+            ["--set", "lane_lookahead_m=0"],
+        ):
+            proc = run(cli, ["--params", str(params), "--scans", str(one), *bad])
+            assert proc.returncode == 2 and proc.stdout == "", (bad, proc.returncode, proc.stderr)
+
+    # Seven scans of the 2026-10-24 floor bag (tools/tests/fixtures), the loop's corners with
+    # the car on the inside edge: lane_centre turns left (the loop is counter-clockwise), never
+    # right, with the aim point and the lane width defined.
+    if args.floor_excerpt:
+        floor = rows(
+            run(
+                cli,
+                [
+                    "--params",
+                    str(params),
+                    "--scans",
+                    str(args.floor_excerpt),
+                    "--set",
+                    "target_mode=lane_centre",
+                    "--set",
+                    "range_max_m=16",
+                ],
+            )
+        )
+        assert len(floor) == 7
+        for r in floor:
+            # Never away from the bend (46.04 s is just before it, about straight).
+            assert r["valid"] and r["wanted_steering_rad"] > -0.05, r
+            assert r["lane_aim_x_m"] is not None and r["lane_half_width_m"] > 0.3, r
+        assert sum(1 for r in floor if r["wanted_steering_rad"] > 0.1) >= 5, floor
 
     assert math.isfinite(out[0]["filtered_steering_rad"])
     print("gap_follow_replay_cli checks passed")

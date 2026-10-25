@@ -99,14 +99,22 @@ def test_profile_argument_defaults_to_none_with_both_choices():
     assert "profile" in args
     context = LaunchContext()
     assert "".join(s.perform(context) for s in args["profile"].default_value) == "none"
-    assert set(args["profile"].choices) == {"none", "floor-2026-10-06"}
-    assert set(module.PROFILES) == {"none", "floor-2026-10-06"}
+    assert set(args["profile"].choices) == {"none", "floor-2026-10-06", "lane-2026-10-25"}
+    assert set(module.PROFILES) == {"none", "floor-2026-10-06", "lane-2026-10-25"}
 
 
 def test_floor_profile_constant_is_the_checkpoint():
     module = _load_launch_module()
     assert module.FLOOR_2026_10_06_PROFILE == _FLOOR_2026_10_06
     assert module.PROFILES["floor-2026-10-06"] is module.FLOOR_2026_10_06_PROFILE
+    assert module.PROFILES["lane-2026-10-25"] is module.LANE_2026_10_25_PROFILE
+    lane = module.LANE_2026_10_25_PROFILE
+    assert lane["target_mode"] == "lane_centre"
+    assert lane["lane_lookahead_m"] == 0.6
+    assert lane["swept_path_clamp"] is True
+    for key, value in module.FLOOR_2026_10_06_PROFILE.items():
+        if key not in ("target_mode", "lane_lookahead_m"):
+            assert lane[key] == value, key
     assert module.PROFILES["none"] == {}
 
 

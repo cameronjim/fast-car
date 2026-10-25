@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1555,11 +1556,96 @@ TEST(SweptPathClamp, ObjectStraightAheadInsideTheCarsWidthIsIgnored) {
 
 TEST(SweptPathClamp, ReturnWithinTheMarginBesideTheCarForbidsTheTurn) {
   // 0.18 m left of the centreline: outside the half width (0.155) but inside half width +
-  // margin (0.205), alongside the car just behind the head. No left turn clears it.
+  // margin (0.205), alongside the car from 0.185 to 0.385 m ahead of the rear axle. The part
+  // ahead of the front axle (x > 0.3302) keeps the full margin, so no left turn clears it.
   const ScanInput scan = c1_scan_with({{-0.1, 0.18, 0.1, 0.18}});
   const SweptPathClamp clamp = clamp_steering_to_swept_path(scan, kC1Yaw, 0.3, swept_geometry());
   EXPECT_TRUE(clamp.clamped);
   EXPECT_EQ(clamp.steering_rad, 0.0);
+}
+
+// Rigid-body check, independent of the clamp's circle algebra: the car (rear axle at the origin,
+// body x in [-0.1, body front], |y| <= 0.155) drives a left arc of steering delta for up to
+// `arc_m` of rear-axle travel; the smallest lateral clearance of the point from the body's side
+// while the point is alongside the body (negative: the body overlaps it).
+double swept_flank_clearance_m(double px, double py, double delta, double arc_m = 1.0) {
+  const double radius = kWheelbase / std::tan(delta);
+  double worst = std::numeric_limits<double>::infinity();
+  for (int i = 0; i <= 2000; ++i) {
+    const double theta = (arc_m / radius) * i / 2000.0;
+    const double tx = radius * std::sin(theta);
+    const double ty = radius * (1.0 - std::cos(theta));
+    const double dx = px - tx;
+    const double dy = py - ty;
+    const double bx = std::cos(theta) * dx + std::sin(theta) * dy;
+    const double by = -std::sin(theta) * dx + std::cos(theta) * dy;
+    if (bx >= -0.1 && bx <= 0.4602) {
+      worst = std::min(worst, std::abs(by) - 0.155);
+    }
+  }
+  return worst;
+}
+
+TEST(SweptPathClamp, AReturnBesideTheCarIsSweptByOffTrackingSoItCannotBeDropped) {
+  // The 2026-10-25 apex return beside the front axle, (0.324, 0.233) in the rear-axle frame, 7.8
+  // cm off the flank: driving straight keeps the 7.8 cm, full lock sweeps the flank over it by
+  // 1.7 cm (the flank at the rear axle runs on R - half width), so it must stay in the clamp.
+  EXPECT_NEAR(swept_flank_clearance_m(0.324, 0.233, 1e-6), 0.078, 1e-3);
+  EXPECT_NEAR(swept_flank_clearance_m(0.324, 0.233, kFullLeft), -0.017, 2e-3);
+}
+
+TEST(SweptPathClamp, AReturnBesideTheCarWithinTheMarginLimitsTheTurnInsteadOfForbiddingIt) {
+  // A wall 0.18 m left of the centreline (inside half width + margin, 0.205 m) from 0.035 to
+  // 0.235 m ahead of the rear axle, all of it behind the front axle. With the full margin every
+  // left turn was forbidden (k_max = 0); now the turn may take half the 2.5 cm the car has, so the
+  // clamp gives the turn whose inside flank circle passes the binding return at 1.25 cm.
+  const ScanInput scan = c1_scan_with({{0.035 - kMountX, 0.18, 0.235 - kMountX, 0.18}});
+  const std::vector<RearAxlePoint> points = rear_axle_returns(scan);
+  ASSERT_GT(points.size(), 5u);
+  const SweptPathClamp clamp = clamp_steering_to_swept_path(scan, kC1Yaw, 0.3, swept_geometry());
+  EXPECT_TRUE(clamp.clamped);
+  EXPECT_GT(clamp.steering_rad, 0.05);
+  EXPECT_LT(clamp.steering_rad, 0.3);
+  // Every return keeps at least half its present clearance on the inside flank circle, and
+  // the binding one exactly half (the clamp is the largest such turn).
+  const double radius = kWheelbase / std::tan(clamp.steering_rad);
+  double tightest = std::numeric_limits<double>::infinity();
+  for (const RearAxlePoint& p : points) {
+    const double keep = std::min(0.05, 0.5 * (p.y - 0.155));
+    const double margin_left = (radius - 0.155 - keep) - std::hypot(p.x, radius - p.y);
+    EXPECT_GE(margin_left, -1e-9) << p.x << " " << p.y;
+    tightest = std::min(tightest, margin_left);
+  }
+  EXPECT_NEAR(tightest, 0.0, 1e-9);
+  // And the body never touches any of them on the clamped arc.
+  for (const RearAxlePoint& p : points) {
+    EXPECT_GT(swept_flank_clearance_m(p.x, p.y, clamp.steering_rad), 0.0) << p.x << " " << p.y;
+  }
+  // The full lock wanted would have touched the wall: the clamp still acts.
+  double worst = std::numeric_limits<double>::infinity();
+  for (const RearAxlePoint& p : points) {
+    worst = std::min(worst, swept_flank_clearance_m(p.x, p.y, kFullLeft));
+  }
+  EXPECT_LT(worst, 0.0);
+  EXPECT_TRUE(clamp_steering_to_swept_path(scan, kC1Yaw, kFullLeft, swept_geometry()).clamped);
+}
+
+TEST(SweptPathClamp, ABoxAtTheApexAheadOfTheBumperKeepsTheFullMargin) {
+  // A box ahead of the front bumper (0.46 m) on the left, 0.5 to 0.7 m ahead of the rear axle
+  // and 0.25 to 0.4 m left: the turn-in drives the front corner at it, so the full margin
+  // applies: the inside flank circle clears every return by at least the margin, and the
+  // binding return by exactly the margin, as before the beside-the-car rule.
+  const ScanInput scan = c1_scan_with(
+      {{0.5 - kMountX, 0.25, 0.7 - kMountX, 0.25}, {0.5 - kMountX, 0.25, 0.5 - kMountX, 0.4}});
+  const std::vector<RearAxlePoint> points = rear_axle_returns(scan);
+  ASSERT_GT(points.size(), 5u);
+  ASSERT_LT(inside_clearance_m(points, kFullLeft), 0.0);
+  const SweptPathClamp clamp =
+      clamp_steering_to_swept_path(scan, kC1Yaw, kFullLeft, swept_geometry());
+  EXPECT_TRUE(clamp.clamped);
+  EXPECT_LT(clamp.steering_rad, kFullLeft);
+  EXPECT_GE(inside_clearance_m(points, clamp.steering_rad), -1e-9);
+  EXPECT_NEAR(inside_clearance_m(points, clamp.steering_rad), 0.0, 1e-9);
 }
 
 TEST(SweptPathClamp, InvalidReturnsAreIgnored) {
@@ -2185,33 +2271,34 @@ TEST(LaneCentreTarget, OneSidedLaneHoldsTheOffset) {
   EXPECT_NEAR(mirror.wanted_steering_rad, -close.wanted_steering_rad, 0.015);
 }
 
-TEST(LaneCentreTarget, AnOpeningPastTheEndOfAWallIsNotFollowed) {
-  // A centred 1.1 m lane whose left wall stops, open beyond (a doorway, the gap between two
-  // boxes). The curve midway between the right wall and the left wall's END POINT bends round
-  // that end into the opening (by 0.12 m at 0.5 m past it); with the wall continued straight
-  // for h and not counted beyond, the aim stays on the old centreline wherever the end is.
+TEST(LaneCentreTarget, PastTheEndOfAWallTheTraceIsTheMidwayCurve) {
+  // A centred 1.1 m lane whose left wall stops, open beyond (a doorway). The wall's end point
+  // stays the nearest left return while it is within the window (2 x 0.55 m), so the trace is the
+  // curve midway between that point and the right wall: y = s^2 / (2 W) at s past the end (W =
+  // 1.1 m), and 0 beside the wall. This is the cost of going round an apex (gap_follow.hpp, What
+  // it costs); the 2026-10-24 trace held it straight.
   for (const double end_x : {-0.5, -0.2, 0.1, 0.3}) {
     GapFollower follower(lane_config());
     const std::vector<Segment> walls{{-3.0, 0.55, end_x, 0.55}, {-3.0, -0.55, 20.0, -0.55}};
     const GapFollowResult r = follower.process(c1_scan_with(walls));
     ASSERT_TRUE(r.lane_valid) << end_x;
-    // A width is measured only while the car is beside both walls (the wall ends ahead of its
-    // centre, 0.23 m ahead of the rear axle, 0.055 m behind the head); otherwise h is the
-    // default 0.55 m, the same here.
-    EXPECT_EQ(r.lane_measured_width_m.has_value(), end_x > -0.05) << end_x;
-    EXPECT_NEAR(r.lane_aim.y, 0.0, 0.005) << end_x;
-    EXPECT_LT(std::abs(r.wanted_steering_rad), 0.01) << end_x;
+    const double end = end_x + kMountX;  // rear-axle frame
     for (const LanePoint& p : follower.lane_trace()) {
-      EXPECT_NEAR(p.y, 0.0, 0.005) << end_x << " at x " << p.x;
+      const double past = std::max(0.0, p.x - end);
+      EXPECT_NEAR(p.y, past * past / 2.2, 0.01) << end_x << " at x " << p.x;
     }
+    // It leans toward the opening (left), and only as far as the midway curve.
+    EXPECT_GE(r.wanted_steering_rad, -1e-6) << end_x;
+    const double past_aim = std::max(0.0, r.lane_aim.x - end);
+    EXPECT_NEAR(r.lane_aim.y, past_aim * past_aim / 2.2, 0.01) << end_x;
   }
 }
 
-TEST(LaneCentreTarget, BoxesAlongAnOpenSideDoNotPullTheTraceIntoTheGaps) {
+TEST(LaneCentreTarget, BoxesAlongAnOpenSideBendTheTraceOnlyByTheMidwayDip) {
   // The sim's lane_open_side: on the left, 0.4 m boxes 0.3 m deep with 0.6 m gaps instead of a
-  // wall (each box's front and side faces are one chain, so its corner is not a chain end), a
-  // continuous right wall, a 1.1 m lane. Wherever the car is along the boxes, the aim point
-  // stays on the centreline (the midway curve round each box corner would lean into the gap).
+  // wall, a continuous right wall, a 1.1 m lane. Midway between the box corners either side of a
+  // gap (0.3 m from each) and the right wall the medial curve dips 0.3^2 / 2.2 = 4.1 cm into the
+  // gap; the trace never goes further, wherever the car is along the boxes.
   for (double shift = 0.0; shift < 1.0; shift += 0.1) {
     std::vector<Segment> scene{{-3.0, -0.55, 20.0, -0.55}};
     for (double x0 = -3.0 - shift; x0 < 6.0; x0 += 1.0) {
@@ -2222,9 +2309,126 @@ TEST(LaneCentreTarget, BoxesAlongAnOpenSideDoNotPullTheTraceIntoTheGaps) {
     GapFollower follower(lane_config());
     const GapFollowResult r = follower.process(c1_scan_with(scene));
     ASSERT_TRUE(r.lane_valid) << shift;
-    EXPECT_NEAR(r.lane_aim.y, 0.0, 0.01) << shift;
-    EXPECT_LT(std::abs(r.wanted_steering_rad), 0.02) << shift;
+    for (const LanePoint& p : follower.lane_trace()) {
+      EXPECT_GT(p.y, -0.005) << shift << " at x " << p.x;
+      EXPECT_LT(p.y, 0.3 * 0.3 / 2.2 + 0.01) << shift << " at x " << p.x;
+    }
+    EXPECT_LT(std::abs(r.wanted_steering_rad), straight_lane_pure_pursuit(0.051)) << shift;
   }
+}
+
+// A LEFT bend in the rear-axle frame (given to c1_scan_with in the head frame): a lane 1.0 m wide
+// centred on the car, the inner wall (left, y = +0.5) ending at the apex x = apex_x, the outer
+// wall (right, y = -0.5) straight on to x = bend_x and then turning left across the lane ahead.
+// With `island_face` the inner wall turns left at the apex (the island's next face, x = apex_x);
+// without it the inner wall just ends and the space beyond is open.
+std::vector<Segment> apex_bend(double apex_x, double bend_x, bool island_face) {
+  const double m = kMountX;
+  std::vector<Segment> walls{{-3.0 - m, 0.5, apex_x - m, 0.5},
+                             {-3.0 - m, -0.5, bend_x - m, -0.5},
+                             {bend_x - m, -0.5, bend_x - m, 4.0}};
+  if (island_face) {
+    walls.push_back({apex_x - m, 0.5, apex_x - m, 4.0});
+  }
+  return walls;
+}
+
+TEST(LaneCentreTarget, TheApexOfAnInsideCornerBendsTheTraceLeft) {
+  // The 2026-10-25 floor finding in a gtest: the inner wall ends at the apex, level with the rear
+  // axle, and the outer wall runs straight on for 1.2 m before it bends, farther than the
+  // 2026-10-24 trace looked for a bend (lane_lookahead_m + h past the apex). That trace held h
+  // from the outer wall past the apex and aimed almost straight down it (0.10 rad here). Now the
+  // apex stays the nearest left return, so the trace bends round it: its heading only ever turns
+  // left, it ends well left of the car, and the pure-pursuit command is a real left turn.
+  for (const bool island_face : {true, false}) {
+    GapFollower follower(lane_config());
+    const ScanInput scan = c1_scan_with(apex_bend(0.0, 1.2, island_face));
+    const GapFollowResult r = follower.process(scan);
+    ASSERT_TRUE(r.valid && r.lane_valid) << island_face;
+    const auto& trace = follower.lane_trace();
+    ASSERT_EQ(trace.size(), 13u);
+    EXPECT_NEAR(trace.front().y, 0.0, 0.005) << island_face;  // starts on the centreline
+    double previous_heading = -1.0;
+    for (std::size_t k = 1; k < trace.size(); ++k) {
+      const double heading = std::atan2(trace[k].y - trace[k - 1].y, trace[k].x - trace[k - 1].x);
+      EXPECT_GT(heading, previous_heading - 0.02) << island_face << " step " << k;
+      previous_heading = std::max(previous_heading, heading);
+      // Inside the lane: left of the outer wall, short of the outer wall ahead.
+      EXPECT_GT(trace[k].y, -0.5 + 0.2) << island_face << " step " << k;
+      EXPECT_LT(trace[k].x, 1.2 - 0.2) << island_face << " step " << k;
+    }
+    EXPECT_GT(previous_heading, 0.5) << island_face;  // turned left by more than 30 degrees
+    EXPECT_GT(r.lane_aim.y, 0.15) << island_face;
+    EXPECT_GT(r.wanted_steering_rad, 0.3) << island_face;
+    // With the swept-path clamp on (the apex is 0.35 m off the flank, beside the car) the
+    // command is not reduced.
+    GapFollowConfig c = lane_config();
+    c.swept_path_clamp = true;
+    GapFollower clamped(c);
+    const GapFollowResult rc = clamped.process(scan);
+    EXPECT_FALSE(rc.swept_path_clamped) << island_face;
+    EXPECT_EQ(rc.steering_rad, r.wanted_steering_rad) << island_face;
+  }
+}
+
+TEST(LaneCentreTarget, TheCommandGrowsSmoothlyAsTheCarComesUpToTheApex) {
+  // The outer wall straight for 2 m: the trace runs straight beside the inner wall and turns
+  // left past the apex on the curve midway between the apex and the outer wall (y = s^2 / 2 at s
+  // past it, W = 1 m), so as the apex comes from 0.5 m ahead to level with the rear axle the
+  // command grows monotonically, all left (the 2026-10-24 trace gave 0 to 0.1 rad throughout).
+  double previous = -1.0;
+  for (const double apex_x : {0.5, 0.4, 0.3, 0.2, 0.1, 0.0}) {
+    GapFollower follower(lane_config());
+    const GapFollowResult r = follower.process(c1_scan_with(apex_bend(apex_x, 2.0, true)));
+    ASSERT_TRUE(r.lane_valid) << apex_x;
+    EXPECT_GT(r.wanted_steering_rad, previous) << apex_x;
+    const double past = std::max(0.0, r.lane_aim.x - apex_x);
+    EXPECT_NEAR(r.lane_aim.y, past * past / 2.0, 0.015) << apex_x;
+    previous = r.wanted_steering_rad;
+  }
+  EXPECT_GT(previous, 0.25);
+}
+
+TEST(LaneCentreTarget, TheOuterWallRoundTheCornerStaysTheRightSide) {
+  // Side memory (2026-10-25 bag, 141.7 s): the car sits in a left bend already turned 60 degrees
+  // left of the old leg (its walls run at -60 degrees in the car's frame), the apex 0.1 m along
+  // the old leg, the outside corner 0.5 m along it, a 0.8 m lane. The outer wall is one chain
+  // round that corner, so the next leg's outer wall crosses the trace heading and its far part
+  // counts as LEFT. Taken there, it made the trace double back to the car and aim 0.36 m out at
+  // full right lock; kept on the right, the trace walks steadily away from the car round the
+  // apex.
+  const double co = std::cos(-M_PI / 3.0);
+  const double sn = std::sin(-M_PI / 3.0);
+  // A point `along` the old leg's centreline (through the rear axle) and `across` it (left
+  // positive), in the head frame c1_scan_with takes.
+  const auto head = [&](double along, double across) {
+    return std::array<double, 2>{along * co - across * sn - kMountX, along * sn + across * co};
+  };
+  const auto apex = head(0.1, 0.4);
+  const auto inner_back = head(-3.0, 0.4);
+  const auto inner_next = head(0.1, 4.0);
+  const auto outer_corner = head(0.5, -0.4);
+  const auto outer_back = head(-3.0, -0.4);
+  const auto outer_next = head(0.5, 4.0);
+  const std::vector<Segment> scene{
+      {inner_back[0], inner_back[1], apex[0], apex[1]},
+      {apex[0], apex[1], inner_next[0], inner_next[1]},
+      {outer_back[0], outer_back[1], outer_corner[0], outer_corner[1]},
+      {outer_corner[0], outer_corner[1], outer_next[0], outer_next[1]}};
+  GapFollower follower(lane_config());
+  const GapFollowResult r = follower.process(c1_scan_with(scene));
+  ASSERT_TRUE(r.lane_valid);
+  const auto& trace = follower.lane_trace();
+  ASSERT_EQ(trace.size(), 13u);
+  // Every step moves farther from the start (no doubling back), so the aim is about a lookahead
+  // out, and the command is not the lock.
+  for (std::size_t k = 1; k < trace.size(); ++k) {
+    const double previous = std::hypot(trace[k - 1].x - trace[0].x, trace[k - 1].y - trace[0].y);
+    const double now = std::hypot(trace[k].x - trace[0].x, trace[k].y - trace[0].y);
+    EXPECT_GT(now, previous + 0.02) << "step " << k;
+  }
+  EXPECT_GT(std::hypot(r.lane_aim.x, r.lane_aim.y), 0.5);
+  EXPECT_LT(std::abs(r.wanted_steering_rad), 0.2);
 }
 
 TEST(LaneCentreTarget, OpenSpaceDrivesStraight) {
@@ -2264,8 +2468,8 @@ TEST(LaneCentreTarget, KeepsTheClampAndTheCornerOverrideAfterIt) {
 }
 
 TEST(LaneCentreTarget, ChainsEndpointsAndBoundaries) {
-  // Two straight walls and a box: three chains (sizes adding up to every return), the walls beside
-  // the car are the boundaries, the box (ahead) is not.
+  // Two straight walls and a box: three chains (sizes adding up to every return); the lane width
+  // is measured to the walls beside the car, not to the box ahead.
   const std::vector<Segment> scene{
       {-1.0, 0.55, 2.0, 0.55}, {-1.0, -0.55, 2.0, -0.55}, {1.5, -0.1, 1.5, 0.1}};
   const ScanInput scan = c1_scan_with(scene);
@@ -2284,16 +2488,16 @@ TEST(LaneCentreTarget, ChainsEndpointsAndBoundaries) {
     total += points.chain_size[c];
   }
   EXPECT_EQ(total, points.count);
-  const LaneBoundaries b = find_lane_boundaries(points, g, 2.2, 0.55);
-  ASSERT_TRUE(b.left_chain && b.right_chain);
-  EXPECT_NE(*b.left_chain, *b.right_chain);
-  EXPECT_NEAR(b.left_m, 0.55, 0.005);
-  EXPECT_NEAR(b.right_m, 0.55, 0.005);
+  const LaneBoundaries b = find_lane_boundaries(points, g, 2.2);
+  ASSERT_TRUE(b.left_m && b.right_m);
+  EXPECT_NEAR(*b.left_m, 0.55, 0.005);
+  EXPECT_NEAR(*b.right_m, 0.55, 0.005);
   ASSERT_TRUE(b.width_m.has_value());
-  // A lane wider than the limit keeps only the nearer side; garbage loads nothing.
-  const LaneBoundaries narrow_limit = find_lane_boundaries(points, g, 1.0, 0.55);
+  EXPECT_NEAR(*b.width_m, 1.1, 0.01);
+  // A lane wider than the limit gives no width; garbage loads nothing.
+  const LaneBoundaries narrow_limit = find_lane_boundaries(points, g, 1.0);
   EXPECT_FALSE(narrow_limit.width_m.has_value());
-  EXPECT_TRUE(narrow_limit.left_chain.has_value() != narrow_limit.right_chain.has_value());
+  EXPECT_TRUE(narrow_limit.left_m.has_value() && narrow_limit.right_m.has_value());
   ScanInput bad = scan;
   bad.angle_increment = 0.0;
   EXPECT_EQ(load_lane_points(bad, kC1Yaw, 5.0, g, points), 0u);

@@ -270,6 +270,7 @@ if(BUILD_TESTING)
             --cli "$<TARGET_FILE:gap_follow_replay_cli>"
             --fixture-dir "${CMAKE_CURRENT_SOURCE_DIR}/test/replay"
             --floor-excerpt "${RACER_REPO_ROOT}/tools/tests/fixtures/floor_2026-10-24_corners.txt"
+            --apex-excerpt "${RACER_REPO_ROOT}/tools/tests/fixtures/floor_2026-10-25_apex.txt"
   )
 endif()
 

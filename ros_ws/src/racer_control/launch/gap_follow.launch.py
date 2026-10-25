@@ -128,9 +128,27 @@ with its own date rather than editing the values above; try new values with laun
 or a params file on top of it.
 """
 
-PROFILES: dict[str, dict[str, float | int | bool]] = {
+LANE_2026_10_25_PROFILE: dict[str, float | int | bool | str] = {
+    **FLOOR_2026_10_06_PROFILE,
+    "target_mode": "lane_centre",
+    "lane_lookahead_m": 0.6,
+}
+"""Lane-centre profile, 2026-10-25: the floor checkpoint plus the lane-centreline target.
+
+On the foam-board loop (2026-10-24 and 2026-10-25 bags) the gap targets rode the inside edge:
+the gap centre aimed at the outer wall ahead of every corner and the deepest ray sat at full
+lock 93 percent of the time. The lane-centre target (PR 110) aims at the middle of the lane at
+`lane_lookahead_m` with pure-pursuit steering and works in both lap directions; the apex fix
+(PR 111) makes the trace bend around the inner corner where the inner wall ends. 0.6 m won the
+sim battery (no wall contact on any lane track, fewer brakes per lap than the floor profile,
+closest to the centreline); 1.0 m stalls on square corners. Not yet driven on the floor with
+the apex fix. The swept-path clamp stays on (its apex false positives were fixed in PR 111).
+"""
+
+PROFILES: dict[str, dict[str, float | int | bool | str]] = {
     "none": {},
     "floor-2026-10-06": FLOOR_2026_10_06_PROFILE,
+    "lane-2026-10-25": LANE_2026_10_25_PROFILE,
 }
 
 # Launch arguments forwarded to the node only when set (empty = profile, params file or node
@@ -169,8 +187,9 @@ _OPTIONAL_FLOAT_ARGS = {
     ),
     "lane_default_half_width_m": (
         "target_mode lane_centre: offset held from the one visible wall before a lane width has "
-        "been measured (m), [0.1, 2]. Empty (default) leaves the profile value, the params file "
-        "value or the node default 0.55."
+        "been measured, and half the reach of the trace's search for each wall (m), [0.1, 2]. "
+        "Empty (default) leaves the profile value, the params file value or the node default "
+        "0.55."
     ),
 }
 # Launch arguments forwarded as strings when set, with the values the node accepts.

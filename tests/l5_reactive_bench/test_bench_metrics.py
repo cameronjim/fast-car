@@ -242,6 +242,31 @@ def test_lap_tracker_reports_the_distance_from_the_centreline():
     assert tracker.lateral_m == pytest.approx(0.3, abs=0.01)
 
 
+def test_lap_tracker_distance_is_to_the_centreline_polyline_not_its_points():
+    # A straight centreline sampled every 0.5 m: a car on it half way between two points is 0
+    # from the line (0.25 m from the nearest point), and one 0.1 m beside it is 0.1 m away.
+    xs = np.array([0.0, 0.5, 1.0, 1.5, 1.5, 0.0])
+    ys = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 1.0])
+    tracker = bm.LapTracker(xs, ys)
+    tracker.update(0.75, 0.0, 0.0)
+    assert tracker.lateral_m == pytest.approx(0.0, abs=1e-12)
+    tracker.update(1.25, -0.1, 0.1)
+    assert tracker.lateral_m == pytest.approx(0.1, abs=1e-12)
+
+
+def test_lap_tracker_centreline_offset_per_lap_and_over_the_run():
+    # Two laps 0.1 m outside the centreline, then a part lap 0.3 m outside it.
+    tracker = bm.LapTracker(*CIRCLE)
+    t = _drive_circle(tracker, 0.0, 2.0 * math.pi * 2.0 + 0.01, 0.0, radius=RADIUS + 0.1)
+    _drive_circle(tracker, 2.0 * math.pi * 2.0 + 0.01, 2.0 * math.pi * 2.5, t, radius=RADIUS + 0.3)
+    assert tracker.laps == 2
+    assert tracker.lap_centreline_offsets_m == pytest.approx([0.1, 0.1], abs=0.002)
+    # Over the run: about 4 parts at 0.1 and 1 at 0.3 by distance.
+    assert tracker.mean_centreline_offset_m == pytest.approx((4 * 0.1 + 0.3) / 5, abs=0.01)
+    tracker.reset()
+    assert tracker.lap_centreline_offsets_m == [] and tracker.mean_centreline_offset_m is None
+
+
 # -- count_reversals ----------------------------------------------------------------------------
 
 
@@ -355,6 +380,16 @@ def test_compute_metrics_laps_and_brakes_per_lap():
     assert len(m["lap_times_s"]) == 2
     assert m["brakes_per_lap"] == pytest.approx(1.5)
     assert m["loop_length_m"] == pytest.approx(CIRCUMFERENCE, rel=1e-3)
+    # Driven on the centreline: the offsets are the 400-gon's sagitta at most.
+    assert m["mean_centreline_offset_m"] == pytest.approx(0.0, abs=1e-3)
+    assert m["lap_centreline_offsets_m"] == pytest.approx([0.0, 0.0], abs=1e-3)
+
+
+def test_compute_metrics_without_a_loop_has_no_centreline_offset():
+    m = bm.compute_metrics(
+        _recording(), box=BOX, walls=wall(0.0, 50.0, 1.0, 50.0), lap_tracker=None
+    )
+    assert m["mean_centreline_offset_m"] is None and m["lap_centreline_offsets_m"] == []
 
 
 def test_compute_metrics_distance_skips_a_reset_teleport():

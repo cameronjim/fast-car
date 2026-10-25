@@ -88,6 +88,10 @@ uv run --project tools --extra plots python tools/replay_follower.py \
   scan), `--plot-flagged` (spread the N scans over clamped or corner-override scans only).
 - `--straight-threshold-rad`: the left / right / straight tally treats `|steering|` below this
   as straight (default 0.05).
+- `--param target_mode=lane_centre` (or `gap_centre`, `gap_deepest`) picks the follower's target
+  (`include/racer_control/gap_follow.hpp`, `TargetMode` and `trace_lane_centre`); it is the one
+  string parameter, every other value must be a number or true/false. `lane_lookahead_m` and
+  `lane_default_half_width_m` go with it.
 
 ## 4. Read the output
 
@@ -115,6 +119,11 @@ vs recorded /drive_raw over 5 scans: mean |difference| 0.176 rad, opposite sign 
   override, which is what the node low-passes. **(low-passed)** is the node's 50 Hz first-order
   filter run for the ticks between this scan and the next; **recorded /drive_raw** is the last
   command the car published in that same interval. Left is positive.
+- **steering stats** (one line before and one after the low-pass): `full lock` is the share of
+  scans with `|steering|` within 1 mrad of the binding's steering limit, `mean |s|` the mean
+  absolute steering, `sign changes` how often the sign flips between consecutive scans that are
+  not straight (`|s|` above the straight threshold). A follower that sits on the lock, or weaves,
+  shows here.
 - **swept-path clamp / corner override**: how often each reduced or zeroed the steering. A high
   clamp rate with a large `wanted` steering is the follower asking for a turn the car cannot
   make past something beside it.
@@ -130,9 +139,9 @@ Files in `--out-dir`:
 
 | File | What |
 |---|---|
-| `per_scan.csv` | One row per scan: `stamp_s`, `t_s`, `valid`, `gap_found`, `target_bearing_rad`, `target_range_m`, `wanted_steering_rad` (gain times bearing plus centring, before the clamps), `steering_rad`, `filtered_steering_rad`, `clamped`, `corner_blocked`, `centering_rad`, `recorded_drive_raw_rad`, `recorded_drive_rad` (the gated command). Blank where there is no value. |
+| `per_scan.csv` | One row per scan: `stamp_s`, `t_s`, `valid`, `gap_found`, `target_bearing_rad`, `target_range_m`, `wanted_steering_rad` (gain times bearing plus centring, or the pure-pursuit angle in `lane_centre`, before the clamps), `steering_rad`, `filtered_steering_rad`, `clamped`, `corner_blocked`, `centering_rad`, `lane_aim_x_m`, `lane_aim_y_m` (the lane-centre aim point, rear-axle frame), `lane_half_width_m` (the half width h in use), `lane_width_m` (measured on that scan), `recorded_drive_raw_rad`, `recorded_drive_rad` (the gated command). Blank where there is no value (the lane columns in the gap modes). |
 | `summary.json` | The summary above, machine-readable, with the resolved parameters. |
-| `scans.png` | Chosen scans in the vehicle frame (car pointing up, left on the left, rear axle at the origin, LiDAR yaw and mount from the binding). Red star: the chosen target. Dashed blue arc: wanted steering; solid blue: replay output; green: recorded `/drive_raw`. |
+| `scans.png` | Chosen scans in the vehicle frame (car pointing up, left on the left, rear axle at the origin, LiDAR yaw and mount from the binding). Red star: the chosen target (in `lane_centre`: the free range toward the aim point, which feeds the speed law). Purple line and diamond (`lane_centre` only): the centreline trace, from the car's place on the centreline, and its aim point. Dashed blue arc: wanted steering; solid blue: replay output; green: recorded `/drive_raw`. |
 | `steering.png` | Replay steering against the recorded `/drive_raw` over time, with ticks where the clamp or corner override fired and the released TTC latches shaded. |
 | `scans.txt`, `params.json` | The exact inputs given to the CLI, so a single scan can be re-run by hand: `gap_follow_replay_cli --params params.json --scans scans.txt`. |
 

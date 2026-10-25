@@ -26,7 +26,10 @@ LAUNCH_FILE = REPO_ROOT / "ros_ws/src/racer_control/launch/gap_follow.launch.py"
 CLI_NAME = "gap_follow_replay_cli"
 CLI_ENV = "GAP_FOLLOW_REPLAY_CLI"
 
-ParamValue = float | int | bool
+ParamValue = float | int | bool | str
+
+# gap_follow_node's string parameters; any other --param value must be a number or true/false.
+STRING_PARAMETERS = {"target_mode"}
 
 
 class ReplayError(RuntimeError):
@@ -69,8 +72,11 @@ def load_profiles(launch_file: Path = LAUNCH_FILE) -> dict[str, dict[str, ParamV
     return {str(name): dict(params) for name, params in profiles.items()}
 
 
-def parse_value(text: str) -> ParamValue:
-    """A --param value: true / false, an integer, or a float."""
+def parse_value(text: str, name: str = "") -> ParamValue:
+    """A --param value: the text itself for a string parameter (target_mode), else true /
+    false, an integer, or a float. The CLI checks a string value, as the node does."""
+    if name in STRING_PARAMETERS:
+        return text.strip()
     lowered = text.strip().lower()
     if lowered in ("true", "false"):
         return lowered == "true"
@@ -90,7 +96,7 @@ def parse_overrides(items: Iterable[str]) -> dict[str, ParamValue]:
         key, sep, value = item.partition("=")
         if not sep or not key.strip():
             raise ReplayError(f"--param wants name=value, got {item!r}")
-        overrides[key.strip()] = parse_value(value)
+        overrides[key.strip()] = parse_value(value, key.strip())
     return overrides
 
 

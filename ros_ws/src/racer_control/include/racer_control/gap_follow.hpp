@@ -15,6 +15,11 @@
 //      default to off, which is the plain widest gap. Target its centre ray (default) or its
 //      deepest ray.
 //   4. steering_from_bearing: steering = clamp(gain * target_bearing, +/- max_angle).
+//   4'. target_mode lane_centre (2026-10-24 floor finding, see trace_lane_centre below)
+//      replaces steps 4 and 4a: the aim point is the lane centreline lane_lookahead_m ahead
+//      along the lane, and the steering is the pure-pursuit angle to it. Steps 1 to 3 still
+//      run (validity, gap_found, and the extended range that feeds the speed law), and so do
+//      4b and 5 after it.
 //   4a. lane centring (optional, centering_gain, default 0 = off): a push away from the
 //      nearer side wall is added to gain * target_bearing BEFORE that clamp, so the sum
 //      saturates at the steering limit (2026-10-06 floor finding (a), see below).
@@ -38,6 +43,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "racer_control/laser_scan.hpp"
@@ -118,6 +124,32 @@ enum class GapTarget {
   kCentre,   // centre ray of the chosen gap (the old behaviour, default)
   kDeepest,  // deepest ray of the chosen gap, ties broken toward forward
 };
+
+// What the follower steers toward (gap_follow_node parameter `target_mode`).
+enum class TargetMode {
+  kGapCentre,   // "gap_centre": centre ray of the chosen gap (default, the old behaviour)
+  kGapDeepest,  // "gap_deepest": deepest ray of the chosen gap (was target_deepest_ray true)
+  kLaneCentre,  // "lane_centre": pure pursuit to the lane centreline (trace_lane_centre)
+};
+
+// "gap_centre" / "gap_deepest" / "lane_centre" <-> TargetMode. Anything else is nullopt (the
+// node refuses to start on it).
+std::optional<TargetMode> target_mode_from_string(std::string_view name);
+const char* target_mode_name(TargetMode mode);
+
+// gap_follow_node's `target_mode` with the old bool `target_deepest_ray` still accepted
+// (shared with gap_follow_replay_cli so the two resolve it alike):
+//   * target_mode not one of the three names: nullopt (refuse to start).
+//   * target_deepest_ray false: target_mode as given.
+//   * target_deepest_ray true with target_mode gap_centre (its default) or gap_deepest:
+//     kGapDeepest, with deprecated_mapping true so the caller warns once.
+//   * target_deepest_ray true with target_mode lane_centre: nullopt (the two disagree).
+struct TargetModeResolution {
+  TargetMode mode = TargetMode::kGapCentre;
+  bool deprecated_mapping = false;
+};
+std::optional<TargetModeResolution> resolve_target_mode(std::string_view target_mode,
+                                                        bool target_deepest_ray);
 
 // Gap selection (step 3). `geometry` supplies angle_min / angle_increment / ray count;
 // `ranges` are the extended ranges (same length). The cone is +/- cone_half_angle_rad around
@@ -207,6 +239,226 @@ LaneWalls measure_lane_walls(const ScanInput& scan, double laser_yaw_offset_rad,
 // centering_gain * (d_left - d_right) / (d_left + d_right); 0 when either side is open, the
 // gain is 0 or not finite, or a distance is not finite and positive.
 double centering_steering(const LaneWalls& walls, double centering_gain);
+
+// Lane-centre target (step 4', target_mode lane_centre). Added after the 2026-10-24 floor test
+// (bag 2026-10-24T23-13-18_car_teleop, a closed foam-board loop about 1.0 to 1.1 m wide with
+// corners near the car's 0.74 m turning radius): the follower rode the inside edge the whole
+// lap. Replayed, the gap-centre target aimed at the outer wall ahead of each corner and the
+// deepest-ray target sat at full lock in 92 to 97 percent of scans whatever the gain, because
+// the deepest ray of a lane that bends is always 60 to 90 degrees round the bend; a
+// proportional gain on a bearing like that saturates, and the centring push (at most
+// centering_gain) cannot compete with it. Both aim at a RAY. This mode aims at a POINT on the
+// lane's centreline a fixed distance ahead along the lane and steers to it with pure pursuit,
+// so the command is the curvature of the lane itself and only saturates when the lane really
+// turns harder than the car can.
+//
+// RETURNS AND CHAINS (load_lane_points). Valid returns of the RAW scan with range below
+// clip_max_range_m (the invalid-return policy applied the way the swept-path clamp applies it:
+// invalid returns are ignored, never filled from a neighbour, because a filled range is an
+// invented wall point; a range at or beyond the clip is free space), turned to the VEHICLE
+// frame with the laser yaw and shifted by the LiDAR mount into the rear-axle frame (x forward,
+// y left): p_i = (r cos b + mount_x, r sin b + mount_y). Returns inside the car's own footprint
+// ahead of the rear axle (0 <= x <= body_front_x_m, |y| <= half_width_m) are dropped: they are
+// the car, not the lane. Taken in ray order (ascending bearing), consecutive points more than
+// kLaneChainGapM apart start a new CHAIN, so each wall the LiDAR sees end to end is one chain:
+// the inside wall of a bend ends at the inside corner, where the next return is the outside
+// wall a lane width (about 1 m) away, and a box beside an open side is its own short chain.
+// 0.25 m is well below the narrowest lane worth driving and well above the spacing of returns
+// along a wall within reach (0.5 degree rays at 2 m are 1.7 cm apart, about 10 cm at 10
+// degrees of grazing incidence). On a full-circle scan a chain running across the seam between
+// the last ray and the first is one chain.
+//
+// WALL DISTANCE (wall_distance in gap_follow.cpp). The distance from a point q to one boundary
+// chain starts from that chain's return p nearest q. Each side of p along the chain, the first
+// return at least kLaneFaceSpanM away gives that FACE's outward direction u_i (from it through
+// p); a chain END has one face. If q is beside a face, (q - p) . u_i <= kLaneVertexMarginM for
+// some face, the distance is |q - p|. Otherwise q has gone past p, which is then:
+//   * an END: its face is CONTINUED (below);
+//   * a CONVEX CORNER (two faces, q past both). The distance stays |q - p| (the corner bounds
+//     the lane, as the inside corner of a bend does) when any of these holds:
+//       - there is no opposite boundary;
+//       - p lies on q's cross-section of the lane: the angle at q between p and the opposite
+//         boundary's nearest return is within 15 degrees of straight (kLaneCornerOnSectionCos);
+//       - the face most parallel to the opposite wall is not within 10 degrees of the
+//         opposite wall's own direction where that wall is nearest q (kLaneParallelSin; its
+//         direction from the first return at least kLaneFaceSpanM along its chain): beside a
+//         box on a straight it is, in the diagonal region of a bend the opposite wall turns
+//         and neither face is;
+//       - the opposite wall crosses the continued line ahead (a return of the opposite chain
+//         within h of that line, ahead of p by at most lane_lookahead_m + h): the lane is
+//         closed ahead, a bend.
+//     If none holds, the face most parallel to the opposite wall is CONTINUED.
+// CONTINUED: with u the face's outward direction and s = (q - p) . u, the distance is the
+// lateral offset |(q - p) x u| while s <= h, and beyond that the chain does not COUNT at q.
+// Why: the curve midway between a wall and the END or corner of the other wall is a parabola
+// that bends round it into the opening beyond (13 cm into a doorway within 0.35 m in the gtest
+// scene; 15 cm into every 0.6 m gap of the sim's open-side track, where a box's side face,
+// seen obliquely, joins its front face in one chain, which braked 87 times in 3 laps), the dive
+// into the open room of the first floor test. Continued straight, an end reads as the wall
+// going on, so the midway curve runs straight past it; more than h past the end of the inside
+// wall of a bend, or past a box, only the other wall counts and the trace holds h from it,
+// which round an inside corner is the centreline of the next leg (h from its outside wall). The
+// h of continuation matters on the floor loop, where the car often sits just past the NEAR end
+// of the inside wall (its corner beside the rear axle, the rest ahead or occluded): dropping a
+// wall the moment q was past its end followed the outside wall the wrong way on 1 scan in 20 of
+// the floor bag. A box corner and the inside corner of a bend look the same up close; what
+// tells them apart is the rest of the lane (is the opposite wall straight and parallel, does it
+// close the lane ahead): continuing every convex corner made the floor replay steer right,
+// toward the outside pocket, at every inside corner (the floor's island is a polygon), and
+// continuing without the parallel test turned the sim's square and round lanes late into the
+// outside wall (13 to 23 contacts per run, against none with the corner always Euclidean).
+// A concave corner (the outside wall of a bend turning across the lane ahead) is never nearest from
+// inside the lane, so walls ahead push the centreline round as they are. (Also tried and dropped:
+// continuing every wall behind q along the trace heading curled the trace at the open-side track's
+// corners, because the continuation turned with the trace.)
+//
+// BOUNDARIES AND LANE WIDTH (find_lane_boundaries). The car's centre is c = (body_front_x_m /
+// 2, 0). The LEFT boundary is the chain of the return nearest c among those in the left
+// sector beside the car (y > 0 and |x - c_x| <= y, i.e. within 45 degrees of straight left of
+// c); the RIGHT boundary likewise with y < 0. Chains of fewer than kLaneMinChainPoints returns
+// (a chair leg, a stray return) are never boundaries. d_left, d_right are the WALL DISTANCEs
+// from c to those chains, with the h in use (the perpendicular distance to a straight wall,
+// whatever the car's yaw in the lane; a wall that ended behind the car reads its continued
+// line, not the longer distance to its end point, and the side is open once it ended more than
+// h behind; the bend test looks kLaneMaxWidthFactor * h ahead). A side with no return in its sector
+// is OPEN. If both sides find the same chain (a ring of wall round the car, a dead end) only the
+// nearer side keeps it. If d_left + d_right > kLaneMaxWidthFactor * lane_default_half_width_m, the
+// farther side is open (a far "wall" is the room beyond an open side, not a lane). With both
+// boundaries left, the lane width is W = d_left + d_right and the half width h becomes W / 2;
+// otherwise h keeps its last measured value (GapFollower remembers it), starting from
+// lane_default_half_width_m.
+//
+// CENTRELINE TRACE (trace_lane_centre). For a point q let d_L(q), d_R(q) be its WALL
+// DISTANCEs to the left and right chains (returns farther than
+// lane_lookahead_m + kLaneMaxWidthFactor * h from the rear axle are skipped: they cannot be the
+// nearest part of a chain to a trace point that matters). Each candidate point is scored
+//     both chains count:       score = -|d_L(q) - d_R(q)|   (0 on the curve midway between)
+//     one chain counts:        score = -|d(q) - h|          (0 on the line h from that wall)
+//     neither counts:          score = -infinity            (no boundary beside q)
+// The trace STARTS at the car's place on the centreline: the best-scoring point of the
+// rear-axle line (x = 0), searched outward from the car both ways every kLaneStartStepM up to
+// 2 h, a direction stopping at the first point within kLaneStartStepM of any return (the search
+// never jumps through a wall); ties go to the point nearest the car, then to the left. (Walking
+// to the centreline first and counting that walk as lane distance made an offset car aim short
+// and saturate.) From there, heading straight ahead, it walks kLaneTraceStepM at a time (the
+// last step shortened so the total is exactly lane_lookahead_m): from the current point and
+// heading theta it tries the kLaneTraceCandidates headings theta + delta, delta evenly
+// spaced over [-kLaneTraceMaxTurnRad, +kLaneTraceMaxTurnRad] (every 5 degrees over a right
+// angle either side, delta = 0 included), and moves to the candidate with the highest score;
+// ties go to the smallest |delta|, then to the left one, so with no boundary at all the trace
+// runs straight ahead (no steering). Off the curve a step goes as straight toward it as the
+// step length allows; on it, the step lands where the circle of radius kLaneTraceStepM round
+// the current point crosses the curve on the forward side, so the trace walks along the curve
+// rather than weaving across it (a turn limit per step made it overshoot and weave). Candidate
+// headings more than pi/2 from the car's heading are not tried: the trace always moves away
+// from the car (a line h from a single wall can otherwise be followed backward when the trace
+// meets it steeply), and no lane the car can drive turns more than a right angle within a
+// lookahead. The arc length walked from the start is the "distance along the lane" and the AIM
+// POINT is the trace's end.
+//
+// Why this estimate (the "cleaner estimate" the task allowed):
+//   * the midway curve between the two walls IS the lane centreline, on a straight, round a
+//     bend of any radius and through a narrowing, and following a curve (rather than climbing
+//     to the point of largest clearance) cannot stall or circle in the wide pocket of a corner
+//     (it did, with a clearance score, on 1 scan in 20 of the floor bag);
+//   * the nearest return per angular bin is not a boundary round a corner: there the outer wall
+//     ahead is the nearest return in the forward bins on BOTH sides, so per-bin midpoints put
+//     the aim into the outer wall (the gap centre's failure again);
+//   * the lateral measure behind q (WALL DISTANCE) is what keeps the trace out of openings,
+//     and the lane width measured beside the car keeps h equal to the real half width.
+//
+// What it does in the cases the owner asked for:
+//   * straight lane, car offset e from the centre: the trace starts on the centreline beside
+//     the rear axle and runs along it, so the aim point is (lane_lookahead_m, e).
+//   * one side open: only the visible wall counts, so the trace starts on the line h from it
+//     (h the half width last measured) and runs along it: the car holds that offset.
+//   * a bend: the trace follows the midway curve round it, so the aim point is in the middle of
+//     the lane round the bend, not on the outer wall.
+//
+// PURE PURSUIT. With the aim point (x_a, y_a) in the rear-axle frame, chord l_d = hypot(x_a,
+// y_a) and alpha = atan2(y_a, x_a), the circle through the rear axle tangent to the car's
+// heading and through the aim point has curvature k = 2 sin(alpha) / l_d, so the bicycle-model
+// steering is
+//     steering = atan(2 L sin(alpha) / l_d),      L = chassis.wheelbase_m (the binding),
+// clamped to +/- steering.max_angle_rad. l_d is the straight-line distance to the aim point
+// (the textbook pure-pursuit chord, so the arc really passes through the aim point; for a car
+// on the centreline of a circular lane of radius R the result is exactly atan(L / R)). It is
+// lane_lookahead_m for a car centred on a straight. The sign follows alpha: an aim point to the
+// LEFT steers LEFT (positive). A car offset e to the right of a straight centreline sees the
+// aim point at (lane_lookahead_m, e), so l_d^2 = lane_lookahead_m^2 + e^2 and it steers
+// atan(2 L e / (lane_lookahead_m^2 + e^2)) left. No proportional gain is involved:
+// steering_gain and the lane centring push (centering_gain) are not used in this mode.
+//
+// Heap: the caller owns the LanePoints buffers and `trace` (grown, never shrunk), so a
+// GapFollower that has seen a scan of the running size allocates nothing here.
+inline constexpr double kLaneTraceStepM = 0.05;
+inline constexpr double kLaneTraceMaxTurnRad = 1.5707963267948966;  // pi / 2
+inline constexpr std::size_t kLaneTraceCandidates = 37;
+inline constexpr double kLaneChainGapM = 0.25;
+inline constexpr double kLaneStartStepM = 0.01;
+inline constexpr std::size_t kLaneMinChainPoints = 3;
+inline constexpr double kLaneFaceSpanM = 0.05;
+inline constexpr double kLaneVertexMarginM = 0.01;
+inline constexpr double kLaneCornerOnSectionCos = 0.96592582628906829;  // cos(15 degrees)
+inline constexpr double kLaneParallelSin = 0.17364817766693035;         // sin(10 degrees)
+// A measured lane wider than this multiple of lane_default_half_width_m is an open side.
+inline constexpr double kLaneMaxWidthFactor = 4.0;
+
+struct LaneGeometry {
+  double half_width_m = 0.0;     // chassis.width_m / 2
+  double body_front_x_m = 0.0;   // rear axle to the front bumper line (as for the clamp)
+  double lidar_mount_x_m = 0.0;  // sensors.lidar.mount_x_m
+  double lidar_mount_y_m = 0.0;  // sensors.lidar.mount_y_m
+};
+
+struct LanePoint {
+  double x = 0.0;  // rear-axle frame, m, forward
+  double y = 0.0;  // left
+};
+
+// The loaded returns: point k is (x[k], y[k]) in chain chain[k]; chain_size[c] is the number
+// of points in chain c; wraps is true when the last point's chain continues into the first's
+// (a full-circle scan continuous across its seam). Only the first `count` points (and the
+// chains they name) are meaningful: the vectors are working buffers, grown and never shrunk.
+struct LanePoints {
+  std::vector<double> x;
+  std::vector<double> y;
+  std::vector<std::size_t> chain;
+  std::vector<std::size_t> chain_size;
+  bool wraps = false;
+  std::size_t count = 0;
+};
+
+// Loads the returns and chains described above into `out` and returns out.count. Unusable
+// input (scan, yaw, geometry, clip) loads nothing.
+std::size_t load_lane_points(const ScanInput& scan, double laser_yaw_offset_rad,
+                             double clip_max_range_m, const LaneGeometry& geometry,
+                             LanePoints& out);
+
+struct LaneBoundaries {
+  std::optional<std::size_t> left_chain;
+  std::optional<std::size_t> right_chain;
+  double left_m = 0.0;   // d_left (meaningful with left_chain)
+  double right_m = 0.0;  // d_right (meaningful with right_chain)
+  // d_left + d_right when both boundaries are found (the lane width W), else nullopt.
+  std::optional<double> width_m;
+};
+
+// The left and right boundaries and the lane width (see BOUNDARIES above). end_reach_m is how
+// far a wall is continued past its end (the half width h in use); max_width_m is
+// kLaneMaxWidthFactor * lane_default_half_width_m in the follower.
+LaneBoundaries find_lane_boundaries(const LanePoints& points, const LaneGeometry& geometry,
+                                    double max_width_m, double end_reach_m);
+
+// The centreline trace (see CENTRELINE TRACE above). Writes the trace's points, its start
+// first, in order, into `trace` and returns the aim point (the last one). A non-positive or
+// non-finite lookahead or half width returns the rear axle (0, 0) with an empty trace.
+LanePoint trace_lane_centre(const LanePoints& points, const LaneBoundaries& boundaries,
+                            double lookahead_m, double half_width_m, std::vector<LanePoint>& trace);
+
+// atan(2 L sin(alpha) / l_d) clamped to +/- max_steering_rad (see PURE PURSUIT above). An aim
+// point at the rear axle (l_d < 1e-9), a non-positive wheelbase or a non-finite input gives 0.
+double pure_pursuit_steering(const LanePoint& aim, double wheelbase_m, double max_steering_rad);
 
 // Swept-path steering clamp (step 4b). Added after the 2026-10-06 floor test (bag
 // 2026-10-06T22-12-40_car_teleop, counter-clockwise loop with loose objects on the inside of
@@ -350,7 +602,7 @@ struct GapFollowConfig {
   double free_space_threshold_m = 0.0;
   double cone_half_angle_rad = 0.0;
   double laser_yaw_offset_rad = 0.0;
-  GapTarget target = GapTarget::kCentre;
+  TargetMode target_mode = TargetMode::kGapCentre;
   double forward_preference = 0.0;  // [0, 1], see GapPreference; 0 = plain widest gap
   double gap_switch_margin = 0.0;   // [0, 1], see GapPreference; 0 = off
   double steering_gain = 1.0;
@@ -370,6 +622,11 @@ struct GapFollowConfig {
   double centering_gain = 0.0;
   double centering_sector_half_angle_rad = 1.0;
   double centering_max_range_m = 1.5;
+  // Lane-centre target (step 4', target_mode kLaneCentre, see trace_lane_centre). The body
+  // front and LiDAR mount are taken from swept_path, the half width from half_width_m and the
+  // wheelbase from swept_path.wheelbase_m; nothing here is a vehicle constant.
+  double lane_lookahead_m = 0.6;
+  double lane_default_half_width_m = 0.55;
 };
 
 struct GapFollowResult {
@@ -384,11 +641,20 @@ struct GapFollowResult {
   // push it added before the clamp (0 when off or when a side is open).
   LaneWalls lane_walls;
   double centering_steering_rad = 0.0;
-  // clamp(steering_gain * bearing + centering, +/- max): the steering the follower wants,
-  // before the swept-path clamp and the corner override.
+  // clamp(steering_gain * bearing + centering, +/- max), or in lane_centre mode the clamped
+  // pure-pursuit angle: the steering the follower wants, before the swept-path clamp and the
+  // corner override.
   double wanted_steering_rad = 0.0;
-  bool swept_path_clamped = false;  // the swept-path clamp reduced |steering|
-  double steering_rad = 0.0;        // after clamps and corner override, BEFORE low-pass
+  // Lane-centre target (target_mode kLaneCentre only; lane_valid is false otherwise). The aim
+  // point and the trace (GapFollower::lane_trace()) are in the rear-axle frame. In this mode
+  // target_vehicle_bearing_rad is the bearing of the aim point from the LiDAR head and
+  // target_range_m the extended range of the ray nearest that bearing (the speed law's input).
+  bool lane_valid = false;
+  LanePoint lane_aim;
+  double lane_half_width_m = 0.0;               // h used for this scan
+  std::optional<double> lane_measured_width_m;  // W measured on this scan, if any
+  bool swept_path_clamped = false;              // the swept-path clamp reduced |steering|
+  double steering_rad = 0.0;                    // after clamps and corner override, BEFORE low-pass
 };
 
 class GapFollower {
@@ -396,6 +662,8 @@ class GapFollower {
   explicit GapFollower(GapFollowConfig config) : config_(config) {}
   GapFollowResult process(const ScanInput& scan);
   const GapFollowConfig& config() const { return config_; }
+  // The last lane_centre trace (empty in the gap modes and before the first valid scan).
+  const std::vector<LanePoint>& lane_trace() const { return lane_trace_; }
 
  private:
   GapFollowConfig config_;
@@ -406,6 +674,11 @@ class GapFollower {
   std::vector<double> extended_;
   std::vector<double> lane_left_;
   std::vector<double> lane_right_;
+  // Lane-centre target: the half width last measured (nullopt until the first measurement,
+  // when lane_default_half_width_m applies), the loaded returns and the trace.
+  std::optional<double> lane_half_width_m_;
+  LanePoints lane_points_;
+  std::vector<LanePoint> lane_trace_;
 };
 
 }  // namespace racer_control

@@ -18,10 +18,14 @@
 // or an out-of-range value is an error (exit 2), as the node refuses to start on one.
 // --set overrides a key after the file. --describe prints the resolved vehicle geometry (LiDAR
 // yaw and mount, half width, wheelbase, steering limit) as one JSON line and exits.
+// `target_mode` is the one string key (gap_centre, gap_deepest or lane_centre, quoted or not in
+// JSON); it and target_deepest_ray resolve through the node's resolve_target_mode, so true with
+// gap_centre warns on stderr and means gap_deepest, and true with lane_centre is refused.
 //
 // What runs per scan is GapFollower::process, which is the node's whole perception half:
 // sanitize, extend disparities, select the gap (forward preference, switch margin), steering
-// gain with lane centring, swept-path clamp, corner override. The node's other steering step
+// gain with lane centring or the lane-centre pure pursuit, swept-path clamp, corner override.
+// The node's other steering step
 // is the first-order low-pass its 50 Hz timer applies to the latest result; it is reproduced
 // here with the same FirstOrderLowPass, stepped control_period_s per tick, as many ticks per
 // scan as fit between this scan and the next (the first tick after start or after a /scan
@@ -36,8 +40,11 @@
 //   (gain * bearing + centring, before the clamp), steering_rad (after the swept-path clamp
 //   and the corner override, before the low-pass), filtered_steering_rad (the low-pass output
 //   after this scan's interval of control ticks, what the node would be publishing just before
-//   the next scan), clamped, corner_blocked, centering_rad. Numbers that do not exist for an
-//   invalid scan are null.
+//   the next scan), clamped, corner_blocked, centering_rad, and for target_mode lane_centre
+//   lane_aim_x_m / lane_aim_y_m (the aim point, rear-axle frame), lane_half_width_m (h used),
+//   lane_width_m (measured on this scan) and lane_trace ([[x, y], ...], the centreline trace).
+//   Numbers that do not exist (an invalid scan, a gap mode, no width measured) are null, and
+//   lane_trace is then [].
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -84,6 +91,8 @@ const ParamSpec kParams[] = {
     {"centering_gain", 0.0, 0.0, 5.0, false},
     {"centering_sector_half_angle_rad", 1.0, 0.01, kPi / 2.0, false},
     {"centering_max_range_m", 1.5, 0.05, 20.0, false},
+    {"lane_lookahead_m", 0.6, 0.1, 3.0, false},
+    {"lane_default_half_width_m", 0.55, 0.1, 2.0, false},
     {"corner_sector_inner_rad", kPi / 2.0, 0.0, kPi, false},
     {"corner_sector_outer_rad", 3.0 * kPi / 4.0, 0.0, kPi, false},
     {"corner_min_clearance_m", 0.2, 0.0, 10.0, false},
@@ -155,8 +164,24 @@ std::optional<double> parse_number(const std::string& text) {
   std::exit(code);
 }
 
+// The node's one string parameter (gap_follow_node `target_mode`), default gap_centre.
+std::string g_target_mode = "gap_centre";
+
 void set_param(ParamMap& params, const std::string& key, const std::string& value) {
   if (is_ignored_key(key)) {
+    return;
+  }
+  if (key == "target_mode") {
+    std::string name = trim(value);
+    if (name.size() >= 2 && name.front() == '"' && name.back() == '"') {
+      name = name.substr(1, name.size() - 2);
+    }
+    if (!racer_control::target_mode_from_string(name)) {
+      die(2, "parameter 'target_mode' = '" + name +
+                 "' is not gap_centre, gap_deepest or lane_centre (the node refuses to start "
+                 "on this)");
+    }
+    g_target_mode = name;
     return;
   }
   const auto spec = std::find_if(std::begin(kParams), std::end(kParams),
@@ -374,8 +399,20 @@ int main(int argc, char** argv) {
   c.disparity_threshold_m = get("disparity_threshold_m");
   c.free_space_threshold_m = get("free_space_threshold_m");
   c.cone_half_angle_rad = get("cone_half_angle_rad");
-  c.target = get("target_deepest_ray") != 0.0 ? racer_control::GapTarget::kDeepest
-                                              : racer_control::GapTarget::kCentre;
+  const auto mode =
+      racer_control::resolve_target_mode(g_target_mode, get("target_deepest_ray") != 0.0);
+  if (!mode) {
+    die(2,
+        "target_deepest_ray true with target_mode lane_centre: the two disagree (the node "
+        "refuses to start on this)");
+  }
+  if (mode->deprecated_mapping) {
+    std::cerr << "gap_follow_replay_cli: target_deepest_ray is deprecated; true is taken as "
+                 "target_mode gap_deepest\n";
+  }
+  c.target_mode = mode->mode;
+  c.lane_lookahead_m = get("lane_lookahead_m");
+  c.lane_default_half_width_m = get("lane_default_half_width_m");
   c.forward_preference = get("forward_preference");
   c.gap_switch_margin = get("gap_switch_margin");
   c.steering_gain = get("steering_gain");
@@ -485,7 +522,20 @@ int main(int argc, char** argv) {
     std::printf(",\"clamped\":%s,\"corner_blocked\":%s", json_bool(result.swept_path_clamped),
                 json_bool(result.corner_blocked));
     print_number("centering_rad", result.centering_steering_rad, result.valid);
-    std::printf("}\n");
+    const bool lane = result.valid && result.lane_valid;
+    print_number("lane_aim_x_m", result.lane_aim.x, lane);
+    print_number("lane_aim_y_m", result.lane_aim.y, lane);
+    print_number("lane_half_width_m", result.lane_half_width_m, lane);
+    print_number("lane_width_m", result.lane_measured_width_m.value_or(0.0),
+                 lane && result.lane_measured_width_m.has_value());
+    std::printf(",\"lane_trace\":[");
+    if (lane) {
+      const auto& trace = follower.lane_trace();
+      for (std::size_t p = 0; p < trace.size(); ++p) {
+        std::printf("%s[%.4f,%.4f]", p == 0 ? "" : ",", trace[p].x, trace[p].y);
+      }
+    }
+    std::printf("]}\n");
   }
   return 0;
 }

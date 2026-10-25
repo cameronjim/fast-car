@@ -7,6 +7,7 @@ import math
 import statistics
 from bisect import bisect_left
 from collections.abc import Sequence
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -37,9 +38,17 @@ CSV_COLUMNS = (
     "clamped",
     "corner_blocked",
     "centering_rad",
+    "lane_aim_x_m",
+    "lane_aim_y_m",
+    "lane_half_width_m",
+    "lane_width_m",
     "recorded_drive_raw_rad",
     "recorded_drive_rad",
 )
+# The lane-centre fields of the CLI's output (target_mode lane_centre; null otherwise).
+LANE_KEYS = ("lane_aim_x_m", "lane_aim_y_m", "lane_half_width_m", "lane_width_m")
+# |steering| within this of the steering limit counts as full lock (rad).
+FULL_LOCK_TOLERANCE_RAD = 1e-3
 
 NAN = float("nan")
 
@@ -89,6 +98,8 @@ def build_table(
                 "clamped": bool(row["clamped"]),
                 "corner_blocked": bool(row["corner_blocked"]),
                 "centering_rad": row["centering_rad"],
+                **{key: row.get(key) for key in LANE_KEYS},
+                "lane_trace": row.get("lane_trace") or [],
                 "recorded_drive_raw_rad": recorded_before_next(raw_sorted, scan.stamp_s, end),
                 "recorded_drive_rad": recorded_before_next(gated_sorted, scan.stamp_s, end),
             }
@@ -122,6 +133,32 @@ def steer_counts(values: Sequence[float | None], threshold_rad: float) -> dict[s
         else:
             counts["straight"] += 1
     return counts
+
+
+def steering_stats(
+    values: Sequence[float | None],
+    max_steering_rad: float | None,
+    threshold_rad: float,
+) -> dict[str, Any]:
+    """How hard and how steadily a steering column turns (missing values skipped).
+
+    full_lock_fraction: share of values with |s| >= max_steering_rad - FULL_LOCK_TOLERANCE_RAD
+    (None without a limit). mean_abs_rad: mean |s|. sign_changes: how often the sign flips
+    between consecutive values that are not straight (|s| > threshold_rad), so a steady turn
+    has none and a left-right weave has one per swing.
+    """
+    present = [v for v in values if not _missing(v)]
+    turning = [v for v in present if abs(v) > threshold_rad]
+    full_lock = None
+    if max_steering_rad is not None and present:
+        limit = max_steering_rad - FULL_LOCK_TOLERANCE_RAD
+        full_lock = sum(1 for v in present if abs(v) >= limit) / len(present)
+    return {
+        "samples": len(present),
+        "full_lock_fraction": full_lock,
+        "mean_abs_rad": statistics.fmean(abs(v) for v in present) if present else None,
+        "sign_changes": sum(1 for a, b in pairwise(turning) if (a > 0) != (b > 0)),
+    }
 
 
 def event_summary(events: Sequence[EventRecord]) -> dict[str, Any]:
@@ -169,8 +206,11 @@ def summarise(
     profile: str,
     params: dict[str, Any],
     straight_threshold_rad: float = DEFAULT_STRAIGHT_THRESHOLD_RAD,
+    max_steering_rad: float | None = None,
 ) -> dict[str, Any]:
-    """The numbers replay_follower.py prints. Rates are over scans the core accepted."""
+    """The numbers replay_follower.py prints. Rates are over scans the core accepted.
+    ``max_steering_rad`` (the binding's limit, from the CLI's --describe) enables the full-lock
+    share in the steering statistics."""
     valid = [r for r in table if r["valid"]]
     n_valid = len(valid)
 
@@ -211,6 +251,13 @@ def summarise(
         "steering_recorded_drive_raw": steer_counts(
             [r["recorded_drive_raw_rad"] for r in table], straight_threshold_rad
         ),
+        "max_steering_rad": max_steering_rad,
+        "steering_stats": steering_stats(
+            [r["steering_rad"] for r in valid], max_steering_rad, straight_threshold_rad
+        ),
+        "steering_stats_filtered": steering_stats(
+            [r["filtered_steering_rad"] for r in table], max_steering_rad, straight_threshold_rad
+        ),
         "clamp_rate": rate(sum(1 for r in valid if r["clamped"])),
         "clamped_scans": sum(1 for r in valid if r["clamped"]),
         "corner_override_rate": rate(sum(1 for r in valid if r["corner_blocked"])),
@@ -229,6 +276,17 @@ def summarise(
 
 def _counts_text(counts: dict[str, int]) -> str:
     return f"left {counts['left']}, right {counts['right']}, straight {counts['straight']}"
+
+
+def _stats_text(stats: dict[str, Any] | None) -> str:
+    if not stats or not stats["samples"]:
+        return "none"
+    lock = stats["full_lock_fraction"]
+    lock_text = "full lock n/a" if lock is None else f"full lock {100 * lock:.1f} %"
+    return (
+        f"{lock_text}, mean |s| {stats['mean_abs_rad']:.3f} rad, "
+        f"sign changes {stats['sign_changes']}"
+    )
 
 
 def format_summary(summary: dict[str, Any]) -> str:
@@ -255,6 +313,9 @@ def format_summary(summary: dict[str, Any]) -> str:
         + _counts_text(summary["steering_replay"]),
         "steering, replay (low-passed):  " + _counts_text(summary["steering_replay_filtered"]),
         "steering, recorded /drive_raw:  " + _counts_text(summary["steering_recorded_drive_raw"]),
+        "steering stats, replay (before low-pass): " + _stats_text(summary.get("steering_stats")),
+        "steering stats, replay (low-passed):      "
+        + _stats_text(summary.get("steering_stats_filtered")),
         (
             f"swept-path clamp: {summary['clamped_scans']} of {n} scans "
             f"({100 * summary['clamp_rate']:.1f} %)"

@@ -102,7 +102,9 @@ def plot_scans(
     The horizontal axis is y drawn right to left, so the car's left is on the left of the
     picture; the car points up.
     Blue arc: replay output before the low-pass, dashed: what the follower wanted before the
-    clamps, green: the recorded /drive_raw steering. The star is the chosen target.
+    clamps, green: the recorded /drive_raw steering. The star is the chosen target (in
+    target_mode lane_centre: the free range toward the aim point, for the speed law); the
+    purple line and diamond are the lane-centre trace and its aim point.
     """
     plt = _pyplot()
     n = max(len(indices), 1)
@@ -145,6 +147,26 @@ def plot_scans(
                 color="tab:red",
             )
             ax.plot([ty], [tx], "*", color="tab:red", ms=14, label="target")
+        # target_mode lane_centre: the centreline trace from the rear axle and its aim point.
+        trace = row.get("lane_trace") or []
+        if trace:
+            ax.plot(
+                [0.0] + [p[1] for p in trace],
+                [0.0] + [p[0] for p in trace],
+                "-",
+                color="tab:purple",
+                lw=1.2,
+                label="lane trace",
+            )
+        if row.get("lane_aim_x_m") is not None and row.get("lane_aim_y_m") is not None:
+            ax.plot(
+                [row["lane_aim_y_m"]],
+                [row["lane_aim_x_m"]],
+                "D",
+                color="tab:purple",
+                ms=8,
+                label="lane aim",
+            )
         flags = [
             name
             for name, on in (

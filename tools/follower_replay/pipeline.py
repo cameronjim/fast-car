@@ -57,10 +57,17 @@ def replay_bag(
     rows = replay.run_cli(cli, files["scans"], files["params"])
     table = analysis.build_table(data.scans, rows, data.drive_raw, data.drive)
     analysis.write_csv(table, files["csv"])
-    summary = analysis.summarise(data, table, profile, params, straight_threshold_rad)
+    geometry = replay.describe_cli(cli, files["params"])
+    summary = analysis.summarise(
+        data,
+        table,
+        profile,
+        params,
+        straight_threshold_rad,
+        max_steering_rad=geometry.get("max_steering_rad"),
+    )
     files["summary"].write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     if plot is not None and plot.enabled:
-        geometry = replay.describe_cli(cli, files["params"])
         indices = plots.select_scan_indices(table, plot.count, plot.at_s, plot.flagged_only)
         files["plot_scans"] = out_dir / "scans.png"
         files["plot_steering"] = out_dir / "steering.png"

@@ -169,8 +169,9 @@ _OPTIONAL_FLOAT_ARGS = {
     ),
     "lane_default_half_width_m": (
         "target_mode lane_centre: offset held from the one visible wall before a lane width has "
-        "been measured (m), [0.1, 2]. Empty (default) leaves the profile value, the params file "
-        "value or the node default 0.55."
+        "been measured, and half the reach of the trace's search for each wall (m), [0.1, 2]. "
+        "Empty (default) leaves the profile value, the params file value or the node default "
+        "0.55."
     ),
 }
 # Launch arguments forwarded as strings when set, with the values the node accepts.

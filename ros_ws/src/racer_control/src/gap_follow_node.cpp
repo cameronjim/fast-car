@@ -244,7 +244,8 @@ class GapFollowNode : public rclcpp::Node {
         *this, "lane_default_half_width_m", 0.55, 0.1, 2.0,
         "target_mode lane_centre: half lane width held from the one visible wall when the "
         "other side is open, until a lane width has been measured beside the car (then half "
-        "the last measured width) (m).");
+        "the last measured width); twice it is how far the trace looks for each side's nearest "
+        "return, a side with none being open (m).");
     c.forward_preference = declare_ranged_double(
         *this, "forward_preference", 0.0, 0.0, 1.0,
         "Weights gap selection toward the vehicle's forward direction: each gap scores "

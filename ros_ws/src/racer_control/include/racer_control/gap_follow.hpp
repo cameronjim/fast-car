@@ -266,114 +266,75 @@ double centering_steering(const LaneWalls& walls, double centering_gain);
 // 0.25 m is well below the narrowest lane worth driving and well above the spacing of returns
 // along a wall within reach (0.5 degree rays at 2 m are 1.7 cm apart, about 10 cm at 10
 // degrees of grazing incidence). On a full-circle scan a chain running across the seam between
-// the last ray and the first is one chain.
+// the last ray and the first is one chain. Chains are used for three things only: a chain of
+// fewer than kLaneMinChainPoints returns is never a boundary, the trace's side memory, and the
+// ring test of the lane width.
 //
-// WALL DISTANCE (wall_distance in gap_follow.cpp). The distance from a point q to one boundary
-// chain starts from that chain's return p nearest q. Each side of p along the chain, the first
-// return at least kLaneFaceSpanM away gives that FACE's outward direction u_i (from it through
-// p); a chain END has one face. If q is beside a face, (q - p) . u_i <= kLaneVertexMarginM for
-// some face, the distance is |q - p|. Otherwise q has gone past p, which is then:
-//   * an END: its face is CONTINUED (below);
-//   * a CONVEX CORNER (two faces, q past both). The distance stays |q - p| (the corner bounds
-//     the lane, as the inside corner of a bend does) when any of these holds:
-//       - there is no opposite boundary;
-//       - p lies on q's cross-section of the lane: the angle at q between p and the opposite
-//         boundary's nearest return is within 15 degrees of straight (kLaneCornerOnSectionCos);
-//       - the face most parallel to the opposite wall is not within 10 degrees of the
-//         opposite wall's own direction where that wall is nearest q (kLaneParallelSin; its
-//         direction from the first return at least kLaneFaceSpanM along its chain): beside a
-//         box on a straight it is, in the diagonal region of a bend the opposite wall turns
-//         and neither face is;
-//       - the opposite wall crosses the continued line ahead (a return of the opposite chain
-//         within h of that line, ahead of p by at most lane_lookahead_m + h): the lane is
-//         closed ahead, a bend.
-//     If none holds, the face most parallel to the opposite wall is CONTINUED.
-// CONTINUED: with u the face's outward direction and s = (q - p) . u, the distance is the
-// lateral offset |(q - p) x u| while s <= h, and beyond that the chain does not COUNT at q.
-// Why: the curve midway between a wall and the END or corner of the other wall is a parabola
-// that bends round it into the opening beyond (13 cm into a doorway within 0.35 m in the gtest
-// scene; 15 cm into every 0.6 m gap of the sim's open-side track, where a box's side face,
-// seen obliquely, joins its front face in one chain, which braked 87 times in 3 laps), the dive
-// into the open room of the first floor test. Continued straight, an end reads as the wall
-// going on, so the midway curve runs straight past it; more than h past the end of the inside
-// wall of a bend, or past a box, only the other wall counts and the trace holds h from it,
-// which round an inside corner is the centreline of the next leg (h from its outside wall). The
-// h of continuation matters on the floor loop, where the car often sits just past the NEAR end
-// of the inside wall (its corner beside the rear axle, the rest ahead or occluded): dropping a
-// wall the moment q was past its end followed the outside wall the wrong way on 1 scan in 20 of
-// the floor bag. A box corner and the inside corner of a bend look the same up close; what
-// tells them apart is the rest of the lane (is the opposite wall straight and parallel, does it
-// close the lane ahead): continuing every convex corner made the floor replay steer right,
-// toward the outside pocket, at every inside corner (the floor's island is a polygon), and
-// continuing without the parallel test turned the sim's square and round lanes late into the
-// outside wall (13 to 23 contacts per run, against none with the corner always Euclidean).
-// A concave corner (the outside wall of a bend turning across the lane ahead) is never nearest from
-// inside the lane, so walls ahead push the centreline round as they are. (Also tried and dropped:
-// continuing every wall behind q along the trace heading curled the trace at the open-side track's
-// corners, because the continuation turned with the trace.)
+// LANE WIDTH (find_lane_boundaries). The car's centre is c = (body_front_x_m / 2, 0). d_left is
+// the distance from c to the nearest counted return (a return whose chain has at least
+// kLaneMinChainPoints returns: a chair leg or a stray return is not a wall) in the left sector
+// beside the car (y > 0 and |x - c_x| <= y, within 45 degrees of straight left of c); d_right
+// likewise with y < 0. With both found, on different chains (one chain on both sides is a ring
+// of wall round the car or a dead end) and d_left + d_right <= kLaneMaxWidthFactor *
+// lane_default_half_width_m (wider is the room beyond an open side, not a lane), the lane width
+// is W = d_left + d_right and the half width h becomes W / 2; otherwise h keeps its last
+// measured value (GapFollower remembers it), starting from lane_default_half_width_m. h is used
+// only by the one-sided fallback below.
 //
-// BOUNDARIES AND LANE WIDTH (find_lane_boundaries). The car's centre is c = (body_front_x_m /
-// 2, 0). The LEFT boundary is the chain of the return nearest c among those in the left
-// sector beside the car (y > 0 and |x - c_x| <= y, i.e. within 45 degrees of straight left of
-// c); the RIGHT boundary likewise with y < 0. Chains of fewer than kLaneMinChainPoints returns
-// (a chair leg, a stray return) are never boundaries. d_left, d_right are the WALL DISTANCEs
-// from c to those chains, with the h in use (the perpendicular distance to a straight wall,
-// whatever the car's yaw in the lane; a wall that ended behind the car reads its continued
-// line, not the longer distance to its end point, and the side is open once it ended more than
-// h behind; the bend test looks kLaneMaxWidthFactor * h ahead). A side with no return in its sector
-// is OPEN. If both sides find the same chain (a ring of wall round the car, a dead end) only the
-// nearer side keeps it. If d_left + d_right > kLaneMaxWidthFactor * lane_default_half_width_m, the
-// farther side is open (a far "wall" is the room beyond an open side, not a lane). With both
-// boundaries left, the lane width is W = d_left + d_right and the half width h becomes W / 2;
-// otherwise h keeps its last measured value (GapFollower remembers it), starting from
-// lane_default_half_width_m.
-//
-// CENTRELINE TRACE (trace_lane_centre). For a point q let d_L(q), d_R(q) be its WALL
-// DISTANCEs to the left and right chains (returns farther than
-// lane_lookahead_m + kLaneMaxWidthFactor * h from the rear axle are skipped: they cannot be the
-// nearest part of a chain to a trace point that matters). Each candidate point is scored
-//     both chains count:       score = -|d_L(q) - d_R(q)|   (0 on the curve midway between)
-//     one chain counts:        score = -|d(q) - h|          (0 on the line h from that wall)
-//     neither counts:          score = -infinity            (no boundary beside q)
-// The trace STARTS at the car's place on the centreline: the best-scoring point of the
-// rear-axle line (x = 0), searched outward from the car both ways every kLaneStartStepM up to
-// 2 h, a direction stopping at the first point within kLaneStartStepM of any return (the search
-// never jumps through a wall); ties go to the point nearest the car, then to the left. (Walking
-// to the centreline first and counting that walk as lane distance made an offset car aim short
-// and saturate.) From there, heading straight ahead, it walks kLaneTraceStepM at a time (the
-// last step shortened so the total is exactly lane_lookahead_m): from the current point and
-// heading theta it tries the kLaneTraceCandidates headings theta + delta, delta evenly
-// spaced over [-kLaneTraceMaxTurnRad, +kLaneTraceMaxTurnRad] (every 5 degrees over a right
-// angle either side, delta = 0 included), and moves to the candidate with the highest score;
-// ties go to the smallest |delta|, then to the left one, so with no boundary at all the trace
-// runs straight ahead (no steering). Off the curve a step goes as straight toward it as the
-// step length allows; on it, the step lands where the circle of radius kLaneTraceStepM round
-// the current point crosses the curve on the forward side, so the trace walks along the curve
-// rather than weaving across it (a turn limit per step made it overshoot and weave). Candidate
-// headings more than pi/2 from the car's heading are not tried: the trace always moves away
-// from the car (a line h from a single wall can otherwise be followed backward when the trace
-// meets it steeply), and no lane the car can drive turns more than a right angle within a
-// lookahead. The arc length walked from the start is the "distance along the lane" and the AIM
-// POINT is the trace's end.
-//
-// Why this estimate (the "cleaner estimate" the task allowed):
-//   * the midway curve between the two walls IS the lane centreline, on a straight, round a
-//     bend of any radius and through a narrowing, and following a curve (rather than climbing
-//     to the point of largest clearance) cannot stall or circle in the wide pocket of a corner
-//     (it did, with a clearance score, on 1 scan in 20 of the floor bag);
-//   * the nearest return per angular bin is not a boundary round a corner: there the outer wall
-//     ahead is the nearest return in the forward bins on BOTH sides, so per-bin midpoints put
-//     the aim into the outer wall (the gap centre's failure again);
-//   * the lateral measure behind q (WALL DISTANCE) is what keeps the trace out of openings,
-//     and the lane width measured beside the car keeps h equal to the real half width.
+// CENTRELINE TRACE (trace_lane_centre). Added after the 2026-10-25 floor test (bag
+// 2026-10-25T19-27-08_car_teleop, lane_lookahead_m 1.0 on the same loop): the 2026-10-24 trace
+// measured each side as the distance to one boundary WALL SEGMENT chosen beside the car,
+// continued straight past its end, and dropped the side once the trace was more than h past
+// that end. Round an inside corner the inner wall is a short segment ending at the apex, so past
+// it the trace held h from the outer wall alone, and in the bends of the floor bag it stepped
+// across to the wrong branch (aim points into the outside pocket, steering jumping by more than
+// 0.3 rad between scans 12 to 27 times a run). The trace is now a MEDIAL AXIS of the two sides'
+// return sets, with no segments:
+//   * NEAREST RETURN EACH SIDE. At a trace point q with local heading t (a unit vector; the
+//     car's heading at the start), the LEFT distance d_L is the distance from q to the nearest
+//     counted return p with (p - q) x t > 0 (left of the heading), among the returns within
+//     the window kLaneWindowFactor * lane_default_half_width_m of q; d_R likewise with
+//     (p - q) x t < 0. So once the inner wall ends at the apex, the apex return itself stays the
+//     nearest left return while the trace goes round it.
+//   * SIDE MEMORY. A chain that held the nearest return on one side at the previous trace point
+//     is not taken on the other side at the next, and if both nearest returns are on one chain
+//     (a wall across the heading) the nearer side keeps it and the other side takes its nearest
+//     return off that chain. Why: at the junction where the centreline of a bend meets the spur
+//     into the outside corner, the outside wall of the next leg crosses the heading and its far
+//     part counts as LEFT; taking it there walks the trace into the outside pocket (seen on the
+//     2026-10-25 bag at 141.7 s). The outer wall stays the right side, the apex stays the left.
+//   * CORRECT, THEN STEP. With both sides found, the lane heading is perpendicular to the
+//     segment from the right return p_R to the left return p_L (pointing forward), and q moves
+//     across the lane onto the perpendicular bisector of p_L p_R (its projection onto that line,
+//     no motion along the lane). With one side only (the other side has no return within the
+//     window: a doorway, the room beyond an open side), q moves to h from that side's nearest
+//     return p along the line from p through q, and the lane heading is perpendicular to it
+//     (along the wall). With neither, q and the heading stay. A heading more than a right angle
+//     from the car's is clamped to the right angle on its side (the trace never runs back toward
+//     the car). The START is the rear axle (0, 0) corrected once this way: the car's place on
+//     the centreline. From there the trace steps kLaneTraceStepM along the heading and corrects
+//     again, until it has stepped lane_lookahead_m (the last step shortened); the arc stepped
+//     is the "distance along the lane" (the correction across the lane does not count, so an
+//     offset car does not aim short), and the AIM POINT is the last corrected point.
+// Why this estimate:
+//   * the perpendicular bisector of the two nearest boundary points is the local medial axis: on
+//     a straight it is the centreline, in a narrowing it is midway, and round the apex of a bend
+//     (the apex a point, the outer wall straight) it is the parabola midway between the two, which
+//     turns the trace by atan(s / W) a distance s past the apex of a lane W wide;
+//   * nothing depends on where a segment ends, so the apex, a box corner and the end of a wall all
+//     act the same way, as the nearest point of that side;
+//   * the side memory, not a turn limit (a limit per step made the 2026-10-24 trace overshoot and
+//     weave), keeps the trace on the branch that continues the lane.
+// What it costs: past the end of a wall with open space beyond (a doorway, a gap between boxes)
+// the midway curve bends toward the opening until the end leaves the window, by s^2 / (2 W) at s
+// past the end (5 cm at 0.3 m past it in a 1.1 m lane, so about 4 cm in the middle of the sim's
+// 0.6 m box gaps); the 2026-10-24 trace held it straight. LaneCentreTarget pins that bound.
 //
 // What it does in the cases the owner asked for:
-//   * straight lane, car offset e from the centre: the trace starts on the centreline beside
-//     the rear axle and runs along it, so the aim point is (lane_lookahead_m, e).
-//   * one side open: only the visible wall counts, so the trace starts on the line h from it
-//     (h the half width last measured) and runs along it: the car holds that offset.
-//   * a bend: the trace follows the midway curve round it, so the aim point is in the middle of
-//     the lane round the bend, not on the outer wall.
+//   * straight lane, car offset e from the centre: the start is on the centreline beside the
+//     rear axle and the trace runs along it, so the aim point is (lane_lookahead_m, e).
+//   * one side open: the trace holds h from the visible wall (h the half width last measured).
+//   * a bend: the trace follows the midway curve round it and round the apex.
 //
 // PURE PURSUIT. With the aim point (x_a, y_a) in the rear-axle frame, chord l_d = hypot(x_a,
 // y_a) and alpha = atan2(y_a, x_a), the circle through the rear axle tangent to the car's
@@ -392,17 +353,13 @@ double centering_steering(const LaneWalls& walls, double centering_gain);
 // Heap: the caller owns the LanePoints buffers and `trace` (grown, never shrunk), so a
 // GapFollower that has seen a scan of the running size allocates nothing here.
 inline constexpr double kLaneTraceStepM = 0.05;
-inline constexpr double kLaneTraceMaxTurnRad = 1.5707963267948966;  // pi / 2
-inline constexpr std::size_t kLaneTraceCandidates = 37;
 inline constexpr double kLaneChainGapM = 0.25;
-inline constexpr double kLaneStartStepM = 0.01;
 inline constexpr std::size_t kLaneMinChainPoints = 3;
-inline constexpr double kLaneFaceSpanM = 0.05;
-inline constexpr double kLaneVertexMarginM = 0.01;
-inline constexpr double kLaneCornerOnSectionCos = 0.96592582628906829;  // cos(15 degrees)
-inline constexpr double kLaneParallelSin = 0.17364817766693035;         // sin(10 degrees)
 // A measured lane wider than this multiple of lane_default_half_width_m is an open side.
 inline constexpr double kLaneMaxWidthFactor = 4.0;
+// The trace looks for boundary returns within this multiple of lane_default_half_width_m of each
+// trace point; a side with none is open (the one-sided fallback).
+inline constexpr double kLaneWindowFactor = 2.0;
 
 struct LaneGeometry {
   double half_width_m = 0.0;     // chassis.width_m / 2
@@ -436,25 +393,24 @@ std::size_t load_lane_points(const ScanInput& scan, double laser_yaw_offset_rad,
                              LanePoints& out);
 
 struct LaneBoundaries {
-  std::optional<std::size_t> left_chain;
-  std::optional<std::size_t> right_chain;
-  double left_m = 0.0;   // d_left (meaningful with left_chain)
-  double right_m = 0.0;  // d_right (meaningful with right_chain)
-  // d_left + d_right when both boundaries are found (the lane width W), else nullopt.
+  std::optional<double> left_m;   // d_left, the nearest counted return beside the car on the left
+  std::optional<double> right_m;  // d_right, likewise on the right (a positive distance)
+  // d_left + d_right when both are found on different chains and within max_width_m (the lane
+  // width W), else nullopt.
   std::optional<double> width_m;
 };
 
-// The left and right boundaries and the lane width (see BOUNDARIES above). end_reach_m is how
-// far a wall is continued past its end (the half width h in use); max_width_m is
-// kLaneMaxWidthFactor * lane_default_half_width_m in the follower.
+// The lane width beside the car (see LANE WIDTH above). max_width_m is kLaneMaxWidthFactor *
+// lane_default_half_width_m in the follower.
 LaneBoundaries find_lane_boundaries(const LanePoints& points, const LaneGeometry& geometry,
-                                    double max_width_m, double end_reach_m);
+                                    double max_width_m);
 
-// The centreline trace (see CENTRELINE TRACE above). Writes the trace's points, its start
-// first, in order, into `trace` and returns the aim point (the last one). A non-positive or
-// non-finite lookahead or half width returns the rear axle (0, 0) with an empty trace.
-LanePoint trace_lane_centre(const LanePoints& points, const LaneBoundaries& boundaries,
-                            double lookahead_m, double half_width_m, std::vector<LanePoint>& trace);
+// The centreline trace (see CENTRELINE TRACE above). window_m is kLaneWindowFactor *
+// lane_default_half_width_m in the follower. Writes the trace's points, its start first, in
+// order, into `trace` and returns the aim point (the last one). A non-positive or non-finite
+// lookahead, half width or window returns the rear axle (0, 0) with an empty trace.
+LanePoint trace_lane_centre(const LanePoints& points, double lookahead_m, double half_width_m,
+                            double window_m, std::vector<LanePoint>& trace);
 
 // atan(2 L sin(alpha) / l_d) clamped to +/- max_steering_rad (see PURE PURSUIT above). An aim
 // point at the rear axle (l_d < 1e-9), a non-positive wheelbase or a non-finite input gives 0.
@@ -487,15 +443,31 @@ double pure_pursuit_steering(const LanePoint& aim, double wheelbase_m, double ma
 //   * it is clear on the INSIDE (rho <= R - c) exactly when the curvature k = 1 / R satisfies
 //         k <= k_max = 2 (y - c) / (x^2 + y^2 - c^2)     (y > c; k_max = 0 when y <= c)
 //     (square rho <= R - c and solve for R: R >= (x^2 + y^2 - c^2) / (2 (y - c))). A return
-//     within the margin of the car's side (half_width < y <= c) therefore forbids any turn
-//     toward it.
+//     within the margin of the car's side (half_width < y <= c) would therefore forbid any turn
+//     toward it, which is why returns beside the car get a smaller margin (below).
+// BESIDE THE CAR (2026-10-25 floor finding). A return beside the body up to the front axle,
+// 0 < x <= wheelbase, is one the car is already alongside: a turn toward it does not drive the
+// body at it, it sweeps the inside flank inward past it by off-tracking (the flank point at the
+// rear axle runs on the circle R - half_width while the return sits at rho = hypot(x, R - y),
+// so the flank passes it at y - (rho - (R - y)), closer by about x^2 / (2 (R - y))). That is
+// real: at full lock (R 0.74 m) a return 8 cm off the flank at the front axle is touched (by
+// 1.7 cm), so these returns cannot be dropped. But with the full margin, one that is already
+// inside the margin (half_width < y <= half_width + margin, common at an apex of the 1 m floor
+// loop with the 0.1 m default margin) forbids every turn toward it, however small its
+// off-tracking: on the 2026-10-25 bag the clamp zeroed the lane steering there. So for these
+// returns the clearance required is min(margin, (y - half_width) / 2): the turn may take at most
+// half the clearance the car already has to the return, and never needs more than the margin,
+// i.e. c is replaced by half_width + that clearance in k_max. The flank still never reaches a
+// return (it keeps at least half its present clearance), and every return ahead of the front
+// axle, a box at the apex ahead of the bumper included, keeps the full margin. The outer circle
+// keeps c with the full margin.
 // ALGORITHM. Start from the wanted curvature k = tan(|delta|) / L. Every return in the
 // swept area at k (with the window above evaluated at k) is a violator; set k to the
 // smallest k_max among the violators and repeat until there are none. Each pass strictly
 // lowers k and a return is never a violator again once k <= its k_max, so this ends in at
 // most one pass per return (usually one or two). The result is delta = sign * atan(k L): the
-// inside flank circle passes every considered return at a distance of at least the margin
-// (exactly the margin for the binding return). The wanted steering is returned unchanged,
+// inside flank circle passes every considered return at a distance of at least its required
+// clearance (exactly that for the binding return). The wanted steering is returned unchanged,
 // bit for bit, when it is zero or non-finite, when nothing violates, or when the geometry is
 // unusable (non-positive or non-finite wheelbase, half width or lookahead; negative or
 // non-finite margin; non-finite mount or front x; unusable scan).

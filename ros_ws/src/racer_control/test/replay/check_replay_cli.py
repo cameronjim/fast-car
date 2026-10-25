@@ -19,7 +19,8 @@ with params.json (the steering part of the floor-2026-10-06 profile), and checks
     key=value params format, stdin input and malformed scan lines;
   * target_mode lane_centre (2026-10-24): the centred lane of scan 0.0 gives zero pure-pursuit
     steering, target_mode quoted in JSON and bare in --set, the deprecated target_deepest_ray,
-    refusals, and (with --floor-excerpt) seven corner scans of the 2026-10-24 floor bag;
+    refusals, (with --floor-excerpt) seven corner scans of the 2026-10-24 floor bag, and (with
+    --apex-excerpt) four apex scans of the 2026-10-25 one;
   * the whole output against expected.jsonl within 1e-6. Regenerate that file only on purpose
     (--write-expected) and say why in the PR: a silent golden refresh is a defect
     (claude-docs/12-testing.md, L4).
@@ -80,6 +81,9 @@ def main():
     parser.add_argument(
         "--floor-excerpt", type=Path, help="tools/tests/fixtures/floor_2026-10-24_corners.txt"
     )
+    parser.add_argument(
+        "--apex-excerpt", type=Path, help="tools/tests/fixtures/floor_2026-10-25_apex.txt"
+    )
     args = parser.parse_args()
     cli = args.cli
     scenes = args.fixture_dir / "scenes.txt"
@@ -99,13 +103,17 @@ def main():
     assert close(out[1]["steering_rad"], MAX_STEERING_RAD) and out[1]["target_bearing_rad"] > 0.5
     assert close(out[2]["steering_rad"], -MAX_STEERING_RAD) and out[2]["target_bearing_rad"] < -0.5
     assert out[3]["clamped"] and close(out[3]["wanted_steering_rad"], MAX_STEERING_RAD)
-    assert out[3]["steering_rad"] == 0.0
+    # The object sits beside the car behind the front axle, 9 cm off the flank (inside the 0.1 m
+    # margin): since 2026-10-25 the turn may take half that clearance (gap_follow.hpp, BESIDE THE
+    # CAR) instead of being zeroed, so the clamp cuts full lock to about 0.35 rad.
+    assert 0.3 < out[3]["steering_rad"] < MAX_STEERING_RAD - 0.05, out[3]
     assert not any(r["clamped"] for r in out[:3])
     assert out[4]["valid"] is False and out[4]["steering_rad"] is None
     assert out[4]["target_bearing_rad"] is None and not out[4]["gap_found"]
     # An invalid scan does not replace the latest result: the filter keeps stepping toward the
-    # previous (clamped, zero) steering, so it decays toward 0 from the previous output.
-    assert abs(out[4]["filtered_steering_rad"]) < abs(out[3]["filtered_steering_rad"])
+    # previous (clamped) steering.
+    held = out[3]["steering_rad"]
+    assert abs(out[4]["filtered_steering_rad"] - held) < abs(out[3]["filtered_steering_rad"] - held)
 
     if args.write_expected:
         expected_path.write_text("".join(json.dumps(r) + "\n" for r in out), encoding="utf-8")
@@ -280,6 +288,54 @@ def main():
             assert r["valid"] and r["wanted_steering_rad"] > -0.05, r
             assert r["lane_aim_x_m"] is not None and r["lane_half_width_m"] > 0.3, r
         assert sum(1 for r in floor if r["wanted_steering_rad"] > 0.1) >= 5, floor
+
+    # Four scans of the 2026-10-25 floor bag (tools/tests/fixtures): three inside corners with the
+    # car beside the apex and a bend where the outer wall crosses the trace heading. At the 0.6 m
+    # lookahead the trace walks a whole lookahead away from the car (it never doubles back), the
+    # aim point is in the lane (at least 0.6 h from every return), the command is off the lock,
+    # and the swept-path clamp does not cut it (gap_follow.hpp, CENTRELINE TRACE and BESIDE THE
+    # CAR).
+    if args.apex_excerpt:
+        apex = rows(
+            run(
+                cli,
+                [
+                    "--params",
+                    str(params),
+                    "--scans",
+                    str(args.apex_excerpt),
+                    "--set",
+                    "target_mode=lane_centre",
+                    "--set",
+                    "lane_lookahead_m=0.6",
+                    "--set",
+                    "range_max_m=16",
+                ],
+            )
+        )
+        scans = [
+            ln.split()
+            for ln in args.apex_excerpt.read_text().splitlines()
+            if not ln.startswith("#")
+        ]
+        assert len(apex) == len(scans) == 4
+        for r, w in zip(apex, scans):
+            assert r["valid"] and len(r["lane_trace"]) == 13, r["stamp_s"]
+            aim = (r["lane_aim_x_m"], r["lane_aim_y_m"])
+            assert math.hypot(*aim) > 0.4, (r["stamp_s"], aim)
+            assert abs(r["wanted_steering_rad"]) < MAX_STEERING_RAD - 1e-3, r["stamp_s"]
+            assert not r["clamped"] and not r["corner_blocked"], r["stamp_s"]
+            angle_min, increment = float(w[1]), float(w[2])
+            clearance = math.inf
+            for i, value in enumerate(w[4:]):
+                rng = float(value)
+                if not (0.05 <= rng <= 16.0):
+                    continue
+                bearing = angle_min + i * increment + desc["laser_yaw_rad"]
+                x = rng * math.cos(bearing) + desc["lidar_mount_x_m"]
+                y = rng * math.sin(bearing) + desc["lidar_mount_y_m"]
+                clearance = min(clearance, math.hypot(x - aim[0], y - aim[1]))
+            assert clearance >= 0.6 * r["lane_half_width_m"], (r["stamp_s"], clearance)
 
     assert math.isfinite(out[0]["filtered_steering_rad"])
     print("gap_follow_replay_cli checks passed")

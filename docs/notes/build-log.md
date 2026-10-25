@@ -2129,3 +2129,19 @@ a 1.0 m lookahead but brakes on the open side and touches walls at 1.0 m box gap
 further from the centreline than the floor profile, so no new profile was added; try it on the
 floor with `target_mode:=lane_centre`. The bench gained a centreline-offset metric. Nothing ran
 on the Jetson or the car. Details: `docs/notes/lane-centre-2026-10-24.md`.
+
+## 2026-10-25: lane-centre trace round the apex, clamp beside the car (replay and sim only)
+
+Floor finding (bag `2026-10-25T19-27-08_car_teleop`, `lane_centre` at a 1.0 m lookahead): the car
+under-steered into the inside corners, where the inner wall ends at the apex. The lane-centre
+trace is now the medial axis of the two sides' returns (nearest return left and right of the
+trace heading within 2 x `lane_default_half_width_m`, stepping perpendicular to the line joining
+them, with side memory so the outer wall round a corner stays the right side), and the swept-path
+clamp lets a turn take half the clearance to a return beside the body up to the front axle
+instead of demanding the full margin (returns ahead of the front axle keep it). On the bag at
+0.6 m the aim points at 92.4, 118.1 and 142.6 s are in the lane and unclamped, the scan-to-scan
+jumps above 0.3 rad drop from 27 to 1, and the clamp fires on 4 scans instead of 24; the sim
+battery is clean at 0.6 m with the centre offset at or below PR 110's. The moving-scan mean
+|steering| stays below 0.3 rad (0.24), so the acceptance was not met and no `lane-2026-10-25`
+profile was added. Nothing ran on the Jetson or the car. Details:
+`docs/notes/lane-centre-2026-10-24.md`.

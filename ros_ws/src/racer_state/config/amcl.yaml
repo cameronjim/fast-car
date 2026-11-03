@@ -1,0 +1,79 @@
+# nav2 AMCL localisation on a saved map (docs/notes/localization-2026-11-03.md).
+#
+# Started by racer_bringup/launch/localization.launch.py with nav2_map_server and
+# nav2_lifecycle_manager. Publishes map -> odom and amcl_pose, remapped to /pose
+# (claude-docs/04-architecture.md). AMCL replaces the F1TENTH particle filter the architecture
+# doc names; the note says why and keeps that filter as the fallback.
+#
+# Motion model: nav2 has only differential and omni models. The differential one is used for
+# this Ackermann car; between two filter updates (every 0.1 m or 0.1 rad, so every scan at
+# speed) a car-like motion is a small rotate-translate-rotate, which is what that model samples.
+#
+# Tuned in the sim with the bridge's sensor noise on (2% wheel speed scale error, slip, 0.01 rad
+# steering trim, 2 cm scan noise), at speeds up to the car's 2.91 m/s cap; the note's tuning
+# table has every variant tried and what it measured. In short:
+#   * nav2's defaults (every alpha 0.2, sigma_hit 0.2, z_hit/z_rand 0.5/0.5, 60 beams) work at
+#     walking pace and lose the car at 2.9 m/s: alpha2 0.2 adds 0.13 rad of heading noise per
+#     0.29 m update, more than the scan can pull back.
+#   * alpha3 (translation noise from translation) is the one that matters for the wheel speed
+#     scale error: 0.02 leaves the estimate running ahead of the car (0.3 m mean along track on
+#     the oval), 0.2 lets the cloud jump along featureless walls. 0.1 is the compromise.
+#   * alpha1 / alpha2 below 0.05 / 0.01 let the cloud collapse onto the wrong, symmetric pose.
+#   * 240 beams and sigma_hit 0.05 sharpen the laser model; 1000 to 5000 particles keep enough
+#     hypotheses alive along a straight.
+amcl:
+  ros__parameters:
+    base_frame_id: base_link
+    odom_frame_id: odom
+    global_frame_id: map
+    scan_topic: scan
+    map_topic: map
+    tf_broadcast: true
+    transform_tolerance: 0.2
+    robot_model_type: nav2_amcl::DifferentialMotionModel
+
+    # Motion noise: alpha1 rotation from rotation, alpha2 rotation from translation, alpha3
+    # translation from translation, alpha4 translation from rotation (alpha5 is omni only).
+    alpha1: 0.1
+    alpha2: 0.02
+    alpha3: 0.1
+    alpha4: 0.02
+    alpha5: 0.02
+
+    # Particles.
+    min_particles: 1000
+    max_particles: 5000
+    pf_err: 0.05
+    pf_z: 0.99
+    resample_interval: 1
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+
+    # Filter update thresholds.
+    update_min_d: 0.1
+    update_min_a: 0.1
+
+    # Laser model, sized for the C1 (vehicle_params sensors.lidar_spec: 0.05 to 12 m, 720
+    # beams over 360 degrees). The likelihood field does not ray cast: it needs a map with thin
+    # walls (what slam_toolbox saves). A hand-drawn map with solid walls biases it.
+    laser_model_type: likelihood_field
+    laser_min_range: 0.15
+    laser_max_range: 12.0
+    max_beams: 240
+    laser_likelihood_max_dist: 2.0
+    sigma_hit: 0.05
+    z_hit: 0.9
+    z_short: 0.05
+    z_max: 0.05
+    z_rand: 0.1
+    lambda_short: 0.1
+    do_beamskip: false
+    beam_skip_distance: 0.5
+    beam_skip_threshold: 0.3
+    beam_skip_error_threshold: 0.9
+
+    save_pose_rate: 0.5
+    first_map_only: false
+    # The initial pose is set by localization.launch.py's initial_pose_* arguments, or on
+    # /initialpose (Foxglove's pose estimate tool).
+    set_initial_pose: false

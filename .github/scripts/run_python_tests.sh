@@ -75,7 +75,9 @@ run "sim/bridge/racer_gym_bridge" report
 # pyproject.toml, nothing a bare `uv run pytest` could exercise -- and so is racer_drivers,
 # whose only .py file is test/test_pwm_output_node_launch.py: it launches the C++
 # pwm_output_node executable colcon builds and needs rclpy, exactly like racer_safety's, and
-# its ROS-free logic is C++ covered by gtest. All four are exercised for real by the
+# its ROS-free logic is C++ covered by gtest. racer_state (2026-11-03) is excluded for the
+# same reason as racer_control: a C++ node with a gtest-covered core, an L3 launch test, and a
+# config check registered with ament_cmake_pytest. All five are exercised for real by the
 # l3-and-cpp CI job (colcon build + colcon test, including their L3 launch tests) via
 # ros_build_test.sh.
 if [ -d ros_ws/src ]; then
@@ -83,7 +85,7 @@ if [ -d ros_ws/src ]; then
     pkg_name="$(basename "$pkg_dir")"
     if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_control" ] ||
        [ "$pkg_name" = "racer_safety" ] || [ "$pkg_name" = "racer_bringup" ] ||
-       [ "$pkg_name" = "racer_drivers" ]; then
+       [ "$pkg_name" = "racer_drivers" ] || [ "$pkg_name" = "racer_state" ]; then
       continue
     fi
     run "$pkg_dir" report

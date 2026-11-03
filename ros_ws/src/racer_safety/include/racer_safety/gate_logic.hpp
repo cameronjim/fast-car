@@ -139,6 +139,31 @@
 //     that: the gate still just reads GateInput::min_scan_range_m, and
 //     test_arc_corridor.cpp composes the two exactly the way safety_node does.
 //
+// SPEED FOR THE TTC (2026-11-02, docs/notes/safety-floor-review-2026-11-02.md; read before
+// changing step 3b). The TTC used to divide by the REQUESTED speed only. On the 2026-10-24 bag
+// (t 701.18 s) wall_follow dropped its request from 1.97 to 1.0 m/s on the approach to a wall;
+// the car was still near 1.97 m/s, the gate judged 1.0 m/s, braked late and the car hit. Now:
+//   * Whether the gate judges at all is still decided by the request: a zero or away request
+//     never trips or latches, exactly as before.
+//   * The speed the TTC divides by is the request's, RAISED (never lowered) to a speed estimate
+//     when that is higher: the larger of
+//       - the decaying output bound: the last cycle's OUTPUT speed toward this side, or an
+//         earlier, faster output minus SafetyLimits::speed_bound_deceleration_mps2 (vehicle_params
+//         actuation.stop_deceleration_mps2) times the time since, whichever is larger. It is
+//         threaded from cycle to cycle like the latch (GateInput/GateResult
+//         speed_bound_forward_mps / speed_bound_reverse_mps), advances on every path, and is 0
+//         with the deceleration unset (then this is the pre-0.13.0 rule exactly);
+//       - the measured wheel speed toward this side (GateInput::measured_speed_mps, safety_node's
+//         /odom/wheel twist.linear.x while fresh; absent in sim and in older bags).
+//   * Why this keeps the 2026-10-06 limit-cycle fix ("THE OBSTACLE GATE AND ITS LATCH"). That
+//     cycle came from the gate judging the output it had itself shrunk: a smaller output passed
+//     the TTC. Here the judged speed is max(request, estimate), never below the request, and the
+//     gate's own braking only lowers the estimate, which then drops out of the max. While the
+//     output ramps up after a release it stays at or below the request (the rate limiter only
+//     slows growth), so the TTC is the request's, as before. The estimate only matters while a
+//     past output (or the wheels) is faster than the current request: right after a request
+//     drop, for about (old - new) / deceleration seconds.
+//
 // THE REAR OBSTACLE GATE (added 2026-10-06 night; read before changing step 3b).
 //
 // Why. On the night floor test (bags 2026-10-06T23-19-41 and 23-25-38) the car ended nose-in
@@ -285,6 +310,10 @@ struct SafetyLimits {
   // at zero before the steering output is frozen (see "STEERING HOLD WHILE PARKED ON THE
   // OBSTACLE LATCH" above). The default +infinity never holds; only tests rely on it.
   double obstacle_steering_hold_after_s = std::numeric_limits<double>::infinity();
+  // vehicle_params actuation.stop_deceleration_mps2 (schema 0.13.0): the rate the decaying
+  // output bound falls at ("SPEED FOR THE TTC"). std::nullopt (the default, tests only) turns the
+  // bound off: the TTC divides by the request (and a fresh measured speed, if any).
+  std::optional<double> speed_bound_deceleration_mps2;
   int watchdog_missed_cycles = 3;
   double control_period_s = 0.02;  // 1 / 50 Hz, claude-docs/04-architecture.md
 };
@@ -377,6 +406,14 @@ struct GateInput {
   // seconds the latch has held the output speed at zero, std::nullopt when it was not. See
   // "STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH".
   std::optional<double> obstacle_hold_timer_s;
+  // "SPEED FOR THE TTC": the measured wheel speed (m/s, forward positive), safety_node's
+  // /odom/wheel twist.linear.x while fresh; std::nullopt when stale, absent (sim, older bags) or
+  // never received. A non-finite value is ignored.
+  std::optional<double> measured_speed_mps;
+  // The decaying output bounds as the previous cycle left them (GateResult::speed_bound_*), m/s
+  // of speed toward the front and toward the rear; 0 at startup.
+  double speed_bound_forward_mps = 0.0;
+  double speed_bound_reverse_mps = 0.0;
   // Covariance gate stub inputs (TODO roadmap task 2.6: wire from /pose once it exists).
   // `has_pose_input` is always false until then; `pose_covariance_trace` is unused while it
   // is.
@@ -418,6 +455,10 @@ struct GateResult {
   // The steering-hold timer after this cycle; safety_node feeds it back in as next cycle's
   // GateInput::obstacle_hold_timer_s.
   std::optional<double> obstacle_hold_timer_s;
+  // The decaying output bounds after this cycle ("SPEED FOR THE TTC"); safety_node feeds them
+  // back as next cycle's GateInput::speed_bound_forward_mps / speed_bound_reverse_mps.
+  double speed_bound_forward_mps = 0.0;
+  double speed_bound_reverse_mps = 0.0;
   // Why an engagement ended, for gates that know (today only the obstacle gate's "ttc brake
   // released" note). Not an engagement: GateEventTracker::update uses a matching
   // (source, severity) entry here as the detail of that engagement's PHASE_RELEASE record.
@@ -470,10 +511,12 @@ class SafetyGateLogic {
   // ttc_brake_latched, source kTtc) or -1.0 reverse (min_rear_scan_range_m,
   // reverse_brake_latched, kTtcReverse). Reads the REQUESTED command, may zero `target`'s
   // speed toward that side, and records the latch, activations and release note in `result`;
-  // returns the new latch.
+  // returns the new latch. `estimate_toward_mps` raises the TTC speed ("SPEED FOR THE TTC").
   bool apply_obstacle_gate(double direction, GateSource source, double range_m, bool latched_in,
-                           const DriveCommand& requested, DriveCommand& target,
-                           GateResult& result) const;
+                           const DriveCommand& requested, double estimate_toward_mps,
+                           DriveCommand& target, GateResult& result) const;
+  // The decaying output bound toward one side after this cycle ("SPEED FOR THE TTC").
+  double next_speed_bound_mps(double bound_in_mps, double previous_toward_mps, double dt_s) const;
   // TTC the request must exceed to release the latch. Only called when ttc_brake_s is set.
   double ttc_release_threshold_s() const;
   // Step 3d. Advances or clears the hold timer from the final `output` speed and, while the

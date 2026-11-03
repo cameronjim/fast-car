@@ -311,7 +311,8 @@
         "throttle_full_scale_mps",
         "steering_pwm_period_us", "throttle_pwm_period_us",
         "steering_pwm_achieved_period_us", "throttle_pwm_achieved_period_us",
-        "throttle_deadband_us"
+        "throttle_deadband_us",
+        "stop_latency_s", "stop_deceleration_mps2"
       ],
       "properties": {
         "command_to_torque_delay_s": {
@@ -375,6 +376,17 @@
           "type": "number", "minimum": 0, "maximum": 250,
           "units": "microseconds (raw PWM pulse width offset; non-SI driver-boundary value, see CLAUDE.md invariant 4)",
           "description": "Offset from throttle_pwm_neutral_us at which racer_drivers/pwm_output_node's open-loop throttle map STARTS for any non-zero speed command: speed 0 maps to exactly throttle_pwm_neutral_us, a speed > 0 maps to neutral + this + a linear share of the rest of the range up to throttle_pwm_max_us at throttle_full_scale_mps (mirrored below neutral for a negative speed). It mirrors the ESC's own PPM deadband (VESC app_ppm_conf.hyst, a fraction of the 500 us half range) so the first non-zero command lands outside it instead of being swallowed. Must be re-set whenever the VESC deadband or centre changes. 0 disables the offset and restores a plain linear map."
+        },
+        "stop_latency_s": {
+          "type": "number", "minimum": 0, "maximum": 2,
+          "units": "s",
+          "description": "Stopping model of the whole stop chain (added 2026-11-02, schema 0.13.0): the time the car keeps its speed after racer_safety/safety_node's obstacle gate trips, counted from the scan the gate judged (scan age, the 50 Hz gate cycle, the PWM frame, the layer-1 mux frame, the VESC PPM filter and speed loop). With stop_deceleration_mps2 it predicts the stopping travel speed * stop_latency_s + speed^2 / (2 stop_deceleration_mps2) that tools/replay_safety.py reports for every brake, and it is what the TTC and floor values are checked against. Derived from LiDAR scan matching of recorded brakes, not from odometry."
+        },
+        "stop_deceleration_mps2": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 50,
+          "units": "m/s^2",
+          "sign_convention": "positive = magnitude of the deceleration",
+          "description": "Stopping model, second half (added 2026-11-02, schema 0.13.0): the mean deceleration after stop_latency_s while the VESC brings the car from its speed to rest on a zero-speed command. Also the rate at which racer_safety's decaying output speed bound falls (racer_safety/gate_logic.hpp SPEED FOR THE TTC): the TTC divides by the larger of the request and the last output decayed at this rate, so a car still faster than a just-lowered request is judged at the faster speed. Derived from LiDAR scan matching of recorded brakes, not from odometry."
         }
       }
     },
@@ -465,17 +477,17 @@
         "ttc_warning_s": {
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 10,
           "units": "s",
-          "description": "Time-to-collision warning threshold used by racer_safety/safety_node's layer-3 TTC gate. Null disables the gate. The committed value is PROVISIONAL: a conventional F1TENTH-class starting point, not tuned against this car's measured braking distance."
+          "description": "Time-to-collision warning threshold used by racer_safety/safety_node's layer-3 TTC gate, and the release line of its latched brake. Null disables the warning. Since schema 0.13.0 the distance it divides is measured from the swept body (front bumper / leading corner), not the LiDAR head. The committed value is PROVISIONAL."
         },
         "ttc_brake_s": {
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 10,
           "units": "s",
-          "description": "Time-to-collision hard-brake threshold used by racer_safety/safety_node's layer-3 TTC gate. Null disables the gate. The committed value is PROVISIONAL: a conventional F1TENTH-class starting point, not tuned against this car's measured braking distance. Note that safety_node's forward-speed estimate for TTC is its own COMMANDED speed until /odom exists."
+          "description": "Time-to-collision hard-brake threshold used by racer_safety/safety_node's layer-3 TTC gate. Null disables the gate. Since schema 0.13.0 the distance is measured from the swept body (front bumper, or the body's leading point along the requested arc), not the LiDAR head, and the speed is the request raised to the decaying bound of recent outputs and the fresh /odom/wheel speed when either is higher (racer_safety/gate_logic.hpp SPEED FOR THE TTC). The committed value is PROVISIONAL: chosen by replaying the 2026-10-24/25 floor bags through the real gate (tools/replay_safety.py), not measured on the car with the new rule."
         },
         "min_forward_clearance_m": {
           "type": "number", "exclusiveMinimum": 0, "maximum": 5,
           "units": "m",
-          "description": "Distance floor for racer_safety/safety_node's layer-3 obstacle gate (added 2026-10-06, schema 0.7.0). If the along-track distance to the nearest valid LiDAR return in the path corridor (obstacle_corridor_margin_m, bounded by ttc_forward_sector_half_angle_rad; schema 0.9.0, before that the whole forward sector and the slant range) is less than this, measured from the LiDAR head, forward throttle is held at zero regardless of the requested speed, latched with the TTC brake and released once that return is farther than this times the gate's release factor (racer_safety/gate_logic.hpp). Catches the crawl-speed case TTC cannot. The committed value is PROVISIONAL, not measured."
+          "description": "Distance floor for racer_safety/safety_node's layer-3 obstacle gate (added 2026-10-06, schema 0.7.0). If the along-track distance to the nearest valid LiDAR return in the path corridor (obstacle_corridor_margin_m, bounded by ttc_forward_sector_half_angle_rad; schema 0.9.0, before that the whole forward sector and the slant range) is less than this, measured from the swept body since schema 0.13.0 (the LiDAR head before), forward throttle is held at zero regardless of the requested speed, latched with the TTC brake and released once that return is farther than this times the gate's release factor (racer_safety/gate_logic.hpp). Catches the crawl-speed case TTC cannot. The committed value is PROVISIONAL, not measured."
         },
         "ttc_forward_sector_half_angle_rad": {
           "type": "number", "exclusiveMinimum": 0, "maximum": 3.141593,

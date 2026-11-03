@@ -76,6 +76,9 @@ actuation:
   steering_pwm_achieved_period_us: 20000.0
   throttle_pwm_achieved_period_us: 3925.0
   throttle_deadband_us: 50.0
+  # Deliberately NOT the committed 0.20 / 1.0 (schema 0.13.0 stopping model).
+  stop_latency_s: 0.15
+  stop_deceleration_mps2: 2.5
 
 sensors:
   imu:

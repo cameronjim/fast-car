@@ -100,12 +100,27 @@
 // output until the latch releases (a car parked against an obstacle stops hunting its servo).
 // This node only threads the hold timer from cycle to cycle, like the latch, and keeps an
 // engaged hold reported across an internal fault. gate_logic.hpp has the rule and the reasons.
+//
+// DISTANCE FROM THE BODY AND SPEED FOR THE TTC (2026-11-02, schema 0.13.0,
+// docs/notes/safety-floor-review-2026-11-02.md). The in-path distances are now measured from the
+// swept body (front bumper / leading corner forward, rear bumper / leading corner in reverse),
+// PathGeometry::distance_from_body true (forward_sector.hpp "DISTANCE FROM THE BODY"), and the
+// TTC divides by the request raised to a speed estimate (gate_logic.hpp "SPEED FOR THE TTC"):
+// the decaying bound of this node's own outputs, falling at vehicle_params
+// actuation.stop_deceleration_mps2 and threaded from cycle to cycle like the latch, and the
+// measured wheel speed from /odom/wheel (nav_msgs/Odometry twist.twist.linear.x, racer_drivers/
+// vesc_odometry_node, KeepLast(10) best_effort: it is sensor data, and a best_effort subscriber
+// matches that node's reliable publisher) while it is at most wheel_odom_timeout_s old on the
+// steady clock. OPTIONAL: the simulator and every bag before 2026-11 have no /odom/wheel; without
+// it, or when it goes stale, the measured term is simply absent and the request and the output
+// bound still apply. It can only raise the TTC speed, never lower it below the request.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <nav_msgs/msg/odometry.hpp>
 #include <optional>
 #include <racer_msgs/msg/safety_event.hpp>
 #include <rcl_interfaces/msg/floating_point_range.hpp>
@@ -145,6 +160,20 @@ class SafetyNode : public rclcpp::Node {
         std::bind(&SafetyNode::on_drive_raw, this, std::placeholders::_1));
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
         "/scan", scan_qos, std::bind(&SafetyNode::on_scan, this, std::placeholders::_1));
+    // Measured wheel speed for the TTC (this file's "SPEED FOR THE TTC"); optional.
+    rcl_interfaces::msg::ParameterDescriptor odom_topic_descriptor;
+    odom_topic_descriptor.description =
+        "nav_msgs/Odometry topic whose twist.twist.linear.x (m/s, forward positive) raises the TTC "
+        "speed when it is higher than the request (gate_logic.hpp SPEED FOR THE TTC). Optional: "
+        "without it the request and the output bound still apply.";
+    const std::string odom_topic = this->declare_parameter<std::string>(
+        "wheel_odom_topic", "/odom/wheel", odom_topic_descriptor);
+    wheel_odom_timeout_s_ = declare_positive_double(
+        "wheel_odom_timeout_s", 0.1,
+        "The /odom/wheel speed counts for the TTC while it is at most this old (s, steady clock). "
+        "vesc_odometry_node publishes at 50 Hz, so 0.1 s is five missed messages.");
+    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+        odom_topic, scan_qos, std::bind(&SafetyNode::on_odom, this, std::placeholders::_1));
 
     drive_pub_ =
         this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive", command_qos);
@@ -182,13 +211,16 @@ class SafetyNode : public rclcpp::Node {
         "outer-corner band to %.3f m of arc) inside a +/-%.3f rad "
         "outer sector, rear corridor mirrored behind the car from the rear bumper line "
         "%.3f m behind the rear axle, laser yaw %.6f rad, steering hold after %.3f s on the "
-        "obstacle latch, "
+        "obstacle latch, distances from the swept body, TTC speed bound decaying at %.2f m/s^2, "
+        "wheel speed from %s while fresh (%.2f s), "
         "ttc_brake_s=%s, ttc_warning_s=%s",
         control_rate_hz, gate_limits_.watchdog_missed_cycles, *gate_limits_.min_forward_clearance_m,
         corridor_half_width_m_, path_geometry_.wheelbase_m, path_geometry_.lidar_mount_x_m,
         path_geometry_.lidar_mount_y_m, path_geometry_.body_front_x_m,
         path_geometry_.outer_corner_horizon_m, sector_half_angle_rad_, rear_overhang_m_,
         laser_yaw_rad_, gate_limits_.obstacle_steering_hold_after_s,
+        *gate_limits_.speed_bound_deceleration_mps2, odom_sub_->get_topic_name(),
+        wheel_odom_timeout_s_,
         gate_limits_.ttc_brake_s.has_value()
             ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
             : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
@@ -281,6 +313,9 @@ class SafetyNode : public rclcpp::Node {
     // Steering hold on the obstacle latch (schema 0.7.3, required, so always set here; see
     // gate_logic.hpp "STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH").
     limits.obstacle_steering_hold_after_s = VEHICLE_PARAMS.limits.obstacle_steering_hold_after_s;
+    // The decaying output bound's deceleration (schema 0.13.0, required, so always set; see
+    // gate_logic.hpp "SPEED FOR THE TTC").
+    limits.speed_bound_deceleration_mps2 = VEHICLE_PARAMS.actuation.stop_deceleration_mps2;
     limits.watchdog_missed_cycles = watchdog_missed_cycles;
     limits.control_period_s = control_period_s_;
     gate_limits_ = limits;
@@ -316,6 +351,9 @@ class SafetyNode : public rclcpp::Node {
     // Arc horizon of the outer-corner band, forward and rear (forward_sector.hpp "OUTER-CORNER
     // HORIZON"; schema 0.12.0, required, so always set).
     path_geometry_.outer_corner_horizon_m = VEHICLE_PARAMS.limits.outer_corner_horizon_m;
+    // Distances from the swept body, not the LiDAR head (forward_sector.hpp "DISTANCE FROM THE
+    // BODY", schema 0.13.0). Always on in the node; the legacy reference exists for the replay.
+    path_geometry_.distance_from_body = true;
     // The rear corridor's reference line (schema 0.10.0, required, so always set).
     rear_overhang_m_ = VEHICLE_PARAMS.chassis.rear_overhang_m;
 
@@ -370,6 +408,13 @@ class SafetyNode : public rclcpp::Node {
   // that cycle's requested steering (in_path_distance_m), not here. See "ARC CORRIDOR,
   // RECOMPUTED EVERY GATE CYCLE" at the top of this file.
   void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg) { last_scan_ = msg; }
+
+  // Keeps the latest measured wheel speed and its arrival time (steady clock, CLOCK POLICY).
+  void on_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    last_odom_speed_mps_ = msg->twist.twist.linear.x;
+    last_odom_steady_ = steady_clock_.now();
+    has_odom_ = true;
+  }
 
   // The in-path distance the obstacle gate sees this cycle: the last scan, reduced along the
   // arc `requested_steering_rad` sweeps (forward_sector.hpp). +infinity before the first scan.
@@ -480,6 +525,11 @@ class SafetyNode : public rclcpp::Node {
       input.ttc_brake_latched = ttc_brake_latched_;
       input.reverse_brake_latched = reverse_brake_latched_;
       input.obstacle_hold_timer_s = obstacle_hold_timer_s_;
+      input.speed_bound_forward_mps = speed_bound_forward_mps_;
+      input.speed_bound_reverse_mps = speed_bound_reverse_mps_;
+      if (has_odom_ && (steady_now - last_odom_steady_).seconds() <= wheel_odom_timeout_s_) {
+        input.measured_speed_mps = last_odom_speed_mps_;
+      }
       input.has_pose_input = false;  // TODO(roadmap 2.6): wire from /pose once it exists.
       input.pose_covariance_trace = 0.0;
 
@@ -490,6 +540,8 @@ class SafetyNode : public rclcpp::Node {
       ttc_brake_latched_ = result.ttc_brake_latched;
       reverse_brake_latched_ = result.reverse_brake_latched;
       obstacle_hold_timer_s_ = result.obstacle_hold_timer_s;
+      speed_bound_forward_mps_ = result.speed_bound_forward_mps;
+      speed_bound_reverse_mps_ = result.speed_bound_reverse_mps;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     } catch (const std::exception& e) {
@@ -557,6 +609,15 @@ class SafetyNode : public rclcpp::Node {
   bool reverse_brake_latched_{false};
   // Steering-hold timer on that latch, threaded the same way (gate_logic.hpp).
   std::optional<double> obstacle_hold_timer_s_;
+  // The decaying output speed bounds, threaded the same way (gate_logic.hpp "SPEED FOR THE
+  // TTC"). Held, not advanced, across an internal fault (the gate did not run).
+  double speed_bound_forward_mps_{0.0};
+  double speed_bound_reverse_mps_{0.0};
+  // Latest /odom/wheel speed and its arrival on the steady clock (on_odom).
+  double last_odom_speed_mps_{0.0};
+  rclcpp::Time last_odom_steady_{0, 0, RCL_STEADY_TIME};
+  bool has_odom_{false};
+  double wheel_odom_timeout_s_{0.1};
   // In-path test (configure_scan_sector).
   double sector_half_angle_rad_{0.0};
   double corridor_half_width_m_{0.0};
@@ -568,6 +629,7 @@ class SafetyNode : public rclcpp::Node {
 
   rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_raw_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_pub_;
   rclcpp::Publisher<racer_msgs::msg::SafetyEvent>::SharedPtr events_pub_;
   rclcpp::TimerBase::SharedPtr timer_;

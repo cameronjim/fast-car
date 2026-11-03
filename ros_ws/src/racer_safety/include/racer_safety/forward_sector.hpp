@@ -64,9 +64,10 @@
 //   * The distance handed to the gate is the ARC LENGTH the rear axle travels until the head
 //     reaches the return's angle, |R| (phi - phi_head), phi_head being the head's own arc
 //     angle, and it must be > 0 (the return is ahead of the head along the arc). REFERENCE:
-//     like the straight corridor's x, and the clearance floor, this is measured from the LiDAR
-//     HEAD, not from the bumper; as R grows it tends to the straight corridor's x. It is never
-//     the straight-line range.
+//     like the straight corridor's x, and the clearance floor, this was measured from the LiDAR
+//     HEAD, not from the bumper (since 2026-11-02 it is measured from the body, see "DISTANCE
+//     FROM THE BODY" below); as R grows it tends to the straight corridor's x. It is never the
+//     straight-line range.
 // The outer sector bound applies before either corridor, unchanged.
 //
 // OUTER BOUNDARY (2026-10-06 night, sim escape scenario on a round corner). The band used to
@@ -107,6 +108,42 @@
 // The distance for TTC and the floor is unchanged: the arc length from the head. The straight
 // corridor is unchanged. The rear corridor applies the same split with rear_overhang_m and the
 // same horizon. With the horizon at +infinity the band is the pre-0.12.0 one.
+//
+// DISTANCE FROM THE BODY (2026-11-02, docs/notes/safety-floor-review-2026-11-02.md). Every
+// distance above was measured from the LiDAR HEAD (forward) or the rear bumper line's centre
+// (reverse). The parts that hit are not there: the front bumper is body_front_x_m -
+// lidar_mount_x_m (0.175 m with the PROVISIONAL front_overhang_m) ahead of the head, and at full
+// lock the outer front corner leads the head by about 0.08 m of arc. So the same TTC meant very
+// different real margins (0.3 s on the head distance was about 0.08 s to the bumper straight
+// ahead at 0.8 m/s), and on the 2026-10-24/25 floor bags 14 of 56 brakes ended with the nose on
+// the foam. With PathGeometry::distance_from_body true (safety_node sets it), the distance is
+// measured from the body itself:
+//   * Straight: x + mount_x - body_front_x_m, the distance ahead of the front bumper line; it
+//     must be > 0.
+//   * Arc: the arc length the rear axle travels until the body's LEADING point at the return's
+//     own radius reaches the return's angle. The body here is the rectangle from the rear axle
+//     to the bumper line, corridor_half_width_m either side (the same margin the band uses). At
+//     radius rho its leading point is on the inner flank while the flank's circle is inside the
+//     bumper (x = sqrt(rho^2 - (|R| - half width)^2)) and on the bumper line beyond, out to the
+//     outer leading corner. So a return in the outer-corner band is measured from the outer
+//     front corner, one straight ahead of the bumper from the bumper, and one toward the inside
+//     from the inner flank. The distance must be > 0: a return the leading edge has already
+//     passed is beside or behind the swept body (or inside the side margin), and a rigid car
+//     driving this arc never reaches it, so it does not count, exactly like a return behind
+//     the head did before.
+//   * Straight ahead and on the outer half of the band the bumper / outer corner leads the
+//     head, so the body distance is the smaller one. Toward the inside of the turn it can be the
+//     larger: a return just inside the band's inner edge is reached only by the inner flank near
+//     the rear axle, which trails the head's arc angle. The legacy rule used the head's angle at
+//     every radius and read such a return closer than any part of the body can reach it; the
+//     body distance is the true one (test_body_distance.cpp). Replayed on both October floor bags
+//     the new rule tripped no later than the old one on any recorded approach.
+//   * Reverse: the same with the rear bumper line (rear_overhang_m) as the leading edge, so a
+//     return toward the outer rear corner is measured from that corner instead of from the
+//     bumper's centre (which read it as "already passed" when it was just behind the corner).
+// WHICH returns are in the band, and the outer-corner horizon test, are unchanged; only the
+// distance handed to the gate (TTC, floor, release) changes. false keeps the legacy reference
+// bit for bit: tools/replay_safety.py runs both through this code to compare them.
 //
 // WHICH STEERING. The path is the one the car is being ASKED to drive, the bounds-clamped
 // /drive_raw steering, not the gate's rate-limited or held output. That is what lets a latched
@@ -183,6 +220,11 @@ struct PathGeometry {
   // distance is at most this ("OUTER-CORNER HORIZON"); forward and rear alike. +infinity (the
   // default) gives the pre-0.12.0 band, checked to the quarter turn.
   double outer_corner_horizon_m = std::numeric_limits<double>::infinity();
+  // "DISTANCE FROM THE BODY": true measures every in-path distance from the swept body's leading
+  // edge (front bumper / leading corner forward, rear bumper / leading corner in reverse); false
+  // (the default) is the legacy reference, the LiDAR head forward and the rear bumper line's
+  // centre in reverse. safety_node always sets true; false stays for the replay comparison.
+  bool distance_from_body = false;
 };
 
 // Below this |clamped steering| the path is treated as straight (a numerical guard, not a
@@ -194,8 +236,9 @@ inline constexpr double kStraightSteeringEpsilonRad = 1e-3;
 // requested steering sweeps: vehicle bearing within [-half_angle_rad, +half_angle_rad] (the
 // outer bound), then the straight corridor (|delta| < kStraightSteeringEpsilonRad: x > 0,
 // |y + mount_y| <= corridor_half_width_m, distance x) or the arc corridor (see "ARC CORRIDOR"
-// above, distance = arc length from the head). Returns +infinity if there is none ("nothing in
-// the path this scan", which the gate treats as clear, not as garbage).
+// above, distance = arc length from the head, or from the body with
+// PathGeometry::distance_from_body, "DISTANCE FROM THE BODY"). Returns +infinity if there is none
+// ("nothing in the path this scan", which the gate treats as clear, not as garbage).
 //
 // Fails CONSERVATIVE on garbage input: if angle_min/angle_increment are non-finite,
 // angle_increment is not positive, laser_yaw_rad/half_angle_rad are non-finite or
@@ -233,11 +276,12 @@ double min_path_distance_m(const ScanGeometry& geometry, const std::vector<float
 //     length the rear axle travels until the rear bumper line's centre reaches the return's
 //     angle, |R| (phi - atan2(rear_overhang_m, |R|)), which must be > 0.
 //   * REFERENCE: the REAR BUMPER LINE, rear_overhang_m (chassis.rear_overhang_m, schema
-//     0.10.0) behind the rear axle. The forward corridor is measured from the LiDAR head (about
-//     0.15 m behind the front bumper on this car), the rear one from the bumper itself: the
-//     head sits far forward, so measuring the rear from it would put 0.4 m of car inside the
-//     distance. Returns inside the car's own footprint behind the head (the body, cables) have
-//     a distance <= 0 and never count.
+//     0.10.0) behind the rear axle (its centre on an arc; with PathGeometry::distance_from_body
+//     the leading point at the return's radius, "DISTANCE FROM THE BODY"). The forward corridor is
+//     measured from the LiDAR head (about 0.15 m behind the front bumper on this car), the rear one
+//     from the bumper itself: the head sits far forward, so measuring the rear from it would put
+//     0.4 m of car inside the distance. Returns inside the car's own footprint behind the head (the
+//     body, cables) have a distance <= 0 and never count.
 //   * Outer bound: the same half angle as the forward sector, centred on the car's -x axis:
 //     |wrap(vehicle bearing - pi)| <= half_angle_rad, as seen from the head.
 // Same invalid-return policy, same +infinity for "nothing in the path", and the same

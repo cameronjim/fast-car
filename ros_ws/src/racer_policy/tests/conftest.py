@@ -102,8 +102,9 @@ _TEMPLATE: dict[str, Any] = {
         # 0.11.0 when the required chassis.front_overhang_m was added (the forward arc
         # corridor's outer front corner sweep), then 0.11.0 -> 0.11.1 (lane pass, value-only),
         # then 0.11.1 -> 0.12.0 when the required limits.outer_corner_horizon_m was added (the
-        # arc corridor's outer-corner band horizon).
-        "schema_version": "0.12.0",
+        # arc corridor's outer-corner band horizon), then 0.12.0 -> 0.13.0 when the required
+        # actuation.stop_latency_s / stop_deceleration_mps2 were added (the body-distance gate).
+        "schema_version": "0.13.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

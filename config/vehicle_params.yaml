@@ -111,6 +111,25 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.12.0 -> 0.13.0 on 2026-11-02: two new REQUIRED fields,
+# actuation.stop_latency_s and actuation.stop_deceleration_mps2 (DERIVED, see the actuation
+# section), and the obstacle gate's distances are now measured from the swept BODY instead of the
+# LiDAR head (racer_safety/forward_sector.hpp "DISTANCE FROM THE BODY"), so the three gate values
+# change meaning and two change value: limits.ttc_brake_s 0.3 -> 0.34, limits.ttc_warning_s 0.45
+# (unchanged number, still the release line, now on the body distance) and
+# limits.min_forward_clearance_m 0.25 -> 0.05. Reason (docs/notes/safety-floor-review-2026-11-02.md):
+# on the 2026-10-24/25 floor bags the gate braked justifiably but too late, because the parts that
+# hit (front bumper, outer front corner) are 0.08 to 0.175 m ahead of the head the distance was
+# measured from; 14 of 56 brakes ended with the nose on the foam. The values were chosen by
+# replaying both bags through the real C++ gate (tools/replay_safety.py) against the stopping
+# travel measured from the LiDAR: with them every one of the 53 recorded approaches is predicted
+# to stop 6.3 cm or more off the wall (median 17.6 cm), with no new brake in a corner driven at
+# the October speeds (0.9 m/s request or less) and 9 new brakes at 1.0 to 1.4 m/s requests on the
+# entry to a turn. All three stay PROVISIONAL: they depend on chassis.front_overhang_m and
+# rear_overhang_m, which are still placeholders, and on the stopping travel of this car on that
+# floor. New required fields change the schema's required-field set, so this is a minor bump per
+# rule 5.
+#
 # Values at 0.12.0 (same day, owner's floor pass): ttc_brake_s 0.3, ttc_warning_s 0.45,
 # min_forward_clearance_m 0.25. The owner drove 0.45/0.6/0.30 and still found the brake early
 # in corners; these are the numbers driven on the floor after that, edited on the Jetson and
@@ -279,6 +298,8 @@ chassis:
   # chassis' rear overhang until it is taped on the car (with the car on the bench, rear axle
   # centre to the rearmost point of the bumper, body included). Measure it before relying on
   # the rear corridor's clearance floor.
+  # Since schema 0.13.0 the reverse gate measures its distance from this line's leading point,
+  # so the rear brake point moves one for one with this value.
   rear_overhang_m: 0.12            # PROVISIONAL (placeholder, NOT measured) -- see above
   # Front axle centre to the front bumper line, along +x (added 2026-10-06 night, schema
   # 0.11.0). The rear axle to front bumper distance is wheelbase_m + front_overhang_m:
@@ -288,6 +309,10 @@ chassis:
   # the old cg_to_rear_axle_m + length_m / 2 assumption within 1.3 mm. Measure it (car on the
   # bench, front axle centre to the foremost point of the bumper, body included) before relying
   # on the corridor's outer edge.
+  # SINCE SCHEMA 0.13.0 THE OBSTACLE GATE MEASURES FROM THE BUMPER: every forward TTC and floor
+  # distance is the distance from the front bumper line (or the leading corner on an arc), so
+  # an error here moves the brake point one for one. MEASURE IT BEFORE THE NEXT FLOOR TEST
+  # (docs/notes/first-boot-runbook.md, "Safety floor test, body-distance gate").
   front_overhang_m: 0.13           # PROVISIONAL (placeholder, NOT measured) -- see above
 
 tires:
@@ -501,6 +526,22 @@ actuation:
   # DEADBAND. It was 50 us (10 percent, centre 1.4875 ms) until the VESC change; merge this
   # change only after the VESC has been changed (docs/notes/build-log.md 2026-09-29).
   throttle_deadband_us: 20.0        # PROVISIONAL (mirrors VESC PPM deadband 4 percent) -- see above
+  # Stopping model (added 2026-11-02, schema 0.13.0): after racer_safety's obstacle gate trips,
+  # the car keeps its speed for stop_latency_s, counted from the scan the gate judged (scan age,
+  # the 50 Hz gate cycle, the PWM and mux frames, the VESC PPM filter and speed loop), then slows
+  # at stop_deceleration_mps2: travel = v * stop_latency_s + v^2 / (2 stop_deceleration_mps2).
+  # tools/replay_safety.py prints it for every replayed brake, and safety_node's decaying output
+  # speed bound (racer_safety/gate_logic.hpp "SPEED FOR THE TTC") falls at stop_deceleration_mps2.
+  # DERIVED, NOT MEASURED WITH ODOMETRY: from 2D scan matching of the 2026-10-24/25 floor bags
+  # (no /odom/wheel was recorded then), over the 41 brakes that stopped clear of the wall at
+  # 0.3 to 0.8 m/s real speed. Real travel / real speed: median 0.30 s, 90th percentile 0.405 s,
+  # no detectable v^2 term in that range; the speed held for about 0.1 s after the trip and fell
+  # at 1.0 to 1.5 m/s^2 (2.8 m/s^2 in the one brake from 1.03 m/s). 0.20 s and 1.0 m/s^2 put the
+  # model at that 90th percentile at 0.45 m/s and above every measured brake's travel, and keep
+  # the speed bound decaying no faster than the slowest measured deceleration. Re-derive from
+  # the first bag with /odom/wheel.
+  stop_latency_s: 0.20              # DERIVED 2026-11-02 (LiDAR scan matching of floor bags, see above)
+  stop_deceleration_mps2: 1.0       # DERIVED 2026-11-02 (LiDAR scan matching of floor bags, see above)
 
 sensors:
   imu:
@@ -579,8 +620,19 @@ limits:
   # bug, fixed in racer_safety, but the threshold was also too small. Release of the latched
   # brake needs the requested speed's TTC to exceed ttc_warning_s, so the warning value is
   # also the brake's release point.
-  ttc_warning_s: 0.45               # PROVISIONAL (owner floor pass 2026-10-07: release line, see 0.12.0 note)
-  ttc_brake_s: 0.3                  # PROVISIONAL (owner floor pass 2026-10-07, see 0.12.0 note)
+  #
+  # FROM THE BODY, schema 0.13.0 (2026-11-02, docs/notes/safety-floor-review-2026-11-02.md). The
+  # distance both thresholds divide is now measured from the swept body (front bumper straight
+  # ahead, the body's leading point along an arc), not from the LiDAR head, and the speed is the
+  # request raised to the decaying output bound and the fresh /odom/wheel speed when either is
+  # higher. Replayed on both October floor bags (tools/replay_safety.py): brake 0.30 left 6 of 53
+  # approaches under 4 cm, 0.33 one (3.1 cm), 0.34 none (min 6.3 cm, median 17.6 cm), with no new
+  # brake in a corner driven at 0.9 m/s or less; 0.35 added new brakes in 0.6 m/s full-lock
+  # corners the car made. The 9 new brakes at 0.34 are all at 1.0 to 1.4 m/s requests on the
+  # entry to a turn, with the bumper 0.27 to 0.43 m from the wall. The release line stays 0.45 s
+  # (now on the body distance). PROVISIONAL: depends on the placeholder front_overhang_m.
+  ttc_warning_s: 0.45               # PROVISIONAL (release line, body distance, 2026-11-02 replay, see 0.13.0 note)
+  ttc_brake_s: 0.34                 # PROVISIONAL (body distance, 2026-11-02 replay, see 0.13.0 note)
   # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
   # nearest valid return inside the forward sector below is closer than this, forward throttle
   # is held at zero whatever the requested speed, with the same latch as the TTC brake
@@ -589,7 +641,14 @@ limits:
   # when the obstacle is centimetres away. PROVISIONAL, NOT measured: 0.30 m is the
   # 2026-10-06 bench obstacle distance (0.22 m) plus a margin, chosen so that case brakes.
   # Replace with a value from measured coast-down distance at teleop speeds (roadmap phase 2).
-  min_forward_clearance_m: 0.25     # PROVISIONAL (owner floor pass 2026-10-07; measured from the LiDAR head, about 0.10 m ahead of the bumper)
+  #
+  # Since schema 0.13.0 measured from the swept BODY: 0.05 m off the bumper (or the leading corner
+  # on an arc), released beyond 0.075 m (1.5 x). The old 0.25 m from the head was 0.075 m off the
+  # bumper straight ahead and about 0.17 m of arc at full lock, so this is slightly more forgiving
+  # straight ahead and much more so in corners, where the TTC now does the work. It only matters
+  # at crawl speeds (below 0.15 m/s the 0.34 s TTC asks for less than 0.05 m); replaying the
+  # October bags, 0.05 and 0.08 gave identical brakes. PROVISIONAL.
+  min_forward_clearance_m: 0.05     # PROVISIONAL (body distance, 2026-11-02 replay, see 0.13.0 note)
   # Half angle of the forward sector, in the VEHICLE frame (base_link, x forward, left
   # positive). Since schema 0.9.0 (2026-10-06 floor test) this is only the OUTER bound of the
   # obstacle gate's in-path test: no return outside it is ever considered, whatever
@@ -626,6 +685,10 @@ limits:
   # 2026-10-06 round-corner sim escape canary to brake before the corner touches the wall.
   # Lengthen it if the outer corner clips things on the floor; shorten it if outer walls still
   # brake the car mid-corner.
+  # Since schema 0.13.0 the arc distance tested against this is the body distance (from the
+  # outer leading corner, the only part that sweeps this band), so the band now reaches about
+  # 0.08 m further round the turn at full lock than it did measured from the head. Kept: the
+  # 2026-11-02 replay of both October floor bags showed no new brake from it.
   outer_corner_horizon_m: 0.45      # PROVISIONAL (lane pass 2026-10-07, about one body length, NOT tuned) -- see above
   # Steering hold on the obstacle latch (added 2026-10-06 late, schema 0.8.0). A TTC or
   # clearance brake zeroes forward throttle and keeps steering live, because a car braking at
@@ -669,10 +732,13 @@ meta:
   # chassis.rear_overhang_m is PROVISIONAL (a placeholder, not measured). Added 2026-10-06 night
   # (schema 0.11.0): chassis.front_overhang_m is PROVISIONAL (a placeholder, not measured).
   # Added 2026-10-07 (schema 0.12.0): limits.outer_corner_horizon_m is PROVISIONAL (not tuned).
+  # Added 2026-11-02 (schema 0.13.0): actuation.stop_latency_s and stop_deceleration_mps2 are
+  # DERIVED from LiDAR scan matching (not odometry); the three limits.ttc_* / min_forward_clearance_m
+  # values are re-chosen for the body-distance gate and stay PROVISIONAL.
   # sysid_session_id stays
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.12.0"
+  schema_version: "0.13.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

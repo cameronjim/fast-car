@@ -625,7 +625,7 @@ limits:
   # distance both thresholds divide is now measured from the swept body (front bumper straight
   # ahead, the body's leading point along an arc), not from the LiDAR head, and the speed is the
   # request raised to the decaying output bound and the fresh /odom/wheel speed when either is
-  # higher. Replayed on both October floor bags (tools/replay_safety.py): brake 0.30 left 6 of 53
+  # higher. Replayed on both October floor bags (tools/replay_safety.py): brake 0.30 left 5 of 53
   # approaches under 4 cm, 0.33 one (3.1 cm), 0.34 none (min 6.3 cm, median 17.6 cm), with no new
   # brake in a corner driven at 0.9 m/s or less; 0.35 added new brakes in 0.6 m/s full-lock
   # corners the car made. The 9 new brakes at 0.34 are all at 1.0 to 1.4 m/s requests on the

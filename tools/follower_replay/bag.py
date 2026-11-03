@@ -7,8 +7,10 @@ walks the records from the front, and keeps every message it decoded before the 
 `BagData.truncated` says whether that happened.
 
 Messages are decoded with mcap-ros2-support from the schemas stored in the file, so no ROS
-install is needed. Only /scan, /drive_raw, /drive and /safety/events are decoded; everything
-else is skipped without touching its payload.
+install is needed. Only /scan, /drive_raw, /drive, /safety/events and /odom/wheel are decoded
+(the last for the safety replay, tools/replay_safety.py); everything else is skipped without
+touching its payload. Every record keeps the recorder's log time too: the safety replay feeds
+messages in arrival order, which for /scan is about one sweep (0.1 s) after its header stamp.
 """
 
 from __future__ import annotations
@@ -22,7 +24,8 @@ SCAN_TOPIC = "/scan"
 DRIVE_RAW_TOPIC = "/drive_raw"
 DRIVE_TOPIC = "/drive"
 EVENTS_TOPIC = "/safety/events"
-WANTED_TOPICS = (SCAN_TOPIC, DRIVE_RAW_TOPIC, DRIVE_TOPIC, EVENTS_TOPIC)
+ODOM_TOPIC = "/odom/wheel"
+WANTED_TOPICS = (SCAN_TOPIC, DRIVE_RAW_TOPIC, DRIVE_TOPIC, EVENTS_TOPIC, ODOM_TOPIC)
 
 # racer_msgs/SafetyEvent constants (ros_ws/src/racer_msgs/msg/SafetyEvent.msg).
 SEVERITY_INFO = 0
@@ -40,6 +43,7 @@ class ScanRecord:
     range_min: float
     range_max: float
     ranges: tuple[float, ...]
+    log_time_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,7 @@ class DriveRecord:
     stamp_s: float
     steering_rad: float
     speed_mps: float
+    log_time_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,14 @@ class EventRecord:
     duration_s: float
     source: str
     detail: str
+    log_time_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class OdomRecord:
+    stamp_s: float
+    speed_mps: float  # twist.linear.x, forward positive
+    log_time_s: float = 0.0
 
 
 @dataclass
@@ -65,6 +78,7 @@ class BagData:
     drive_raw: list[DriveRecord] = field(default_factory=list)
     drive: list[DriveRecord] = field(default_factory=list)
     events: list[EventRecord] = field(default_factory=list)
+    odom: list[OdomRecord] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     # True when a file ended before its footer or inside a record (the recorder was killed).
     truncated: bool = False
@@ -106,6 +120,7 @@ def _scan_record(msg: Any, log_time_ns: int) -> ScanRecord:
         range_min=float(msg.range_min),
         range_max=float(msg.range_max),
         ranges=tuple(float(r) for r in msg.ranges),
+        log_time_s=log_time_ns / 1e9,
     )
 
 
@@ -114,6 +129,7 @@ def _drive_record(msg: Any, log_time_ns: int) -> DriveRecord:
         stamp_s=_stamp_s(msg.header.stamp, log_time_ns),
         steering_rad=float(msg.drive.steering_angle),
         speed_mps=float(msg.drive.speed),
+        log_time_s=log_time_ns / 1e9,
     )
 
 
@@ -125,6 +141,15 @@ def _event_record(msg: Any, log_time_ns: int) -> EventRecord:
         duration_s=float(msg.duration_s),
         source=str(msg.source),
         detail=str(msg.detail),
+        log_time_s=log_time_ns / 1e9,
+    )
+
+
+def _odom_record(msg: Any, log_time_ns: int) -> OdomRecord:
+    return OdomRecord(
+        stamp_s=_stamp_s(msg.header.stamp, log_time_ns),
+        speed_mps=float(msg.twist.twist.linear.x),
+        log_time_s=log_time_ns / 1e9,
     )
 
 
@@ -196,6 +221,8 @@ def read_bag(path: str | Path) -> BagData:
                             data.drive_raw.append(_drive_record(msg, record.log_time))
                         elif topic == DRIVE_TOPIC:
                             data.drive.append(_drive_record(msg, record.log_time))
+                        elif topic == ODOM_TOPIC:
+                            data.odom.append(_odom_record(msg, record.log_time))
                         else:
                             data.events.append(_event_record(msg, record.log_time))
                     except Exception:  # noqa: BLE001 - one bad message must not lose the bag

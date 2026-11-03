@@ -1721,6 +1721,93 @@ load. When the second IMX219 arrives: `jetson-io` "Camera IMX219 Dual", the same
 checks as C2, and `camera_csi.launch.py sensor_id:=1` publishes under `/camera/csi1/*`
 (`cameras.launch.py` starts sensor 0 only until then).
 
+## First mapping session (UNVERIFIED, written 2026-11-03; proven only in the sim)
+
+Builds a slam_toolbox map of the floor track, then localises on it with AMCL. Background,
+tuning and the sim numbers: `docs/notes/localization-2026-11-03.md`. Needs the LiDAR bench
+("LiDAR first power-up") and the VESC telemetry bench ("VESC telemetry") done first: the EKF's
+speed is `/odom/wheel` and both map builders read `/scan`. Nothing here changes the command path;
+the kill switch rules are the usual ones.
+
+### M1. Rebuild
+
+The car image gains five apt packages (robot_localization, slam_toolbox, nav2_amcl,
+nav2_map_server, nav2_lifecycle_manager) and the workspace gains `racer_state`. Rebuild both
+exactly as in "LiDAR first power-up" L1, then:
+
+```sh
+docker run --rm car:local bash -lc 'source /opt/ros/humble/setup.bash && ros2 pkg prefix slam_toolbox nav2_amcl robot_localization'
+```
+
+### M2. Calibrate the wheel speed first (10 minutes, saves the most error)
+
+The sim's biggest error source was a 2% wheel speed scale error (`tires.nominal_radius_m` is
+assumed). Do V5's distance check properly: push the car along a taped 5.000 m straight, three
+times, and compare `/odom/wheel` `pose.pose.position.x`. Write the ratio into the build log. If it
+is more than 1% off, correct `tires.nominal_radius_m` (schema patch bump) before mapping.
+
+### M3. Map: one slow lap, Jetson teleop
+
+Start the stack as in "Start the stack", with the LiDAR and VESC flags from those sections and
+the end of the command changed to:
+
+```sh
+exec ros2 launch racer_bringup car_teleop.launch.py browser_teleop:=true lidar:=true vesc:=true mapping:=true
+```
+
+- Put the car on the start line and LEAVE IT STILL for 10 s while the stack comes up: the map's
+  origin is where the car stands when slam_toolbox starts, facing +x. Mark that spot and heading
+  on the floor with tape; localisation starts from it.
+- In Foxglove (fixed frame `map`): `/map`, `/scan`, the TF tree `map -> odom -> base_link ->
+  laser`. Expect `wheel_twist_node up: ...`, the EKF, and `slam_toolbox` registering scans.
+- Drive ONE lap at 0.8 to 1.0 m/s with the browser teleop (Jetson teleop, not the RC
+  transmitter: the EKF models the steering from `/drive`, which the RC override bypasses). The
+  sim mapped cleanly at 1.0 m/s and lost the lane track at 1.5 m/s. Smooth steering, no
+  reversing. Finish the lap past the start so the loop closes, then a few metres more.
+- Watch `/map` grow. Walls should be single thin lines. Doubled or smeared walls mean the scan
+  matcher lost track: stop, note where, and redo the lap slower.
+
+### M4. Save the map (stack still running)
+
+In a second shell into the container:
+
+```sh
+docker exec -it car-stack bash -lc '
+  source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash
+  mkdir -p /workspace/data/maps
+  ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: /workspace/data/maps/floor-2026-11-xx}}"'
+```
+
+Expect `result: 0` and `floor-2026-11-xx.pgm` + `.yaml` in `~/car/data/maps/` (not in git,
+`data/` is ignored; copy it off the car). Open the pgm: thin walls, grey (unknown) outside. Do
+NOT paint walls in by hand: AMCL's laser model is biased by filled walls (the note, finding 1).
+Stop the stack with Ctrl-C; the bag holds `/scan`, `/odom`, `/tf` and `/map` for replay.
+
+### M5. Localise on it
+
+Put the car back on the taped start spot, facing the same way, and start with the end of the
+command changed to:
+
+```sh
+exec ros2 launch racer_bringup car_teleop.launch.py browser_teleop:=true lidar:=true vesc:=true localization:=true map:=/workspace/data/maps/floor-2026-11-xx.yaml
+```
+
+The default initial pose is the map origin, which is that spot. If the car is elsewhere, use
+Foxglove's "Publish pose estimate" on `/initialpose` (map frame).
+
+1. Car still: the scan in Foxglove must sit on the map's walls. If it is rotated or offset, set
+   the pose estimate again.
+2. Push the car round the lap BY HAND (motor off, mux killed): `/pose` and TF `map ->
+   base_link` must follow it round the whole loop without jumping. `ros2 topic hz /pose` is
+   scan rate only while moving (AMCL updates every 0.1 m).
+3. Then one lap at walking pace with the teleop, then 1.0 m/s. Watch for the scan sliding off
+   the walls on the straights (along-track drift, expected to be the weak direction).
+4. Write in the build log: map name and start spot, how well the scan sat on the walls at each
+   speed, any jump of `/pose` and where, CPU (`top`: amcl, ekf_node).
+
+Driving the raceline tracker on this pose (tracker_node `pose_frame:=map`) needs a raceline
+written in this map's frame, which is a later step.
+
 ## Afterwards
 
 - Everything measured in steps 5, 10, 11, 12, 13 and 15 goes into `config/vehicle_params.yaml` or a

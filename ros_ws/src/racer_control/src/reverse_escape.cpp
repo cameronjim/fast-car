@@ -104,8 +104,11 @@ EscapeOutput ReverseEscape::update(const EscapeInput& input) {
       }
       return out;
     }
+    // The follower's view of the way forward counts until the refusal has lasted
+    // refused_escape_after_s (reverse_escape.hpp REFUSED TOO LONG).
+    const bool refused_too_long = forward_blocked_s_ >= config_.refused_escape_after_s;
     if (state_ != EscapeState::kIdle || forward_blocked_s_ < config_.escape_after_s ||
-        !input.forward_path_blocked) {
+        !(input.forward_path_blocked || refused_too_long)) {
       return out;
     }
     if (attempts_ >= config_.escape_max_attempts) {
@@ -113,6 +116,7 @@ EscapeOutput ReverseEscape::update(const EscapeInput& input) {
       out.event = EscapeEvent::kExhausted;
       return out;
     }
+    started_on_refusal_ = !input.forward_path_blocked;
     start(input, out);
   }
 

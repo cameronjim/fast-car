@@ -22,6 +22,7 @@ find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(ackermann_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(racer_msgs REQUIRED)
 
 # -- ROS-free core library (claude-docs/10-conventions.md: gate/decision logic separated
@@ -80,9 +81,19 @@ add_executable(safety_node src/safety_node.cpp)
 add_dependencies(safety_node racer_safety_generate_vehicle_params)
 target_include_directories(safety_node PRIVATE "${RACER_GENERATED_DIR}")
 target_link_libraries(safety_node racer_safety_core)
-ament_target_dependencies(safety_node rclcpp rcl_interfaces ackermann_msgs sensor_msgs racer_msgs)
+ament_target_dependencies(safety_node rclcpp rcl_interfaces ackermann_msgs sensor_msgs nav_msgs
+  racer_msgs)
 
-install(TARGETS safety_node
+# -- safety_replay_cli: replays a recorded /scan + /drive_raw (+ /odom/wheel) stream through the
+#    real gate for tools/replay_safety.py (docs/notes/safety-floor-review-2026-11-02.md). ROS-free
+#    like gap_follow_replay_cli in racer_control, built unconditionally, constants from the
+#    generated binding. ---------------------------------------------------------------------
+add_executable(safety_replay_cli src/safety_replay_cli.cpp)
+add_dependencies(safety_replay_cli racer_safety_generate_vehicle_params)
+target_include_directories(safety_replay_cli PRIVATE "${RACER_GENERATED_DIR}")
+target_link_libraries(safety_replay_cli racer_safety_core)
+
+install(TARGETS safety_node safety_replay_cli
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -100,6 +111,8 @@ if(BUILD_TESTING)
     test/test_forward_sector.cpp
     test/test_arc_corridor.cpp
     test/test_rear_corridor.cpp
+    test/test_body_distance.cpp
+    test/test_ttc_speed.cpp
   )
   target_link_libraries(test_racer_safety_core racer_safety_core)
 
@@ -114,6 +127,17 @@ if(BUILD_TESTING)
   add_launch_test(test/test_safety_node_clock_launch.py
     TARGET test_safety_node_clock_launch
     TIMEOUT 120
+  )
+
+  # safety_replay_cli on small synthetic streams: the trip of the real gate, the old and new
+  # distance references, the speed bound, odometry and parameter validation
+  # (test/replay/check_safety_replay_cli.py).
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(
+    NAME test_safety_replay_cli
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/check_safety_replay_cli.py"
+            --cli "$<TARGET_FILE:safety_replay_cli>"
   )
 endif()
 

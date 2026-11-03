@@ -841,6 +841,51 @@ first laps.
    reach for if the car does anything unexpected, including backing up when you did not expect
    it.
 
+### Safety floor test, body-distance gate (vehicle_params 0.13.0; NOT yet run on the car)
+
+Since 2026-11-02 safety_node measures every obstacle distance from the swept body (front bumper,
+or the leading corner on an arc) instead of the LiDAR head, brakes at TTC 0.34 s on that
+distance with a 0.05 m floor, and raises the TTC speed to `/odom/wheel` when the car is faster
+than its request. gap_follow_node escapes after 5 s of refusal even when it thinks it sees a
+way through, and its timer no longer waits for the scan callback. Why, and the bag replay behind
+the numbers: `docs/notes/safety-floor-review-2026-11-02.md`. Do these in order before the first
+drive with it.
+
+1. **Measure both overhangs first.** The brake point now moves one for one with them, and both
+   are still placeholders. Car on the bench, tape measure: front axle centre to the foremost
+   point of the front bumper (body included) is `chassis.front_overhang_m` (placeholder 0.13);
+   rear axle centre to the rearmost point (body included) is `chassis.rear_overhang_m`
+   (placeholder 0.12). Write them into `config/vehicle_params.yaml` tagged MEASURED with the
+   date, bump `meta.schema_version` to 0.13.1 (value change, rule 5) and commit. If the front
+   one differs from 0.13 m by more than 1 cm, re-run the replay with the new value before
+   driving: `uv run --project tools python tools/replay_safety.py <both October bags>
+   --set front_overhang_m=<value>` must still print `below 0.04 m: 0`.
+2. **Build optimised.** The 2026-10-25 stutter came from a scan callback that took 20 to 50 ms on
+   the Jetson; the code is now much cheaper and threaded, but build the workspace with
+   `colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release` (step 6 builds without
+   a build type, which compiles without optimisation).
+3. **Start the stack with the VESC telemetry**, so `/odom/wheel` is used by the gate and recorded:
+   `ros2 launch racer_bringup car_teleop.launch.py lidar:=true vesc:=true`. The `safety_node up:`
+   line must say `distances from the swept body, TTC speed bound decaying at 1.00 m/s^2, wheel
+   speed from /odom/wheel while fresh (0.10 s)` and `ttc_brake_s=0.340000`. Without the VESC
+   UART the gate still works on the request alone.
+4. **Wheels off the ground, a box 0.30 m ahead of the bumper:** with the gap follower running at
+   its crawl the wheels must stop (one `ttc` brake engage), and must restart when the box is
+   moved to 0.6 m. With the box beside the front corner (inside the 5 cm side margin) and the
+   steering pointing away from it, the wheels must turn.
+5. **Floor, both directions,** profile `lane-2026-10-25` (PR 111, the lane_centre apex fix, never
+   driven): `ros2 launch racer_control gap_follow.launch.py profile:=lane-2026-10-25`. The startup
+   WARN must now say `... or for 5.00 s whatever the arc`. Kill switch in a second person's hand.
+6. **What to look for, then check with the bag.** Brakes should come earlier on the approach to a
+   wall than in October and end clear of the foam. A brake on the entry to a corner at 1 m/s or
+   more is expected (the replay found 9 such brakes at 1.0 to 1.4 m/s requests): if those feel
+   like cut-offs, lower `max_speed_mps`, do not lower the TTC. A car refused for 5 s backs out and
+   logs `reverse escape N/3: ... although the probe sees a clear forward arc`. Copy the bag off and
+   run `tools/replay_safety.py` on it: the `end (m)` column is the real end clearance measured from
+   the scans (want 0.04 m or more on every brake), `watchdog engages: recorded` should be near
+   zero (it was 186 on 2026-10-25), and with `/odom/wheel` in the bag the stopping model
+   (`actuation.stop_latency_s`, `stop_deceleration_mps2`) can be re-derived from real speeds.
+
 ### Parallel park and three-point turn (park_node; NOT yet run on the car)
 
 `racer_control`'s park_node (roadmap 2.9, 2026-10-07) finds a slot along a row of obstacles

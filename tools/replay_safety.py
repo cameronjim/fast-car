@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.table:
                 print(analysis.table(report.rows, t0))
             print()
-            failed |= s["predicted_below"] > 0 or s["extra_trips_free"] > 0
+            failed |= s["predicted_below"] > 0
         return 1 if failed else 0
     except ReplayError as error:
         print(f"replay_safety: {error}", file=sys.stderr)

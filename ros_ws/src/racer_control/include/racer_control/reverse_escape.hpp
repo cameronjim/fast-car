@@ -10,8 +10,9 @@
 //
 // WHAT THIS DOES. A small state machine, off unless gap_follow_node's `reverse_escape` is true:
 //
-//   kIdle -> kEscaping   forward-blocked for escape_after_s AND the forward path is blocked
-//                        (or kIdle -> kExhausted when escape_max_attempts are used up)
+//   kIdle -> kEscaping   forward-blocked for escape_after_s AND the forward path is blocked,
+//                        OR forward-blocked for refused_escape_after_s whatever the follower
+//                        sees (or kIdle -> kExhausted when escape_max_attempts are used up)
 //   kEscaping -> kIdle   escape_distance_m covered (completed) or escape_max_s elapsed
 //   kEscaping -> kRetryWait   rear blocked for block_debounce_s (aborted)
 //   kRetryWait -> kIdle  escape_retry_after_s elapsed
@@ -27,6 +28,16 @@
 //     for escape_probe_distance_m (gap_follow.hpp any_forward_arc_clear). Both are needed: a gate
 //     that holds the car while the follower still sees a way through (a person stepping in
 //     front, then away) is waited out, not reversed from.
+//   * REFUSED TOO LONG (2026-11-02, bag 2026-10-24T23-13-18, 89.6 to 225 s): after a floor
+//     brake nearly straight ahead, gap_follow kept requesting 0.68 m/s at steering 0.03 for 136 s.
+//     Its own probe found a steering with a clear arc, so the rule above never fired, but the
+//     follower never steered to that arc (its swept-path clamp held the wanted left turn at
+//     zero), and safety_node never released. A deadlock until the car was moved by hand. So the
+//     follower's view stops mattering once safety_node has refused it for
+//     refused_escape_after_s (gap_follow_node `escape_refused_after_s`, 5 s by default; +infinity
+//     here, which is the old rule): whatever the probe says, the way the follower is driving does
+//     not work, and backing out and coming at it again from a different pose is the escape. The
+//     attempt limit below still bounds how often that can happen without forward progress.
 //   * ESCAPING commands escape_speed_mps (negative), its magnitude ramped up at
 //     max_acceleration_mps2 like the forward speed, with the steering at escape_steering_rad
 //     OPPOSITE to the sign of the follower's wanted forward steering when the escape started.
@@ -63,6 +74,7 @@
 #ifndef RACER_CONTROL_REVERSE_ESCAPE_HPP_
 #define RACER_CONTROL_REVERSE_ESCAPE_HPP_
 
+#include <limits>
 #include <optional>
 
 namespace racer_control {
@@ -77,6 +89,9 @@ struct ReverseEscapeConfig {
   int escape_max_attempts = 3;         // escapes without forward progress before holding
   double block_debounce_s = 0.1;       // a rear block must persist this long to abort
   double max_acceleration_mps2 = 0.0;  // reverse speed magnitude ramp (<= 0: step)
+  // forward-blocked this long starts an escape even while the follower sees a way through
+  // (REFUSED TOO LONG); +infinity never does (the pre-2026-11-02 rule)
+  double refused_escape_after_s = std::numeric_limits<double>::infinity();
 };
 
 enum class EscapeState { kIdle, kEscaping, kRetryWait, kExhausted };
@@ -125,6 +140,9 @@ class ReverseEscape {
   double escape_elapsed_s() const { return elapsed_s_; }
   double escape_steering_rad() const { return steering_rad_; }
   double forward_blocked_s() const { return forward_blocked_s_; }
+  // Whether the current or last escape started because the refusal lasted
+  // refused_escape_after_s while the follower still saw a way through (REFUSED TOO LONG).
+  bool started_on_refusal() const { return started_on_refusal_; }
   const ReverseEscapeConfig& config() const { return config_; }
 
  private:
@@ -143,6 +161,7 @@ class ReverseEscape {
   double steering_rad_ = 0.0;
   double rear_blocked_s_ = 0.0;
   double retry_wait_s_ = 0.0;
+  bool started_on_refusal_ = false;
 };
 
 }  // namespace racer_control

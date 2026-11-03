@@ -208,6 +208,12 @@ if(BUILD_TESTING)
     TARGET test_gap_follow_node_escape_launch
     TIMEOUT 120
   )
+  # Threading (2026-11-02, the 2026-10-25 stutter): with every scan callback slowed to 50 ms the
+  # 50 Hz /drive_raw never gaps to safety_node's 60 ms watchdog.
+  add_launch_test(test/test_gap_follow_node_threading_launch.py
+    TARGET test_gap_follow_node_threading_launch
+    TIMEOUT 120
+  )
   # L1 check of the same argument: launch-description inspection only, no processes started
   # (same approach as racer_bringup's test_car_teleop_profile.py).
   find_package(ament_cmake_pytest REQUIRED)

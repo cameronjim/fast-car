@@ -49,17 +49,18 @@ MAX_TEST_WALL_S = 150.0
 TOLERANCE_M = 0.12
 
 # Pass thresholds. MEASURED with racer_state's slam_toolbox.yaml, noise on, 1.0 m/s, two laps,
-# seeds 21 (twice) and 22 plus one run before the harness settled, locally in the ros-dev image
+# nine runs (seeds 21 to 26 and three more of 21), locally in the ros-dev image
 # (docs/notes/localization-2026-11-03.md):
-#   wall error mean      0.033 / 0.030 / 0.035 m
-#   wall error p95       0.074 / 0.099 / 0.100 m
-#   spurious fraction    0.000 / 0.022 / 0.013
-#   coverage             1.000 / 1.000 / 1.000
-#   slam_toolbox pose p95 against ground truth   0.197 / 0.241 / 0.235 m
-# Limits about 1.5 to 2 times the worst measured value. A broken map is not a few centimetres
-# worse: at 1.5 m/s slam_toolbox lost the lane track (wall error mean 0.137 m, spurious 0.36,
-# coverage 0.83), which these limits catch. The pose limit is the loosest because the pose is
-# checked between scan-matcher updates, where it is odometry; the map is the deliverable.
+#   wall error mean      0.030 to 0.042 m
+#   wall error p95       0.058 to 0.119 m
+#   spurious fraction    0.000 to 0.006
+#   coverage             1.000 in all nine
+#   slam_toolbox pose p95 against ground truth   0.167 to 0.253 m
+# Limits about 1.5 times the worst measured value. A broken map is not a few centimetres worse:
+# with slam_toolbox's default loop closure settings 3 of 17 runs closed the loop at the wrong
+# place (wall error mean 0.14 to 0.23 m, spurious 0.36 to 0.52, coverage 0.77 to 0.83), which
+# these limits catch. The pose limit is the loosest because the pose is checked between
+# scan-matcher updates, where it is odometry; the map is the deliverable.
 MAX_WALL_ERR_MEAN_M = 0.06
 MAX_WALL_ERR_P95_M = 0.16
 MAX_SPURIOUS_FRACTION = 0.06

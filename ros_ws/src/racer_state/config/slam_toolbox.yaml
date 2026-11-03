@@ -14,6 +14,11 @@
 #     lane with 0.8 m corners leaves the corners nearly unmapped. Tuned in the sim, see the note.
 #   * map_update_interval 1.0 s: the occupancy grid on /map refreshes faster, cheap at this size.
 #   * enable_interactive_mode false: headless on the car and in CI.
+#   * Stricter loop closure (loop_match_minimum_chain_size 15, minimum responses 0.5 coarse /
+#     0.6 fine, from 10 / 0.35 / 0.45): on the sim's lane track, a plain rectangle whose walls
+#     look the same all the way along, the defaults closed the loop at the wrong place in 3 of
+#     17 runs (the map came out doubled, 0.6 to 1 m off). With these, 12 of 12 runs were
+#     clean. Turning loop closure off made every map worse (no way to remove the drift).
 slam_toolbox:
   ros__parameters:
     # Plugin params
@@ -56,10 +61,10 @@ slam_toolbox:
     link_scan_maximum_distance: 1.5
     loop_search_maximum_distance: 3.0
     do_loop_closing: true
-    loop_match_minimum_chain_size: 10
+    loop_match_minimum_chain_size: 15
     loop_match_maximum_variance_coarse: 3.0
-    loop_match_minimum_response_coarse: 0.35
-    loop_match_minimum_response_fine: 0.45
+    loop_match_minimum_response_coarse: 0.5
+    loop_match_minimum_response_fine: 0.6
 
     # Correlation Parameters - Correlation Parameters
     correlation_search_space_dimension: 0.5

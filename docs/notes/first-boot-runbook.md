@@ -1762,10 +1762,15 @@ exec ros2 launch racer_bringup car_teleop.launch.py browser_teleop:=true lidar:=
   laser`. Expect `wheel_twist_node up: ...`, the EKF, and `slam_toolbox` registering scans.
 - Drive ONE lap at 0.8 to 1.0 m/s with the browser teleop (Jetson teleop, not the RC
   transmitter: the EKF models the steering from `/drive`, which the RC override bypasses). The
-  sim mapped cleanly at 1.0 m/s and lost the lane track at 1.5 m/s. Smooth steering, no
-  reversing. Finish the lap past the start so the loop closes, then a few metres more.
+  sim mapped cleanly at 0.5 to 1.5 m/s; slower gives the odometry less to get wrong between
+  scan matches. Smooth steering, no reversing. Finish the lap past the start so the loop
+  closes, then a few metres more.
+- If the loop is plain foam board all the way round, put two or three boxes or bags OUTSIDE the
+  walls (where the LiDAR sees them over the boards, or through gaps) before mapping, and leave
+  them there for every later run: walls that look the same everywhere are what fooled the sim's
+  loop closure and AMCL's along-track estimate.
 - Watch `/map` grow. Walls should be single thin lines. Doubled or smeared walls mean the scan
-  matcher lost track: stop, note where, and redo the lap slower.
+  matcher lost track or the loop closed in the wrong place: stop, note where, and redo the lap.
 
 ### M4. Save the map (stack still running)
 

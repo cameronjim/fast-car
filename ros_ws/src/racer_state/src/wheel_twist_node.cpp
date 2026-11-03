@@ -138,6 +138,13 @@ class WheelTwistNode : public rclcpp::Node {
   }
 
   void on_wheel(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    // A sample still being handled after SIGINT shut the context down. This node segfaulted once
+    // in CI at launch_testing teardown (2026-11-03, about 0.5 s after SIGINT, when the /drive
+    // staleness WARN would fire as the other nodes stop); the likely cause, not proven, is
+    // publishing or logging on the shut-down context. Nothing useful can be sent now anyway.
+    if (!rclcpp::ok()) {
+      return;
+    }
     const double steady_s = steady_seconds();
     rclcpp::Time stamp(msg->header.stamp, get_clock()->get_clock_type());
     if (stamp.nanoseconds() == 0) {

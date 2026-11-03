@@ -104,8 +104,11 @@ of travel inside one scan), real reflectivity dropouts, wheels lifting, and a re
    floor track's corners are near the car's 0.74 m turning radius (`lane-centre-2026-10-24.md`),
    so a raceline for the floor needs that kind of lookahead and corners no tighter than about
    0.8 m.
-7. **slam_toolbox lost the lane track at 1.5 m/s** (wall error mean 0.14 m, 36% spurious
-   cells) and mapped it cleanly at 0.5 and 1.0 m/s. Map slowly.
+7. **slam_toolbox's default loop closure closed the loop at the wrong place on the plain lane
+   track in 3 of 17 runs** (once each at 1.5, 1.0 and 0.7 m/s): doubled walls, 0.6 to
+   1 m of error. Stricter loop closure (chain 15, responses 0.5 / 0.6) gave 12 clean maps out
+   of 12 at 0.5 to 1.5 m/s. Still map slowly: the map is only as good as the odometry between
+   scan matches.
 
 ## Tuning
 
@@ -167,19 +170,39 @@ filter. Kept at 100 Hz for `04-architecture.md`'s `/odom` >= 100 Hz.
 
 ### slam_toolbox, lane track, two laps
 
-| Variant | Wall error mean / p95 (m) | Spurious | Coverage | Pose p95 (m) |
-|---|---|---|---|---|
-| Chosen (min travel 0.2 m / 0.2 rad / 0.1 s, update 1 s, 12 m), 1.0 m/s, seeds 21, 21, 22 | 0.030 to 0.035 / 0.07 to 0.10 | 0.000 to 0.022 | 1.00 | 0.20 to 0.24 |
-| Chosen, no noise | 0.035 / 0.080 | 0.000 | 1.00 | 0.117 |
-| Chosen, 0.5 m/s, one lap | 0.036 / 0.102 | 0.003 | 1.00 | 0.314 |
-| Chosen, 1.5 m/s | 0.137 / 0.449 | 0.358 | 0.83 | 0.457 |
-| slam_toolbox defaults (0.5 m / 0.5 rad / 0.5 s, update 5 s, 20 m), 1.0 m/s | 0.043 / 0.119 | 0.018 | 1.00 | 0.241 |
-| Chosen, resolution 0.025 m | 0.030 / 0.068 | 0.000 | 1.00 | 0.212 |
-| gym_oval, 1.0 m/s | 0.076 / 0.245 | 0.178 | 0.90 | 0.414 |
+First pass, with slam_toolbox's own loop closure settings (chain 10, responses 0.35 / 0.45),
+"T" = min travel 0.2 m / 0.2 rad / 0.1 s, update 1 s, 12 m range:
 
-0.025 m resolution was slightly better and three times the cells; 0.05 m is kept (AMCL's map,
-the C1's own resolution at 5 m is about 6 cm). The oval corridor maps worse for the same reason
-it localises worse along track.
+| Variant | Runs | Wall error mean / p95 (m) | Spurious | Coverage | Pose p95 (m) |
+|---|---|---|---|---|---|
+| T, 1.0 m/s, good runs (two of them in CI) | 10 | 0.028 to 0.037 / 0.07 to 0.11 | 0.000 to 0.022 | 1.00 | 0.20 to 0.32 |
+| T, 0.7 m/s, good runs | 2 | 0.031, 0.028 / 0.069, 0.070 | 0.000 | 1.00 | 0.20, 0.23 |
+| T, failed runs (the loop closed at the wrong place, walls doubled): 1 of 11 at 1.0 m/s, 1 of 3 at 0.7 m/s | 2 | 0.167, 0.232 / 0.52, 0.82 | 0.42, 0.52 | 0.81, 0.77 | 0.60, 1.00 |
+| T, 0.5 m/s, one lap | 1 | 0.036 / 0.102 | 0.003 | 1.00 | 0.314 |
+| T, 1.5 m/s | 1, failed | 0.137 / 0.449 | 0.358 | 0.83 | 0.457 |
+| T, no noise | 1 | 0.035 / 0.080 | 0.000 | 1.00 | 0.117 |
+| slam_toolbox defaults (0.5 m / 0.5 rad / 0.5 s, update 5 s, 20 m) | 1 | 0.043 / 0.119 | 0.018 | 1.00 | 0.241 |
+| T, resolution 0.025 m | 1 | 0.030 / 0.068 | 0.000 | 1.00 | 0.212 |
+| T, min travel 0.1 m / 0.1 rad | 3 | 2 failed (0.25 mean) and 0.024 / 0.058 | | | |
+| T, correlation search 1.0 m | 4 | 1 failed (0.098 mean), 3 at 0.032 to 0.034 | | | |
+| T, loop closure off | 3 | 0.073 to 0.089 / 0.21 to 0.25 (drift never removed) | 0.20 to 0.28 | 0.94 to 0.97 | 0.42 to 0.52 |
+| gym_oval, 1.0 m/s | 1 | 0.076 / 0.245 | 0.178 | 0.90 | 0.414 |
+
+Then **chosen: T plus stricter loop closure (chain 15, responses 0.5 coarse / 0.6 fine)**:
+
+| Variant | Runs | Wall error mean / p95 (m) | Spurious | Coverage | Pose p95 (m) |
+|---|---|---|---|---|---|
+| 1.0 m/s, seeds 21 to 26 and three more of 21 | 9, none failed | 0.030 to 0.042 / 0.06 to 0.12 | 0.000 to 0.006 | 1.00 | 0.17 to 0.25 |
+| 1.5 m/s, seeds 21, 22 | 2, none failed | 0.031, 0.040 / 0.070, 0.101 | 0.001, 0.029 | 1.00 | 0.24, 0.16 |
+| 0.5 m/s, one lap | 1 | 0.043 / 0.120 | 0.056 | 0.98 | 0.248 |
+| gym_oval, 1.0 m/s | 1 | 0.076 / 0.225 | 0.179 | 0.91 | 0.437 |
+
+The lane track is a plain rectangle whose walls look the same all the way along, which is what
+fooled the default loop closure; the owner's foam-board floor loop may be just as plain, so the
+stricter setting matters on the car too (and a few distinctive objects outside the walls would
+help both mapping and AMCL). 0.025 m resolution was slightly better and three times the cells;
+0.05 m is kept (AMCL's map; the C1's own resolution at 5 m is about 6 cm). The oval corridor
+maps worse for the same reason it localises worse along track.
 
 ### AMCL on a slam_toolbox map (the real workflow)
 

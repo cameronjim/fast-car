@@ -17,6 +17,8 @@ find_package(ackermann_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 # -- ROS-free core library (claude-docs/10-conventions.md: gate/decision logic separated
 #    from node plumbing) -------------------------------------------------------------------
@@ -25,6 +27,9 @@ add_library(racer_control_core
   src/pure_pursuit.cpp
   src/speed_rate_limiter.cpp
   src/float32_wire_margin.cpp
+  # Planar pose composition for tracker_node's map-frame pose (map -> odom from TF composed
+  # with the EKF's /odom), 2026-11-03 localisation.
+  src/pose2d.cpp
   # Reactive controllers ported from the old Python reactive_control package (GitHub issue
   # 26). Same ROS-free rule: none of these include rclcpp or the generated binding.
   src/laser_scan.cpp
@@ -91,7 +96,8 @@ add_executable(tracker_node src/tracker_node.cpp)
 add_dependencies(tracker_node racer_control_generate_vehicle_params)
 target_include_directories(tracker_node PRIVATE "${RACER_GENERATED_DIR}")
 target_link_libraries(tracker_node racer_control_core)
-ament_target_dependencies(tracker_node rclcpp rcl_interfaces nav_msgs ackermann_msgs)
+ament_target_dependencies(tracker_node rclcpp rcl_interfaces nav_msgs ackermann_msgs geometry_msgs
+  tf2_ros)
 
 install(TARGETS tracker_node
   DESTINATION lib/${PROJECT_NAME}
@@ -164,6 +170,7 @@ if(BUILD_TESTING)
     test/test_raceline.cpp
     test/test_speed_rate_limiter.cpp
     test/test_float32_wire_margin.cpp
+    test/test_pose2d.cpp
     test/test_laser_scan.cpp
     test/test_gap_follow.cpp
     test/test_wall_follow.cpp
@@ -234,6 +241,12 @@ if(BUILD_TESTING)
   # #22). Its own launch file because `use_sim_time` is set at node construction.
   add_launch_test(test/test_tracker_node_clock_launch.py
     TARGET test_tracker_node_clock_launch
+    TIMEOUT 120
+  )
+  # odom_topic + pose_frame (2026-11-03 localisation): the pose is /odom composed with
+  # map -> odom from TF; no map -> odom (or a stale one) stops /drive_raw.
+  add_launch_test(test/test_tracker_node_pose_frame_launch.py
+    TARGET test_tracker_node_pose_frame_launch
     TIMEOUT 120
   )
 

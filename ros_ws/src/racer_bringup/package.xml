@@ -38,6 +38,15 @@
   <exec_depend>racer_control</exec_depend>
   <exec_depend>racer_tools</exec_depend>
   <exec_depend>racer_drivers</exec_depend>
+  <!-- odometry / mapping / localization.launch.py (2026-11-03): racer_state's wheel_twist_node
+       and its configs, and the adopted nodes those launch files start (all from apt in
+       docker/ros-dev and docker/car). -->
+  <exec_depend>racer_state</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_amcl</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>foxglove_bridge</exec_depend>
   <!-- car_teleop.launch.py starts `ros2 bag record` by default (CLAUDE.md invariant 5). The
        verb comes from ros2bag; the storage plugin is chosen at launch time (mcap on the car,

@@ -31,9 +31,16 @@ Bridges the gym simulator to the standard racer topics
     correctly aligned in Foxglove/RViz. REP-105 naming
     (claude-docs/04-architecture.md): ``map`` and ``base_link`` are real
     REP-105 frames; ``map`` -> ``base_link`` direct from sim ground truth is
-    a documented simplification for visualization only -- there is no
-    localization stack yet (roadmap Phase 2), so this is not standing in
-    for a real ``map`` -> ``odom`` -> ``base_link`` chain.
+    a simplification for visualization and for the controllers that run on
+    ground truth.
+  - (localisation, 2026-11-03, all off by default) ``publish_ground_truth_tf``
+    false stops that ground-truth ``map`` -> ``base_link`` so the real chain
+    (slam_toolbox or AMCL ``map`` -> ``odom``, the EKF ``odom`` -> ``base_link``)
+    can own the tree; ``base_link_offset_x_m`` puts ``base_link`` where the car
+    has it (the rear axle) instead of at the gym's pose; and the sensor realism
+    options in ``racer_gym_bridge.sensor_noise`` (wheel speed scale, slip and
+    noise, scan noise and maximum range, sensor rates, a steering trim error).
+    See docs/notes/localization-2026-11-03.md.
 
 Vehicle physical parameters (mass, wheelbase, friction, ...) are the
 f1tenth_gym env's own defaults. ``config/vehicle_params.yaml`` (roadmap
@@ -74,6 +81,7 @@ from racer_gym_bridge.conversions import (
     mirrored_speed_to_accel,
     yaw_to_quaternion,
 )
+from racer_gym_bridge.sensor_noise import WheelSpeedNoise, degrade_scan, publish_divider
 from racer_gym_bridge.track_loader import (
     SYNTHETIC_TRACK_NAMES,
     SyntheticTrack,
@@ -310,6 +318,7 @@ class BridgeNode(Node):
 
         pocket = self._declare_pocket()
         self._declare_park_scenario_parameters()
+        self._declare_localization_parameters()
         synthetic = self._declare_synthetic_track()
 
         self.env = build_env(
@@ -340,6 +349,9 @@ class BridgeNode(Node):
             self._mounted_scan_rng = np.random.default_rng(self._seed)
             self._fov_rad = float(fov)
         self._wheel_distance_m = 0.0
+        self._noise_rng = np.random.default_rng(self._seed + 1)
+        self._previous_wheel_speed_mps: float | None = None
+        self._step_count = 0
 
         step_rate_descriptor = ParameterDescriptor(
             description=(
@@ -353,6 +365,10 @@ class BridgeNode(Node):
             self.declare_parameter("step_rate_hz", 0.0, step_rate_descriptor).value
         )
         self._step_rate_hz = requested_rate if requested_rate > 0.0 else 1.0 / self._env_timestep
+        self._scan_divider = publish_divider(self._step_rate_hz, self._scan_rate_hz)
+        self._wheel_odom_divider = publish_divider(self._step_rate_hz, self._wheel_odom_rate_hz)
+        if self._scan_range_max_m > 0.0:
+            self._range_max = min(self._range_max, self._scan_range_max_m)
 
         scan_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -438,7 +454,11 @@ class BridgeNode(Node):
                 float(params["v_max"]),
                 float(params["v_min"]),
             )
-        action = drive_cmd_to_action(self._latest_steering_angle, longitudinal)
+        # steering_offset_rad (default 0): an uncalibrated servo trim. The wheels point this far
+        # off what /drive asked for, and nothing downstream is told.
+        action = drive_cmd_to_action(
+            self._latest_steering_angle + self._steering_offset_rad, longitudinal
+        )
         obs, _reward, terminated, truncated, _info = self.env.step(action)
         if terminated or truncated:
             if not self._warned_terminated:
@@ -461,36 +481,11 @@ class BridgeNode(Node):
     def _publish(self, obs: dict) -> None:
         agent_obs = obs[_EGO_AGENT_ID]
         now = self.get_clock().now().to_msg()
+        step = self._step_count
+        self._step_count += 1
 
-        ranges = agent_obs["scan"]
-        if self._mounted_scan is not None:
-            yaw = float(agent_obs["pose_theta"])
-            lidar_pose = np.array(
-                [
-                    float(agent_obs["pose_x"]) + self._lidar_offset_x_m * math.cos(yaw),
-                    float(agent_obs["pose_y"]) + self._lidar_offset_x_m * math.sin(yaw),
-                    yaw + self._lidar_yaw_rad,
-                ]
-            )
-            ranges = self._mounted_scan.scan(lidar_pose, self._mounted_scan_rng)
-        scan_fields = build_scan_fields(
-            ranges=ranges,
-            fov_rad=self._fov_rad,
-            range_min=self._range_min,
-            range_max=self._range_max,
-        )
-        scan_msg = LaserScan()
-        scan_msg.header.stamp = now
-        scan_msg.header.frame_id = _LASER_FRAME_ID
-        scan_msg.angle_min = scan_fields.angle_min
-        scan_msg.angle_max = scan_fields.angle_max
-        scan_msg.angle_increment = scan_fields.angle_increment
-        scan_msg.time_increment = 0.0
-        scan_msg.scan_time = 1.0 / self._step_rate_hz
-        scan_msg.range_min = scan_fields.range_min
-        scan_msg.range_max = scan_fields.range_max
-        scan_msg.ranges = scan_fields.ranges
-        self._scan_pub.publish(scan_msg)
+        if step % self._scan_divider == 0:
+            self._publish_scan(agent_obs, now)
 
         odom_fields = build_odom_fields(
             pose_x=agent_obs["pose_x"],
@@ -515,17 +510,25 @@ class BridgeNode(Node):
         self._odom_pub.publish(odom_msg)
 
         if self._wheel_odom_pub is not None:
-            self._publish_wheel_odom_msg(now, float(agent_obs["linear_vel_x"]))
+            self._integrate_and_publish_wheel_odom(
+                now, float(agent_obs["linear_vel_x"]), step % self._wheel_odom_divider == 0
+            )
 
-        # Milestone 2: map -> base_link from the same ground-truth pose, every step (no
-        # localization stack exists yet -- see this module's docstring).
+        if not self._publish_ground_truth_tf:
+            return
+        # map -> base_link from the same ground-truth pose, every step, moved to base_link's
+        # place on the car when base_link_offset_x_m is set (0 by default: the gym's pose).
+        yaw = float(agent_obs["pose_theta"])
         transform = TransformStamped()
         transform.header.stamp = now
         transform.header.frame_id = _MAP_FRAME_ID
         transform.child_frame_id = _BASE_LINK_FRAME_ID
-        transform.transform.translation.x, transform.transform.translation.y, _ = (
-            odom_fields.position
-        )
+        transform.transform.translation.x = odom_fields.position[
+            0
+        ] + self._base_link_offset_x_m * math.cos(yaw)
+        transform.transform.translation.y = odom_fields.position[
+            1
+        ] + self._base_link_offset_x_m * math.sin(yaw)
         (
             transform.transform.rotation.x,
             transform.transform.rotation.y,
@@ -534,14 +537,63 @@ class BridgeNode(Node):
         ) = odom_fields.orientation
         self._tf_broadcaster.sendTransform(transform)
 
-    def _publish_wheel_odom_msg(self, stamp, speed_mps: float) -> None:
+    def _publish_scan(self, agent_obs: dict, now) -> None:
+        ranges = agent_obs["scan"]
+        if self._mounted_scan is not None:
+            yaw = float(agent_obs["pose_theta"])
+            lidar_pose = np.array(
+                [
+                    float(agent_obs["pose_x"]) + self._lidar_offset_x_m * math.cos(yaw),
+                    float(agent_obs["pose_y"]) + self._lidar_offset_x_m * math.sin(yaw),
+                    yaw + self._lidar_yaw_rad,
+                ]
+            )
+            ranges = self._mounted_scan.scan(lidar_pose, self._mounted_scan_rng)
+        if self._scan_noise_std_m > 0.0 or self._scan_range_max_m > 0.0:
+            ranges = degrade_scan(
+                np.asarray(ranges, dtype=float),
+                self._scan_noise_std_m,
+                self._scan_range_max_m,
+                self._noise_rng,
+            )
+        scan_fields = build_scan_fields(
+            ranges=ranges,
+            fov_rad=self._fov_rad,
+            range_min=self._range_min,
+            range_max=self._range_max,
+        )
+        scan_msg = LaserScan()
+        scan_msg.header.stamp = now
+        scan_msg.header.frame_id = _LASER_FRAME_ID
+        scan_msg.angle_min = scan_fields.angle_min
+        scan_msg.angle_max = scan_fields.angle_max
+        scan_msg.angle_increment = scan_fields.angle_increment
+        scan_msg.time_increment = 0.0
+        scan_msg.scan_time = self._scan_divider / self._step_rate_hz
+        scan_msg.range_min = scan_fields.range_min
+        scan_msg.range_max = scan_fields.range_max
+        scan_msg.ranges = scan_fields.ranges
+        self._scan_pub.publish(scan_msg)
+
+    def _integrate_and_publish_wheel_odom(self, stamp, speed_mps: float, publish: bool) -> None:
         """/odom/wheel in vesc_odometry_node's shape (roadmap 2.9): twist.linear.x the speed,
         pose.position.x the SIGNED along-track distance since the node started (not an x
         coordinate). The speed is the gym's longitudinal body speed, ``linear_vel_x`` (v cos beta at
         the gym's reference point); in the gym's kinematic regime that is exactly the rear axle's
         speed, the distance park_node's arcs are measured in. Integrated per step over the env
-        timestep; /sim/reset does not zero it (the real driver does not either)."""
+        timestep; /sim/reset does not zero it (the real driver does not either).
+
+        With the realism options on (``wheel_speed_*``, ``wheel_slip_s``) the published speed and
+        the distance integrated from it are the MEASURED ones, as on the car;
+        ``wheel_odom_rate_hz`` thins the publishing, never the integration."""
+        accel = 0.0
+        if self._previous_wheel_speed_mps is not None:
+            accel = (speed_mps - self._previous_wheel_speed_mps) / self._env_timestep
+        self._previous_wheel_speed_mps = speed_mps
+        speed_mps = self._wheel_noise.measure(speed_mps, accel, self._noise_rng)
         self._wheel_distance_m += speed_mps * self._env_timestep
+        if not publish:
+            return
         msg = Odometry()
         msg.header.stamp = stamp
         msg.header.frame_id = _ODOM_FRAME_ID
@@ -770,6 +822,137 @@ class BridgeNode(Node):
             or self._lidar_num_beams > 0
         )
 
+    def _declare_localization_parameters(self) -> None:
+        """The localisation options (2026-11-03). Every default keeps the old behaviour."""
+
+        def described(description: str, low: float | None = None, high: float | None = None):
+            if low is None:
+                return ParameterDescriptor(description=description)
+            return ParameterDescriptor(
+                description=description,
+                floating_point_range=[FloatingPointRange(from_value=low, to_value=high, step=0.0)],
+            )
+
+        self._publish_ground_truth_tf = bool(
+            self.declare_parameter(
+                "publish_ground_truth_tf",
+                True,
+                described(
+                    "Broadcast the ground-truth map -> base_link on /tf every step. Default true. "
+                    "False for the localisation stack, which builds map -> odom -> base_link "
+                    "itself (slam_toolbox or AMCL, and the EKF)."
+                ),
+            ).value
+        )
+        self._base_link_offset_x_m = float(
+            self.declare_parameter(
+                "base_link_offset_x_m",
+                0.0,
+                described(
+                    "Where base_link sits ahead of the gym's pose (m; the gym's pose is the centre "
+                    "of gravity). 0.0 (default) keeps base_link at the gym's pose. The car's "
+                    "base_link is the rear axle, so the caller passes -cg_to_rear_axle_m from "
+                    "vehicle_params. Moves the ground-truth TF and the base_link -> laser static "
+                    "transform; /sim/ground_truth_odom stays at the gym's pose.",
+                    -2.0,
+                    2.0,
+                ),
+            ).value
+        )
+        self._wheel_noise = WheelSpeedNoise(
+            scale=float(
+                self.declare_parameter(
+                    "wheel_speed_scale",
+                    1.0,
+                    described(
+                        "Multiplies the simulated /odom/wheel speed: a tyre radius error. 1.0 "
+                        "(default) is exact.",
+                        0.5,
+                        1.5,
+                    ),
+                ).value
+            ),
+            noise_std_mps=float(
+                self.declare_parameter(
+                    "wheel_speed_noise_std_mps",
+                    0.0,
+                    described("White noise on /odom/wheel speed (m/s). Default 0.", 0.0, 1.0),
+                ).value
+            ),
+            slip_s=float(
+                self.declare_parameter(
+                    "wheel_slip_s",
+                    0.0,
+                    described(
+                        "Wheelspin: adds this times the longitudinal acceleration to the wheel "
+                        "speed (s). Default 0.",
+                        0.0,
+                        1.0,
+                    ),
+                ).value
+            ),
+        )
+        self._wheel_odom_rate_hz = float(
+            self.declare_parameter(
+                "wheel_odom_rate_hz",
+                0.0,
+                described(
+                    "Publish /odom/wheel at about this rate (the VESC driver's is 50 Hz). 0.0 "
+                    "(default) = every step.",
+                    0.0,
+                    1000.0,
+                ),
+            ).value
+        )
+        self._scan_rate_hz = float(
+            self.declare_parameter(
+                "scan_rate_hz",
+                0.0,
+                described(
+                    "Publish /scan at about this rate (the C1's is 10 Hz). 0.0 (default) = every "
+                    "step.",
+                    0.0,
+                    1000.0,
+                ),
+            ).value
+        )
+        self._scan_noise_std_m = float(
+            self.declare_parameter(
+                "scan_noise_std_m",
+                0.0,
+                described(
+                    "Extra white range noise on /scan (m), on top of the gym's own 0.01 m. "
+                    "Default 0.",
+                    0.0,
+                    1.0,
+                ),
+            ).value
+        )
+        self._scan_range_max_m = float(
+            self.declare_parameter(
+                "scan_range_max_m",
+                0.0,
+                described(
+                    "Maximum range of /scan (m): returns beyond it become +inf (no return) and "
+                    "range_max says so. 0.0 (default) keeps the gym's own.",
+                    0.0,
+                    100.0,
+                ),
+            ).value
+        )
+        self._steering_offset_rad = float(
+            self.declare_parameter(
+                "steering_offset_rad",
+                0.0,
+                described(
+                    "Servo trim error: the gym steers to /drive's angle plus this (rad, left "
+                    "positive). Default 0.",
+                    -0.2,
+                    0.2,
+                ),
+            ).value
+        )
+
     def _publish_map_once(self) -> None:
         """Publish ``/sim/map`` once (transient_local latches it for later subscribers).
 
@@ -823,7 +1006,7 @@ class BridgeNode(Node):
         transform.child_frame_id = _LASER_FRAME_ID
         # The mounted LiDAR's pose relative to the gym's pose when one is configured (roadmap
         # 2.9); identity otherwise.
-        transform.transform.translation.x = self._lidar_offset_x_m
+        transform.transform.translation.x = self._lidar_offset_x_m - self._base_link_offset_x_m
         (
             transform.transform.rotation.x,
             transform.transform.rotation.y,
@@ -842,6 +1025,14 @@ def main(args: list[str] | None = None) -> None:
     node = BridgeNode()
     try:
         rclpy.spin(node)
+    except RuntimeError:
+        # GitHub issue 50: a SIGINT that lands while rclpy is taking a message surfaces as
+        # "RuntimeError: Unable to convert call argument to Python object" from inside rclpy's
+        # take_message, after rclpy's own SIGINT handler has already shut the context down. Seen
+        # twice in one local run of the L5 jobs (2026-11-03), always at test teardown. Only that
+        # case is swallowed: with the context still up it is a real error and is re-raised.
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
         # rclpy installs its own SIGINT handler that already calls

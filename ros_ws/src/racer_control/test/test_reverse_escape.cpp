@@ -463,5 +463,79 @@ TEST(ReverseEscape, GarbageTimeIsNoTime) {
   EXPECT_EQ(escape.forward_blocked_s(), 0.0);
 }
 
+// -- Refused too long (2026-11-02, the 2026-10-24 deadlock) ---------------------------------
+
+ReverseEscapeConfig refused_config(double refused_after_s = 5.0) {
+  ReverseEscapeConfig c = config();
+  c.refused_escape_after_s = refused_after_s;
+  return c;
+}
+
+TEST(ReverseEscapeRefusedTooLong, TheDeadlockOf2026_10_24EscapesAfterTheRefusalTime) {
+  // Bag 2026-10-24T23-13-18, 89.6 to 225 s: a floor brake nearly straight ahead, the follower
+  // still requesting 0.68 m/s at steering 0.03 and seeing a clear arc (path not blocked), so
+  // the probe rule never fired and the car sat for 136 s. With escape_refused_after_s 5 s it
+  // backs out 5 s after the refusal began.
+  Harness h(refused_config(5.0));
+  int started = -1;
+  for (int i = 0; i < cycles(136.0); ++i) {
+    const EscapeOutput out = h.step(0.68, false, 0.03, blocks_forward_passes_reverse);
+    if (out.event == EscapeEvent::kStarted) {
+      started = i;
+      break;
+    }
+  }
+  ASSERT_GE(started, 0);
+  EXPECT_NEAR(started * kDt, 5.0 + kDt, 2.0 * kDt);
+  EXPECT_TRUE(h.escape.started_on_refusal());
+  // Steering opposite to the wanted (slightly left) forward steering, as for any escape.
+  EXPECT_DOUBLE_EQ(h.escape.escape_steering_rad(), -kMaxSteer);
+  EXPECT_LT(h.last_request, 0.0);
+}
+
+TEST(ReverseEscapeRefusedTooLong, BeforeTheRefusalTimeTheProbeRuleStillDecides) {
+  Harness h(refused_config(5.0));
+  for (int i = 0; i < cycles(4.9); ++i) {
+    EXPECT_FALSE(h.step(0.5, false, 0.3, blocks_forward_passes_reverse).active) << i;
+  }
+  EXPECT_TRUE(h.events.empty());
+  // A blocked path still escapes at escape_after_s, and says so.
+  Harness blocked(refused_config(5.0));
+  ASSERT_GE(run_until_start(blocked), 0);
+  EXPECT_FALSE(blocked.escape.started_on_refusal());
+}
+
+TEST(ReverseEscapeRefusedTooLong, ARefusalTimeBelowEscapeAfterWaitsForEscapeAfter) {
+  Harness h(refused_config(0.5));
+  int started = -1;
+  for (int i = 0; i < cycles(5.0); ++i) {
+    if (h.step(0.5, false, 0.3, blocks_forward_passes_reverse).event == EscapeEvent::kStarted) {
+      started = i;
+      break;
+    }
+  }
+  EXPECT_NEAR(started * kDt, 1.5 + kDt, 2.0 * kDt);
+}
+
+TEST(ReverseEscapeRefusedTooLong, StillBoundedByTheAttemptLimit) {
+  // The car backs out, drives forward less than escape_distance_m, is refused again: after
+  // escape_max_attempts of that it holds, exactly as with a blocked path.
+  Harness h(refused_config(2.0));
+  int starts = 0;
+  bool exhausted = false;
+  for (int i = 0; i < cycles(60.0) && !exhausted; ++i) {
+    const EscapeOutput out = h.step(0.5, false, 0.3, blocks_forward_passes_reverse);
+    starts += out.event == EscapeEvent::kStarted ? 1 : 0;
+    exhausted = out.event == EscapeEvent::kExhausted;
+  }
+  EXPECT_TRUE(exhausted);
+  EXPECT_EQ(starts, 3);
+  EXPECT_EQ(h.escape.state(), EscapeState::kExhausted);
+}
+
+TEST(ReverseEscapeRefusedTooLong, TheDefaultIsTheOldRule) {
+  EXPECT_TRUE(std::isinf(ReverseEscapeConfig{}.refused_escape_after_s));
+}
+
 }  // namespace
 }  // namespace racer_control

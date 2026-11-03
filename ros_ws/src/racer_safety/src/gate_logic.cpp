@@ -83,6 +83,26 @@ bool is_valid_range(double range_m) {
 // gate was written; a numerical zero guard, not a physical constant).
 constexpr double kMinForwardSpeedMps = 1e-6;
 
+// A fresh measured speed (GateInput::measured_speed_mps), or 0 when there is none or it is not
+// finite: a garbage measurement adds nothing, the request and the output bound still apply.
+double measured_speed_or_zero(const std::optional<double>& measured_mps) {
+  if (!measured_mps.has_value()) {
+    return 0.0;
+  }
+  if (!std::isfinite(*measured_mps)) {
+    return 0.0;
+  }
+  return *measured_mps;
+}
+
+// The larger of two speeds (explicit branch for the coverage gate).
+double larger(double a, double b) {
+  if (b > a) {
+    return b;
+  }
+  return a;
+}
+
 // Garbage range: NaN, zero, negative or -inf. +inf is NOT garbage (it is "nothing in the
 // path"), and neither is a finite positive distance. Written as !(r > 0) so NaN
 // lands here without its own branch.
@@ -280,13 +300,45 @@ double SafetyGateLogic::ttc_release_threshold_s() const {
   return *limits_.ttc_brake_s * limits_.ttc_release_hysteresis_factor;
 }
 
+double SafetyGateLogic::next_speed_bound_mps(double bound_in_mps, double previous_toward_mps,
+                                             double dt_s) const {
+  // gate_logic.hpp "SPEED FOR THE TTC". The last output toward this side, or what is left of an
+  // earlier, faster output after decelerating at the configured rate since. Unset deceleration:
+  // the feature is off and the bound is 0 (the TTC uses the request alone, the pre-0.13.0 rule).
+  double toward_mps = 0.0;
+  if (previous_toward_mps > 0.0) {  // NaN lands on 0, never propagates
+    toward_mps = previous_toward_mps;
+  }
+  if (!limits_.speed_bound_deceleration_mps2.has_value()) {
+    return 0.0;
+  }
+  double carried_mps = 0.0;
+  // A garbage carried bound (non-finite, which no path here produces) or a garbage deceleration
+  // (non-finite, zero or negative, which the schema refuses) keeps no memory: the bound is the
+  // last output alone, never NaN and never a bound that cannot decay.
+  if (std::isfinite(bound_in_mps)) {
+    if (std::isfinite(*limits_.speed_bound_deceleration_mps2)) {
+      if (*limits_.speed_bound_deceleration_mps2 > 0.0) {
+        carried_mps = bound_in_mps - *limits_.speed_bound_deceleration_mps2 * dt_s;
+      }
+    }
+  }
+  if (carried_mps > toward_mps) {
+    return carried_mps;
+  }
+  return toward_mps;
+}
+
 bool SafetyGateLogic::apply_obstacle_gate(double direction, GateSource source, double range_m,
                                           bool latched_in, const DriveCommand& requested,
-                                          DriveCommand& target, GateResult& result) const {
+                                          double estimate_toward_mps, DriveCommand& target,
+                                          GateResult& result) const {
   // One implementation for both directions (gate_logic.hpp "THE REAR OBSTACLE GATE"):
-  // direction +1.0 is the forward gate, -1.0 the rear gate. No state estimator (/odom) feeds
-  // safety_node yet (the EKF is roadmap phase 2), so the REQUESTED speed toward this side is
-  // the speed estimate. A request away from this side, or stopped, is never braked by it.
+  // direction +1.0 is the forward gate, -1.0 the rear gate. Whether the gate judges at all is
+  // decided by the REQUEST: a request away from this side, or stopped, is never braked by it.
+  // The speed the TTC divides by is the request's, raised to `estimate_toward_mps` (the decaying
+  // bound of recent outputs and, when fresh, the measured wheel speed) when the car may still be
+  // moving faster than it is now asked to (gate_logic.hpp "SPEED FOR THE TTC").
   const bool reverse = direction < 0.0;
   const double toward_mps = direction * requested.speed_mps;
   const double speed_toward_mps = toward_mps > 0.0 ? toward_mps : 0.0;
@@ -294,13 +346,18 @@ bool SafetyGateLogic::apply_obstacle_gate(double direction, GateSource source, d
   if (speed_toward_mps > kMinForwardSpeedMps) {
     moving_toward = true;
   }
+  double ttc_speed_mps = speed_toward_mps;
+  if (estimate_toward_mps > ttc_speed_mps) {
+    ttc_speed_mps = estimate_toward_mps;
+  }
   const bool obstacle = is_valid_range(range_m);  // finite and > 0
 
-  // TTC of the REQUEST. +inf when there is no obstacle or the request is not toward it.
+  // TTC of the REQUEST (at the estimated speed when that is higher). +inf when there is no
+  // obstacle or the request is not toward it.
   double ttc_s = std::numeric_limits<double>::infinity();
   if (obstacle) {
     if (moving_toward) {
-      ttc_s = range_m / speed_toward_mps;
+      ttc_s = range_m / ttc_speed_mps;
     }
   }
 
@@ -405,6 +462,13 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   // in.
   result.ttc_brake_latched = input.ttc_brake_latched;
   result.reverse_brake_latched = input.reverse_brake_latched;
+  // The speed bounds ("SPEED FOR THE TTC") advance on every path, short-circuits included: they
+  // follow what was actually commanded, whatever this cycle decides.
+  const double dt_s = safe_dt(input.dt_s);
+  result.speed_bound_forward_mps =
+      next_speed_bound_mps(input.speed_bound_forward_mps, previous_output.speed_mps, dt_s);
+  result.speed_bound_reverse_mps =
+      next_speed_bound_mps(input.speed_bound_reverse_mps, -previous_output.speed_mps, dt_s);
 
   // 1. Watchdog (claude-docs/04-architecture.md: "missing /drive_raw for 3 cycles -> brake
   // command") -- short-circuits everything else below; a stale/garbage age means there is no
@@ -460,21 +524,22 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   // gate_logic.hpp "THE OBSTACLE GATE AND ITS LATCH" for why this runs BEFORE the rate
   // limiter and on the request, not the output (the 2026-10-06 limit cycle). Then the rear
   // gate, the same logic mirrored for a reverse request on the rear corridor with its own
-  // latch (gate_logic.hpp "THE REAR OBSTACLE GATE").
+  // latch (gate_logic.hpp "THE REAR OBSTACLE GATE"). The TTC speed is raised to the speed
+  // estimate when that is higher ("SPEED FOR THE TTC").
   const DriveCommand requested = cmd;
   DriveCommand target = requested;
-  result.ttc_brake_latched =
-      apply_obstacle_gate(1.0, GateSource::kTtc, input.min_scan_range_m, input.ttc_brake_latched,
-                          requested, target, result);
-  result.reverse_brake_latched =
-      apply_obstacle_gate(-1.0, GateSource::kTtcReverse, input.min_rear_scan_range_m,
-                          input.reverse_brake_latched, requested, target, result);
+  const double measured_mps = measured_speed_or_zero(input.measured_speed_mps);
+  result.ttc_brake_latched = apply_obstacle_gate(
+      1.0, GateSource::kTtc, input.min_scan_range_m, input.ttc_brake_latched, requested,
+      larger(result.speed_bound_forward_mps, measured_mps), target, result);
+  result.reverse_brake_latched = apply_obstacle_gate(
+      -1.0, GateSource::kTtcReverse, input.min_rear_scan_range_m, input.reverse_brake_latched,
+      requested, larger(result.speed_bound_reverse_mps, -measured_mps), target, result);
 
   // 3c. Rate-limit clamp relative to the previous OUTPUT (what was actually commanded last
   // cycle, not what was requested), applied to whatever the obstacle gate left, then
   // re-clamp to absolute bounds defensively. Braking to zero is a decrease and is never
   // rate-limited, so a latched brake reaches the output on the cycle it engages.
-  const double dt_s = safe_dt(input.dt_s);
   DriveCommand rate_limited = rate_limit(target, previous_output, dt_s);
   rate_limited = clamp_to_bounds(rate_limited);
 

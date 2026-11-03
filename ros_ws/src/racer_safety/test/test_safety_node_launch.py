@@ -50,6 +50,7 @@ import rclpy
 import yaml
 from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
+from nav_msgs.msg import Odometry
 from racer_msgs.msg import SafetyEvent
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
@@ -93,10 +94,20 @@ _BAG_RANGE_M = 0.22
 # so the TTC half of the gate is what engages) and raise the request until its TTC sits at
 # 80 percent of the threshold. At the original 0.5 s this is the bag's own 0.48 m/s.
 _MIN_FORWARD_CLEARANCE_M = _VEHICLE_PARAMS["limits"]["min_forward_clearance_m"]
-# The clearance floor moved from 0.20 m to 0.40 m on 2026-10-06 (crawl-speed pass), above the
-# bag's 0.22 m. Keep the wall 20 percent beyond the configured floor so the TTC half of the
-# gate is still what engages, and raise the request so its TTC stays under the threshold.
-_SCENARIO_RANGE_M = max(_BAG_RANGE_M, 1.2 * _MIN_FORWARD_CLEARANCE_M)
+# Since schema 0.13.0 every forward distance the gate judges is measured from the swept BODY
+# (forward_sector.hpp "DISTANCE FROM THE BODY"): straight ahead, from the front bumper line,
+# wheelbase_m + front_overhang_m from the rear axle, which is this far ahead of the head. A
+# scenario that places a wall at a gate distance d puts it at d + this from the head.
+_LIDAR_MOUNT_X_M = _VEHICLE_PARAMS["sensors"]["lidar"]["mount_x_m"]
+_BUMPER_AHEAD_OF_HEAD_M = (
+    _VEHICLE_PARAMS["chassis"]["wheelbase_m"]
+    + _VEHICLE_PARAMS["chassis"]["front_overhang_m"]
+    - _LIDAR_MOUNT_X_M
+)
+# The bag's 0.22 m from the head is 0.045 m off the bumper, under the 0.05 m floor. Keep the
+# wall 20 percent beyond the configured floor (gate distance, from the bumper) so the TTC half
+# of the gate is still what engages, and raise the request so its TTC stays under the threshold.
+_SCENARIO_RANGE_M = max(_BAG_RANGE_M - _BUMPER_AHEAD_OF_HEAD_M, 1.2 * _MIN_FORWARD_CLEARANCE_M)
 _SCENARIO_REQUEST_MPS = max(_BAG_REQUEST_MPS, _SCENARIO_RANGE_M / (0.8 * _TTC_BRAKE_S))
 # Steering hold on the obstacle latch (schema 0.8.0, gate_logic.hpp "STEERING HOLD WHILE PARKED
 # ON THE OBSTACLE LATCH"): read from the committed yaml like the thresholds above, so the test
@@ -106,7 +117,6 @@ assert _STEERING_HOLD_AFTER_S is not None and _STEERING_HOLD_AFTER_S >= 0.0
 # Rear corridor (schema 0.10.0, forward_sector.hpp "REAR CORRIDOR"): a reverse request's distance
 # is measured from the rear bumper line, chassis.rear_overhang_m behind the rear axle, which is
 # sensors.lidar.mount_x_m behind the head. Read from the committed yaml like everything above.
-_LIDAR_MOUNT_X_M = _VEHICLE_PARAMS["sensors"]["lidar"]["mount_x_m"]
 _REAR_OVERHANG_M = _VEHICLE_PARAMS["chassis"]["rear_overhang_m"]
 
 
@@ -571,9 +581,12 @@ class TestSafetyNode(unittest.TestCase):
         )
 
         events.clear()
-        # ttc = 0.05 m / ~5 m/s = 0.01 s, far below the committed brake threshold.
-        self.assertLess(0.05 / 5.0, _TTC_BRAKE_S)
-        close_scan = _make_scan(range_m=0.05)
+        # A wall 0.10 m off the front bumper (the gate measures from the body since schema
+        # 0.13.0): ttc = 0.10 m / ~5 m/s = 0.02 s, far below the committed brake threshold. A
+        # uniform circle 0.05 m round the head, which this test used before, is inside the car's
+        # own footprint and now rightly counts for nothing.
+        self.assertLess(0.10 / 5.0, _TTC_BRAKE_S)
+        close_scan = _make_wall_scan(distance_m=_BUMPER_AHEAD_OF_HEAD_M + 0.10)
         self._publish_steadily(
             drive_raw_pub, forward_cmd, seconds=1.0, scan_pub=scan_pub, scan=close_scan
         )
@@ -629,10 +642,10 @@ class TestSafetyNode(unittest.TestCase):
         request = _make_drive(steering=0.0, speed=_SCENARIO_REQUEST_MPS)
         self.assertLess(_SCENARIO_RANGE_M / _SCENARIO_REQUEST_MPS, _TTC_BRAKE_S)
         self.assertGreater(_SCENARIO_RANGE_M, _MIN_FORWARD_CLEARANCE_M)
-        # A flat wall at the bag's distance, not a uniform circle: with the corridor (schema
-        # 0.9.0) a circle of radius 0.22 m reads as x = 0.22 cos(0.6) = 0.18 m at the sector
-        # edge, under the clearance floor, so the floor rather than TTC would engage.
-        bag_scan = _make_wall_scan(distance_m=_SCENARIO_RANGE_M)
+        # A flat wall at the scenario's distance off the bumper, not a uniform circle: with the
+        # corridor (schema 0.9.0) a circle reads closer at the sector edge, under the clearance
+        # floor, so the floor rather than TTC would engage.
+        bag_scan = _make_wall_scan(distance_m=_BUMPER_AHEAD_OF_HEAD_M + _SCENARIO_RANGE_M)
         # Settle: the brake engages within a cycle or two of the scan arriving, and the steering
         # hold (a ttc INFO engage, 2026-10-06 late) follows limits.obstacle_steering_hold_after_s
         # later. Both must be engaged before the window opens, so that "no ttc engage inside the
@@ -690,9 +703,9 @@ class TestSafetyNode(unittest.TestCase):
 
         held_angle = 0.2
         far_scan = _make_scan(range_m=100.0)
-        # Inside the clearance floor: any forward request latches.
+        # Inside the clearance floor, measured from the bumper: any forward request latches.
         park_range_m = _MIN_FORWARD_CLEARANCE_M * 0.5
-        park_scan = _make_scan(range_m=park_range_m)
+        park_scan = _make_wall_scan(distance_m=_BUMPER_AHEAD_OF_HEAD_M + park_range_m)
         request_mps = 0.5
 
         # Clear road first (also releases any latch a previous test left behind).
@@ -800,9 +813,12 @@ class TestSafetyNode(unittest.TestCase):
         # floor so TTC, not the floor, engages. Further out the full-lock-LEFT arc clears the
         # segment by more, not less. The request is raised with the wall so the wall's TTC
         # stays at 80 percent of the configured brake threshold as that threshold is tuned.
-        wall_m = max(0.33, 1.15 * _MIN_FORWARD_CLEARANCE_M)
-        request_mps = max(1.0, wall_m / (0.8 * _TTC_BRAKE_S))
-        self.assertLess(wall_m / request_mps, _TTC_BRAKE_S)
+        # Since schema 0.13.0 the gate distance is from the bumper: the bag's 0.33 m from the head
+        # is wall_gap_m off the bumper.
+        wall_m = max(0.33, _BUMPER_AHEAD_OF_HEAD_M + 1.15 * _MIN_FORWARD_CLEARANCE_M)
+        wall_gap_m = wall_m - _BUMPER_AHEAD_OF_HEAD_M
+        request_mps = max(1.0, wall_gap_m / (0.8 * _TTC_BRAKE_S))
+        self.assertLess(wall_gap_m / request_mps, _TTC_BRAKE_S)
         # From 15 cm right of the centreline out to 0.6 m right: in the straight corridor
         # (half width 0.205 m), and clear of the full-lock-LEFT arc including the outer
         # (right) front corner's sweep (forward_sector.hpp "OUTER BOUNDARY", 1.053 m from the
@@ -813,8 +829,7 @@ class TestSafetyNode(unittest.TestCase):
         # the gtest's clear_wall(). With the 0.40 m floor the wall sat at 0.46 m, outside the
         # sweep even from 2 cm; the 0.30 m floor (schema 0.11.1) brought it inside.
         wall_scan = _make_segment_scan(x_m=wall_m, y_from_m=-0.15, y_to_m=-0.60)
-        self.assertLess(wall_m / request_mps, _TTC_BRAKE_S)
-        self.assertGreater(wall_m, _MIN_FORWARD_CLEARANCE_M)
+        self.assertGreater(wall_gap_m, _MIN_FORWARD_CLEARANCE_M)
         far_scan = _make_scan(range_m=100.0)
 
         # Clear road first (also releases any latch a previous test left behind).
@@ -961,6 +976,75 @@ class TestSafetyNode(unittest.TestCase):
         self.assertLess(drive_out[-1].drive.speed, -0.4, "reverse did not come back after release")
 
         # Leave the node stopped with a forward-only scan, like the other tests expect.
+        self._publish_steadily(
+            drive_raw_pub,
+            _make_drive(steering=0.0, speed=0.0),
+            seconds=0.5,
+            scan_pub=scan_pub,
+            scan=_make_scan(range_m=100.0),
+        )
+
+    def test_wheel_odometry_raises_the_ttc_speed_and_is_optional(self):
+        """2026-11-02 (gate_logic.hpp "SPEED FOR THE TTC", the 2026-10-24 wall-follow contact).
+        A wall 0.30 m off the bumper and a steady 0.5 m/s request: TTC 0.6 s, no brake. The same
+        request with /odom/wheel saying the car is doing 1.2 m/s: TTC 0.25 s, brake. /odom/wheel
+        goes silent: once it is stale the request decides again and the latch releases. The
+        odometry publisher is RELIABLE like racer_drivers/vesc_odometry_node, which proves the
+        node's best_effort subscription matches it; every other test runs with no /odom/wheel
+        at all, the optional path."""
+        drive_out = []
+        self.node.create_subscription(
+            AckermannDriveStamped, "/drive", drive_out.append, _reliable_qos()
+        )
+        events = []
+        self.node.create_subscription(SafetyEvent, "/safety/events", events.append, _reliable_qos())
+        drive_raw_pub = self.node.create_publisher(
+            AckermannDriveStamped, "/drive_raw", _reliable_qos()
+        )
+        scan_pub = self.node.create_publisher(LaserScan, "/scan", _best_effort_qos())
+        odom_pub = self.node.create_publisher(Odometry, "/odom/wheel", _reliable_qos())
+        self._spin_for(0.3)
+
+        request = _make_drive(steering=0.0, speed=0.5)
+        wall_gap_m = 0.30
+        self.assertGreater(wall_gap_m / 0.5, _TTC_WARNING_S)  # releases on the request alone
+        self.assertLess(wall_gap_m / 1.2, _TTC_BRAKE_S)  # trips on the measured speed
+        wall = _make_wall_scan(distance_m=_BUMPER_AHEAD_OF_HEAD_M + wall_gap_m)
+        # Clear road, long enough for any earlier test's output speed bound to decay.
+        self._publish_steadily(
+            drive_raw_pub, request, seconds=2.5, scan_pub=scan_pub, scan=_make_scan(100.0)
+        )
+        # The wall, no odometry: the request's TTC (0.6 s) passes.
+        events.clear()
+        self._publish_steadily(drive_raw_pub, request, seconds=1.0, scan_pub=scan_pub, scan=wall)
+        self.assertGreater(drive_out[-1].drive.speed, 0.4, "braked without odometry")
+        self.assertEqual(
+            [e for e in _engages(events, "ttc") if e.severity == SafetyEvent.SEVERITY_BRAKE], []
+        )
+
+        # The car is measured at 1.2 m/s.
+        odom = Odometry()
+        odom.twist.twist.linear.x = 1.2
+        end = time.time() + 1.0
+        while time.time() < end:
+            drive_raw_pub.publish(request)
+            scan_pub.publish(wall)
+            odom_pub.publish(odom)
+            rclpy.spin_once(self.node, timeout_sec=0.02)
+        self.assertEqual(drive_out[-1].drive.speed, 0.0, "the measured speed did not raise TTC")
+        self.assertGreaterEqual(
+            len([e for e in _engages(events, "ttc") if e.severity == SafetyEvent.SEVERITY_BRAKE]),
+            1,
+        )
+
+        # /odom/wheel goes silent: stale after wheel_odom_timeout_s, the latch releases.
+        self._publish_steadily(drive_raw_pub, request, seconds=1.5, scan_pub=scan_pub, scan=wall)
+        self.assertGreaterEqual(
+            len([e for e in _releases(events, "ttc") if e.severity == SafetyEvent.SEVERITY_BRAKE]),
+            1,
+            "the latch did not release once /odom/wheel went stale",
+        )
+        self.assertGreater(drive_out[-1].drive.speed, 0.4, "speed did not come back")
         self._publish_steadily(
             drive_raw_pub,
             _make_drive(steering=0.0, speed=0.0),

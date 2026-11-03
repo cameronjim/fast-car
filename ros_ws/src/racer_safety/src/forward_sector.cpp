@@ -100,16 +100,18 @@ double clamp_symmetric(double value, double bound) {
 }
 
 // Straight corridor: a head-relative return (x ahead, y left) is in the path if it is ahead of
-// the head and within the half width of the car's centreline. Distance: x, from the head.
-std::optional<double> straight_corridor_distance_m(double x, double y, double half_width_m,
+// the reference line and within the half width of the car's centreline. `ahead_m` is the
+// return's distance ahead of that line: x itself with the legacy head reference, x + mount_x -
+// body_front_x with the body reference (forward_sector.hpp "DISTANCE FROM THE BODY").
+std::optional<double> straight_corridor_distance_m(double ahead_m, double y, double half_width_m,
                                                    double mount_y_m) {
-  if (x <= 0.0) {
+  if (ahead_m <= 0.0) {
     return std::nullopt;
   }
   if (std::abs(y + mount_y_m) > half_width_m) {
     return std::nullopt;
   }
-  return x;
+  return ahead_m;
 }
 
 // Rear straight corridor (forward_sector.hpp "REAR CORRIDOR"): mirrored rear-axle frame
@@ -127,20 +129,39 @@ std::optional<double> rear_straight_corridor_distance_m(double xm, double ym, do
   return behind_bumper_m;
 }
 
+// Arc angle, about the turn centre, of the body's LEADING point at distance rho_m from the
+// centre (forward_sector.hpp "DISTANCE FROM THE BODY"). Worked as a left turn in the frame where
+// the body is the rectangle x in [0, body_x_m] ahead of the rear axle and |y| <= half_width_m
+// (margin included), the centre at (0, |R|): a body point at radius rho has arc angle
+// asin(x / rho), so the leading one is the one with the largest x at that radius. That is on
+// the inner flank, x = sqrt(rho^2 - inner^2) with inner = |R| - half width, until it reaches
+// the bumper line, and on the bumper line (x = body_x_m) beyond. fmax / fmin, not branches:
+// the inner radius is clamped at 0 for a turn tighter than the half width (never on this car,
+// R >= 0.74 m) and the square roots are kept off rounding negatives.
+double leading_edge_arc_angle_rad(double rho_m, double abs_radius_m, double half_width_m,
+                                  double body_x_m) {
+  const double inner_m = std::fmax(abs_radius_m - half_width_m, 0.0);
+  const double flank_x_m = std::sqrt(std::fmax(rho_m * rho_m - inner_m * inner_m, 0.0));
+  const double lead_x_m = std::fmin(body_x_m, flank_x_m);
+  return std::atan2(lead_x_m, std::sqrt(std::fmax(rho_m * rho_m - lead_x_m * lead_x_m, 0.0)));
+}
+
 // Arc corridor (forward_sector.hpp "ARC CORRIDOR"): the rear axle follows a circle of signed
 // radius `radius_m` (left positive) about (0, radius_m) in the rear-axle frame. (xr, yr) is the
-// return in that frame and (ref_x, ref_y) the reference point the distance is measured from
-// (the head going forward; the rear bumper line's centre in the mirrored frame going backward,
-// "REAR CORRIDOR"). `body_x_m` is the x of the body's leading edge in that frame (the front
-// bumper line going forward, the rear bumper line going backward): its outer corner sets the
-// band's outer radius ("OUTER BOUNDARY"). Distance: the arc length the rear axle travels until
-// the reference point reaches the return's arc angle. A return in the OUTER-CORNER band (beyond
-// the body band's |R| + half width) counts only within `outer_corner_horizon_m` of that arc
-// length ("OUTER-CORNER HORIZON"); the body band counts out to the quarter turn.
+// return in that frame. `body_x_m` is the x of the body's leading edge in that frame (the front
+// bumper line going forward, the rear bumper line going backward, "REAR CORRIDOR"): its outer
+// corner sets the band's outer radius ("OUTER BOUNDARY"). Distance: the arc length the rear axle
+// travels until the reference reaches the return's arc angle. With `from_body` the reference is
+// the body's leading point at the return's own radius (leading_edge_arc_angle_rad, "DISTANCE
+// FROM THE BODY"); without it, the legacy fixed point (ref_x, ref_y): the head going forward,
+// the rear bumper line's centre in the mirrored frame going backward. A return in the
+// OUTER-CORNER band (beyond the body band's |R| + half width) counts only within
+// `outer_corner_horizon_m` of that arc length ("OUTER-CORNER HORIZON"); the body band counts
+// out to the quarter turn.
 std::optional<double> arc_corridor_distance_m(double xr, double yr, double half_width_m,
                                               double radius_m, double body_x_m,
-                                              double outer_corner_horizon_m, double ref_x,
-                                              double ref_y) {
+                                              double outer_corner_horizon_m, bool from_body,
+                                              double ref_x, double ref_y) {
   const double abs_radius_m = std::abs(radius_m);
   double turn_sign = 1.0;
   if (radius_m < 0.0) {
@@ -163,7 +184,12 @@ std::optional<double> arc_corridor_distance_m(double xr, double yr, double half_
   if (phi >= kHalfPi) {
     return std::nullopt;
   }
-  const double phi_ref = std::atan2(ref_x, abs_radius_m - turn_sign * ref_y);
+  double phi_ref = 0.0;
+  if (from_body) {
+    phi_ref = leading_edge_arc_angle_rad(rho_m, abs_radius_m, half_width_m, body_x_m);
+  } else {
+    phi_ref = std::atan2(ref_x, abs_radius_m - turn_sign * ref_y);
+  }
   const double arc_m = abs_radius_m * (phi - phi_ref);
   if (arc_m <= 0.0) {
     return std::nullopt;
@@ -280,12 +306,18 @@ double path_distance_m(const ScanGeometry& geometry, const std::vector<float>& r
       std::optional<double> in_path;
       if (!reverse) {
         if (straight) {
-          in_path = straight_corridor_distance_m(x, y, corridor_half_width_m, path.lidar_mount_y_m);
+          // Ahead of the head (legacy) or of the front bumper line (body reference).
+          double ahead_m = x;
+          if (path.distance_from_body) {
+            ahead_m = x + path.lidar_mount_x_m - path.body_front_x_m;
+          }
+          in_path =
+              straight_corridor_distance_m(ahead_m, y, corridor_half_width_m, path.lidar_mount_y_m);
         } else {
           in_path = arc_corridor_distance_m(x + path.lidar_mount_x_m, y + path.lidar_mount_y_m,
                                             corridor_half_width_m, radius_m, path.body_front_x_m,
-                                            path.outer_corner_horizon_m, path.lidar_mount_x_m,
-                                            path.lidar_mount_y_m);
+                                            path.outer_corner_horizon_m, path.distance_from_body,
+                                            path.lidar_mount_x_m, path.lidar_mount_y_m);
         }
       } else {
         // Mirrored rear-axle frame: behind the rear axle is +xm (forward_sector.hpp "REAR
@@ -296,9 +328,9 @@ double path_distance_m(const ScanGeometry& geometry, const std::vector<float>& r
           in_path =
               rear_straight_corridor_distance_m(xm, ym, corridor_half_width_m, rear_overhang_m);
         } else {
-          in_path =
-              arc_corridor_distance_m(xm, ym, corridor_half_width_m, radius_m, rear_overhang_m,
-                                      path.outer_corner_horizon_m, rear_overhang_m, 0.0);
+          in_path = arc_corridor_distance_m(xm, ym, corridor_half_width_m, radius_m,
+                                            rear_overhang_m, path.outer_corner_horizon_m,
+                                            path.distance_from_body, rear_overhang_m, 0.0);
         }
       }
       if (!in_path.has_value()) {

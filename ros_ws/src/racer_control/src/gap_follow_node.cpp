@@ -44,6 +44,26 @@
 // other command: this node NEVER publishes /drive (CLAUDE.md invariant 1), only reads it.
 // Without safety_node in the loop there is no gated /drive, so the escape never fires.
 //
+// REFUSED TOO LONG (2026-11-02, bag 2026-10-24T23-13-18, 89.6 to 225 s). With reverse_escape on,
+// a refusal that has lasted escape_refused_after_s (default 5 s) starts an escape even while the
+// follower's probe still sees a clear forward arc: on that bag the follower kept asking straight
+// ahead into a floor latch for 136 s because its swept-path clamp held the wanted turn at zero
+// while the probe found a steering that would have been clear (reverse_escape.hpp).
+//
+// THREADING (2026-11-02, the 2026-10-25 stutter). The scan callback (the perception half) and
+// the 50 Hz timer (the command half) run in two mutually exclusive callback groups on a
+// two-thread MultiThreadedExecutor, so a slow scan never delays a /drive_raw. On the 2026-10-25
+// bag 206 /drive_raw gaps of 63 to 69 ms (just over safety_node's 60 ms watchdog: a one-cycle
+// brake and a rate-limited re-ramp each time) all contained a scan arrival, and the length of
+// each gap tracked the follower's compute time on that scan (correlation 0.86 against the same
+// scans replayed through the lane_centre code the car ran): with one thread, the scan callback
+// (then 20 to 50 ms on the Jetson, the pre-PR-111 lane trace) blocked the timer. PR 111 made the
+// trace about 25 times cheaper; this keeps the timer on its own thread whatever perception
+// costs. The state the two share (the latest result, the forward-path flag, the target range
+// median, the scan freshness) sits behind one mutex, held only to copy it; the gated /drive
+// callback is in the timer's group. scan_processing_delay_s is TEST ONLY: it sleeps in the scan
+// callback to stand in for a slow scan (test_gap_follow_node_launch.py).
+//
 // Watchdog behaviour on /scan silence: this node STOPS PUBLISHING /drive_raw, exactly like
 // tracker_node does on /odom silence, for the same reason (see tracker_node.cpp's header):
 // claude-docs/04-architecture.md assigns the staleness watchdog to safety_node ("missing
@@ -97,11 +117,13 @@
 #include <cmath>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vehicle_params_generated.hpp>
 
 #include "racer_control/float32_wire_margin.hpp"
@@ -139,22 +161,35 @@ class GapFollowNode : public rclcpp::Node {
 
     build_escape();
     scan_.ranges.reserve(4096);
+    scan_processing_delay_s_ = declare_ranged_double(
+        *this, "scan_processing_delay_s", 0.0, 0.0, 1.0,
+        "TEST ONLY: sleep this long in the scan callback, standing in for a slow scan (the "
+        "threading test). Never set outside a test.");
+
+    // THREADING: perception and the command timer in separate groups (see the header).
+    scan_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    command_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rclcpp::SubscriptionOptions scan_options;
+    scan_options.callback_group = scan_group_;
+    rclcpp::SubscriptionOptions command_options;
+    command_options.callback_group = command_group_;
 
     const rclcpp::QoS scan_qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
     const rclcpp::QoS command_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-        "/scan", scan_qos, std::bind(&GapFollowNode::on_scan, this, std::placeholders::_1));
+        "/scan", scan_qos, std::bind(&GapFollowNode::on_scan, this, std::placeholders::_1),
+        scan_options);
     drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive_raw",
                                                                                     command_qos);
     if (escape_) {
       // The GATED command, read only (reverse escape). Never published here (invariant 1).
       gated_sub_ = this->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
           "/drive", command_qos,
-          std::bind(&GapFollowNode::on_gated_drive, this, std::placeholders::_1));
+          std::bind(&GapFollowNode::on_gated_drive, this, std::placeholders::_1), command_options);
     }
     timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                          std::chrono::duration<double>(control_period_s_)),
-                                     std::bind(&GapFollowNode::on_timer, this));
+                                     std::bind(&GapFollowNode::on_timer, this), command_group_);
 
     const GapFollowConfig& c = follower_.config();
     RCLCPP_INFO(this->get_logger(),
@@ -178,12 +213,13 @@ class GapFollowNode : public rclcpp::Node {
       RCLCPP_WARN(this->get_logger(),
                   "gap_follow_node: REVERSE ESCAPE ON: this node will command the car to "
                   "REVERSE on its own when safety_node has refused its forward request for "
-                  "%.2f s and no steering gives %.2f m of clear forward arc (%.2f m/s, steering "
+                  "%.2f s and no steering gives %.2f m of clear forward arc, or for %.2f s "
+                  "whatever the arc (%.2f m/s, steering "
                   "opposite to the wanted one at %.3f rad, up to %.2f m or %.1f s; retry after "
                   "%.1f s, at most %d attempts without forward progress). Reverse requests go "
                   "through safety_node's rear corridor like every other command.",
-                  e.escape_after_s, escape_probe_distance_m_, e.escape_speed_mps,
-                  e.escape_steering_rad, e.escape_distance_m, e.escape_max_s,
+                  e.escape_after_s, escape_probe_distance_m_, e.refused_escape_after_s,
+                  e.escape_speed_mps, e.escape_steering_rad, e.escape_distance_m, e.escape_max_s,
                   e.escape_retry_after_s, e.escape_max_attempts);
     } else {
       RCLCPP_INFO(this->get_logger(), "gap_follow_node: reverse escape off (reverse_escape false)");
@@ -427,6 +463,11 @@ class GapFollowNode : public rclcpp::Node {
         *this, "drive_feedback_timeout_s", 0.2, 0.02, 5.0,
         "The gated /drive counts as fresh for this long after its last message (s); stale "
         "/drive never starts an escape and aborts a running one.");
+    e.refused_escape_after_s = declare_ranged_double(
+        *this, "escape_refused_after_s", 5.0, 0.1, 600.0,
+        "Reverse escape: forward request refused by safety_node for this long starts an escape "
+        "even while the forward arc probe still sees a clear steering (s). Breaks the "
+        "2026-10-24 deadlock (reverse_escape.hpp REFUSED TOO LONG).");
     e.max_acceleration_mps2 = speed_command_.config().max_acceleration_mps2;
     if (!enabled) {
       return;
@@ -449,19 +490,30 @@ class GapFollowNode : public rclcpp::Node {
     has_gated_ = true;
   }
 
-  void log_escape_event(EscapeEvent event) {
+  void log_escape_event(EscapeEvent event, bool corner_blocked) {
     const ReverseEscape& e = *escape_;
     const ReverseEscapeConfig& c = e.config();
     switch (event) {
       case EscapeEvent::kStarted:
-        RCLCPP_INFO(this->get_logger(),
-                    "gap_follow_node: reverse escape %d/%d: forward request refused by "
-                    "safety_node for %.2f s and no clear forward arc for %.2f m (corner override "
-                    "%s); reversing at %.2f m/s with steering %+.3f rad for up to %.2f m or %.1f s",
-                    e.attempts(), c.escape_max_attempts, e.forward_blocked_s(),
-                    escape_probe_distance_m_, latest_.corner_blocked ? "on" : "off",
-                    c.escape_speed_mps, e.escape_steering_rad(), c.escape_distance_m,
-                    c.escape_max_s);
+        if (e.started_on_refusal()) {
+          RCLCPP_INFO(this->get_logger(),
+                      "gap_follow_node: reverse escape %d/%d: forward request refused by "
+                      "safety_node for %.2f s (escape_refused_after_s %.2f s) although the probe "
+                      "sees a clear forward arc; reversing at %.2f m/s with steering %+.3f rad "
+                      "for up to %.2f m or %.1f s",
+                      e.attempts(), c.escape_max_attempts, e.forward_blocked_s(),
+                      c.refused_escape_after_s, c.escape_speed_mps, e.escape_steering_rad(),
+                      c.escape_distance_m, c.escape_max_s);
+        } else {
+          RCLCPP_INFO(this->get_logger(),
+                      "gap_follow_node: reverse escape %d/%d: forward request refused by "
+                      "safety_node for %.2f s and no clear forward arc for %.2f m (corner "
+                      "override %s); reversing at %.2f m/s with steering %+.3f rad for up to "
+                      "%.2f m or %.1f s",
+                      e.attempts(), c.escape_max_attempts, e.forward_blocked_s(),
+                      escape_probe_distance_m_, corner_blocked ? "on" : "off", c.escape_speed_mps,
+                      e.escape_steering_rad(), c.escape_distance_m, c.escape_max_s);
+        }
         break;
       case EscapeEvent::kCompleted:
         RCLCPP_INFO(this->get_logger(),
@@ -525,27 +577,50 @@ class GapFollowNode : public rclcpp::Node {
                             result.wanted_steering_rad, result.steering_rad,
                             result.target_vehicle_bearing_rad);
     }
-    latest_ = result;
+    bool path_blocked = false;
     if (escape_) {
       // The follower's own view of the way forward, for the reverse escape: the corner
       // override fired, or no steering lets the body travel escape_probe_distance_m.
-      forward_path_blocked_ =
+      path_blocked =
           result.corner_blocked ||
           !any_forward_arc_clear(scan_, follower_.config().laser_yaw_offset_rad,
                                  VEHICLE_PARAMS.steering.max_angle_rad, escape_probe_distance_m_,
                                  probe_geometry_, probe_points_);
     }
+    if (scan_processing_delay_s_ > 0.0) {
+      // TEST ONLY (THREADING): a slow scan.
+      std::this_thread::sleep_for(std::chrono::duration<double>(scan_processing_delay_s_));
+    }
+    // Steady clock, never this->now(): see CLOCK POLICY.
+    const rclcpp::Time stamp = steady_clock_.now();
+    const std::lock_guard<std::mutex> lock(shared_mutex_);
+    latest_ = result;
+    forward_path_blocked_ = path_blocked;
     // Once per scan, not per control cycle: the window spans N scans (window 1 = this scan).
     target_range_m_ = target_range_median_.push(result.target_range_m);
-    // Steady clock, never this->now(): see CLOCK POLICY.
-    last_scan_steady_ = steady_clock_.now();
+    last_scan_steady_ = stamp;
     has_scan_ = true;
   }
 
   void on_timer() {
     const rclcpp::Time now = this->now();
     const rclcpp::Time steady_now = steady_clock_.now();
-    const bool stale = !has_scan_ || (steady_now - last_scan_steady_).seconds() > scan_timeout_s_;
+    // THREADING: copy what the scan callback shares, then work on the copies.
+    GapFollowResult latest;
+    bool forward_path_blocked = false;
+    double target_range_m = 0.0;
+    bool stale = true;
+    {
+      const std::lock_guard<std::mutex> lock(shared_mutex_);
+      stale = !has_scan_ || (steady_now - last_scan_steady_).seconds() > scan_timeout_s_;
+      if (stale) {
+        // Do not let target ranges from before the gap into the median.
+        target_range_median_.reset();
+      }
+      latest = latest_;
+      forward_path_blocked = forward_path_blocked_;
+      target_range_m = target_range_m_;
+    }
     if (stale) {
       if (!watchdog_active_) {
         RCLCPP_WARN(this->get_logger(),
@@ -555,10 +630,9 @@ class GapFollowNode : public rclcpp::Node {
         watchdog_active_ = true;
       }
       has_last_command_time_ = false;
-      // safety_node brakes the car during the silence, so ramp from rest on resume, and do
-      // not let target ranges from before the gap into the median.
+      // safety_node brakes the car during the silence, so ramp from rest on resume (the median
+      // was reset above, under the lock).
       speed_command_.reset();
-      target_range_median_.reset();
       // Nothing is being published: no escape survives the gap, and the last request is none.
       if (escape_) {
         escape_->reset();
@@ -584,11 +658,11 @@ class GapFollowNode : public rclcpp::Node {
       if (has_gated_ && (steady_now - last_gated_steady_).seconds() <= drive_feedback_timeout_s_) {
         in.gated_speed_mps = gated_speed_mps_;
       }
-      in.forward_path_blocked = forward_path_blocked_;
-      in.forward_steering_rad = latest_.wanted_steering_rad;
+      in.forward_path_blocked = forward_path_blocked;
+      in.forward_steering_rad = latest.wanted_steering_rad;
       const EscapeOutput e = escape_->update(in);
       if (e.event) {
-        log_escape_event(*e.event);
+        log_escape_event(*e.event, latest.corner_blocked);
       }
       if (e.active) {
         escaping = true;
@@ -599,9 +673,9 @@ class GapFollowNode : public rclcpp::Node {
       }
     }
     if (!escaping) {
-      steering = steering_filter_.update(latest_.steering_rad, dt_s);
+      steering = steering_filter_.update(latest.steering_rad, dt_s);
       // Range speed -> steering slowdown -> speed low-pass -> rate limiter (reactive_speed.hpp).
-      speed = speed_command_.update(target_range_m_, steering, dt_s);
+      speed = speed_command_.update(target_range_m, steering, dt_s);
     }
     if (!std::isfinite(steering) || !std::isfinite(speed)) {
       RCLCPP_ERROR(this->get_logger(),
@@ -630,7 +704,10 @@ class GapFollowNode : public rclcpp::Node {
   double control_period_s_{0.02};
   double scan_timeout_s_{0.3};
 
-  ScanInput scan_;
+  ScanInput scan_;  // scan callback only
+  // THREADING: shared between the scan callback and the timer, behind shared_mutex_ (with the
+  // forward-path flag, the target range and its median, and the scan freshness below).
+  std::mutex shared_mutex_;
   GapFollowResult latest_;
 
   // Reverse escape (empty unless reverse_escape is true).
@@ -646,6 +723,9 @@ class GapFollowNode : public rclcpp::Node {
   rclcpp::Time last_gated_steady_{0, 0, RCL_STEADY_TIME};
   rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr gated_sub_;
 
+  rclcpp::CallbackGroup::SharedPtr scan_group_;
+  rclcpp::CallbackGroup::SharedPtr command_group_;
+  double scan_processing_delay_s_{0.0};
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -664,7 +744,10 @@ int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   try {
     auto node = std::make_shared<racer_control::GapFollowNode>();
-    rclcpp::spin(node);
+    // Two threads: the scan group and the command group never wait for each other (THREADING).
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+    executor.add_node(node);
+    executor.spin();
   } catch (const std::exception& e) {
     RCLCPP_FATAL(rclcpp::get_logger("gap_follow_node"), "gap_follow_node: fatal error: %s",
                  e.what());

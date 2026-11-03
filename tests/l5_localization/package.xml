@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>l5_localization</name>
+  <version>0.1.0</version>
+  <description>
+    L5 sim-in-loop localisation canaries (docs/notes/localization-2026-11-03.md,
+    claude-docs/12-testing.md): racer_gym_bridge with its ground-truth TF off and the car's
+    sensor shapes and noise, racer_bringup's mapping and localization launch files (racer_state's
+    wheel_twist_node, robot_localization, slam_toolbox, nav2 AMCL), and racer_control's
+    tracker_node. A mapping canary compares a saved slam_toolbox map with the sim's map; the
+    localisation canaries drive laps on the AMCL pose and check its error against ground truth.
+    No library code: test hosting only (see .github/scripts/l5_localization_test.sh).
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>racer_gym_bridge</test_depend>
+  <test_depend>racer_control</test_depend>
+  <test_depend>racer_state</test_depend>
+  <test_depend>racer_bringup</test_depend>
+  <test_depend>robot_localization</test_depend>
+  <test_depend>slam_toolbox</test_depend>
+  <test_depend>nav2_amcl</test_depend>
+  <test_depend>nav2_map_server</test_depend>
+  <test_depend>nav2_lifecycle_manager</test_depend>
+  <test_depend>tf2_ros</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>python3-numpy</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

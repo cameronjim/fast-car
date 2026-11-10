@@ -135,6 +135,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rosdep update \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Localisation stack (added 2026-11-03, docs/notes/localization-2026-11-03.md) ----------
+# RUNTIME packages for racer_bringup's odometry / mapping / localization launch files, which
+# car_teleop.launch.py includes with mapping:=true or localization:=true:
+#   ros-humble-robot-localization: the EKF (wheel speed + modelled steering -> /odom and
+#     odom -> base_link). claude-docs/04-architecture.md: adopt, do not hand-write, the EKF.
+#   ros-humble-slam-toolbox: online async mapping, and its save_map service.
+#   ros-humble-nav2-amcl / ros-humble-nav2-map-server / ros-humble-nav2-lifecycle-manager:
+#     AMCL on a saved map (map -> odom, /pose), the map server it reads, and the lifecycle
+#     manager that activates both. AMCL stands in for the F1TENTH particle filter, which needs a
+#     hand-built CUDA range_libc with only community forks; it stays the fallback.
+# All five are in the ROS apt repo for arm64 (checked in the ros-dev image 2026-11-02). Same list
+# as docker/ros-dev/Dockerfile, so the L5 canaries test what the car runs. Both default to off
+# in car_teleop.launch.py, so .github/scripts/check_car_image_launch_packages.py does not need
+# them, but the car is where the first mapping session happens.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-robot-localization \
+        ros-humble-slam-toolbox \
+        ros-humble-nav2-amcl \
+        ros-humble-nav2-map-server \
+        ros-humble-nav2-lifecycle-manager \
+    && rm -rf /var/lib/apt/lists/*
+
 # --- LiDAR driver: sllidar_ros2 from source at a pinned commit (added 2026-10-05, 2.3) ---
 # The car's 2D LiDAR is a Slamtec RPLIDAR C1 (docs/notes/phase2-parts-2026-09-30.md section
 # A1). Its driver is Slamtec's own sllidar_ros2. There is no ros-humble-sllidar-ros2 apt

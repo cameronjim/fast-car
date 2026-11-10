@@ -99,6 +99,17 @@ cameras.launch.py HERE instead, for a car-stack started with the camera docker f
 way the recorder's regex takes /camera/.*/compressed (about 5 to 10 MB/s per camera at 720p60,
 ESTIMATED, see the runbook) and leaves the raw images out: rgb8 at 1280x720x60 is about
 166 MB/s per camera, more than a bag should take.
+
+MAPPING AND LOCALISATION ARE OFF BY DEFAULT (2026-11-03, docs/notes/localization-2026-11-03.md).
+`mapping:=true` includes mapping.launch.py (racer_state's wheel_twist_node, the
+robot_localization EKF on /odom, slam_toolbox building /map); `localization:=true map:=<yaml>`
+includes localization.launch.py instead (the same odometry, nav2_map_server and AMCL publishing
+map -> odom and /pose). Both need lidar:=true and vesc:=true: the EKF's speed comes from
+/odom/wheel and both map builders read /scan. Asking for both at once refuses to launch. Neither
+touches the command path: wheel_twist_node only READS /drive (the steering safety_node let
+through) to model where the wheels point. The recorder takes /odom, /odom/wheel_twist, /pose,
+/tf, /tf_static and /map, so a mapping or localisation run can be replayed offline. See
+docs/notes/first-boot-runbook.md "First mapping session".
 """
 
 import datetime
@@ -136,6 +147,11 @@ _CAMERAS_LAUNCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 #: vesc_telemetry.launch.py, found the same way as lidar.launch.py.
 _VESC_LAUNCH_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "vesc_telemetry.launch.py"
+)
+#: mapping.launch.py and localization.launch.py (2026-11-03), found the same way.
+_MAPPING_LAUNCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapping.launch.py")
+_LOCALIZATION_LAUNCH_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "localization.launch.py"
 )
 
 #: FIRST-DRIVE TELEOP PROFILE (GitHub issue #72). keyboard_teleop_node's tap sizes default to
@@ -196,10 +212,19 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.8
 #:                     image_raw is about 166 MB/s per camera at 720p60 and is NOT recorded.
 #:   /rosout           every node's log stream, in the same file as the data it explains
 #:   /parameter_events which parameters the run actually ran with
+#:   /odom, /odom/wheel_twist
+#:                     the EKF's odometry and the twist it fused, with mapping:=true or
+#:                     localization:=true (2026-11-03)
+#:   /pose             AMCL's pose with its covariance, with localization:=true
+#:   /tf, /tf_static   map -> odom -> base_link -> laser: the localised pose at every instant,
+#:                     and the LiDAR mount the run used
+#:   /map              slam_toolbox's map as it grew (mapping:=true), or map_server's latched
+#:                     copy (localization:=true); about 1 Hz, a few hundred kB each
 _RECORDED_TOPIC_REGEX = (
     r"^(/drive_raw|/drive|/safety/events|/teleop/cmd_vel|/telemetry/.*|/scan"
     r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core|/park_node/status"
-    r"|/camera/.*/compressed|/rosout|/parameter_events)$"
+    r"|/camera/.*/compressed|/rosout|/parameter_events"
+    r"|/odom|/odom/wheel_twist|/pose|/tf|/tf_static|/map)$"
 )
 
 
@@ -320,6 +345,30 @@ def _on_recorder_exit(event, context):
         LogInfo(msg=message),
         EmitEvent(event=Shutdown(reason="rosbag recorder exited (CLAUDE.md invariant 5)")),
     ]
+
+
+def _localization_actions(context):
+    """mapping.launch.py or localization.launch.py, at most one (they would both own map -> odom).
+
+    An OpaqueFunction rather than two IfConditions so that asking for both refuses at launch
+    instead of starting two nodes that fight over the same transform."""
+    mapping = LaunchConfiguration("mapping").perform(context).lower() == "true"
+    localization = LaunchConfiguration("localization").perform(context).lower() == "true"
+    if mapping and localization:
+        raise RuntimeError(
+            "car_teleop.launch.py: mapping:=true and localization:=true both own map -> odom; "
+            "pick one (map first, save it, then localise on it)"
+        )
+    if mapping:
+        return [IncludeLaunchDescription(PythonLaunchDescriptionSource(_MAPPING_LAUNCH_FILE))]
+    if localization:
+        return [
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(_LOCALIZATION_LAUNCH_FILE),
+                launch_arguments={"map": LaunchConfiguration("map")}.items(),
+            )
+        ]
+    return []
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -572,6 +621,30 @@ def generate_launch_description() -> LaunchDescription:
         ),
     )
 
+    mapping_arg = DeclareLaunchArgument(
+        "mapping",
+        default_value="false",
+        description=(
+            "Include mapping.launch.py: wheel_twist_node + robot_localization EKF (/odom) + "
+            "slam_toolbox (/map, map -> odom). Needs lidar:=true and vesc:=true. Save the map "
+            "with /slam_toolbox/save_map. Exclusive with localization."
+        ),
+    )
+    localization_arg = DeclareLaunchArgument(
+        "localization",
+        default_value="false",
+        description=(
+            "Include localization.launch.py on map:=<yaml>: the same odometry plus "
+            "nav2_map_server and AMCL (map -> odom, /pose). Needs lidar:=true and vesc:=true. "
+            "Exclusive with mapping."
+        ),
+    )
+    map_arg = DeclareLaunchArgument(
+        "map",
+        default_value="",
+        description="Map yaml for localization:=true (a slam_toolbox save_map output).",
+    )
+
     safety_node = Node(
         package="racer_safety",
         executable="safety_node",
@@ -713,6 +786,9 @@ def generate_launch_description() -> LaunchDescription:
             vesc_serial_port_arg,
             cameras_arg,
             camera_usb_device_arg,
+            mapping_arg,
+            localization_arg,
+            map_arg,
             # rail_voltage_node BEFORE the recorder so its topics exist by the time
             # `ros2 bag record --regex` does its first discovery pass, and the recorder
             # before the command-path nodes for the same reason: rosbag2 does keep
@@ -727,6 +803,9 @@ def generate_launch_description() -> LaunchDescription:
             # Same reasoning as the LiDAR: after the recorder, which picks the compressed
             # camera topics up once they appear.
             cameras_launch,
+            # Mapping or localisation (both off by default), after the recorder like every other
+            # sensor-side include.
+            OpaqueFunction(function=_localization_actions),
             safety_node,
             pwm_output_node,
             teleop_node,

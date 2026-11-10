@@ -168,6 +168,25 @@ RUN bash -c 'source /opt/ros/humble/setup.bash \
     && ros2 interface show vesc_msgs/msg/VescStateStamped > /dev/null \
     && python3 -c "from vesc_msgs.msg import VescStateStamped"'
 
+# --- Localisation stack (added 2026-11-03, docs/notes/localization-2026-11-03.md) ----------
+# ros-humble-robot-localization: the ekf_node racer_state's odometry runs (wheel speed plus
+#   modelled steering in, /odom and odom -> base_link out). claude-docs/04-architecture.md
+#   says adopt, do not hand-write, the EKF.
+# ros-humble-slam-toolbox: online async mapping (racer_bringup mapping.launch.py).
+# ros-humble-nav2-amcl / ros-humble-nav2-map-server / ros-humble-nav2-lifecycle-manager:
+#   AMCL localisation on a saved map (racer_bringup localization.launch.py). AMCL stands in
+#   for the F1TENTH particle filter named in 04-architecture.md, which needs a hand-built CUDA
+#   range_libc; see the note for the reasoning.
+# Same list as docker/car/Dockerfile, so the L5 localisation canaries run what the car runs.
+# A separate layer so adding it did not invalidate the cached layers above.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-robot-localization \
+        ros-humble-slam-toolbox \
+        ros-humble-nav2-amcl \
+        ros-humble-nav2-map-server \
+        ros-humble-nav2-lifecycle-manager \
+    && rm -rf /var/lib/apt/lists/*
+
 # Pin the uv binary itself to the same version used to generate uv.lock
 # locally (matches sim-cpu/train-cuda), so `uv sync --locked` resolves the
 # lockfile the same way here as it did during development.

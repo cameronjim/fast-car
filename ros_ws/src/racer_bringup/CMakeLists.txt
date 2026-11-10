@@ -36,6 +36,10 @@ if(BUILD_TESTING)
   # car_teleop.launch.py's `cameras` argument and recorder regex. Description inspection only:
   # usb_cam and gscam are installed in the car image, not in ros-dev, and are never started.
   ament_add_pytest_test(test_camera_launch test/test_camera_launch.py)
+  # L1 check of odometry / mapping / localization.launch.py and car_teleop.launch.py's mapping,
+  # localization and map arguments and recorder regex (2026-11-03). Description inspection
+  # only; tests/l5_localization runs them for real against the sim.
+  ament_add_pytest_test(test_localization_launch test/test_localization_launch.py)
 
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_car_teleop_launch.py

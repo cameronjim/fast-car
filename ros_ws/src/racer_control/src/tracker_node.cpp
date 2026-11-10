@@ -63,8 +63,35 @@
 // `racer_control::clamp_for_float32_publish` (`include/racer_control/float32_wire_margin.hpp`)
 // keeps the PUBLISHED value a small, fixed margin inside the real bound; it does not change
 // what `PurePursuitController` computed internally.
+//
+// POSE SOURCE (2026-11-03 localisation, docs/notes/localization-2026-11-03.md). The raceline is
+// written in the map frame. Two parameters, defaults unchanged:
+//
+//   * `odom_topic` (default /odom): the Odometry this node follows. The sim canaries that drive
+//     on ground truth point it at /sim/ground_truth_odom instead of remapping.
+//   * `pose_frame` (default empty): empty uses the Odometry's pose as is (ground truth is
+//     already in map). Set to "map" when following the EKF's /odom, whose pose is in the odom
+//     frame: the node then looks up `pose_frame` -> <the Odometry's header.frame_id> (map ->
+//     odom, published by AMCL or slam_toolbox) from TF and composes it with the /odom pose
+//     (racer_control::compose). The lookup runs on its own timer and caches plain doubles, so
+//     the 50 Hz control callback stays allocation-free (claude-docs/10-conventions.md).
+//
+// Why compose here rather than a separate node turning /pose + /odom into a map-frame
+// Odometry: AMCL's /pose only comes out when the filter updates (every 0.1 m of travel) and
+// carries the filter's latency, while its map -> odom transform is republished on every scan
+// and the EKF's odom -> base_link runs at 100 Hz. Composing the latest map -> odom with the
+// latest /odom is exactly the map-frame pose nav2's own controllers use, at the EKF's rate, with
+// no extra process or topic. The /odom watchdog above is unchanged and still the freshness gate;
+// on top of it, a map -> odom whose stamp is more than `pose_frame_timeout_s` older than the
+// /odom sample it is composed with (both are data stamps on the same ROS clock, so no elapsed
+// time is measured on it) counts as stale and stops /drive_raw the same way.
+#include <tf2/exceptions.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <chrono>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <memory>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rcl_interfaces/msg/floating_point_range.hpp>
@@ -75,6 +102,7 @@
 #include <vehicle_params_generated.hpp>
 
 #include "racer_control/float32_wire_margin.hpp"
+#include "racer_control/pose2d.hpp"
 #include "racer_control/pure_pursuit.hpp"
 #include "racer_control/raceline.hpp"
 #include "racer_control/speed_rate_limiter.hpp"
@@ -93,8 +121,25 @@ class TrackerNode : public rclcpp::Node {
         has_last_command_time_(false) {
     const rclcpp::QoS command_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
 
+    rcl_interfaces::msg::ParameterDescriptor odom_topic_descriptor;
+    odom_topic_descriptor.description =
+        "Odometry to follow. Default /odom (the EKF). See this file's POSE SOURCE comment.";
+    const std::string odom_topic =
+        this->declare_parameter<std::string>("odom_topic", "/odom", odom_topic_descriptor);
+    rcl_interfaces::msg::ParameterDescriptor pose_frame_descriptor;
+    pose_frame_descriptor.description =
+        "Empty (default): use the Odometry's pose as is. Otherwise the raceline's frame (map): "
+        "the pose is TF pose_frame -> <Odometry header.frame_id> composed with the Odometry "
+        "pose. See this file's POSE SOURCE comment.";
+    pose_frame_ = this->declare_parameter<std::string>("pose_frame", "", pose_frame_descriptor);
+    pose_frame_timeout_s_ = declare_positive_double(
+        "pose_frame_timeout_s", 1.0,
+        "With pose_frame set: a pose_frame -> odom transform stamped more than this before the "
+        "/odom sample counts as stale and stops /drive_raw. AMCL republishes it every scan "
+        "(10 Hz) and future-dates it by its transform_tolerance.");
+
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        "/odom", command_qos, std::bind(&TrackerNode::on_odom, this, std::placeholders::_1));
+        odom_topic, command_qos, std::bind(&TrackerNode::on_odom, this, std::placeholders::_1));
     drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive_raw",
                                                                                     command_qos);
 
@@ -111,8 +156,22 @@ class TrackerNode : public rclcpp::Node {
     timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
                                      std::bind(&TrackerNode::on_timer, this));
 
-    RCLCPP_INFO(this->get_logger(), "tracker_node up: %zu raceline point(s), %.1f Hz control rate",
-                raceline_.size(), control_rate_hz);
+    if (!pose_frame_.empty()) {
+      tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+      tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
+      const double lookup_rate_hz = declare_positive_double(
+          "pose_frame_lookup_rate_hz", 25.0,
+          "With pose_frame set: how often the pose_frame -> odom transform is looked up.");
+      lookup_timer_ =
+          this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::duration<double>(1.0 / lookup_rate_hz)),
+                                  std::bind(&TrackerNode::on_lookup_timer, this));
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+                "tracker_node up: %zu raceline point(s), %.1f Hz control rate, following %s%s%s",
+                raceline_.size(), control_rate_hz, odom_topic.c_str(),
+                pose_frame_.empty() ? "" : " composed into frame ", pose_frame_.c_str());
   }
 
  private:
@@ -214,6 +273,30 @@ class TrackerNode : public rclcpp::Node {
     return SpeedRateLimiter(VEHICLE_PARAMS.actuation.max_acceleration_mps2 * margin_fraction);
   }
 
+  void on_lookup_timer() {
+    // Off the control path: TF lookups allocate. Only plain doubles cross to on_timer().
+    if (!has_odom_) {
+      return;
+    }
+    if (odom_frame_id_ != last_odom_.header.frame_id) {
+      odom_frame_id_ = last_odom_.header.frame_id;
+    }
+    try {
+      const geometry_msgs::msg::TransformStamped tf =
+          tf_buffer_->lookupTransform(pose_frame_, odom_frame_id_, tf2::TimePointZero);
+      const auto& q = tf.transform.rotation;
+      frame_from_odom_.x_m = tf.transform.translation.x;
+      frame_from_odom_.y_m = tf.transform.translation.y;
+      frame_from_odom_.yaw_rad = yaw_from_quaternion(q.w, q.x, q.y, q.z);
+      frame_from_odom_stamp_s_ = rclcpp::Time(tf.header.stamp).seconds();
+      has_frame_from_odom_ = true;
+    } catch (const tf2::TransformException& e) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                           "tracker_node: no %s -> %s transform yet: %s", pose_frame_.c_str(),
+                           odom_frame_id_.c_str(), e.what());
+    }
+  }
+
   void on_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
     last_odom_ = *msg;
     // Steady clock, NOT this->now() -- see this file's CLOCK POLICY comment. Only ever the
@@ -250,10 +333,33 @@ class TrackerNode : public rclcpp::Node {
     }
 
     const auto& pose = last_odom_.pose.pose;
-    const double yaw = yaw_from_quaternion(pose.orientation.w, pose.orientation.x,
-                                           pose.orientation.y, pose.orientation.z);
+    Pose2D vehicle{pose.position.x, pose.position.y,
+                   yaw_from_quaternion(pose.orientation.w, pose.orientation.x, pose.orientation.y,
+                                       pose.orientation.z)};
+    if (!pose_frame_.empty()) {
+      const double odom_stamp_s = rclcpp::Time(last_odom_.header.stamp).seconds();
+      const bool frame_stale =
+          !has_frame_from_odom_ || odom_stamp_s - frame_from_odom_stamp_s_ > pose_frame_timeout_s_;
+      if (frame_stale) {
+        if (!pose_frame_stale_) {
+          RCLCPP_WARN(this->get_logger(),
+                      "tracker_node: %s -> odom transform missing or stale (> %.3fs behind "
+                      "/odom); stopping /drive_raw until localisation is back.",
+                      pose_frame_.c_str(), pose_frame_timeout_s_);
+          pose_frame_stale_ = true;
+        }
+        has_last_command_time_ = false;
+        return;
+      }
+      if (pose_frame_stale_) {
+        RCLCPP_INFO(this->get_logger(), "tracker_node: %s -> odom transform fresh; resuming.",
+                    pose_frame_.c_str());
+        pose_frame_stale_ = false;
+      }
+      vehicle = compose(frame_from_odom_, vehicle);
+    }
     const PurePursuitCommand cmd =
-        controller_.compute_command(raceline_, pose.position.x, pose.position.y, yaw);
+        controller_.compute_command(raceline_, vehicle.x_m, vehicle.y_m, vehicle.yaw_rad);
 
     // Rate-limit the raw commanded speed to the vehicle's own acceleration bound before
     // publishing (see racer_control/include/racer_control/speed_rate_limiter.hpp's header
@@ -308,6 +414,18 @@ class TrackerNode : public rclcpp::Node {
 
   double control_period_s_{0.02};
   bool has_last_command_time_;
+
+  // POSE SOURCE (see the top of this file). Empty pose_frame_ = none of this is used.
+  std::string pose_frame_;
+  double pose_frame_timeout_s_{1.0};
+  std::string odom_frame_id_;
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
+  rclcpp::TimerBase::SharedPtr lookup_timer_;
+  Pose2D frame_from_odom_;
+  double frame_from_odom_stamp_s_{0.0};
+  bool has_frame_from_odom_{false};
+  bool pose_frame_stale_{false};
 };
 
 }  // namespace racer_control

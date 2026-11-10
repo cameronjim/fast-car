@@ -211,8 +211,10 @@ def test_recorder_regex_keeps_the_vesc_topics(topic):
     assert re.fullmatch(regex, topic), topic
 
 
+# "/odom" itself used to be here; it is recorded on purpose since 2026-11-03 (the EKF's output,
+# docs/notes/localization-2026-11-03.md), so the anchoring check uses "/odom_raw" instead.
 @pytest.mark.parametrize(
-    "topic", ["/odom", "/odom/wheel_extra", "/vesc/sensors/imu", "/park_node/status_extra"]
+    "topic", ["/odom_raw", "/odom/wheel_extra", "/vesc/sensors/imu", "/park_node/status_extra"]
 )
 def test_recorder_regex_is_still_anchored(topic):
     regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX

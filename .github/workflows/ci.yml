@@ -264,6 +264,27 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_park_test.sh"
 
+  l5-localization:
+    name: L5 localisation canaries (slam_toolbox map + AMCL laps on the localised pose, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # 2026-11-03 (docs/notes/localization-2026-11-03.md): the bridge's ground-truth TF off, the
+    # car's sensor shapes and noise on, racer_bringup's mapping and localization launch files
+    # (racer_state's wheel_twist_node, robot_localization, slam_toolbox, nav2 AMCL). A mapping
+    # canary compares a saved slam_toolbox map of a living-room lane track with the sim's map;
+    # two localisation canaries drive tracker_node on the AMCL pose (gym_oval at the car's 2.91
+    # m/s cap, and the lane track) and check the pose error against ground truth. Same
+    # workspace-combination pattern as l5-park (see .github/scripts/l5_localization_test.sh); a
+    # sibling job so the canaries fail independently.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 localisation workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_localization_test.sh"
+
   e2e-sim-safety:
     name: Milestone 1 e2e (bridge_node + safety_node, real command path, ros-dev + gym)
     runs-on: ubuntu-latest

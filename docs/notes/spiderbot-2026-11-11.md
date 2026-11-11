@@ -83,8 +83,8 @@ slower on a non-Super Orin Nano (lower clocks). TensorRT stays out of scope (CLA
 |---|---|
 | Base | `nvcr.io/nvidia/l4t-jetpack:r36.4.0@sha256:34ccf0f3...` (3.4 GB compressed, pulled once) |
 | Wheels | torch 2.8.0 (226 MB) and torchvision 0.23.0 from the Jetson AI Lab `jp6/cu126` index, sha256 in the Dockerfile. The NVIDIA tree has one JetPack 6.1 torch wheel (2.5.0a0) and no torchvision. |
-| Image size | skip build TBD_SKIP_SIZE, perception build TBD_PERC_SIZE (`docker images`, uncompressed; the Jetson's earlier 10.2 GB figure was before the localisation and camera layers) |
-| Build time | TBD_BUILD_TIME from `--no-cache` with the base image already local; the two new layers alone take about 75 s when the layers below are cached |
+| Image size | skip build 18 GB, perception build 19.9 GB (+1.9 GB) (`docker images`, uncompressed; the Jetson's earlier 10.2 GB figure was before the localisation and camera layers) |
+| Build time | 357 s (6 min) from `--no-cache` with the base image already local, whole image; the two new layers alone take about 75 s when the layers below are cached |
 | Verified | imports; `ldd` of every torch library finds everything except `libcuda.so.1`, which the NVIDIA runtime supplies on the Jetson; hadolint clean |
 | Not verified | `torch.cuda.is_available()`, any CUDA kernel, the 6.1 userspace on the 6.2.1 host (still the open question in `docker/car/README.md`), build time on the Jetson itself |
 

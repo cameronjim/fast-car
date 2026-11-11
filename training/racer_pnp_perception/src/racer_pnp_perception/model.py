@@ -9,6 +9,7 @@ module writes (`to_npz_arrays`).
 
 from __future__ import annotations
 
+import itertools
 from typing import Any
 
 import numpy as np
@@ -52,7 +53,7 @@ def build_model(channels: tuple[int, ...] = CHANNELS, hidden: int = HIDDEN) -> A
                     padding=PAD,
                     padding_mode="circular",
                 )
-                for c_in, c_out in zip(channels[:-1], channels[1:], strict=True)
+                for c_in, c_out in itertools.pairwise(channels)
             )
             self.fc0 = nn.Linear(flat_features(channels), hidden)
             self.fc1 = nn.Linear(hidden, STATIONS * OUT_PER_STATION)
@@ -95,12 +96,14 @@ def to_npz_arrays(model: Any) -> dict[str, NDArray[Any]]:
     return out
 
 
-def loss_fn(pred: Any, target: Any, width_huber_delta: float = 0.1, width_weight: float = 5.0) -> Any:
+def loss_fn(
+    pred: Any, target: Any, width_huber_delta: float = 0.1, width_weight: float = 5.0
+) -> Any:
     """Gaussian negative log likelihood on (x, y) with the predicted sigma of each station, plus a
     Huber loss on the two half widths. pred and target are [B, 16, 5]; the target's log_sigma
     column is unused."""
     import torch
-    import torch.nn.functional as functional
+    from torch.nn import functional
 
     log_sigma = pred[..., 4].clamp(-7.0, 3.0)
     err2 = (pred[..., 0] - target[..., 0]) ** 2 + (pred[..., 1] - target[..., 1]) ** 2

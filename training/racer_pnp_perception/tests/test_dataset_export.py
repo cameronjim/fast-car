@@ -114,7 +114,7 @@ def test_finalize_writes_metrics_pointer_and_fixture(tmp_path: Path, live: LiveV
     stored = json.loads((pointer / "metrics.json").read_text())
     assert stored["verdict"].startswith("net fails") and stored["median"] is None
     readme = (pointer / "README.md").read_text()
-    assert "net fails, use backend:=geometric tonight" in readme and "—" not in readme
+    assert "net fails, use backend:=geometric tonight" in readme and chr(0x2014) not in readme
     manifest = yaml.safe_load((bundle / "manifest.yaml").read_text())
     assert manifest["metrics"]["a"] == 1.5
     release = repo / "ros_ws/src/racer_track_perception/test/fixtures/bundle_release"

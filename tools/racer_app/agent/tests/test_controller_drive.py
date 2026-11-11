@@ -542,3 +542,134 @@ def test_status_survives_docker_being_down(env):
 def test_heartbeat_unknown_when_systemctl_is_missing(env):
     env.runner.responders.insert(0, lambda argv: (127, "") if argv[0] == "systemctl" else None)
     assert env.controller.snapshot(fresh=True).heartbeat_active is None
+
+
+# -- Plug-and-Play -------------------------------------------------------------------------------
+
+
+def make_pnp_bundle(env, name, kind="dynamics"):
+    folder = env.settings.pnp_models_dir / name
+    folder.mkdir(parents=True)
+    (folder / "manifest.yaml").write_text(f"kind: {kind}\n")
+    return folder
+
+
+def wire_pnp(car, dynamics=("dyn-v0-2026-11-12",), perception=("trackperc-v0-2026-11-12",)):
+    for name in dynamics:
+        make_pnp_bundle(car, name, "dynamics")
+    for name in perception:
+        make_pnp_bundle(car, name, "track_perception")
+    launch = car.repo / "ros_ws/src/racer_bringup/launch"
+    launch.mkdir(parents=True, exist_ok=True)
+    (launch / "pnp.launch.py").write_text("")
+
+
+def test_pnp_is_disabled_without_a_dynamics_bundle(car):
+    status = car.controller.pnp_status()
+    assert not status["available"] and "no dynamics bundle" in status["reason"]
+    with pytest.raises(ActionError, match="Plug-and-Play is disabled: no dynamics bundle") as exc:
+        car.controller.start_drive("pnp", pnp_backend="geometric")
+    assert exc.value.status == 409
+    assert not detached_execs(car)
+
+
+def test_pnp_is_disabled_without_the_launch_file(car):
+    make_pnp_bundle(car, "dyn-v0-2026-11-12")
+    status = car.controller.pnp_status()
+    assert not status["available"] and "pnp.launch.py" in status["reason"]
+
+
+def test_pnp_lists_bundles_by_kind_and_ignores_the_rest(car):
+    wire_pnp(car, dynamics=("dyn-a", "dyn-b"), perception=("trackperc-a",))
+    base = car.settings.pnp_models_dir
+    (base / "no-manifest").mkdir()
+    (base / "bad-yaml").mkdir()
+    (base / "bad-yaml" / "manifest.yaml").write_text(": : [\n")
+    (base / "not-a-mapping").mkdir()
+    (base / "not-a-mapping" / "manifest.yaml").write_text("- 1\n")
+    make_pnp_bundle(car, "other-kind", "lap_memory")
+    (base / "stray-file").write_text("x")
+    status = car.controller.pnp_status()
+    assert status["available"] is True and status["reason"] == ""
+    assert status["dynamics"] == ["dyn-a", "dyn-b"]
+    assert status["perception"] == ["trackperc-a"]
+    assert status["backends"] == ["net", "geometric"]
+    assert status["speed_range"] == [0.2, 1.5]
+    assert car.controller.options()["pnp"] == status
+
+
+def test_pnp_starts_with_the_geometric_backend_and_needs_no_pose(car):
+    wire_pnp(car)
+    result = car.controller.start_drive("pnp", pnp_backend="geometric", pnp_v_max_mps=0.4)
+    assert result["mode"] == "pnp:geometric"
+    command = detached_execs(car)[0][-1]
+    assert "ros2 launch racer_bringup pnp.launch.py" in command
+    assert "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0-2026-11-12" in command
+    assert "backend:=geometric v_max_mps:=0.40" in command
+    assert "perception_bundle" not in command
+    assert car.last_log()["action"] == "drive.start.pnp" and car.last_log()["ok"]
+
+
+def test_pnp_net_backend_names_both_bundles(car):
+    wire_pnp(car)
+    car.controller.start_drive("pnp", pnp_backend="net")
+    command = detached_execs(car)[0][-1]
+    assert "perception_bundle:=/workspace/data/pnp/models/trackperc-v0-2026-11-12" in command
+    assert "backend:=net v_max_mps:=0.50" in command
+
+
+def test_pnp_net_backend_without_a_perception_bundle_is_refused(car):
+    wire_pnp(car, perception=())
+    with pytest.raises(ActionError, match="needs a perception bundle") as exc:
+        car.controller.start_drive("pnp", pnp_backend="net")
+    assert exc.value.status == 400 and not detached_execs(car)
+
+
+def test_pnp_with_several_bundles_must_be_told_which_and_only_accepts_listed_ones(car):
+    wire_pnp(car, dynamics=("dyn-a", "dyn-b"), perception=("tp-a", "tp-b"))
+    with pytest.raises(ActionError, match="choose a dynamics bundle"):
+        car.controller.start_drive("pnp", pnp_backend="geometric")
+    with pytest.raises(ActionError, match="choose a dynamics bundle"):
+        car.controller.start_drive("pnp", pnp_dynamics="../../etc", pnp_backend="geometric")
+    with pytest.raises(ActionError, match="needs a perception bundle"):
+        car.controller.start_drive("pnp", pnp_dynamics="dyn-b", pnp_backend="net")
+    car.controller.start_drive(
+        "pnp", pnp_dynamics="dyn-b", pnp_perception="tp-b", pnp_backend="net"
+    )
+    command = detached_execs(car)[0][-1]
+    assert "dynamics_bundle:=/workspace/data/pnp/models/dyn-b" in command
+    assert "perception_bundle:=/workspace/data/pnp/models/tp-b" in command
+
+
+def test_pnp_refuses_a_bad_backend_or_speed_before_anything_starts(car):
+    wire_pnp(car)
+    with pytest.raises(ActionError, match="backend must be one of") as exc:
+        car.controller.start_drive("pnp", pnp_backend="classical")
+    assert exc.value.status == 400
+    for speed in (0.1, 2.0):
+        with pytest.raises(ActionError, match="speed cap") as exc:
+            car.controller.start_drive("pnp", pnp_backend="geometric", pnp_v_max_mps=speed)
+        assert exc.value.status == 400
+    assert not detached_execs(car)
+
+
+def test_pnp_goes_through_the_same_pre_drive_gate_and_recorder_check(car):
+    wire_pnp(car)
+    car.world.recorder = False
+    with pytest.raises(ActionError, match="invariant 5") as exc:
+        car.controller.start_drive(
+            "pnp", pnp_backend="geometric", override=True, override_reason="in a hurry"
+        )
+    assert exc.value.data["overridable"] is False
+    assert not detached_execs(car)
+
+
+def test_pnp_one_launch_at_a_time_and_stop_all_stops_it(car):
+    wire_pnp(car)
+    car.controller.start_drive("pnp", pnp_backend="geometric")
+    with pytest.raises(ActionError, match="already running"):
+        car.controller.start_drive("pnp", pnp_backend="geometric")
+    with pytest.raises(ActionError, match="already running"):
+        car.controller.start_drive("gap_follow")
+    car.controller.stop_all()
+    assert car.controller.drive_mode() is None

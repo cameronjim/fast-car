@@ -15,7 +15,7 @@ The design is in `claude-docs/13-plug-and-play.md` (not in git).
 | B. Dynamics | 130 | `racer_pnp_dynamics`: bicycle model reference, bundle export, the `dyn-nominal-v0` fixture used by the sim canary. |
 | C. MPPI planner | 133 | `racer_planner`: C++ ROS-free MPPI core, bundle loader with golden rollout check, `mppi_planner_node`, `mppi_bench`. Publishes `/drive_raw` only. |
 | D. Lap memory | 131 | `racer_laps` v0. Not used by tonight's launch. |
-| Bring-up | BRINGUP_PR | `pnp.launch.py` (starts the two nodes and nothing else, refuses to start without a rosbag recorder in the graph, shuts down if either node exits), `/pnp/.*` in the recorder regex, the `l5-pnp` canary and this note. |
+| Bring-up | 134 | `pnp.launch.py` (starts the two nodes and nothing else, refuses to start without a rosbag recorder in the graph, shuts down if either node exits), `/pnp/.*` in the recorder regex, the `l5-pnp` canary and this note. |
 | App | 132 | A `pnp` drive mode in the racer app (whitelisted command, same pre-drive gate, recorder check and STOP ALL). Not needed for the first test: use the launch command below. |
 
 The command path is the one in the architecture, unchanged: `mppi_planner_node` publishes

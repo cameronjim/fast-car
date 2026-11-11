@@ -139,6 +139,17 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/check_safety_replay_cli.py"
             --cli "$<TARGET_FILE:safety_replay_cli>"
   )
+
+  # safety_node exits cleanly on SIGINT while /scan, /drive_raw and /odom/wheel keep streaming,
+  # repeated (test/check_safety_node_sigint.py). CI saw exit code -11 at shutdown on 2026-11-10;
+  # a segfault in the safety node is never an allowed exit.
+  add_test(
+    NAME test_safety_node_sigint
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/check_safety_node_sigint.py"
+            --exe "$<TARGET_FILE:safety_node>" --iterations 20
+  )
+  set_tests_properties(test_safety_node_sigint PROPERTIES TIMEOUT 300)
 endif()
 
 ament_package()

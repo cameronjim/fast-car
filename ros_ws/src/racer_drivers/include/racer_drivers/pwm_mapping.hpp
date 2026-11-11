@@ -32,6 +32,13 @@ struct PwmCalibration {
   double max_us{0.0};
 };
 
+/// One point of the calibrated steering table (vehicle_params steering.pwm_to_angle_table): the
+/// real road-wheel angle, left positive, a pulse of `pwm_us` produces.
+struct SteeringTablePoint {
+  double pwm_us{0.0};
+  double angle_rad{0.0};
+};
+
 /// Everything the mapping needs. Built by the node from vehicle_params + declared ROS
 /// parameters; never hand-populated with literals outside tests.
 struct MappingConfig {
@@ -43,6 +50,15 @@ struct MappingConfig {
   /// the left-hand limit (positive).
   double steering_min_angle_rad{0.0};
   double steering_max_angle_rad{0.0};
+
+  /// vehicle_params steering.pwm_to_angle_table, as given (pulse ascending). Empty means the
+  /// table is null: each side is then a straight line from neutral to its pulse end, with the two
+  /// angle limits above at the ends. With a table, a commanded angle is mapped to the pulse that
+  /// produces that REAL angle (piecewise-linear inverse of the table), so an asymmetric steering
+  /// rack gives the commanded angle on both sides, and the two angle limits above only clip the
+  /// command (validate_config() requires the table to cover them). The pulse is still clamped to
+  /// [steering.min_us, steering.max_us].
+  std::vector<SteeringTablePoint> steering_table;
 
   /// Full-scale speed reference for the provisional open-loop throttle map:
   /// vehicle_params actuation.throttle_full_scale_mps. A command at +this maps to
@@ -139,7 +155,9 @@ std::optional<std::string> find_missing_fields(const std::vector<RequiredField>&
 
 /// Structural sanity on an assembled config: finite values, min < neutral < max on both
 /// channels, a two-sided steering range (min < 0 < max), a positive speed full scale, a
-/// positive speed cap, a positive timeout, a throttle deadband that leaves a linear span on both
+/// positive speed cap, a steering table (when given) that is finite, ordered, consistent with
+/// the pulse ends, neutral and the pulse side of left, and wide enough to cover the angle
+/// limits, a positive timeout, a throttle deadband that leaves a linear span on both
 /// sides of neutral, frame periods long enough for their longest pulse, and achieved frame
 /// periods within kMaxAchievedPeriodDeviation of the requested ones. Returns std::nullopt when the
 /// config is usable, else the reason. This is a refusal, not a repair: nothing here clamps a bad
@@ -184,11 +202,13 @@ struct PulsePair {
 
 /// Map a road-wheel angle (rad, left positive) to a steering pulse width (us).
 /// Non-finite input maps to neutral (fail closed). Finite input is clamped to
-/// [steering_min_angle_rad, steering_max_angle_rad] and then interpolated linearly from
-/// neutral_us out to whichever pulse end `left_is_pwm_max` says is left. Interpolating each
-/// side from neutral separately (rather than one line across the whole range) keeps the
-/// zero-angle command exactly on the calibrated neutral even when the calibration is
-/// asymmetric, which matters because neutral is the fail-closed output.
+/// [steering_min_angle_rad, steering_max_angle_rad]. With no table it is then interpolated
+/// linearly from neutral_us out to whichever pulse end `left_is_pwm_max` says is left.
+/// Interpolating each side from neutral separately (rather than one line across the whole
+/// range) keeps the zero-angle command exactly on the calibrated neutral even when the
+/// calibration is asymmetric, which matters because neutral is the fail-closed output. With a
+/// table (`steering_table`) the angle is looked up in the table instead, piecewise linearly,
+/// and zero is still exactly neutral.
 double steering_angle_to_pulse_us(const MappingConfig& config, double steering_angle_rad);
 
 /// Map a commanded speed (m/s) to a throttle pulse width (us).

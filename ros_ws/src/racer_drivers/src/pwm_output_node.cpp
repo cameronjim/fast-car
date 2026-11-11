@@ -307,6 +307,12 @@ class PwmOutputNode : public rclcpp::Node {
     config.speed_full_scale_mps = *VEHICLE_PARAMS.actuation.throttle_full_scale_mps;
     config.speed_cap_mps = VEHICLE_PARAMS.limits.global_speed_cap_mps;
     config.left_is_pwm_max = (left_bound == "pwm_max_us");
+    // The per-side steering calibration (null keeps the straight line from neutral to each stop).
+    if (VEHICLE_PARAMS.steering.pwm_to_angle_table.has_value()) {
+      for (const auto& point : *VEHICLE_PARAMS.steering.pwm_to_angle_table) {
+        config.steering_table.push_back({point.pwm_us, point.angle_rad});
+      }
+    }
     config.drive_timeout_s = drive_timeout_s;
     config.steering_pwm_period_us = VEHICLE_PARAMS.actuation.steering_pwm_period_us;
     config.throttle_pwm_period_us = VEHICLE_PARAMS.actuation.throttle_pwm_period_us;

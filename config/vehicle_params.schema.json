@@ -179,7 +179,7 @@
         "nominal_radius_m": {
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 0.5,
           "units": "m",
-          "description": "Nominal wheel/tire radius. MEASURED and drift-tracked (tires wear); null until measured, see sysid/drift/."
+          "description": "Nominal wheel/tire radius (HALF the tyre diameter: the 2026-11-10 calibration found the diameter had been entered here). MEASURED and drift-tracked (tires wear); null until measured, see sysid/drift/. Consumed by racer_drivers/vesc_odometry_node (ERPM to m/s) together with drivetrain.gear_ratio, and by actuation.throttle_full_scale_mps, which is derived from both."
         },
         "compound_id": {
           "type": "string", "minLength": 1, "maxLength": 63,
@@ -207,7 +207,7 @@
         "gear_ratio": {
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 20,
           "units": "dimensionless",
-          "description": "Motor-to-wheel gear ratio. Null until Phase 1 drivetrain assembly."
+          "description": "Motor-to-wheel gear ratio (motor turns per wheel turn). Since 2026-11-10 DERIVED from a push test against the measured tyre radius, tooth counts not verified (see config/vehicle_params.yaml). Null until Phase 1 drivetrain assembly."
         },
         "pole_pairs": {
           "type": ["integer", "null"], "minimum": 1, "maximum": 50,
@@ -246,13 +246,13 @@
           "type": "number", "minimum": -1.5708, "maximum": 0,
           "units": "rad",
           "sign_convention": "road-wheel angle, LEFT positive (claude-docs/06-vehicle-params.md)",
-          "description": "Minimum (rightmost) achievable road-wheel angle."
+          "description": "Minimum (rightmost) road-wheel angle PLANNING may command: the limit every planner and racer_safety clamp to, and the angle racer_drivers/pwm_output_node maps to the right stop when pwm_to_angle_table is null. With a table it need only lie inside the table's angle range. Since 2026-11-10 the measured right-lock effective angle, and equal to -max_angle_rad because the planners assume a symmetric range."
         },
         "max_angle_rad": {
           "type": "number", "minimum": 0, "maximum": 1.5708,
           "units": "rad",
           "sign_convention": "road-wheel angle, LEFT positive (claude-docs/06-vehicle-params.md)",
-          "description": "Maximum (leftmost) achievable road-wheel angle."
+          "description": "Maximum (leftmost) road-wheel angle PLANNING may command (see min_angle_rad). Since 2026-11-10 set to the weaker right-hand lock so that a planned turn is one the car can make to either side; the left stop's larger measured angle lives in pwm_to_angle_table."
         },
         "min_rate_rad_per_s": {
           "type": "number", "minimum": -20, "maximum": 0,
@@ -275,7 +275,7 @@
           "type": ["array", "null"],
           "maxItems": 32,
           "items": {"$ref": "#/$defs/pwm_angle_point"},
-          "description": "Calibrated servo PWM <-> road-wheel-angle table (claude-docs/06-vehicle-params.md). Null (not assumed linear) until measured."
+          "description": "Calibrated servo PWM <-> road-wheel-angle table (claude-docs/06-vehicle-params.md), at least three points, pulse ascending, angle strictly decreasing when the left stop is the shorter pulse (see pwm_left_bound). Must contain the neutral pulse at angle 0 and the two stops. racer_drivers/pwm_output_node interpolates it piecewise linearly (inverse, angle to pulse), so a commanded angle gives that real angle on each side. MEASURED 2026-11-10 by LiDAR scan matching at full lock: the EFFECTIVE bicycle angle at low speed, including tyre slip, not a direct measurement of the front wheels. Null falls back to a straight line from neutral to each stop, with min_angle_rad / max_angle_rad at the ends."
         },
         "pwm_min_us": {
           "type": ["number", "null"], "minimum": 500, "maximum": 2500,
@@ -350,7 +350,7 @@
           "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 50,
           "units": "m/s",
           "sign_convention": "positive forward; a commanded -this maps to throttle_pwm_min_us",
-          "description": "Full-scale speed reference for racer_drivers/pwm_output_node's provisional OPEN-LOOP throttle map: a commanded +this maps to throttle_pwm_max_us and -this to throttle_pwm_min_us. An ACTUATION scale, not a safety limit -- limits.global_speed_cap_mps still clamps the command and is unaffected. Exists because the speed cap (an f1tenth_gym model-validity bound, 20 m/s) made a 1 m/s command only 25 us off neutral, likely inside the VESC PPM deadband (GitHub issue #40). Null until measured; the committed value is PROVISIONAL and unmeasured, replaced by the wheels-off-the-ground throttle sweep in docs/notes/first-boot-runbook.md, and removed entirely when the closed-loop vesc_node replaces the open-loop map."
+          "description": "Full-scale speed reference for racer_drivers/pwm_output_node's provisional OPEN-LOOP throttle map: a commanded +this maps to throttle_pwm_max_us and -this to throttle_pwm_min_us. An ACTUATION scale, not a safety limit -- limits.global_speed_cap_mps still clamps the command and is unaffected. Exists because the speed cap (an f1tenth_gym model-validity bound, 20 m/s) made a 1 m/s command only 25 us off neutral, likely inside the VESC PPM deadband (GitHub issue #40). Null until measured. Since 2026-11-10 DERIVED (VESC l_max_erpm / pole_pairs / gear_ratio * 2 pi * nominal_radius_m / 60) from the push-test gear ratio and the measured tyre radius, so a request is the true straight-line wheel speed; tools/tests/test_vehicle_params_calibration.py recomputes it. Removed entirely when the closed-loop vesc_node replaces the open-loop map."
         },
         "steering_pwm_period_us": {
           "type": "number", "minimum": 2500, "maximum": 20000,

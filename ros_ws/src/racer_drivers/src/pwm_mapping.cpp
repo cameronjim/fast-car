@@ -14,6 +14,90 @@ double interpolate(double from_us, double to_us, double magnitude, double span) 
   return from_us + (to_us - from_us) * (magnitude / span);
 }
 
+/// The pulse a steering table gives for `angle_rad`: the inverse of the piecewise-linear
+/// pulse-to-angle table. The table is monotone in angle (validate_config() checks), so the angle
+/// falls in exactly one segment; outside the table's extent the end point's pulse is held.
+double table_pulse_us(const std::vector<SteeringTablePoint>& table, double angle_rad) {
+  const double first_angle = table.front().angle_rad;
+  const double last_angle = table.back().angle_rad;
+  const bool angle_falls_with_pulse = first_angle > last_angle;
+  const double highest = angle_falls_with_pulse ? first_angle : last_angle;
+  const double lowest = angle_falls_with_pulse ? last_angle : first_angle;
+  if (angle_rad >= highest) {
+    return angle_falls_with_pulse ? table.front().pwm_us : table.back().pwm_us;
+  }
+  if (angle_rad <= lowest) {
+    return angle_falls_with_pulse ? table.back().pwm_us : table.front().pwm_us;
+  }
+  for (std::size_t i = 0; i + 1 < table.size(); ++i) {
+    const SteeringTablePoint& a = table[i];
+    const SteeringTablePoint& b = table[i + 1];
+    const double low = std::min(a.angle_rad, b.angle_rad);
+    const double high = std::max(a.angle_rad, b.angle_rad);
+    if (angle_rad >= low && angle_rad <= high) {
+      return a.pwm_us +
+             (b.pwm_us - a.pwm_us) * ((angle_rad - a.angle_rad) / (b.angle_rad - a.angle_rad));
+    }
+  }
+  return table.back().pwm_us;  // unreachable for a validated table
+}
+
+std::optional<std::string> validate_steering_table(const MappingConfig& config) {
+  const std::vector<SteeringTablePoint>& table = config.steering_table;
+  if (table.empty()) {
+    return std::nullopt;
+  }
+  if (table.size() < 2) {
+    return std::string("steering.pwm_to_angle_table needs at least two points (or be null)");
+  }
+  for (const SteeringTablePoint& p : table) {
+    if (!std::isfinite(p.pwm_us) || !std::isfinite(p.angle_rad)) {
+      return std::string("steering.pwm_to_angle_table contains a non-finite value");
+    }
+  }
+  for (std::size_t i = 0; i + 1 < table.size(); ++i) {
+    if (!(table[i].pwm_us < table[i + 1].pwm_us)) {
+      return std::string(
+          "steering.pwm_to_angle_table must be listed with pulse strictly ascending");
+    }
+  }
+  // Left must sit at the pulse side the pwm_left_bound names: the angle rises toward the left end.
+  const bool left_is_long_pulse = config.left_is_pwm_max;
+  for (std::size_t i = 0; i + 1 < table.size(); ++i) {
+    const bool rises = table[i + 1].angle_rad > table[i].angle_rad;
+    const bool falls = table[i + 1].angle_rad < table[i].angle_rad;
+    if (!(left_is_long_pulse ? rises : falls)) {
+      return std::string(
+          "steering.pwm_to_angle_table angle must change strictly monotonically with pulse, "
+          "toward LEFT at the pulse end steering.pwm_left_bound names");
+    }
+  }
+  if (table.front().pwm_us < config.steering.min_us ||
+      table.back().pwm_us > config.steering.max_us) {
+    return std::string(
+        "steering.pwm_to_angle_table has a pulse outside steering.pwm_min_us .. pwm_max_us");
+  }
+  bool has_neutral = false;
+  for (const SteeringTablePoint& p : table) {
+    if (p.angle_rad == 0.0) {
+      has_neutral = std::fabs(p.pwm_us - config.steering.neutral_us) < 1e-6;
+    }
+  }
+  if (!has_neutral) {
+    return std::string(
+        "steering.pwm_to_angle_table must contain angle 0 at exactly steering.pwm_neutral_us "
+        "(neutral is the fail-closed output)");
+  }
+  const double left_extent = left_is_long_pulse ? table.back().angle_rad : table.front().angle_rad;
+  const double right_extent = left_is_long_pulse ? table.front().angle_rad : table.back().angle_rad;
+  if (config.steering_max_angle_rad > left_extent || config.steering_min_angle_rad < right_extent) {
+    return std::string(
+        "steering.pwm_to_angle_table does not cover steering.min_angle_rad .. max_angle_rad: "
+        "the mapping would have to extrapolate past the last measured point");
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 std::optional<std::string> find_missing_fields(const std::vector<RequiredField>& fields) {
@@ -70,6 +154,9 @@ std::optional<std::string> validate_config(const MappingConfig& config) {
     return std::string(
         "steering angle limits must straddle zero (steering.min_angle_rad < 0 < "
         "steering.max_angle_rad); this mapping interpolates each side out from neutral");
+  }
+  if (const std::optional<std::string> bad = validate_steering_table(config)) {
+    return bad;
   }
   if (!finite(config.speed_full_scale_mps) || config.speed_full_scale_mps <= 0.0) {
     return std::string(
@@ -190,6 +277,15 @@ std::optional<std::string> validate_channel_assignment(int steering_chip, int st
 double steering_angle_to_pulse_us(const MappingConfig& config, double steering_angle_rad) {
   if (!std::isfinite(steering_angle_rad)) {
     return config.steering.neutral_us;
+  }
+  if (!config.steering_table.empty()) {
+    const double angle = std::clamp(steering_angle_rad, config.steering_min_angle_rad,
+                                    config.steering_max_angle_rad);
+    if (angle == 0.0) {
+      return config.steering.neutral_us;
+    }
+    return std::clamp(table_pulse_us(config.steering_table, angle), config.steering.min_us,
+                      config.steering.max_us);
   }
   const double left_end_us =
       config.left_is_pwm_max ? config.steering.max_us : config.steering.min_us;

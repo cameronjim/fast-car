@@ -33,6 +33,7 @@ import launch_testing.actions
 import launch_testing.asserts
 import pytest
 import rclpy
+import yaml
 from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
 from nav_msgs.msg import Odometry
@@ -40,6 +41,13 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 _FIXTURE_RACELINE = str(Path(__file__).resolve().parent / "fixtures" / "tiny_raceline.csv")
 _TEST_ODOM_TIMEOUT_S = 0.2
+
+# The planning steering limit comes from the committed config, not a copy of its number: it was
+# 0.4189 until the 2026-11-10 calibration and is the measured right-lock angle now.
+with open(
+    Path(__file__).resolve().parents[4] / "config" / "vehicle_params.yaml", encoding="utf-8"
+) as _handle:
+    _COMMITTED_MAX_STEERING_RAD = float(yaml.safe_load(_handle)["steering"]["max_angle_rad"])
 
 
 def _reliable_qos() -> QoSProfile:
@@ -155,7 +163,7 @@ class TestTrackerNode(unittest.TestCase):
         msg = received[-1]
         self.assertTrue(math.isfinite(msg.drive.steering_angle))
         self.assertTrue(math.isfinite(msg.drive.speed))
-        self.assertLessEqual(abs(msg.drive.steering_angle), 0.4189 + 1e-3)
+        self.assertLessEqual(abs(msg.drive.steering_angle), _COMMITTED_MAX_STEERING_RAD + 1e-3)
         # The fixture raceline's nearest point to (0.3, 0) is (0, 0), speed 3.0 m/s
         # (see tiny_raceline.csv) -- by now the rate-limited ramp has had time to converge.
         self.assertAlmostEqual(msg.drive.speed, 3.0, places=3)

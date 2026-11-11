@@ -82,7 +82,7 @@ assert _TTC_WARNING_S is not None and _TTC_WARNING_S > 0.0, (
     "config/vehicle_params.yaml limits.ttc_warning_s is unset (GitHub issue #36)."
 )
 
-_STEERING_MAX_RAD = 0.4189  # vehicle_params.yaml steering.max_angle_rad
+_STEERING_MAX_RAD = _VEHICLE_PARAMS["steering"]["max_angle_rad"]
 
 # The 2026-10-06 bench run (bag 2026-10-06T18-51-39_car_teleop): a steady ~0.48 m/s request
 # with an obstacle ~0.22 m ahead made the pre-fix gate cycle 0 -> 0.19 -> 0.38 -> 0 m/s
@@ -986,8 +986,8 @@ class TestSafetyNode(unittest.TestCase):
 
     def test_wheel_odometry_raises_the_ttc_speed_and_is_optional(self):
         """2026-11-02 (gate_logic.hpp "SPEED FOR THE TTC", the 2026-10-24 wall-follow contact).
-        A wall 0.30 m off the bumper and a steady 0.5 m/s request: TTC 0.6 s, no brake. The same
-        request with /odom/wheel saying the car is doing 1.2 m/s: TTC 0.25 s, brake. /odom/wheel
+        A wall just beyond the request's release line off the bumper and a steady 0.5 m/s request:
+        no brake. The same request with /odom/wheel saying the car is much faster: brake. /odom/wheel
         goes silent: once it is stale the request decides again and the latch releases. The
         odometry publisher is RELIABLE like racer_drivers/vesc_odometry_node, which proves the
         node's best_effort subscription matches it; every other test runs with no /odom/wheel
@@ -1006,9 +1006,12 @@ class TestSafetyNode(unittest.TestCase):
         self._spin_for(0.3)
 
         request = _make_drive(steering=0.0, speed=0.5)
-        wall_gap_m = 0.30
+        # The wall sits 10 percent beyond the request's release line, and the measured speed is
+        # chosen so its TTC is half the brake threshold, whatever the committed thresholds are.
+        wall_gap_m = 1.1 * 0.5 * _TTC_WARNING_S
+        measured_mps = 2.0 * wall_gap_m / _TTC_BRAKE_S
         self.assertGreater(wall_gap_m / 0.5, _TTC_WARNING_S)  # releases on the request alone
-        self.assertLess(wall_gap_m / 1.2, _TTC_BRAKE_S)  # trips on the measured speed
+        self.assertLess(wall_gap_m / measured_mps, _TTC_BRAKE_S)  # trips on the measured speed
         wall = _make_wall_scan(distance_m=_BUMPER_AHEAD_OF_HEAD_M + wall_gap_m)
         # Clear road, long enough for any earlier test's output speed bound to decay.
         self._publish_steadily(
@@ -1024,7 +1027,7 @@ class TestSafetyNode(unittest.TestCase):
 
         # The car is measured at 1.2 m/s.
         odom = Odometry()
-        odom.twist.twist.linear.x = 1.2
+        odom.twist.twist.linear.x = measured_mps
         end = time.time() + 1.0
         while time.time() < end:
             drive_raw_pub.publish(request)

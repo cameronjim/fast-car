@@ -32,6 +32,7 @@
 //   ttc_forward_sector_half_angle_rad, obstacle_steering_hold_after_s, laser_yaw_rad,
 //   watchdog_missed_cycles, control_rate_hz  as in vehicle_params / safety_node
 //   stop_latency_s, stop_deceleration_mps2   the stopping model for predicted_clearance_m
+//   max_steering_rad                         the upper steering clamp and the arc corridor's lock
 //
 // Output, one JSON object per line on stdout:
 //   {"type":"event", ...} every /safety/events record the node would publish (phase engage or
@@ -135,6 +136,10 @@ std::map<std::string, Param> default_params() {
   p["control_rate_hz"] = {50.0, 1.0, 1000.0};
   p["stop_latency_s"] = {vp.actuation.stop_latency_s, 0.0, 10.0};
   p["stop_deceleration_mps2"] = {vp.actuation.stop_deceleration_mps2, 1e-3, 100.0};
+  // The steering range the gate clamps a request to and bends the arc corridor with. The replay
+  // of a bag recorded before the 2026-11-10 calibration needs the wider real lock of its
+  // recorded commands (tools/safety_replay/calibration.py), not the planning limit.
+  p["max_steering_rad"] = {vp.steering.max_angle_rad, 1e-3, 1.5708};
   return p;
 }
 
@@ -299,7 +304,6 @@ int main(int argc, char** argv) {
               << json_number(VEHICLE_PARAMS.sensors.lidar.mount_x_m.value_or(0.0))
               << ", \"lidar_mount_y_m\": "
               << json_number(VEHICLE_PARAMS.sensors.lidar.mount_y_m.value_or(0.0))
-              << ", \"max_steering_rad\": " << json_number(VEHICLE_PARAMS.steering.max_angle_rad)
               << ", \"schema_version\": " << json_string(VEHICLE_PARAMS.meta.schema_version)
               << "}\n";
     return 0;
@@ -309,7 +313,7 @@ int main(int argc, char** argv) {
   // overrides on top.
   racer_safety::SafetyLimits limits;
   limits.steering_min_rad = VEHICLE_PARAMS.steering.min_angle_rad;
-  limits.steering_max_rad = VEHICLE_PARAMS.steering.max_angle_rad;
+  limits.steering_max_rad = value("max_steering_rad");
   limits.steering_rate_min_rad_per_s = VEHICLE_PARAMS.steering.min_rate_rad_per_s;
   limits.steering_rate_max_rad_per_s = VEHICLE_PARAMS.steering.max_rate_rad_per_s;
   limits.speed_min_mps = VEHICLE_PARAMS.limits.min_velocity_mps;
@@ -335,7 +339,7 @@ int main(int argc, char** argv) {
 
   racer_safety::PathGeometry path;
   path.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
-  path.max_steering_angle_rad = VEHICLE_PARAMS.steering.max_angle_rad;
+  path.max_steering_angle_rad = value("max_steering_rad");
   path.lidar_mount_x_m = VEHICLE_PARAMS.sensors.lidar.mount_x_m.value_or(0.0);
   path.lidar_mount_y_m = VEHICLE_PARAMS.sensors.lidar.mount_y_m.value_or(0.0);
   path.body_front_x_m = VEHICLE_PARAMS.chassis.wheelbase_m + value("front_overhang_m");

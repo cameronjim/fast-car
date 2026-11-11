@@ -485,6 +485,14 @@ ESCAPE_TARGET_LAPS = 1
 # each escape costs escape_after_s (1.5 s) of waiting plus a couple of seconds of backing and
 # re-trying. Measured locally: see docs/notes/reactive-control-port-2026-10-05.md.
 ESCAPE_MAX_LAP_S = 150.0
+# The speeds and the escape travel of the floor profile and node defaults before schema 0.14.0.
+ESCAPE_CANARY_SPEEDS = {
+    "min_speed_mps": 0.5,
+    "max_speed_mps": 0.9,
+    "k_speed_per_s": 1.0,
+    "escape_speed_mps": -0.5,
+    "escape_distance_m": 0.4,
+}
 ESCAPE_MAX_TEST_WALL_S = 200.0
 # A corner that needs several back-and-forth legs makes no NEW forward progress for a while.
 ESCAPE_STALL_TIMEOUT_S = 30.0
@@ -532,6 +540,12 @@ def escape_canary_launch(tight_radius_m: float, launch, launch_testing, LaunchNo
     gap_params = floor_profile()
     # racer_gym_bridge's /scan is aligned to the vehicle (yaw 0), not the real car's mount.
     gap_params["laser_yaw_from_vehicle_params"] = False
+    # The scenario is a SIM one: a corner tighter than the turning circle, met at the speeds the
+    # floor profile had until the 2026-11-10 calibration (its car speeds were divided by 1.401
+    # then, to keep the car's physical pace; in the sim a request is a true speed either way).
+    # Slower, the car makes the round corner without ever needing the escape and the canary no
+    # longer exercises it, so the escape inputs are pinned at their pre-calibration sim values.
+    gap_params.update(ESCAPE_CANARY_SPEEDS)
     gap_follow_node = LaunchNode(
         package="racer_control",
         executable="gap_follow_node",

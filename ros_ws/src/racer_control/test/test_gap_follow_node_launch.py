@@ -41,6 +41,7 @@ import launch_testing.actions
 import launch_testing.asserts
 import pytest
 import rclpy
+import yaml
 from ackermann_msgs.msg import AckermannDriveStamped
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription
@@ -51,9 +52,15 @@ from sensor_msgs.msg import LaserScan
 _PARAMS_FILE = str(Path(__file__).resolve().parent / "fixtures" / "gap_follow_test_params.yaml")
 _SCAN_TIMEOUT_S = 0.2  # matches the params file
 _MAX_SPEED_MPS = 1.0
-# vehicle_params steering.max_angle_rad (0.4189) is read by the node from the generated
-# binding; this test only needs an upper bound to check against, with float32 slack.
-_MAX_STEERING_RAD = 0.4189 + 1e-3
+# vehicle_params steering.max_angle_rad is read by the node from the generated binding; this
+# test only needs an upper bound to check against, with float32 slack.
+# The planning steering limit comes from the committed config, not a copy of its number: it was
+# 0.4189 until the 2026-11-10 calibration and is the measured right-lock angle now.
+with open(
+    Path(__file__).resolve().parents[4] / "config" / "vehicle_params.yaml", encoding="utf-8"
+) as _handle:
+    _COMMITTED_MAX_STEERING_RAD = float(yaml.safe_load(_handle)["steering"]["max_angle_rad"])
+_MAX_STEERING_RAD = _COMMITTED_MAX_STEERING_RAD + 1e-3
 
 _FOV_RAD = 4.7
 _NUM_RAYS = 1080
@@ -185,9 +192,9 @@ class TestGapFollowNode(unittest.TestCase):
             abs(b.drive.steering_angle - a.drive.steering_angle)
             for a, b in zip(self.received, self.received[1:])
         ]
-        # Full lock to full lock is 2 * 0.4189 rad. With tau = 0.1 s at 20 Hz each cycle moves
+        # Full lock to full lock is 2 * max_angle_rad. With tau = 0.1 s at 20 Hz each cycle moves
         # at most dt / (tau + dt) = 1/3 of the remaining distance.
-        self.assertLess(max(steps), 0.5 * 2 * 0.4189)
+        self.assertLess(max(steps), 0.5 * 2 * _COMMITTED_MAX_STEERING_RAD)
 
     def test_d_stops_publishing_on_scan_silence(self):
         self._feed(_make_scan(math.radians(-25.0), math.radians(25.0)), 1.0)

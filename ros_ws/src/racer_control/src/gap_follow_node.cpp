@@ -408,17 +408,22 @@ class GapFollowNode : public rclcpp::Node {
         "tracker_node.cpp).");
     s.max_acceleration_mps2 = VEHICLE_PARAMS.actuation.max_acceleration_mps2 * margin_fraction;
     s.max_speed_mps = declare_ranged_double(
-        *this, "max_speed_mps", 2.0, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
-        "Upper speed bound (m/s). Range-limited to vehicle_params limits.global_speed_cap_mps.");
+        *this, "max_speed_mps", 1.43, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
+        "Upper speed bound (m/s, true speed). Range-limited to vehicle_params "
+        "limits.global_speed_cap_mps. The default is the old 2.0 divided by 1.401: since schema "
+        "0.14.0 a request is the true wheel speed, and every speed tuned before it is converted "
+        "so the car does what it did (docs/notes/calibration-2026-11-10.md).");
     s.min_speed_mps = declare_ranged_double(
-        *this, "min_speed_mps", 0.5, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
-        "Lower bound of the range-based speed (m/s), before the steering slowdown.");
+        *this, "min_speed_mps", 0.36, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
+        "Lower bound of the range-based speed (m/s, true speed; the old 0.5 / 1.401), before the "
+        "steering slowdown.");
     if (s.min_speed_mps > s.max_speed_mps) {
       throw std::invalid_argument("gap_follow_node: min_speed_mps must not exceed max_speed_mps");
     }
     s.k_speed_per_s = declare_ranged_double(
-        *this, "k_speed_per_s", 1.0, 0.0, 100.0,
-        "Speed gain (1/s): speed = clamp(k_speed * range along the target bearing, min, max).");
+        *this, "k_speed_per_s", 0.71, 0.0, 100.0,
+        "Speed gain (1/s): speed = clamp(k_speed * range along the target bearing, min, max). "
+        "0.71 is the old 1.0 / 1.401 (a request is the true speed since schema 0.14.0).");
     s.k_steer = declare_ranged_double(
         *this, "k_steer", 0.5, 0.0, 1.0,
         "Steering slowdown: speed *= 1 - k_steer * |steering| / steering.max_angle_rad.");
@@ -451,14 +456,17 @@ class GapFollowNode : public rclcpp::Node {
         "(bounding box plus safety_margin_m) travel this far (m, rear-axle arc) without touching "
         "a return, or the corner override fired.");
     e.escape_speed_mps = declare_ranged_double(
-        *this, "escape_speed_mps", -0.5, VEHICLE_PARAMS.limits.min_velocity_mps, -0.01,
-        "Reverse escape speed (m/s, negative). On the car keep its magnitude at or above about "
-        "0.44 m/s: the VESC speed loop does nothing below its s_pid_min_erpm.");
+        *this, "escape_speed_mps", -0.36, VEHICLE_PARAMS.limits.min_velocity_mps, -0.01,
+        "Reverse escape speed (m/s, negative, true speed; the old -0.5 / 1.401). The VESC speed "
+        "loop does nothing below its s_pid_min_erpm (150 ERPM in the committed VESC config, "
+        "about 0.05 m/s with the committed drivetrain; tools/tests/"
+        "test_vehicle_params_calibration.py computes it).");
     e.escape_steering_rad = VEHICLE_PARAMS.steering.max_angle_rad;
     e.escape_distance_m = declare_ranged_double(
-        *this, "escape_distance_m", 0.4, 0.02, 3.0,
+        *this, "escape_distance_m", 0.29, 0.02, 3.0,
         "Reverse escape length (m), integrated from the commanded speed (no odometry; the real "
-        "travel is shorter, never longer).");
+        "travel is shorter, never longer). 0.29 is the old 0.4 / 1.401: the commanded speed was "
+        "1.401 times the real one, so 0.4 m commanded was about 0.29 m driven.");
     e.escape_max_s = declare_ranged_double(*this, "escape_max_s", 2.0, 0.1, 30.0,
                                            "Reverse escape time limit (s).");
     e.escape_retry_after_s = declare_ranged_double(

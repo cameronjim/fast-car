@@ -93,9 +93,10 @@ these is `null` -- the same refuse-to-arm discipline as `firmware/safety_mux`'s
 |---|---|---|
 | `steering.pwm_min_us` / `pwm_neutral_us` / `pwm_max_us` | steering pulse ends and neutral | 1094 / 1500 / 1875 (MEASURED 2026-09-21) |
 | `steering.pwm_left_bound` | which pulse end is full LEFT | `pwm_min_us` (MEASURED 2026-09-21: shorter pulse is left) |
-| `steering.min_angle_rad` / `max_angle_rad` | angle range the pulse ends correspond to | -0.4189 / +0.4189 (gym defaults) |
+| `steering.min_angle_rad` / `max_angle_rad` | planning limits: the command is clipped to these before the map | -0.449 / +0.449 (MEASURED 2026-11-10, the weaker right lock; were the gym defaults +/-0.4189) |
+| `steering.pwm_to_angle_table` | per-side calibration: the REAL angle each pulse gives, so a commanded angle gives that angle on both sides (the node maps angle to pulse by the inverse, piecewise linear; null falls back to a straight line from neutral to each stop) | 1094 us = +0.504, 1500 us = 0, 1875 us = -0.449 (MEASURED 2026-11-10 by scan matching, effective angle at low speed) |
 | `actuation.throttle_pwm_min_us` / `throttle_pwm_neutral_us` / `throttle_pwm_max_us` | throttle pulse ends and neutral | 1000 / 1500 / 2000 (PROVISIONAL, unmeasured) |
-| `actuation.throttle_full_scale_mps` | full-scale reference for the open-loop speed map | 2.91 (DERIVED 2026-10-06 from the VESC 6000 ERPM cap and the drivetrain fields; was 5.0) |
+| `actuation.throttle_full_scale_mps` | full-scale reference for the open-loop speed map | 2.08 (DERIVED 2026-11-10 from the VESC 6000 ERPM cap, the measured tyre radius and the push-test gear ratio; was 2.91, and 5.0 before 2026-10-06) |
 | `limits.global_speed_cap_mps` | clamp applied to the commanded speed before the map | 20.0 (a model-validity bound, NOT a safety cap) |
 | `actuation.steering_pwm_period_us` / `throttle_pwm_period_us` | PWM frame period REQUESTED on each channel's sysfs `period` | 4000 / 4000 (250 Hz; sets the pulse grid, see "Actuator resolution") |
 | `actuation.steering_pwm_achieved_period_us` / `throttle_pwm_achieved_period_us` | frame the hardware ACTUALLY emits for that request; every duty is pre-scaled by requested / achieved | 3925 / 3925 (MEASURED 2026-09-29 at the mux, issue #77; see "Frame compensation") |
@@ -399,8 +400,8 @@ If the pinmux change turns out to be awkward, the tempting shortcut is to bit-ba
 from userspace on an ordinary GPIO. Do not.
 
 A hobby servo encodes its entire commanded range in the 1000 us window between a 1000 us and
-a 2000 us pulse, so on this car's +/-0.4189 rad rack, **one microsecond of pulse error is
-about 0.0008 rad of road-wheel angle**. A hardware PWM peripheral clocks the edge out of a
+a 2000 us pulse, so on this car's +/-0.45 rad rack, **one microsecond of pulse error is
+about 0.0012 rad of road-wheel angle**. A hardware PWM peripheral clocks the edge out of a
 timer and its jitter is measured in nanoseconds. A userspace loop on a non-realtime Linux
 kernel is at the mercy of scheduler preemption, CPU frequency changes, interrupt storms and
 container CPU shares: tens to hundreds of microseconds of jitter is normal, and a single

@@ -68,7 +68,7 @@ void ReverseEscape::start(const EscapeInput& input, EscapeOutput& out) {
   // reversed with the SAME lock, the nose swung further into the turn and the car looped.
   const double magnitude = std::abs(config_.escape_steering_rad);
   const double side = std::abs(turn_memory_rad_) >= kTurnMemoryMinRad ? turn_memory_rad_
-                                                                       : input.forward_steering_rad;
+                                                                      : input.forward_steering_rad;
   steering_rad_ = 0.0;
   if (side > 0.0) {
     steering_rad_ = -magnitude;

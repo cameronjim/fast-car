@@ -140,6 +140,7 @@ class ReverseEscape {
   double escape_distance_m() const { return distance_m_; }
   double escape_elapsed_s() const { return elapsed_s_; }
   double escape_steering_rad() const { return steering_rad_; }
+  double turn_memory_rad() const { return turn_memory_rad_; }
   double forward_blocked_s() const { return forward_blocked_s_; }
   // Whether the current or last escape started because the refusal lasted
   // refused_escape_after_s while the follower still saw a way through (REFUSED TOO LONG).
@@ -160,6 +161,7 @@ class ReverseEscape {
   double elapsed_s_ = 0.0;
   double speed_magnitude_mps_ = 0.0;
   double steering_rad_ = 0.0;
+  double turn_memory_rad_ = 0.0;  // low-passed wanted steering while moving forward
   double rear_blocked_s_ = 0.0;
   double retry_wait_s_ = 0.0;
   bool started_on_refusal_ = false;

@@ -143,6 +143,17 @@ class TrackerNode : public rclcpp::Node {
     drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive_raw",
                                                                                     command_qos);
 
+    steering_command_per_rad_left_ = declare_positive_double(
+        "steering_command_per_rad_left", 1.0,
+        "Steering command (rad) sent per radian of true road-wheel angle wanted, to the left. 1 "
+        "(default) = /drive's steering is the true angle. On the car as of 2026-11-10 a full "
+        "left command (0.4189) turns the wheels 0.504 rad: 0.4189 / 0.504 = 0.831. Goes away when "
+        "the servo is calibrated in vehicle_params.");
+    steering_command_per_rad_right_ =
+        declare_positive_double("steering_command_per_rad_right", 1.0,
+                                "As steering_command_per_rad_left, to the right (0.4189 / 0.449 = "
+                                "0.933 as of 2026-11-10).");
+
     const double control_rate_hz =
         declare_positive_double("control_rate_hz", 50.0, "Control loop / /drive_raw publish rate.");
     control_period_s_ = 1.0 / control_rate_hz;
@@ -233,9 +244,26 @@ class TrackerNode : public rclcpp::Node {
     const double lookahead_curvature_ref_1pm = this->declare_parameter<double>(
         "lookahead_curvature_ref_1pm", 0.4, lookahead_ref_descriptor);
 
+    // Steering as the car really does it (2026-11-10 floor measurements, pending calibration PR):
+    // the true road-wheel angle limit on each side (a zero means the vehicle_params limit on both
+    // sides, the old behaviour), and how much command each radian of true angle needs.
+    rcl_interfaces::msg::ParameterDescriptor left_limit_descriptor;
+    left_limit_descriptor.description =
+        "Largest TRUE road-wheel angle to the left (rad, positive); 0 (default) = "
+        "vehicle_params steering.max_angle_rad. The car's measured left lock is 0.504 rad.";
+    rcl_interfaces::msg::ParameterDescriptor right_limit_descriptor;
+    right_limit_descriptor.description =
+        "Largest TRUE road-wheel angle to the right (rad, positive); 0 (default) = "
+        "vehicle_params steering.max_angle_rad. The car's measured right lock is 0.449 rad.";
+    const double max_left_rad =
+        this->declare_parameter<double>("max_steering_left_rad", 0.0, left_limit_descriptor);
+    const double max_right_rad =
+        this->declare_parameter<double>("max_steering_right_rad", 0.0, right_limit_descriptor);
     PurePursuitConfig config;
     config.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
     config.max_steering_angle_rad = VEHICLE_PARAMS.steering.max_angle_rad;
+    config.max_steering_left_rad = max_left_rad;
+    config.max_steering_right_rad = max_right_rad;
     config.lookahead_min_m = lookahead_min_m;
     config.lookahead_max_m = lookahead_max_m;
     config.lookahead_curvature_ref_1pm = lookahead_curvature_ref_1pm;
@@ -387,8 +415,14 @@ class TrackerNode : public rclcpp::Node {
     ackermann_msgs::msg::AckermannDriveStamped drive_msg;
     drive_msg.header.stamp = now;
     drive_msg.header.frame_id = "base_link";
+    // cmd.steering_angle_rad is the TRUE road-wheel angle wanted; the command that gets it is that
+    // times the per-side scale (1.0 unless the servo is known to be off), within the vehicle_params
+    // command range that safety_node clamps to.
+    const double steering_command_rad =
+        cmd.steering_angle_rad * (cmd.steering_angle_rad >= 0.0 ? steering_command_per_rad_left_
+                                                                : steering_command_per_rad_right_);
     drive_msg.drive.steering_angle =
-        clamp_for_float32_publish(cmd.steering_angle_rad, -VEHICLE_PARAMS.steering.max_angle_rad,
+        clamp_for_float32_publish(steering_command_rad, -VEHICLE_PARAMS.steering.max_angle_rad,
                                   VEHICLE_PARAMS.steering.max_angle_rad);
     drive_msg.drive.speed =
         clamp_for_float32_publish(rate_limited_speed_mps, VEHICLE_PARAMS.limits.min_velocity_mps,
@@ -414,6 +448,8 @@ class TrackerNode : public rclcpp::Node {
 
   double control_period_s_{0.02};
   bool has_last_command_time_;
+  double steering_command_per_rad_left_{1.0};
+  double steering_command_per_rad_right_{1.0};
 
   // POSE SOURCE (see the top of this file). Empty pose_frame_ = none of this is used.
   std::string pose_frame_;

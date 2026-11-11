@@ -288,6 +288,61 @@ TEST(ReverseEscape, SteeringIsOppositeToTheWantedForwardSteering) {
   }
 }
 
+// Turn memory (2026-11-11 clockwise floor run): drives forward through the gate for
+// `driving_s` with `turning`, then sits forward-blocked with the wish drifted to `drifted` until
+// the escape starts. Returns the escape steering.
+double escape_side_after(double turning, double drifted, double driving_s = 2.0) {
+  Harness h;
+  for (int i = 0; i < cycles(driving_s); ++i) {
+    EXPECT_FALSE(h.step(0.5, false, turning, passes_everything).active);
+  }
+  EXPECT_GE(run_until_start(h, drifted), 0);
+  return h.escape.escape_steering_rad();
+}
+
+TEST(ReverseEscapeTurnMemory, TheClockwiseLoopOf2026_11_11ReversesAgainstTheTurn) {
+  // Full right lock while driving, then the wish drifted to +0.003 rad nose-on to the wall:
+  // the old rule reversed with right lock too and looped. The memory says right: reverse left.
+  EXPECT_DOUBLE_EQ(escape_side_after(-kMaxSteer, 0.003), kMaxSteer);
+}
+
+TEST(ReverseEscapeTurnMemory, TheCounterClockwiseMirror) {
+  EXPECT_DOUBLE_EQ(escape_side_after(kMaxSteer, -0.003), -kMaxSteer);
+}
+
+TEST(ReverseEscapeTurnMemory, AWeakMemoryFallsBackToTheCurrentWish) {
+  // Driving almost straight leaves no usable memory: the current wish decides, as before.
+  EXPECT_DOUBLE_EQ(escape_side_after(0.02, -0.3), kMaxSteer);
+  EXPECT_DOUBLE_EQ(escape_side_after(0.0, 0.0), 0.0);
+}
+
+TEST(ReverseEscapeTurnMemory, OnlyLearnsWhileTheCarMoves) {
+  Harness h;
+  for (int i = 0; i < cycles(2.0); ++i) {
+    h.step(0.5, false, kMaxSteer, passes_everything);
+  }
+  const double learned = h.escape.turn_memory_rad();
+  EXPECT_NEAR(learned, kMaxSteer, 0.01);
+  // Blocked (gated speed zero): a different wish must not move the memory.
+  for (int i = 0; i < cycles(1.0); ++i) {
+    h.step(0.5, false, -kMaxSteer, blocks_forward_passes_reverse);
+  }
+  EXPECT_DOUBLE_EQ(h.escape.turn_memory_rad(), learned);
+  // Garbage wishes are ignored too.
+  h.step(0.5, false, std::numeric_limits<double>::quiet_NaN(), passes_everything);
+  EXPECT_DOUBLE_EQ(h.escape.turn_memory_rad(), learned);
+}
+
+TEST(ReverseEscapeTurnMemory, ResetForgets) {
+  Harness h;
+  for (int i = 0; i < cycles(2.0); ++i) {
+    h.step(0.5, false, -kMaxSteer, passes_everything);
+  }
+  ASSERT_LT(h.escape.turn_memory_rad(), -0.4);
+  h.escape.reset();
+  EXPECT_DOUBLE_EQ(h.escape.turn_memory_rad(), 0.0);
+}
+
 TEST(ReverseEscape, CompletesAfterTheDistanceIntegratedFromTheCommandedSpeed) {
   Harness h;
   ASSERT_GE(run_until_start(h), 0);

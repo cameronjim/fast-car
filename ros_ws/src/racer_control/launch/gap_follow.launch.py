@@ -191,6 +191,20 @@ _OPTIONAL_FLOAT_ARGS = {
         "Empty (default) leaves the profile value, the params file value or the node default "
         "0.55."
     ),
+    "outside_entry_offset_m": (
+        "target_mode lane_centre: run to the outside of a coming turn by up to this much (m) and "
+        "turn in late, [0, 1]. Empty (default) leaves the profile value, the params file value "
+        "or the node default 0 (off)."
+    ),
+    "outside_entry_horizon_m": (
+        "Outside entry: how far along the lane to look for a turn (m), [0.2, 5]. Empty (default) "
+        "leaves the profile value, the params file value or the node default 1.6."
+    ),
+    "outside_entry_turn_rad": (
+        "Outside entry: heading change beyond the lookahead that counts as a turn coming, and "
+        "inside it that ends the shift (rad), [0.05, 3]. Empty (default) leaves the profile "
+        "value, the params file value or the node default 0.35."
+    ),
 }
 # Launch arguments forwarded as strings when set, with the values the node accepts.
 _OPTIONAL_CHOICE_ARGS = {

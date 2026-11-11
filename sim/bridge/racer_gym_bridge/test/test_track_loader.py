@@ -249,7 +249,7 @@ def _box_fronts(track: SyntheticTrack) -> list[tuple[float, float]]:
     )
 
 
-@pytest.mark.parametrize("name", SYNTHETIC_TRACK_NAMES)
+@pytest.mark.parametrize("name", [n for n in SYNTHETIC_TRACK_NAMES if n != "map"])
 def test_every_synthetic_track_builds_finite_walls_and_a_centreline(name):
     track = build_synthetic_track(name)
     assert track.name == name
@@ -417,7 +417,7 @@ def test_reversed_keeps_the_walls_and_flips_the_centreline():
     assert area < 0.0  # clockwise
 
 
-@pytest.mark.parametrize("name", SYNTHETIC_TRACK_NAMES)
+@pytest.mark.parametrize("name", [n for n in SYNTHETIC_TRACK_NAMES if n != "map"])
 def test_centreline_is_free_and_walls_are_solid_in_the_raster(name):
     track = build_synthetic_track(name)
     occ, origin = rasterize_walls(track.walls, track.bounds(), _RES)
@@ -478,3 +478,136 @@ def test_rasterize_walls_rejects_bad_resolution():
 def test_rounded_rect_points_rejects_a_radius_that_does_not_fit():
     with pytest.raises(ValueError):
         rounded_rect_points(0.0, 0.0, 1.0, 1.0, 0.6)
+
+
+# -- Track family (2026-11-11): stadium, rounded_rect, imported maps -----------------------------
+
+
+def _loop_length(track):
+    x, y = track.centreline_x, track.centreline_y
+    return float(np.hypot(np.diff(x, append=x[0]), np.diff(y, append=y[0])).sum())
+
+
+@pytest.mark.parametrize("radius", [0.0, 0.2, 0.4, 0.8])
+@pytest.mark.parametrize("lane", [1.0, 1.2])
+def test_stadium_centreline_length_is_the_analytic_one(radius, lane):
+    straight = 2.0
+    track = build_synthetic_track(
+        "stadium", lane_width_m=lane, straight_length_m=straight, island_radius_m=radius
+    )
+    # Two straights and two half circles of radius r + W / 2.
+    expected = 2.0 * straight + 2.0 * math.pi * (radius + lane / 2.0)
+    assert _loop_length(track) == pytest.approx(expected, rel=0.01)
+    assert track.loop and track.lane_width_m == lane
+
+
+@pytest.mark.parametrize("radius", [0.0, 0.4, 0.8])
+def test_stadium_centreline_has_no_repeated_points_and_starts_mid_straight_facing_plus_x(radius):
+    track = build_synthetic_track("stadium", island_radius_m=radius, straight_length_m=2.0)
+    step = np.hypot(np.diff(track.centreline_x), np.diff(track.centreline_y))
+    assert step.min() > 1e-6  # the gym's spline needs strictly increasing arc length
+    dx = track.centreline_x[1] - track.centreline_x[0]
+    dy = track.centreline_y[1] - track.centreline_y[0]
+    assert dx > 0.0 and abs(dy) < 1e-6
+    # Mid straight: x about half the island length.
+    assert track.centreline_x[0] == pytest.approx((2.0 + 2.0 * radius) / 2.0, abs=0.06)
+
+
+def test_stadium_outer_wall_is_a_lane_width_from_the_island_on_the_straight():
+    track = build_synthetic_track(
+        "stadium", lane_width_m=1.0, straight_length_m=2.0, island_radius_m=0.0
+    )
+    mid_x = track.centreline_x[0]
+    ys = []
+    for x0, y0, x1, y1 in track.walls:
+        if min(x0, x1) <= mid_x <= max(x0, x1) and abs(x1 - x0) > 1e-9:
+            ys.append(y0 + (y1 - y0) * (mid_x - x0) / (x1 - x0))
+    # The thin island is the line y = 0; the lower outer wall is 1.0 m below it, the upper 1.0 above.
+    assert min(ys) == pytest.approx(-1.0, abs=0.06)
+    assert max(ys) == pytest.approx(1.0, abs=0.06)
+    assert any(abs(y) < 0.06 for y in ys)
+
+
+def test_rounded_rect_outer_wall_is_the_island_grown_by_the_lane_width():
+    track = build_synthetic_track(
+        "rounded_rect",
+        lane_width_m=1.0,
+        straight_length_m=3.0,
+        island_width_m=2.0,
+        island_radius_m=0.4,
+    )
+    xmin, ymin, xmax, ymax = track.bounds()
+    assert (xmax - xmin, ymax - ymin) == pytest.approx((5.0, 4.0), abs=0.06)
+
+
+def _rr_length(width, height, radius):
+    """Perimeter of a rounded rectangle."""
+    return 2.0 * (width - 2.0 * radius) + 2.0 * (height - 2.0 * radius) + 2.0 * math.pi * radius
+
+
+def test_rounded_rect_centreline_length_is_the_rounded_rectangle_perimeter():
+    track = build_synthetic_track(
+        "rounded_rect",
+        lane_width_m=1.0,
+        straight_length_m=3.0,
+        island_width_m=2.0,
+        island_radius_m=0.4,
+    )
+    assert _loop_length(track) == pytest.approx(_rr_length(4.0, 3.0, 0.9), rel=0.01)
+
+
+def test_island_radius_must_fit_the_island():
+    with pytest.raises(ValueError, match="does not fit"):
+        build_synthetic_track(
+            "rounded_rect", straight_length_m=1.0, island_width_m=0.5, island_radius_m=0.4
+        )
+
+
+def test_reversed_family_track_keeps_the_walls_and_flips_the_direction():
+    track = build_synthetic_track("stadium", island_radius_m=0.2)
+    back = track.reversed()
+    assert back.walls is track.walls
+    assert back.centreline_x[0] == track.centreline_x[-1]
+
+
+def test_pgm_and_map_cells_round_trip(tmp_path):
+    from racer_gym_bridge.track_loader import map_cells, read_pgm
+
+    pixels = np.full((4, 6), 254, dtype=np.uint8)
+    pixels[0, :] = 0  # top row of the image: occupied
+    pixels[3, 2] = 150  # between the thresholds: unknown
+    pgm = tmp_path / "m.pgm"
+    pgm.write_bytes(b"P5\n# comment\n6 4\n255\n" + pixels.tobytes())
+    assert read_pgm(pgm).shape == (4, 6)
+    (tmp_path / "m.yaml").write_text(
+        "image: m.pgm\nresolution: 0.05\norigin: [1.0, 2.0, 0]\nnegate: 0\n"
+        "occupied_thresh: 0.65\nfree_thresh: 0.25\n"
+    )
+    occupied, free, meta = map_cells(tmp_path / "m.yaml")
+    # Row 0 of the result is the BOTTOM of the image (min y).
+    assert occupied[3].all() and not occupied[0].any()
+    assert not free[0, 2] and free[1, 2]
+    assert meta.origin_xy == (1.0, 2.0)
+
+
+def test_map_track_uses_the_map_as_the_world(tmp_path):
+    from racer_gym_bridge.track_loader import map_track
+
+    pixels = np.full((20, 20), 254, dtype=np.uint8)
+    pixels[0, :] = pixels[-1, :] = pixels[:, 0] = pixels[:, -1] = 0
+    (tmp_path / "w.pgm").write_bytes(b"P5\n20 20\n255\n" + pixels.tobytes())
+    (tmp_path / "w.yaml").write_text(
+        "image: w.pgm\nresolution: 0.05\norigin: [0.0, 0.0, 0]\nnegate: 0\n"
+        "occupied_thresh: 0.65\nfree_thresh: 0.25\n"
+    )
+    (tmp_path / "c.csv").write_text(
+        "s_m,x_m,y_m,heading_rad,curvature_1pm,target_speed_mps\n"
+        "0,0.3,0.5,0,0,1\n0.1,0.4,0.5,0,0,1\n0.2,0.5,0.5,0,0,1\n"
+    )
+    track = map_track(tmp_path / "w.yaml", tmp_path / "c.csv")
+    assert track.occupancy.shape == (20, 20)
+    assert (track.occupancy == 0).sum() == 76  # the border cells, not grown
+    assert track.occupancy_origin == (0.0, 0.0, 0.0)
+    assert track.walls.shape == (76, 4)
+    assert track.wall_thickness_m == pytest.approx(0.05)
+    assert track.reversed().occupancy is track.occupancy

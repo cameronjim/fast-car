@@ -701,6 +701,72 @@ LanePoint trace_lane_centre(const LanePoints& points, double lookahead_m, double
   return at;
 }
 
+namespace {
+
+double trace_heading(const std::vector<LanePoint>& trace, std::size_t i) {
+  const std::size_t a = i >= 2 ? i - 2 : 0;
+  const std::size_t b = std::min(i + 2, trace.size() - 1);
+  return std::atan2(trace[b].y - trace[a].y, trace[b].x - trace[a].x);
+}
+
+}  // namespace
+
+OutsideEntry apply_outside_entry(const std::vector<LanePoint>& trace, std::size_t aim_index,
+                                 const LanePoints& points, double offset_m, double turn_rad,
+                                 double half_width_m, double margin_m) {
+  OutsideEntry out;
+  if (trace.empty()) {
+    return out;
+  }
+  aim_index = std::min(aim_index, trace.size() - 1);
+  out.aim = trace[aim_index];
+  if (!std::isfinite(offset_m) || !(offset_m > 0.0) || !std::isfinite(turn_rad) ||
+      !(turn_rad > 0.0) || !std::isfinite(half_width_m) || !std::isfinite(margin_m) ||
+      trace.size() < aim_index + 6) {
+    return out;
+  }
+  const double h_start = trace_heading(trace, 0);
+  const double h_aim = trace_heading(trace, aim_index);
+  const double h_end = trace_heading(trace, trace.size() - 1);
+  out.near_rad = wrap_angle(h_aim - h_start);
+  out.far_rad = wrap_angle(h_end - h_aim);
+  const double coming = std::min(std::max((std::abs(out.far_rad) - turn_rad) / turn_rad, 0.0), 1.0);
+  if (coming <= 0.0) {
+    return out;
+  }
+  const bool turning_in = out.near_rad * out.far_rad > 0.0;
+  const double arrival = turning_in ? std::max(1.0 - std::abs(out.near_rad) / turn_rad, 0.0) : 1.0;
+  out.weight = coming * arrival;
+  if (out.weight <= 0.0) {
+    return out;
+  }
+  const double outside = out.far_rad > 0.0 ? -1.0 : 1.0;  // away from the turn
+  const double nx = -std::sin(h_aim) * outside;
+  const double ny = std::cos(h_aim) * outside;
+  const double tx = std::cos(h_aim);
+  const double ty = std::sin(h_aim);
+  // Room: the nearest return on the outside, beside the aim point.
+  double nearest = std::numeric_limits<double>::infinity();
+  for (std::size_t k = 0; k < points.count; ++k) {
+    const double dx = points.x[k] - out.aim.x;
+    const double dy = points.y[k] - out.aim.y;
+    const double lateral = dx * nx + dy * ny;
+    const double along = dx * tx + dy * ty;
+    if (lateral > 0.0 && std::abs(along) < 0.4) {
+      nearest = std::min(nearest, lateral);
+    }
+  }
+  double room = offset_m;
+  if (std::isfinite(nearest)) {
+    room = std::max(nearest - half_width_m - margin_m - 0.05, 0.0);
+  }
+  const double shift = out.weight * std::min(offset_m, room);
+  out.aim.x += nx * shift;
+  out.aim.y += ny * shift;
+  out.shift_m = outside * shift;
+  return out;
+}
+
 double pure_pursuit_steering(const LanePoint& aim, double wheelbase_m, double max_steering_rad) {
   if (!std::isfinite(aim.x) || !std::isfinite(aim.y) || !std::isfinite(wheelbase_m) ||
       !(wheelbase_m > 0.0) || !std::isfinite(max_steering_rad)) {
@@ -886,9 +952,22 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
       lane_half_width_m_ = 0.5 * *boundaries.width_m;
     }
     result.lane_half_width_m = lane_half_width_m_.value_or(config_.lane_default_half_width_m);
+    const bool outside_entry = config_.outside_entry_offset_m > 0.0;
+    const double horizon = outside_entry
+                               ? std::max(config_.lane_lookahead_m, config_.outside_entry_horizon_m)
+                               : config_.lane_lookahead_m;
     result.lane_aim =
-        trace_lane_centre(lane_points_, config_.lane_lookahead_m, result.lane_half_width_m,
+        trace_lane_centre(lane_points_, horizon, result.lane_half_width_m,
                           kLaneWindowFactor * config_.lane_default_half_width_m, lane_trace_);
+    if (outside_entry) {
+      const auto aim_index =
+          static_cast<std::size_t>(std::lround(config_.lane_lookahead_m / kLaneTraceStepM));
+      const OutsideEntry entry = apply_outside_entry(
+          lane_trace_, aim_index, lane_points_, config_.outside_entry_offset_m,
+          config_.outside_entry_turn_rad, config_.half_width_m, config_.safety_margin_m);
+      result.lane_aim = entry.aim;
+      result.outside_entry_shift_m = entry.shift_m;
+    }
     result.lane_valid = true;
     result.steering_rad = pure_pursuit_steering(result.lane_aim, config_.swept_path.wheelbase_m,
                                                 config_.max_steering_angle_rad);

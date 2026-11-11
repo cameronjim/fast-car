@@ -24,6 +24,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_car_teleop_profile test/test_car_teleop_profile.py)
   # policy.launch.py: tracker handoff + policy_node wiring (launch-description inspection, L1).
   ament_add_pytest_test(test_policy_launch test/test_policy_launch.py)
+  # pnp.launch.py: the Plug-and-Play driver (perception + MPPI planner): arguments, the recorder
+  # guard, bundle refusals, shutdown with either node, and the recorder regex's /pnp/ entry.
+  ament_add_pytest_test(test_pnp_launch test/test_pnp_launch.py)
   # L1 check of lidar.launch.py and car_teleop.launch.py's `lidar` argument (roadmap 2.3):
   # launch arguments and defaults, the base_link -> laser transform taken from vehicle_params
   # (and refused on a null mount field), the driver's /scan remap. Description inspection

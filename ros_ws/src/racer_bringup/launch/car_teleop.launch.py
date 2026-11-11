@@ -232,6 +232,7 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:   /lap/(event|status)
 #:                     lap_counter_node's lap events and 1 Hz state (2026-11-12), when it runs
 #:                     (cameras.launch.py lap_counter:=true). Small JSON Strings.
+#:   /pnp/...          the Plug-and-Play driver: local track, plan, planner status, lap events
 #:   /map              slam_toolbox's map as it grew (mapping:=true), or map_server's latched
 #:                     copy (localization:=true); about 1 Hz, a few hundred kB each
 _RECORDED_TOPIC_REGEX = (
@@ -241,7 +242,7 @@ _RECORDED_TOPIC_REGEX = (
     r"|/camera/.*/compressed|/rosout|/parameter_events"
     r"|/odom|/odom/wheel_twist|/pose|/tf|/tf_static|/map"
     r"|/perception/(objects|target|poses|detections)|/spiderbot/(alert|state|patrol_cmd)"
-    r"|/lap/(event|status))$"
+    r"|/lap/(event|status)|/pnp/.*)$"
 )
 
 

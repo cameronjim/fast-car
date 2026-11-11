@@ -72,7 +72,7 @@ class HostInfo:
     def read(self, absolute: str) -> str | None:
         try:
             return self.path(absolute).read_text().strip()
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError, TypeError):  # EAGAIN reads surface as TypeError
             return None
 
     # -- disk ----------------------------------------------------------------------------
@@ -112,7 +112,7 @@ class HostInfo:
             try:
                 kind = (zone / "type").read_text().strip()
                 milli = int((zone / "temp").read_text().strip())
-            except (OSError, ValueError):
+            except (OSError, ValueError, TypeError):  # Jetson cv*-thermal: EAGAIN
                 continue
             out[kind] = milli / 1000.0
         return out
@@ -154,7 +154,7 @@ class HostInfo:
                 continue
             try:
                 index = int((entry / "index").read_text().strip())
-            except (OSError, ValueError):
+            except (OSError, ValueError, TypeError):
                 index = 0
             out.append(VideoDevice(f"/dev/video{suffix}", name, index))
         return sorted(out, key=lambda d: int(d.node[len("/dev/video") :]))

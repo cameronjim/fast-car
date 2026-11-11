@@ -397,3 +397,22 @@ def test_real_runner_runs_argv_without_a_shell():
     slow = r.run(["sleep", "5"], timeout=0.1)
     assert slow.returncode == 124 and "timed out" in slow.stderr
     assert r.run(["false"]).tail() == ""
+
+
+def test_thermal_skips_zone_whose_read_fails_with_eagain(tmp_path, monkeypatch):
+    # Jetson cv*-thermal zones return EAGAIN; Python's buffered read surfaces that as TypeError.
+    host = HostInfo(root=tmp_path)
+    for i, kind in enumerate(["cpu-thermal", "cv0-thermal"]):
+        z = host.path(f"/sys/class/thermal/thermal_zone{i}")
+        z.mkdir(parents=True)
+        (z / "type").write_text(kind + "\n")
+        (z / "temp").write_text("45000\n")
+    real = type(host.path("/")).read_text
+
+    def flaky(self, *a, **k):
+        if self.name == "temp" and self.parent.name == "thermal_zone1":
+            raise TypeError("can't concat NoneType to bytes")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(type(host.path("/")), "read_text", flaky)
+    assert host.thermal_zones() == {"cpu-thermal": 45.0}

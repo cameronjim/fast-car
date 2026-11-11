@@ -326,6 +326,24 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_localization_test.sh"
 
+  l5-spiderbot:
+    name: L5 spiderbot (patrol, stop for a synthetic person, face, alert, resume, through the real safety node, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # 2026-11-11 (docs/notes/spiderbot-2026-11-11.md): racer_gym_bridge, the real safety_node,
+    # racer_control's tracker on a patrol generated from waypoints, racer_apps' spiderbot_node and
+    # a fake detector standing a person with raised arms beside gym_oval. Same workspace-combination
+    # pattern as l5-localization (see .github/scripts/l5_spiderbot_test.sh); a sibling job so it
+    # fails independently.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 spiderbot workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_spiderbot_test.sh"
+
   l5-track-family:
     name: L5 track family canary (raceline tracker on a stadium and a rounded rectangle, both directions, ros-dev + gym)
     runs-on: ubuntu-latest

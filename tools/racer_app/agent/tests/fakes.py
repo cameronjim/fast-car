@@ -24,6 +24,7 @@ class World:
     repo: Path
     free_gb: float = 100.0
     image_present: bool = True
+    perception_image_present: bool = True  # car:perception, the GPU image
     heartbeat: str = "active"
     containers: dict[str, dict] = field(default_factory=dict)
     recorder: bool = True
@@ -53,6 +54,8 @@ class World:
             lines = [f"{n}\t{c['state']}" for n, c in self.containers.items()]
             return (0, "\n".join(lines) + "\n")
         if sub == "image":
+            if argv[-1] == "car:perception":
+                return (0 if self.perception_image_present else 1, "")
             return (0 if self.image_present else 1, "")
         if sub == "inspect":
             return self._inspect(argv)

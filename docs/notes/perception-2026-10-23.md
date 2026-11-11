@@ -133,3 +133,16 @@ Start a bridge next to it (same container, as the LiDAR runbook does):
 - Tests: pure logic (bearing, window, median, yaw rules, tracker, throttle) at L1; the nodes at
   L3 with a **fake detector backend**; the real YOLO path is covered only by a launch test that
   needs `ultralytics` and `RACER_TEST_YOLO_WEIGHTS` and is skipped everywhere else.
+
+## Addendum 2026-11-11: pose mode and pinned weights
+
+`detector_node mode:=pose` runs `yolov8n-pose` and also publishes `racer_msgs/PoseDetectionArray` on
+`/perception/poses` (people with 17 COCO keypoints, image pixels, the image size in the array);
+`/perception/detections` still goes out, so box consumers are unchanged. `fusion_node input:=poses`
+(set automatically by `perception.launch.py mode:=pose`) fuses those and the keypoints ride along on
+`/perception/objects` and `/perception/target` (`ObjectDetection.keypoints`). The model parameter
+defaults to empty, meaning the mode's pinned default. Weights are located by
+`racer_perception/weights.py`: model cache, the image's `/opt/racer_weights`, or a download from the
+pinned URL, always checked against the sha256; an unknown bare name is refused instead of being
+handed to ultralytics' unpinned downloader. `python3 -m racer_perception.bench` measures latency.
+Details, numbers and the spiderbot that uses it: `docs/notes/spiderbot-2026-11-11.md`.

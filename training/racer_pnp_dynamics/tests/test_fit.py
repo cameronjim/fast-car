@@ -33,7 +33,7 @@ def test_fit_recovers_known_parameters(toy_vehicle):
     assert abs(got["command_delay_s"] - want["command_delay_s"]) <= 0.02 + 1e-9
     assert result.speed_val_rmse_mps < 0.03 and result.yaw_val_rmse_rad < 0.01
     assert set(result.delay_curve) == set(fit.DELAY_GRID_S)
-    assert result.counts["yaw_left_train"] > 100 and result.counts["yaw_right_train"] > 100
+    assert not result.sides_tied and result.counts["yaw_right_train"] >= fit.MIN_SIDE_INTERVALS
 
 
 def test_fit_beats_the_placeholder_on_validation(toy_vehicle):
@@ -63,10 +63,14 @@ def test_yaw_fit_works_without_odometry(toy_vehicle):
     assert np.isfinite(result.yaw_val_rmse_rad)
 
 
-def test_unidentified_and_bound_parameters_are_flagged(toy_vehicle):
+def test_one_sided_data_ties_the_gains(toy_vehicle):
     """With only left turns the right gain has zero sensitivity; flags say so."""
     run, motion = make_run(TRUTH, toy_vehicle, seconds=600.0, seed=5)
     run.steering_cmd_rad[:] = np.abs(run.steering_cmd_rad)  # left only (inconsistent, fine here)
     result = fit.fit_nominal(make_segments(run, motion), toy_vehicle, delays=(0.10,))
-    assert "steer_gain_right" in result.flags
-    assert result.nominal.steer_gain_right == pytest.approx(1.0)
+    assert "tied" in result.flags["steer_gain_right"] and result.sides_tied
+    assert result.nominal.steer_gain_right == result.nominal.steer_gain_left
+    assert result.nominal.steer_offset_rad == 0.0
+    assert (
+        result.alternative is not None and result.counts["yaw_right_train"] < fit.MIN_SIDE_INTERVALS
+    )

@@ -48,6 +48,17 @@ def wheel_at(run: Run, times_s: np.ndarray, wheel: np.ndarray | None = None) -> 
     return out
 
 
+REVERSE_TOLERANCE_MPS = 0.03
+
+
+def forward_only(v_mps: np.ndarray, cmds: np.ndarray) -> np.ndarray:
+    """Windows where the car is driven forward throughout: the model has v >= 0, so a window with
+    a reverse command or a clearly negative wheel speed (the 2026-11-11 bags back out of walls)
+    is outside what it describes. NaN compares false and is left to the finite checks."""
+    with np.errstate(invalid="ignore"):
+        return (v_mps >= -REVERSE_TOLERANCE_MPS).all(axis=1) & (cmds[..., 0] >= 0.0).all(axis=1)
+
+
 @dataclass(frozen=True)
 class SpeedWindows:
     v_mps: np.ndarray  # (W, n + 1) measured wheel speed at 0, dt, ..., n dt
@@ -77,6 +88,8 @@ def speed_windows(
         v = wheel_at(seg.run, times)
         c = cmd_at(seg.run, times[:, :-1] - delay_s)
         ok = np.isfinite(v).all(axis=1) & np.isfinite(c).all(axis=(1, 2))
+        ok &= forward_only(v, c)
+        v = np.maximum(v, 0.0)
         vs.append(v[ok])
         cs.append(c[ok])
     if not vs:
@@ -156,6 +169,8 @@ def yaw_data(
         v_end = wheel_at(seg.run, m.t_s[pick] + SCAN_DT_S, wheel)
         ok = np.isfinite(c).all(axis=(1, 2)) & np.isfinite(v).all(axis=1) & np.isfinite(v_end)
         ok &= v[:, WARM_N] > min_speed_mps
+        ok &= forward_only(v, c)
+        v = np.maximum(v, 0.0)
         pick = pick[ok]
         cmds.append(c[ok])
         vs.append(v[ok])

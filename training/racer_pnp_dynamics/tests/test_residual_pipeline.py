@@ -153,7 +153,7 @@ def test_pipeline_writes_a_valid_bundle_pointer_and_honest_metrics(tmp_path, toy
     pointer = tmp_path / "pointer"
     assert json.loads((pointer / "metrics.json").read_text())["residual_enabled"] is False
     readme = (pointer / "README.md").read_text()
-    assert "dyn-v0-test" in readme and "NOT enabled" in readme and "—" not in readme
+    assert "dyn-v0-test" in readme and "NOT enabled" in readme and chr(0x2014) not in readme
     assert (pointer / "manifest.yaml").read_bytes() == (
         tmp_path / "models" / "dyn-v0-test" / "manifest.yaml"
     ).read_bytes()

@@ -30,6 +30,7 @@ from .residual import (
     Trainer,
     build_samples,
     decide,
+    early_stopping_split,
     relative_improvement,
     shipped,
     train_residual,
@@ -62,7 +63,7 @@ def v_max_of(train: Sequence[Segment], vehicle: Vehicle) -> float:
     p99 = float(np.percentile(np.concatenate(speeds), 99))
     raw = V_MAX_FACTOR * p99
     rounded = np.floor(raw / V_MAX_ROUND_MPS + 1e-9) * V_MAX_ROUND_MPS
-    return float(min(rounded, vehicle.throttle_full_scale_mps))
+    return round(float(min(rounded, vehicle.throttle_full_scale_mps)), 2)
 
 
 def _json(obj: Any) -> Any:
@@ -112,10 +113,16 @@ def run_fit_and_export(
 
     # Residual candidates, one per seed, scored on the held-out windows.
     s_train, s_val = build_samples(train, nominal, fvehicle), build_samples(val, nominal, fvehicle)
-    candidates = [train_residual(s_train, s_val, seed, trainer) for seed in SEEDS]
+    s_fit, s_stop, stop_how = early_stopping_split(s_train, s_val)
+    candidates = [train_residual(s_fit, s_stop, seed, trainer) for seed in SEEDS]
     variants: dict[str, tuple[Nominal, Residual | None]] = {
         "placeholder_nominal": (PLACEHOLDER_NOMINAL, None),
         "fitted_nominal": (nominal, None),
+        **(
+            {"fitted_nominal_other_side_tying": (result.alternative, None)}
+            if result.alternative is not None
+            else {}
+        ),
         **{
             f"fitted_plus_residual_seed{seed}": (nominal, c)
             for seed, c in zip(SEEDS, candidates, strict=True)
@@ -166,11 +173,19 @@ def run_fit_and_export(
         "residual_median_improvement_1s": {"speed": medians[0], "yaw": medians[1]},
         "residual_enabled": enabled,
         "residual_shipped_seed": SEEDS[chosen],
-        "residual_samples": {"train": len(s_train), "val": len(s_val)},
+        "residual_samples": {
+            "train": len(s_fit),
+            "early_stopping": len(s_stop),
+            "early_stopping_from": stop_how,
+        },
         "fit": {
             "flags": result.flags,
             "speed_val_rmse_mps": result.speed_val_rmse_mps,
             "yaw_val_rmse_rad": result.yaw_val_rmse_rad,
+            "delay_selection": result.delay_selection,
+            "yaw_training": result.yaw_training,
+            "sides_tied": result.sides_tied,
+            "yaw_cv_rmse_rad": result.yaw_cv_rmse_rad,
             "delay_curve_speed_val_rmse": {str(k): v for k, v in result.delay_curve.items()},
             "counts": result.counts,
         },
@@ -218,6 +233,80 @@ def _row(label: str, errs: dict[Any, dict[str, float]]) -> str:
     return f"| {label} | " + " | ".join(cells) + " |"
 
 
+FINDINGS = [
+    (
+        "- The bags are nested copies of three recordings: `..._03-54-11_car_teleop` is the first "
+        "528 s of `..._cw`, and the `..._04-20-19` `_teleop` and `_latest` bags are prefixes of "
+        "`_v3` (identical messages). Only the longest of each group is used, otherwise the held-out "
+        "bag would leak into training."
+    ),
+    (
+        "- Only one odometry recording is left for training (`..._cw`, first 70 percent, about "
+        "189 s of driving, almost all left turns). Its validation tenth holds no driving, so the "
+        "command delay is chosen by 4-fold blocked cross-validation over training segments and the "
+        "residual early-stops on the last 20 percent of its training samples."
+    ),
+    (
+        "- The older floor bags (no odometry) were left out of the yaw fit: blocked "
+        "cross-validation on the 2026-11-11 training segments gave a lower yaw error without them "
+        "(CV numbers above)."
+    ),
+    (
+        "- Right turns are scarce in the training data (counts above). The two steering gains and "
+        "the offset cannot be told apart from one sided data, so below 300 turning intervals on a "
+        "side the gains are tied and the offset fixed at 0. THIS CHOICE WAS MADE AFTER SEEING A "
+        "FIRST HELD-OUT COMPARISON with separate gains (the row marked not shipped), which was worse "
+        "than the placeholder yaw on the clockwise-heavy bag. The tied rule is stated in terms of "
+        "training counts only, but the held-out yaw numbers of the shipped model are not a clean "
+        "pre-registered result. The pre-registered rule covers the residual only."
+    ),
+    (
+        "- Windows with a reverse command or a wheel speed below -0.03 m/s are skipped (the model "
+        "has v >= 0). Converted steering reaches 0.504 rad to the left, beyond the planning limit: "
+        "the fit and these held-out numbers clamp at the physical stops, the exported bundle uses "
+        "the vehicle_params limits (held-out numbers with those limits are in metrics.json)."
+    ),
+    (
+        "- Speed behaves like an acceleration-limited tracker of the command with no visible lag "
+        "(speed time constant, delay and the accel limit sit on bounds, flagged above). Treat them "
+        "as an effective description, not as measured actuator constants. Ground speed falls to "
+        "about 0.8 of wheel speed at full lock (table below); the model keeps wheel speed and absorbs "
+        "this in the yaw gain."
+    ),
+]
+
+
+def _num(x: float | None, digits: int = 4) -> str:
+    return "n/a" if x is None else f"{x:.{digits}f}"
+
+
+def _fit_summary(fit: dict[str, Any], delay_s: float) -> str:
+    curve = fit["delay_curve_speed_val_rmse"]
+    at = curve.get(str(delay_s)) or curve.get(f"{delay_s:.2f}")
+    lines = [
+        (
+            f"Command delay chosen by: {fit['delay_selection']} "
+            f"(speed RMSE at the chosen delay {_num(at)} m/s, 1 s windows)."
+        ),
+        "",
+        (
+            f"Validation split error: wheel speed {_num(fit['speed_val_rmse_mps'])} m/s, yaw "
+            f"change {_num(fit['yaw_val_rmse_rad'])} rad per 0.1 s (n/a means the split holds no "
+            "data of that kind)."
+        ),
+        "",
+        f"Steering gains tied (one gain, offset 0): {fit['sides_tied']}.",
+        "",
+        (
+            f"Yaw channel trained on: {fit['yaw_training']}; blocked CV yaw RMSE per option "
+            f"{json.dumps(fit['yaw_cv_rmse_rad'])}."
+        ),
+        "",
+        f"Training counts: {json.dumps(fit['counts'])}.",
+    ]
+    return "\n".join(lines)
+
+
 def render_readme(manifest: dict[str, Any], metrics: dict[str, Any]) -> str:
     io = manifest["io"]
     nom = io["nominal"]
@@ -244,12 +333,15 @@ def render_readme(manifest: dict[str, Any], metrics: dict[str, Any]) -> str:
         "|---|---|",
         *[f"| {k} | {v:.4f} |" for k, v in nom.items()],
         "",
-        (
-            f"Validation error of the fit: wheel speed {metrics['fit']['speed_val_rmse_mps']:.4f} m/s "
-            f"(RMSE over 1 s windows), yaw change {metrics['fit']['yaw_val_rmse_rad']:.4f} rad per 0.1 s."
-        ),
+        _fit_summary(metrics["fit"], nom["command_delay_s"]),
         "",
-        "Flags: " + (json.dumps(metrics["fit"]["flags"]) if metrics["fit"]["flags"] else "none"),
+        "Flags (parameters on a bound, or that the data cannot move):",
+        "",
+        *(
+            [f"- {k}: {v}" for k, v in metrics["fit"]["flags"].items()]
+            if metrics["fit"]["flags"]
+            else ["- none"]
+        ),
         "",
         "## Held-out error, open loop",
         "",
@@ -261,7 +353,11 @@ def render_readme(manifest: dict[str, Any], metrics: dict[str, Any]) -> str:
         "| variant | 0.5 s | 1.0 s | 1.5 s |",
         "|---|---|---|---|",
         _row("placeholder defaults", errors["placeholder_nominal"]),
-        _row("fitted nominal", errors["fitted_nominal"]),
+        _row("fitted nominal (shipped)", errors["fitted_nominal"]),
+        _row(
+            "fitted nominal, other side tying (not shipped)",
+            errors.get("fitted_nominal_other_side_tying", errors["fitted_nominal"]),
+        ),
         *[
             _row(f"fitted + residual (seed {s})", errors[f"fitted_plus_residual_seed{s}"])
             for s in SEEDS
@@ -274,6 +370,10 @@ def render_readme(manifest: dict[str, Any], metrics: dict[str, Any]) -> str:
             f"yaw {metrics['residual_median_improvement_1s']['yaw']:+.1%} (rule: both at least 5 percent). "
             f"Residual {'ENABLED (seed ' + str(seed) + ')' if enabled else 'NOT enabled: zeros in residual_mlp.f32'}."
         ),
+        "",
+        "## Decisions and findings",
+        "",
+        *FINDINGS,
         "",
         "## Ground speed against wheel speed",
         "",

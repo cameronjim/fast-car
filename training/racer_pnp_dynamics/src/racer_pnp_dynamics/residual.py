@@ -69,6 +69,27 @@ def build_samples(
     return ResidualSamples(x, np.stack([dv_error, yaw_error], axis=1))
 
 
+MIN_VAL_SAMPLES = 200
+FALLBACK_VAL_FRACTION = 0.2
+
+
+def early_stopping_split(
+    train: ResidualSamples, val: ResidualSamples
+) -> tuple[ResidualSamples, ResidualSamples, str]:
+    """Samples to train on and to early stop on. The validation split is used when it is big
+    enough; the 2026-11-11 bag has no driving in its validation tenth, so otherwise the last
+    FALLBACK_VAL_FRACTION of the training samples (the latest segments in time, a blocked
+    split) stand in for it."""
+    if len(val) >= MIN_VAL_SAMPLES:
+        return train, val, "validation split"
+    cut = int(len(train) * (1.0 - FALLBACK_VAL_FRACTION))
+    return (
+        ResidualSamples(train.x[:cut], train.y[:cut]),
+        ResidualSamples(train.x[cut:], train.y[cut:]),
+        f"last {FALLBACK_VAL_FRACTION:.0%} of the training samples (validation split too small)",
+    )
+
+
 Trainer = Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int], MlpWeights]
 
 

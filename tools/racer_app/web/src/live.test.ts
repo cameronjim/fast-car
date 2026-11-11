@@ -25,6 +25,7 @@ describe("startLive", () => {
         "/camera/csi0/image_raw/compressed",
         "/camera/usb/image_raw/compressed",
         "/drive",
+        "/lap/status",
         "/map",
         "/odom/wheel",
         "/pose",
@@ -57,6 +58,8 @@ describe("startLive", () => {
     link.deliver("/drive", { drive: { steering_angle: -0.1, speed: 1.4 } });
     link.deliver("/telemetry/vesc/voltage_v", { data: 11.8 });
     link.deliver("/telemetry/vesc/fault", { data: "NONE" });
+    link.deliver("/lap/status", { data: '{"state":"running","similarity":0.5,"laps":2,"last_lap_s":18.1,"best_lap_s":17.9}' });
+    link.deliver("/lap/status", { data: "garbage" }); // ignored: the last good status stays
     link.deliver("/pose", {
       pose: { pose: { position: { x: 1, y: 2 }, orientation: { x: 0, y: 0, z: 0, w: 1 } } },
     });
@@ -72,6 +75,7 @@ describe("startLive", () => {
     expect(live.steering?.value).toEqual({ angleRad: -0.1, speedMps: 1.4 });
     expect(live.voltage?.value).toBe(11.8);
     expect(live.fault?.value).toBe("NONE");
+    expect(live.lap?.value).toMatchObject({ laps: 2, lastLapS: 18.1, bestLapS: 17.9 });
     expect(live.pose?.value).toEqual({ x: 1, y: 2, yaw: 0 });
     expect(live.events[0].text).toContain("watchdog engage [BRAKE]");
   });

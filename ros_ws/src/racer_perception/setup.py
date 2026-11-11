@@ -24,6 +24,7 @@ setup(
         "console_scripts": [
             "detector_node = racer_perception.detector_node:main",
             "fusion_node = racer_perception.fusion_node:main",
+            "lap_counter_node = racer_perception.lap_counter_node:main",
         ],
     },
 )

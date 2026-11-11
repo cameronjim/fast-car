@@ -5,6 +5,7 @@ import {
   batteryReading,
   fmt,
   fmtDuration,
+  lapSubline,
   occupancyToImage,
   scanToPoints,
   worldToPixel,
@@ -33,6 +34,7 @@ export function Gauges({ live, status, vehicle }: { live: Live; status: Status |
   const motor = fresh(live.tempMotor);
   const fault = fresh(live.fault);
   const faultBad = fault !== null && !["", "NONE", "FAULT_CODE_NONE"].includes(fault.trim().toUpperCase());
+  const lap = fresh(live.lap);
   const steerDeg = steer ? (steer.angleRad * 180) / Math.PI : null;
   return (
     <section class="card gauges" aria-label="Gauges">
@@ -58,6 +60,13 @@ export function Gauges({ live, status, vehicle }: { live: Live; status: Status |
         <div class={`big ${faultBad ? "lvl-red" : ""}`}>{fault === null ? "no data" : faultBad ? fault : "no fault"}</div>
         <div class="sub">FET {fmt(fet, 0, " C")}, motor {motor && motor > 0 ? fmt(motor, 0, " C") : "no sensor"}, in {fmt(fresh(live.currentIn), 1, " A")}</div>
       </div>
+      {lap && (
+        <div class="gauge">
+          <h3>Laps</h3>
+          <div class="big">{lap.laps}</div>
+          <div class="sub">{lapSubline(lap)}</div>
+        </div>
+      )}
     </section>
   );
 }

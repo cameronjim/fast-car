@@ -361,6 +361,44 @@ def test_cameras_includes_both_with_conditions_and_forwarding():
     }
 
 
+def _lap_node(entities) -> Node:
+    nodes = [e for e in entities if isinstance(e, Node)]
+    assert len(nodes) == 1
+    return nodes[0]
+
+
+def test_cameras_lap_counter_is_off_by_default_and_a_single_conditional_node():
+    entities = _load("cameras.launch.py").generate_launch_description().entities
+    assert _defaults(entities)["lap_counter"] == "false"
+    node = _lap_node(entities)
+    assert (node.node_package, node.node_executable) == ("racer_perception", "lap_counter_node")
+    assert node.condition.evaluate(_context(lap_counter="false")) is False
+    assert node.condition.evaluate(_context(lap_counter="true")) is True
+
+
+def test_cameras_lap_counter_forwards_its_thresholds_with_types():
+    module = _load("cameras.launch.py")
+    entities = module.generate_launch_description().entities
+    defaults = _defaults(entities)
+    for name, (_param, default, _desc, _type) in module.LAP_FORWARDED.items():
+        assert defaults[name] == default, name
+    node = _lap_node(entities)
+    context = _context(
+        lap_image_topic="/camera/csi0/image_raw/compressed",
+        lap_similarity_threshold="0.9",
+        lap_rearm_threshold="0.4",
+        lap_min_lap_time_s="12.0",
+        lap_min_lap_distance_m="7.5",
+    )
+    assert _node_parameters(node, context) == {
+        "image_topic": "/camera/csi0/image_raw/compressed",
+        "similarity_threshold": 0.9,
+        "rearm_threshold": 0.4,
+        "min_lap_time_s": 12.0,
+        "min_lap_distance_m": 7.5,
+    }
+
+
 # --- car_teleop.launch.py `cameras` argument and the recorder regex -----------------------
 
 
@@ -393,6 +431,9 @@ _RECORDED = [
     "/spiderbot/alert",
     "/spiderbot/state",
     "/spiderbot/patrol_cmd",
+    # Lap counter (2026-11-12).
+    "/lap/event",
+    "/lap/status",
     # Everything recorded before the cameras still is.
     "/drive_raw",
     "/drive",
@@ -407,6 +448,8 @@ _RECORDED = [
 _NOT_RECORDED = [
     "/perception/debug_image/compressed",
     "/perception/objects/extra",
+    "/lap/event/extra",
+    "/lap/reference",
     "/camera/usb/image_raw",
     "/camera/csi0/image_raw",
     "/camera/usb/camera_info",

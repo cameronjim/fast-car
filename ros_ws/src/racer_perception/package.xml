@@ -9,7 +9,8 @@
     INSTALL_PERCEPTION=required) on a CompressedImage topic and publishes
     vision_msgs/Detection2DArray. fusion_node fuses the detections with the LiDAR scan into
     racer_msgs/ObjectDetectionArray (vehicle-frame bearing, robust range) and publishes the
-    nearest person as /perception/target. The maths (racer_perception/fusion.py,
+    nearest person as /perception/target. lap_counter_node counts laps from the camera alone by
+    recognising the starting view again (docs/notes/lap-counter-2026-11-12.md). The maths (racer_perception/fusion.py,
     person_tracker.py, throttle.py) are pure Python and L1-tested without ROS. Nothing here
     publishes to the command path.
   </description>
@@ -22,6 +23,12 @@
   <depend>rcl_interfaces</depend>
   <depend>sensor_msgs</depend>
   <depend>vision_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <!-- lap_counter_node (lap_counter.py): numpy for the similarity, OpenCV only to decode JPEGs. -->
+  <depend>python3-numpy</depend>
+  <exec_depend>python3-opencv</exec_depend>
   <depend>racer_msgs</depend>
   <!-- The LiDAR mount yaw comes from vehicle_params through racer_tools' loader (CLAUDE.md
        invariant 2). -->

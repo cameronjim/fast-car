@@ -80,7 +80,10 @@ def _make_node_class() -> Any:
             self._yaw_offset = float(self.declare_parameter("laser_yaw_offset_rad", 0.0).value)
             self._status_period_s = float(self.declare_parameter("status_period_s", 1.0).value)
 
-            vehicle_params = load_vehicle_params()
+            try:
+                vehicle_params = load_vehicle_params()
+            except Exception as exc:
+                raise StartupRefusal(f"vehicle_params could not be loaded: {exc}") from exc
             self._core, self._deployment = build_core(
                 str(policy_dir), str(raceline_path), vehicle_params, scan_timeout_s
             )
@@ -106,8 +109,6 @@ def _make_node_class() -> Any:
             self._beams: Array | None = None
             self._scan_t = -1e9
             self._last_command_t: float | None = None
-            self._frame_from_odom: tuple[float, float, float] | None = None
-            self._frame_stamp_s = 0.0
             self._tf_buffer: Any = None
             if self._pose_frame:
                 import tf2_ros

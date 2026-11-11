@@ -99,8 +99,9 @@ def test_profile_argument_defaults_to_none_with_both_choices():
     assert "profile" in args
     context = LaunchContext()
     assert "".join(s.perform(context) for s in args["profile"].default_value) == "none"
-    assert set(args["profile"].choices) == {"none", "floor-2026-10-06", "lane-2026-10-25"}
-    assert set(module.PROFILES) == {"none", "floor-2026-10-06", "lane-2026-10-25"}
+    names = {"none", "floor-2026-10-06", "lane-2026-10-25", "race-2026-11-12"}
+    assert set(args["profile"].choices) == names
+    assert set(module.PROFILES) == names
 
 
 def test_floor_profile_constant_is_the_checkpoint():
@@ -217,3 +218,95 @@ def test_target_mode_must_be_one_of_the_three_names():
         _node_parameters(target_mode="lane_center")
     # Not set: nothing is passed, the profile or node default applies.
     assert "target_mode" not in _merged(_node_parameters())
+
+
+# -- race profile and the race launch arguments (2026-11-12) ---------------------------------------
+
+_RACE_ONLY_PARAMETERS = {
+    "physics_speed",
+    "a_lat_max_mps2",
+    "stopping_margin_m",
+    "side_cap_distance_m",
+    "side_cap_min_speed_mps",
+    "apex_offset_m",
+    "track_out_offset_m",
+    "compute_on_scan",
+}
+
+
+def test_old_profiles_carry_no_race_parameter_so_their_behaviour_is_unchanged():
+    module = _load_launch_module()
+    for name in ("none", "floor-2026-10-06", "lane-2026-10-25"):
+        assert _RACE_ONLY_PARAMETERS.isdisjoint(module.PROFILES[name]), name
+        merged = _merged(_node_parameters(profile=name))
+        assert _RACE_ONLY_PARAMETERS.isdisjoint(merged), name
+        assert "status_rate_hz" not in merged
+    # The lane profile still has the values it had, and the old defaults are the old 0.6 / off.
+    lane = module.LANE_2026_10_25_PROFILE
+    assert lane["lane_lookahead_m"] == 0.6
+    assert "outside_entry_offset_m" not in lane
+
+
+def test_race_profile_is_the_lane_profile_with_the_recommended_settings_and_the_race_features():
+    module = _load_launch_module()
+    race = module.RACE_2026_11_12_PROFILE
+    lane = module.LANE_2026_10_25_PROFILE
+    assert module.PROFILES["race-2026-11-12"] is race
+    for key, value in lane.items():
+        if key not in ("lane_lookahead_m",):
+            assert race[key] == value or key in race, key
+    assert race["target_mode"] == "lane_centre"
+    assert race["lane_lookahead_m"] == 0.8  # the recommended settings, now inside the profile
+    assert race["outside_entry_offset_m"] == 0.25
+    assert race["physics_speed"] is True
+    assert race["speed_time_constant_s"] == 0.0  # a low-pass would delay the stopping limit
+    assert race["swept_path_clamp"] is True and race["reverse_escape"] is True
+
+
+def test_race_profile_reaches_the_node_with_the_right_types():
+    merged = _merged(_node_parameters(profile="race-2026-11-12"))
+    for name, value in merged.items():
+        if name in _INT_PARAMETERS:
+            assert type(value) is int, name
+        elif name in _BOOL_PARAMETERS | {"physics_speed", "compute_on_scan"}:
+            assert type(value) is bool, name
+        elif name == "target_mode":
+            assert type(value) is str
+        else:
+            assert type(value) is float, name
+
+
+def test_race_launch_arguments_are_forwarded_with_their_types_and_override_the_profile():
+    merged = _merged(
+        _node_parameters(
+            profile="race-2026-11-12",
+            physics_speed="false",
+            compute_on_scan="true",
+            a_lat_max_mps2="3",
+            stopping_margin_m="0.1",
+            side_cap_distance_m="0",
+            side_cap_min_speed_mps="1",
+            apex_offset_m="0",
+            track_out_offset_m="0.1",
+            status_rate_hz="2",
+        )
+    )
+    assert merged["physics_speed"] is False
+    assert merged["compute_on_scan"] is True
+    for name, value in (
+        ("a_lat_max_mps2", 3.0),
+        ("stopping_margin_m", 0.1),
+        ("side_cap_distance_m", 0.0),
+        ("side_cap_min_speed_mps", 1.0),
+        ("apex_offset_m", 0.0),
+        ("track_out_offset_m", 0.1),
+        ("status_rate_hz", 2.0),
+    ):
+        assert merged[name] == value and type(merged[name]) is float, name
+
+
+def test_physics_speed_and_compute_on_scan_must_be_true_or_false():
+    for name in ("physics_speed", "compute_on_scan"):
+        with pytest.raises(ValueError, match=name):
+            _node_parameters(**{name: "yes"})
+    assert "physics_speed" not in _merged(_node_parameters())

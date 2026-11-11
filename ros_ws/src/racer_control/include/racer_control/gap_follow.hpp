@@ -442,6 +442,46 @@ OutsideEntry apply_outside_entry(const std::vector<LanePoint>& trace, std::size_
                                  const LanePoints& points, double offset_m, double turn_rad,
                                  double half_width_m, double margin_m);
 
+// RACING LINE (apply_racing_line; added 2026-11-12, every part off by default). Outside entry
+// above is the first third of a racing line: outside, turn in late. This adds the other two, from
+// the same two numbers (`near` and `far`, the heading changes before and after the aim point) and
+// the same turn_rad, with three weights that sum to a smooth hand-over as a corner goes by:
+//   * ENTRY (outside_entry_offset_m): exactly apply_outside_entry's weight and room.
+//   * LATE APEX (apex_offset_m): while the car is turning (n = min(1, |near| / turn_rad)) and the
+//     turn that is still to come beyond the lookahead has shrunk to about turn_rad, the aim moves
+//     to the INSIDE of the turn: weight n * (1 - coming) * min(1, |far| / turn_rad), where coming
+//     is the entry's "turn ahead" ramp. It is zero while a long turn is still ahead (the early
+//     part of the corner: no early apex) and peaks when |far| = turn_rad.
+//   * TRACK-OUT (track_out_offset_m): as the turn ends (|far| falls below turn_rad) the aim moves
+//     back to the OUTSIDE of the turn that has just been driven, weight n * (1 - min(1, |far| /
+//     turn_rad)): the car unwinds onto the exit side of the straight.
+// Each part's shift is limited by the room on ITS side (the nearest return beside the aim, less
+// the body half width, margin_m and 0.05 m: never into the wall) and the sum by the room on the
+// side it moves toward. With apex_offset_m = track_out_offset_m = 0 the result is
+// apply_outside_entry's, to rounding (the node then calls that function itself, so the pipeline
+// is bit-identical to the one without a racing line).
+struct RacingLineParams {
+  double entry_offset_m = 0.0;
+  double apex_offset_m = 0.0;
+  double track_out_offset_m = 0.0;
+  double turn_rad = 0.35;
+  double half_width_m = 0.0;
+  double margin_m = 0.0;
+};
+
+struct RacingLine {
+  LanePoint aim;
+  double entry_weight = 0.0;
+  double apex_weight = 0.0;
+  double exit_weight = 0.0;
+  double shift_m = 0.0;  // lateral displacement of the aim point, left positive
+  double near_rad = 0.0;
+  double far_rad = 0.0;
+};
+
+RacingLine apply_racing_line(const std::vector<LanePoint>& trace, std::size_t aim_index,
+                             const LanePoints& points, const RacingLineParams& params);
+
 // atan(2 L sin(alpha) / l_d) clamped to +/- max_steering_rad (see PURE PURSUIT above). An aim
 // point at the rear axle (l_d < 1e-9), a non-positive wheelbase or a non-finite input gives 0.
 double pure_pursuit_steering(const LanePoint& aim, double wheelbase_m, double max_steering_rad);
@@ -576,6 +616,20 @@ bool any_forward_arc_clear(const ScanInput& scan, double laser_yaw_offset_rad,
                            double max_steering_rad, double travel_m,
                            const ArcProbeGeometry& geometry, std::vector<double>& points);
 
+// FREE TRAVEL along a steering arc (free_arc_travel; added 2026-11-12 for the physics speed law,
+// race_speed.hpp). The same kinematic model and body rectangle as forward_arc_clear, but it
+// returns HOW FAR the rear axle can travel along the arc of constant `steering_rad` before the
+// inflated body touches a return, capped at travel_m: the "free range along the swept path" the
+// stopping-distance speed needs. The distance is to the first sampled pose (every kArcProbeStepM
+// of travel) at which the body overlaps a return, so it is conservative by up to one step (the
+// previous clear pose is reported). A return already inside the inflated body at the start pose is
+// ignored, as in the probe. Unusable input (scan, yaw, geometry, travel, steering at or beyond
+// pi/2) returns travel_m, like the probe reports CLEAR: it only ever ADDS a reason to slow down
+// when it measures a return, and the speed law has the other limits.
+double free_arc_travel(const ScanInput& scan, double laser_yaw_offset_rad, double steering_rad,
+                       double travel_m, const ArcProbeGeometry& geometry,
+                       std::vector<double>& points);
+
 // Discrete first-order low-pass y += dt / (tau + dt) * (x - y), stable for any dt > 0. A
 // non-finite or non-positive dt holds the previous output (same "no elapsed time, no change"
 // convention as SpeedRateLimiter), so the first sample after construction or reset() holds
@@ -634,6 +688,23 @@ struct GapFollowConfig {
   double outside_entry_offset_m = 0.0;
   double outside_entry_horizon_m = 1.6;
   double outside_entry_turn_rad = 0.35;
+  // Racing line (see apply_racing_line): the late apex and the track-out. 0 (the default) is off;
+  // the entry part is outside_entry_offset_m above. Any of the three on widens the trace to
+  // outside_entry_horizon_m.
+  double apex_offset_m = 0.0;
+  double track_out_offset_m = 0.0;
+  // Side clearance for the speed law's side-proximity cap: when true the follower measures the
+  // lane boundaries on every scan (in every target mode) and reports the body's clearance to the
+  // nearer one in GapFollowResult::side_clearance_m. false (the default) skips it outside
+  // lane_centre mode, where it is measured anyway.
+  bool compute_side_clearance = false;
+  // Free travel along the commanded steering arc (free_arc_travel), for the stopping-distance
+  // speed. free_path_horizon_m 0 (the default) skips it. The probe body is the bounding box
+  // inflated by free_path_margin_m; rear_overhang_m (chassis.rear_overhang_m) is the rear end of
+  // it.
+  double free_path_horizon_m = 0.0;
+  double free_path_margin_m = 0.0;
+  double rear_overhang_m = 0.0;
 };
 
 struct GapFollowResult {
@@ -663,6 +734,17 @@ struct GapFollowResult {
   // Outside entry: how far the aim point was moved to the outside of the coming turn (m, signed
   // as lateral displacement in the rear-axle frame, left positive); 0 when off or no turn ahead.
   double outside_entry_shift_m = 0.0;
+  // Racing line weights of this scan (all 0 when off): entry, late apex, track-out.
+  double racing_entry_weight = 0.0;
+  double racing_apex_weight = 0.0;
+  double racing_exit_weight = 0.0;
+  // Body clearance to the nearer lane boundary beside the car (m, >= 0): the nearest counted
+  // return in the side sector, less the body half width. Empty when both sides are open or the
+  // measurement is off (GapFollowConfig::compute_side_clearance, lane_centre mode).
+  std::optional<double> side_clearance_m;
+  // Rear-axle travel along the final steering arc before the inflated body touches a return, at
+  // most free_path_horizon_m; empty when the measurement is off.
+  std::optional<double> free_path_m;
   bool swept_path_clamped = false;  // the swept-path clamp reduced |steering|
   double steering_rad = 0.0;        // after clamps and corner override, BEFORE low-pass
 };
@@ -684,6 +766,7 @@ class GapFollower {
   std::vector<double> extended_;
   std::vector<double> lane_left_;
   std::vector<double> lane_right_;
+  std::vector<double> free_path_points_;
   // Lane-centre target: the half width last measured (nullopt until the first measurement,
   // when lane_default_half_width_m applies), the loaded returns and the trace.
   std::optional<double> lane_half_width_m_;

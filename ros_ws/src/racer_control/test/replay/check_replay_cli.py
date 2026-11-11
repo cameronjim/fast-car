@@ -196,6 +196,117 @@ def main():
         piped = rows(run(cli, ["--params", str(params)], stdin=three.read_text(encoding="utf-8")))
         check_close_rows(piped, lp)
 
+        # --speed (2026-11-12): the speed half of the node, with the physics law. Scene 0 is a
+        # corridor open ahead (target = the top speed, the probe sees no return), scene 1 a wall
+        # 0.45 m ahead (the free path is far inside the standoff: the floor). Without --speed no
+        # speed key appears (the golden rows above already pin that).
+        two = Path(tmp) / "two.txt"
+        two.write_text(scene_lines[0] + "\n" + scene_lines[1] + "\n", encoding="utf-8")
+        zero = Path(tmp) / "zero.txt"
+        zero.write_text(scene_lines[0] + "\n", encoding="utf-8")
+
+        def race_args(physics):
+            return [
+                "--params",
+                str(params),
+                "--scans",
+                str(two),
+                "--speed",
+                "--set",
+                f"physics_speed={physics}",
+                "--set",
+                "max_speed_mps=0.9",
+                "--set",
+                "min_speed_mps=0.4",
+            ]
+
+        fast = rows(run(cli, race_args("true")))
+        assert abs(fast[0]["target_speed_mps"] - 0.9) < 1e-9 and fast[0]["free_path_m"] > 1.0, fast[
+            0
+        ]
+        # Five ticks between the scans: the first steps by 0, four of the limiter's a * dt.
+        assert 0.0 < fast[0]["speed_mps"] < 0.9 and fast[0]["free_path_m"] <= 3.0
+        assert fast[1]["free_path_m"] < 0.2, fast[1]
+        assert abs(fast[1]["target_speed_mps"] - 0.4) < 1e-9, fast[1]  # the floor holds
+        for r in fast:
+            assert 0.0 <= r["speed_mps"] <= 0.9 + 1e-9
+            for key in ("side_clearance_m", "racing_shift_m", "racing_apex_weight"):
+                assert key in r
+        # The same without physics_speed is the range law: no target speed, a speed anyway.
+        ranged = rows(run(cli, race_args("false")))
+        assert ranged[0]["target_speed_mps"] is None and ranged[0]["speed_mps"] >= 0.0
+        assert ranged[0]["free_path_m"] is None
+        # Racing line and speed parameters: ranges are the node's.
+        for bad in (
+            ["--set", "apex_offset_m=2"],
+            ["--set", "track_out_offset_m=-0.1"],
+            ["--set", "outside_entry_turn_rad=0"],
+            ["--set", "a_lat_max_mps2=0"],
+            ["--set", "stopping_margin_m=2"],
+            ["--set", "side_cap_distance_m=-1"],
+            ["--set", "max_speed_mps=25"],
+            ["--set", "min_speed_mps=-1"],
+            ["--set", "max_speed_mps=0.3", "--set", "min_speed_mps=0.4"],
+            ["--set", "target_range_median_scans=0"],
+            ["--set", "target_range_median_scans=2.5"],
+            ["--set", "speed_rate_limit_margin_fraction=0"],
+        ):
+            proc = run(cli, ["--params", str(params), "--scans", str(two), "--speed", *bad])
+            assert proc.returncode == 2 and proc.stdout == "", (bad, proc.returncode, proc.stderr)
+        # --describe carries the numbers the replay checks read, from the binding.
+        desc2 = json.loads(run(cli, ["--params", str(params), "--describe"]).stdout)
+        for key in (
+            "stop_deceleration_mps2",
+            "stop_latency_s",
+            "min_forward_clearance_m",
+            "max_acceleration_mps2",
+            "global_speed_cap_mps",
+        ):
+            assert desc2[key] > 0, key
+        # A /scan gap resets the speed chain, as the node's stale branch does.
+        gap2 = Path(tmp) / "gap2.txt"
+        gap2.write_text(
+            scene_lines[0] + "\n" + scene_lines[0].replace("0.000", "5.000", 1) + "\n",
+            encoding="utf-8",
+        )
+        g2 = rows(
+            run(
+                cli,
+                [
+                    "--params",
+                    str(params),
+                    "--scans",
+                    str(gap2),
+                    "--speed",
+                    "--set",
+                    "physics_speed=true",
+                ],
+            )
+        )
+        assert g2[1]["speed_mps"] < 0.5, g2[1]  # restarted from rest, not from the old speed
+        # Outside entry accepted by the CLI now (lane_centre only, but never refused).
+        oe = run(
+            cli,
+            [
+                "--params",
+                str(params),
+                "--scans",
+                str(zero),
+                "--set",
+                "target_mode=lane_centre",
+                "--set",
+                "outside_entry_offset_m=0.25",
+                "--set",
+                "apex_offset_m=0.1",
+                "--set",
+                "track_out_offset_m=0.1",
+            ],
+        )
+        assert oe.returncode == 0, oe.stderr
+        oe_row = rows(oe)[0]
+        assert abs(oe_row["lane_aim_y_m"]) < 0.01  # a straight corridor: nothing moves
+        assert len(oe_row["lane_trace"]) >= 33  # walked out to the horizon
+
         # key=value params, with the node's speed and escape keys accepted and ignored.
         kv = Path(tmp) / "params.txt"
         kv.write_text(

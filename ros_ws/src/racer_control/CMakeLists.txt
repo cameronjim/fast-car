@@ -37,6 +37,7 @@ add_library(racer_control_core
   src/wall_follow.cpp
   src/pid.cpp
   src/reactive_speed.cpp
+  src/race_speed.cpp
   src/reverse_escape.cpp
   # Low-speed manoeuvres (roadmap 2.9): park_node's slot detection, two-arc parallel park and
   # three-point turn, and the state machine that runs them. Same ROS-free rule.
@@ -111,7 +112,8 @@ foreach(reactive_node gap_follow_node wall_follow_node)
   add_dependencies(${reactive_node} racer_control_generate_vehicle_params)
   target_include_directories(${reactive_node} PRIVATE "${RACER_GENERATED_DIR}")
   target_link_libraries(${reactive_node} racer_control_core)
-  ament_target_dependencies(${reactive_node} rclcpp rcl_interfaces sensor_msgs ackermann_msgs)
+  ament_target_dependencies(${reactive_node} rclcpp rcl_interfaces sensor_msgs ackermann_msgs
+    std_msgs)
   install(TARGETS ${reactive_node}
     DESTINATION lib/${PROJECT_NAME}
   )
@@ -175,6 +177,7 @@ if(BUILD_TESTING)
     test/test_gap_follow.cpp
     test/test_wall_follow.cpp
     test/test_reverse_escape.cpp
+    test/test_race_speed.cpp
     # park_node core (roadmap 2.9); park_test_helpers.hpp holds the synthetic LiDAR.
     test/test_park_geometry.cpp
     test/test_park_slot.cpp
@@ -219,6 +222,18 @@ if(BUILD_TESTING)
   # 50 Hz /drive_raw never gaps to safety_node's 60 ms watchdog.
   add_launch_test(test/test_gap_follow_node_threading_launch.py
     TARGET test_gap_follow_node_threading_launch
+    TIMEOUT 120
+  )
+  # Race features (2026-11-12), timer mode: physics speed through the node (open scan, wall
+  # ahead against the stopping law), the stale scan stopping output and restarting from rest,
+  # /gap_follow/status latency and CPU statistics.
+  add_launch_test(test/test_gap_follow_node_race_launch.py
+    TARGET test_gap_follow_node_race_launch
+    TIMEOUT 120
+  )
+  # compute_on_scan: the latency is the processing time, the timer still feeds the watchdog.
+  add_launch_test(test/test_gap_follow_node_event_launch.py
+    TARGET test_gap_follow_node_event_launch
     TIMEOUT 120
   )
   # L1 check of the same argument: launch-description inspection only, no processes started

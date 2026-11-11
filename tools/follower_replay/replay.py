@@ -43,11 +43,16 @@ def _literal(node: ast.expr, env: dict[str, Any]) -> Any:
             raise ReplayError(f"{LAUNCH_FILE.name}: cannot resolve name {node.id!r}")
         return env[node.id]
     if isinstance(node, ast.Dict):
-        return {
-            ast.literal_eval(k): _literal(v, env)
-            for k, v in zip(node.keys, node.values, strict=True)
-            if k is not None
-        }
+        merged: dict[Any, Any] = {}
+        for k, v in zip(node.keys, node.values, strict=True):
+            if k is None:
+                # `**name`: the profile is built on another profile (the lane profile on the
+                # floor one, the race profile on the lane one). Skipping it replayed those
+                # profiles without their base values.
+                merged.update(_literal(v, env))
+            else:
+                merged[ast.literal_eval(k)] = _literal(v, env)
+        return merged
     return ast.literal_eval(node)
 
 

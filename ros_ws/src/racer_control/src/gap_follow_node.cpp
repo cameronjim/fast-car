@@ -96,6 +96,22 @@
 // precision cannot round past it on the float32 wire. Non-finite values are never published
 // (the core never produces them; the timer re-checks before publishing).
 //
+// RACE PROFILE ADDITIONS (2026-11-12, docs/notes/gap-follow-race-2026-11-12.md). Every one is
+// behind a parameter whose default is the old behaviour:
+//   * physics_speed: the speed law of race_speed.hpp (lateral acceleration limit from the
+//     commanded steering arc, stopping distance along the swept path, side proximity cap)
+//     replaces the range law; the low-pass and the acceleration limiter still follow it.
+//   * apex_offset_m / track_out_offset_m: the late apex and the track-out of the racing line
+//     (gap_follow.hpp RACING LINE), on top of outside_entry_offset_m.
+//   * compute_on_scan: besides the 50 Hz timer, the command half also runs the moment a scan has
+//     been processed and the timer is restarted from it, so the scan-to-command latency is the
+//     processing time instead of up to one period more. The filters, the rate limiter and the
+//     escape advance by the real time since the last command (at most one period), so an extra
+//     command moves them by what actually passed and the acceleration bound still holds.
+//   * /gap_follow/status (std_msgs/String JSON, status_rate_hz, in the car's bag): scan-to-command
+//     latency p50 / p99 / max over the last status_window scans, the CPU time of each scan's
+//     perception half, and the last speed-law terms. Always published (0 Hz turns it off).
+//
 // Physical constants come only from the generated vehicle_params binding (CLAUDE.md
 // invariant 2): half width = chassis.width_m / 2 (the old node hard-coded 0.5 m, wrong for
 // this car), steering clamp = steering.max_angle_rad, speed cap = limits.global_speed_cap_mps
@@ -111,8 +127,11 @@
 // false ignores the binding and uses laser_yaw_offset_rad as given. It exists ONLY for scans
 // that are not the real car's LiDAR, i.e. the simulator (racer_gym_bridge publishes /scan
 // aligned to the vehicle, yaw 0) and synthetic-scan tests. Never set it false on the car.
+#include <time.h>
+
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -121,6 +140,7 @@
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -129,6 +149,7 @@
 #include "racer_control/float32_wire_margin.hpp"
 #include "racer_control/gap_follow.hpp"
 #include "racer_control/laser_scan.hpp"
+#include "racer_control/race_speed.hpp"
 #include "racer_control/reactive_speed.hpp"
 #include "racer_control/reverse_escape.hpp"
 #include "racer_control/speed_rate_limiter.hpp"
@@ -159,6 +180,7 @@ class GapFollowNode : public rclcpp::Node {
         "Watchdog: stop publishing /drive_raw when no usable /scan has arrived for this long "
         "(s). Default is 3x the RPLIDAR C1's 10 Hz period.");
 
+    build_race();
     build_escape();
     scan_.ranges.reserve(4096);
     scan_processing_delay_s_ = declare_ranged_double(
@@ -190,6 +212,13 @@ class GapFollowNode : public rclcpp::Node {
     timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                          std::chrono::duration<double>(control_period_s_)),
                                      std::bind(&GapFollowNode::on_timer, this), command_group_);
+    status_pub_ = this->create_publisher<std_msgs::msg::String>("/gap_follow/status", command_qos);
+    if (status_period_s_ > 0.0) {
+      status_timer_ =
+          this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::duration<double>(status_period_s_)),
+                                  std::bind(&GapFollowNode::on_status_timer, this), command_group_);
+    }
 
     const GapFollowConfig& c = follower_.config();
     RCLCPP_INFO(this->get_logger(),
@@ -295,6 +324,55 @@ class GapFollowNode : public rclcpp::Node {
         "Outside entry: heading change beyond the lookahead (rad) that counts as a turn coming "
         "(full effect at twice this), and the heading change inside the lookahead that ends it "
         "(turn in).");
+    c.apex_offset_m = declare_ranged_double(
+        *this, "apex_offset_m", 0.0, 0.0, 1.0,
+        "Racing line, target_mode lane_centre: move the aim point to the INSIDE of a turn that is "
+        "ending by up to this much (m): the late apex (gap_follow.hpp RACING LINE). 0 (default) = "
+        "off.");
+    c.track_out_offset_m = declare_ranged_double(
+        *this, "track_out_offset_m", 0.0, 0.0, 1.0,
+        "Racing line, target_mode lane_centre: move the aim point back to the OUTSIDE of the turn "
+        "just driven by up to this much (m) as it ends: the track-out. 0 (default) = off.");
+    // Physics speed law (race_speed.hpp). max_speed_mps is declared here, ahead of the speed
+    // config, because the free-path horizon below is sized from it.
+    const double max_speed = declare_ranged_double(
+        *this, "max_speed_mps", 1.43, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
+        "Upper speed bound (m/s, true speed). Range-limited to vehicle_params "
+        "limits.global_speed_cap_mps. The default is the old 2.0 divided by 1.401: since schema "
+        "0.14.0 a request is the true wheel speed, and every speed tuned before it is converted "
+        "so the car does what it did (docs/notes/calibration-2026-11-10.md).");
+    const bool physics_speed = declare_described_bool(
+        *this, "physics_speed", false,
+        "true: speed = max(min_speed_mps, min(max_speed_mps, sqrt(a_lat_max_mps2 * R) from the "
+        "commanded steering, the speed that stops inside the free path along the swept path, the "
+        "side proximity cap)) (race_speed.hpp); k_speed_per_s, k_steer and "
+        "target_range_median_scans are then unused. false (default): the range law.");
+    declare_ranged_double(
+        *this, "a_lat_max_mps2", 2.0, 0.1, 20.0,
+        "physics_speed: lateral acceleration the commanded arc may need (m/s^2); the speed on a "
+        "turn of radius R is sqrt(a_lat_max * R). Not a vehicle constant: the schema has no "
+        "friction limit. Tune on the surface (docs/notes/gap-follow-race-2026-11-12.md).");
+    const double stopping_margin = declare_ranged_double(
+        *this, "stopping_margin_m", 0.05, 0.0, 1.0,
+        "physics_speed: the free path is measured with the body inflated by this (m), and the "
+        "stopping point is limits.min_forward_clearance_m plus this short of the return.");
+    declare_ranged_double(
+        *this, "side_cap_distance_m", 0.0, 0.0, 1.0,
+        "physics_speed: cap the speed while a lane wall is closer than this to the BODY beside "
+        "the car (m), falling linearly to side_cap_min_speed_mps at the wall. 0 (default) = off.");
+    declare_ranged_double(*this, "side_cap_min_speed_mps", 0.36, 0.0,
+                          VEHICLE_PARAMS.limits.global_speed_cap_mps,
+                          "physics_speed: the side proximity cap's speed at zero clearance (m/s).");
+    const double standoff = VEHICLE_PARAMS.limits.min_forward_clearance_m + stopping_margin;
+    c.free_path_margin_m = stopping_margin;
+    c.rear_overhang_m = VEHICLE_PARAMS.chassis.rear_overhang_m;
+    c.free_path_horizon_m =
+        physics_speed
+            ? free_path_horizon(max_speed, VEHICLE_PARAMS.actuation.stop_deceleration_mps2,
+                                VEHICLE_PARAMS.actuation.stop_latency_s, standoff)
+            : 0.0;
+    c.compute_side_clearance =
+        physics_speed && get_parameter("side_cap_distance_m").as_double() > 0.0;
     c.forward_preference = declare_ranged_double(
         *this, "forward_preference", 0.0, 0.0, 1.0,
         "Weights gap selection toward the vehicle's forward direction: each gap scores "
@@ -407,12 +485,7 @@ class GapFollowNode : public rclcpp::Node {
         "(headroom against safety_node's independently clocked copy of the same bound, see "
         "tracker_node.cpp).");
     s.max_acceleration_mps2 = VEHICLE_PARAMS.actuation.max_acceleration_mps2 * margin_fraction;
-    s.max_speed_mps = declare_ranged_double(
-        *this, "max_speed_mps", 1.43, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
-        "Upper speed bound (m/s, true speed). Range-limited to vehicle_params "
-        "limits.global_speed_cap_mps. The default is the old 2.0 divided by 1.401: since schema "
-        "0.14.0 a request is the true wheel speed, and every speed tuned before it is converted "
-        "so the car does what it did (docs/notes/calibration-2026-11-10.md).");
+    s.max_speed_mps = get_parameter("max_speed_mps").as_double();  // declared in build_config
     s.min_speed_mps = declare_ranged_double(
         *this, "min_speed_mps", 0.36, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
         "Lower bound of the range-based speed (m/s, true speed; the old 0.5 / 1.401), before the "
@@ -434,6 +507,45 @@ class GapFollowNode : public rclcpp::Node {
         "acceleration rate limit so the limit still bounds what is published. 0 (default) = "
         "off.");
     return s;
+  }
+
+  // The physics speed law's config, the event-driven switch and the status publisher's window.
+  // The parameters it reads were declared in build_config (physics_speed sizes the free path).
+  void build_race() {
+    physics_speed_ = get_parameter("physics_speed").as_bool();
+    RaceSpeedConfig r;
+    r.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
+    r.a_lat_max_mps2 = get_parameter("a_lat_max_mps2").as_double();
+    r.brake_decel_mps2 = VEHICLE_PARAMS.actuation.stop_deceleration_mps2;
+    r.stop_latency_s = VEHICLE_PARAMS.actuation.stop_latency_s;
+    r.standoff_m = VEHICLE_PARAMS.limits.min_forward_clearance_m +
+                   get_parameter("stopping_margin_m").as_double();
+    r.max_speed_mps = speed_command_.config().max_speed_mps;
+    r.min_speed_mps = speed_command_.config().min_speed_mps;
+    r.side_cap_distance_m = get_parameter("side_cap_distance_m").as_double();
+    r.side_cap_min_speed_mps = get_parameter("side_cap_min_speed_mps").as_double();
+    race_config_ = r;
+    compute_on_scan_ = declare_described_bool(
+        *this, "compute_on_scan", false,
+        "true: also run the command half the moment a scan has been processed (the timer restarts "
+        "from it), so the scan-to-command latency is the processing time rather than up to one "
+        "control period more. The 50 Hz timer keeps publishing between scans, so safety_node's "
+        "watchdog is fed as before, and the filters and the speed limiter step by the real time "
+        "since the last command. false (default): commands come from the timer only.");
+    status_period_s_ = 0.0;
+    const double status_rate_hz = declare_ranged_double(
+        *this, "status_rate_hz", 1.0, 0.0, 10.0,
+        "/gap_follow/status publish rate (Hz): scan-to-command latency percentiles, per-scan CPU "
+        "cost and the speed law's terms as JSON. 0 turns it off.");
+    if (status_rate_hz > 0.0) {
+      status_period_s_ = 1.0 / status_rate_hz;
+    }
+    const auto window = static_cast<std::size_t>(
+        declare_ranged_int(*this, "status_window_scans", 200, 10, 5000,
+                           "Number of recent scans the status percentiles are taken over."));
+    latency_ms_ = PercentileWindow(window);
+    compute_us_ = PercentileWindow(window);
+    cpu_us_ = PercentileWindow(window);
   }
 
   // Reverse escape parameters (reverse_escape.hpp). Declared whether or not the escape is on,
@@ -571,7 +683,16 @@ class GapFollowNode : public rclcpp::Node {
     }
   }
 
+  static double thread_cpu_us() {
+    timespec ts{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+    return static_cast<double>(ts.tv_sec) * 1e6 + static_cast<double>(ts.tv_nsec) * 1e-3;
+  }
+
   void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+    // Steady clock at receipt: the start of the scan-to-command latency (see CLOCK POLICY).
+    const rclcpp::Time received = steady_clock_.now();
+    const double cpu_start_us = thread_cpu_us();
     scan_.ranges.assign(msg->ranges.begin(), msg->ranges.end());
     scan_.angle_min = msg->angle_min;
     scan_.angle_increment = msg->angle_increment;
@@ -608,32 +729,58 @@ class GapFollowNode : public rclcpp::Node {
                                  VEHICLE_PARAMS.steering.max_angle_rad, escape_probe_distance_m_,
                                  probe_geometry_, probe_points_);
     }
+    const double cpu_us = thread_cpu_us() - cpu_start_us;
     if (scan_processing_delay_s_ > 0.0) {
       // TEST ONLY (THREADING): a slow scan.
       std::this_thread::sleep_for(std::chrono::duration<double>(scan_processing_delay_s_));
     }
     // Steady clock, never this->now(): see CLOCK POLICY.
     const rclcpp::Time stamp = steady_clock_.now();
-    const std::lock_guard<std::mutex> lock(shared_mutex_);
-    latest_ = result;
-    forward_path_blocked_ = path_blocked;
-    // Once per scan, not per control cycle: the window spans N scans (window 1 = this scan).
-    target_range_m_ = target_range_median_.push(result.target_range_m);
-    last_scan_steady_ = stamp;
-    has_scan_ = true;
+    {
+      const std::lock_guard<std::mutex> lock(shared_mutex_);
+      latest_ = result;
+      forward_path_blocked_ = path_blocked;
+      // Once per scan, not per control cycle: the window spans N scans (window 1 = this scan).
+      target_range_m_ = target_range_median_.push(result.target_range_m);
+      last_scan_steady_ = stamp;
+      has_scan_ = true;
+      scan_received_steady_ = received;
+      latency_pending_ = true;
+      ++scans_processed_;
+    }
+    {
+      const std::lock_guard<std::mutex> lock(stats_mutex_);
+      compute_us_.push((stamp - received).seconds() * 1e6);
+      cpu_us_.push(cpu_us);
+    }
+    if (compute_on_scan_) {
+      command_step(true);
+    }
   }
 
-  void on_timer() {
+  void on_timer() { command_step(false); }
+
+  // The command half: low-pass, speed law, rate limit, escape, publish. From the 50 Hz timer, or
+  // (compute_on_scan) from the scan callback right after it has installed a result. One mutex
+  // keeps the two callers from interleaving (the filters and the limiter are state). Lock order:
+  // command_mutex_ then shared_mutex_ or stats_mutex_, never the reverse.
+  void command_step(bool from_scan) {
+    const std::lock_guard<std::mutex> command_lock(command_mutex_);
     const rclcpp::Time now = this->now();
     const rclcpp::Time steady_now = steady_clock_.now();
+
     // THREADING: copy what the scan callback shares, then work on the copies.
     GapFollowResult latest;
     bool forward_path_blocked = false;
     double target_range_m = 0.0;
     bool stale = true;
+    bool latency_pending = false;
+    rclcpp::Time scan_received(0, 0, RCL_STEADY_TIME);
     {
       const std::lock_guard<std::mutex> lock(shared_mutex_);
       stale = !has_scan_ || (steady_now - last_scan_steady_).seconds() > scan_timeout_s_;
+      latency_pending = latency_pending_;
+      scan_received = scan_received_steady_;
       if (stale) {
         // Do not let target ranges from before the gap into the median.
         target_range_median_.reset();
@@ -654,6 +801,7 @@ class GapFollowNode : public rclcpp::Node {
       // safety_node brakes the car during the silence, so ramp from rest on resume (the median
       // was reset above, under the lock).
       speed_command_.reset();
+      ++stale_ticks_;
       // Nothing is being published: no escape survives the gap, and the last request is none.
       if (escape_) {
         escape_->reset();
@@ -667,7 +815,15 @@ class GapFollowNode : public rclcpp::Node {
     }
 
     const double max_angle = VEHICLE_PARAMS.steering.max_angle_rad;
-    const double dt_s = has_last_command_time_ ? control_period_s_ : 0.0;
+    // The configured period per cycle (CLOCK POLICY). With compute_on_scan commands also go out
+    // between timer ticks, so the step is the real time since the last command, at most one
+    // period: the filters, the limiter and the escape then advance by the time that passed.
+    double step_s = control_period_s_;
+    if (compute_on_scan_ && has_published_) {
+      step_s =
+          std::min(std::max((steady_now - last_publish_steady_).seconds(), 0.0), control_period_s_);
+    }
+    const double dt_s = has_last_command_time_ ? step_s : 0.0;
     has_last_command_time_ = true;
     double steering = 0.0;
     double speed = 0.0;
@@ -695,8 +851,18 @@ class GapFollowNode : public rclcpp::Node {
     }
     if (!escaping) {
       steering = steering_filter_.update(latest.steering_rad, dt_s);
-      // Range speed -> steering slowdown -> speed low-pass -> rate limiter (reactive_speed.hpp).
-      speed = speed_command_.update(target_range_m, steering, dt_s);
+      if (physics_speed_) {
+        // Physics law -> speed low-pass -> rate limiter (race_speed.hpp, reactive_speed.hpp).
+        RaceSpeedInputs inputs;
+        inputs.steering_rad = steering;
+        inputs.free_path_m = latest.free_path_m;
+        inputs.side_clearance_m = latest.side_clearance_m;
+        last_target_ = race_target_speed(inputs, race_config_);
+        speed = speed_command_.update_target(last_target_.target_mps, dt_s);
+      } else {
+        // Range speed -> steering slowdown -> speed low-pass -> rate limiter (reactive_speed.hpp).
+        speed = speed_command_.update(target_range_m, steering, dt_s);
+      }
     }
     if (!std::isfinite(steering) || !std::isfinite(speed)) {
       RCLCPP_ERROR(this->get_logger(),
@@ -714,6 +880,63 @@ class GapFollowNode : public rclcpp::Node {
                                            VEHICLE_PARAMS.limits.global_speed_cap_mps));
     drive_pub_->publish(drive_msg);
     last_published_speed_mps_ = static_cast<double>(drive_msg.drive.speed);
+    const rclcpp::Time published = steady_clock_.now();
+    last_publish_steady_ = published;
+    has_published_ = true;
+    if (latency_pending) {
+      // The first command out after this scan was installed: its scan-to-command latency.
+      {
+        const std::lock_guard<std::mutex> lock(shared_mutex_);
+        if (scan_received_steady_ == scan_received) {
+          latency_pending_ = false;
+        }
+      }
+      const std::lock_guard<std::mutex> lock(stats_mutex_);
+      latency_ms_.push((published - scan_received).seconds() * 1e3);
+    }
+    if (from_scan) {
+      // Anchor the 50 Hz cadence at this command (reset is thread-safe in rcl).
+      timer_->reset();
+    }
+  }
+
+  void on_status_timer() {
+    std::size_t scans = 0;
+    {
+      const std::lock_guard<std::mutex> lock(shared_mutex_);
+      scans = scans_processed_;
+    }
+    std::string text;
+    {
+      const std::lock_guard<std::mutex> lock(stats_mutex_);
+      const auto stats = [](PercentileWindow& w, double scale) {
+        char buffer[160];
+        std::snprintf(buffer, sizeof(buffer), "{\"n\":%zu,\"p50\":%.3f,\"p99\":%.3f,\"max\":%.3f}",
+                      w.size(), w.percentile(0.5) * scale, w.percentile(0.99) * scale,
+                      w.max() * scale);
+        return std::string(buffer);
+      };
+      char head[256];
+      std::snprintf(head, sizeof(head),
+                    "{\"scans\":%zu,\"event_driven\":%s,\"physics_speed\":%s,"
+                    "\"stale_ticks\":%zu,\"speed_mps\":%.4f,",
+                    scans, compute_on_scan_ ? "true" : "false", physics_speed_ ? "true" : "false",
+                    stale_ticks_.load(), last_published_speed_mps_.load());
+      text = std::string(head) + "\"latency_ms\":" + stats(latency_ms_, 1.0) +
+             ",\"scan_wall_us\":" + stats(compute_us_, 1.0) +
+             ",\"scan_cpu_us\":" + stats(cpu_us_, 1.0);
+    }
+    char tail[256];
+    std::snprintf(tail, sizeof(tail),
+                  ",\"speed_terms_mps\":{\"lateral\":%.3f,\"stopping\":%.3f,\"side\":%.3f,"
+                  "\"target\":%.3f}}",
+                  std::min(last_target_.lateral_mps, 99.0),
+                  std::min(last_target_.stopping_mps, 99.0), std::min(last_target_.side_mps, 99.0),
+                  last_target_.target_mps);
+    text += tail;
+    std_msgs::msg::String msg;
+    msg.data = text;
+    status_pub_->publish(msg);
   }
 
   GapFollower follower_;
@@ -722,6 +945,27 @@ class GapFollowNode : public rclcpp::Node {
   ReactiveSpeedCommand speed_command_{ReactiveSpeedConfig{}};
   RollingMedian target_range_median_{1};
   double target_range_m_{0.0};
+  // Race profile: the physics speed law, event-driven commands and the status stream.
+  bool physics_speed_{false};
+  RaceSpeedConfig race_config_;
+  RaceSpeedTarget last_target_;  // command thread only (read by the status timer, same group)
+  bool compute_on_scan_{false};
+  double status_period_s_{1.0};
+  std::mutex command_mutex_;  // the command half's state: filters, limiter, escape, last publish
+  std::mutex stats_mutex_;
+  PercentileWindow latency_ms_{200};
+  PercentileWindow compute_us_{200};
+  PercentileWindow cpu_us_{200};
+  // Behind shared_mutex_: the receipt time of the latest scan, whether a command has been
+  // published since, and how many scans were processed.
+  rclcpp::Time scan_received_steady_{0, 0, RCL_STEADY_TIME};
+  bool latency_pending_{false};
+  std::size_t scans_processed_{0};
+  rclcpp::Time last_publish_steady_{0, 0, RCL_STEADY_TIME};
+  bool has_published_{false};
+  std::atomic<std::size_t> stale_ticks_{0};
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::TimerBase::SharedPtr status_timer_;
   double control_period_s_{0.02};
   double scan_timeout_s_{0.3};
 
@@ -738,7 +982,7 @@ class GapFollowNode : public rclcpp::Node {
   double escape_probe_distance_m_{0.3};
   double drive_feedback_timeout_s_{0.2};
   bool forward_path_blocked_{false};
-  double last_published_speed_mps_{0.0};
+  std::atomic<double> last_published_speed_mps_{0.0};
   double gated_speed_mps_{0.0};
   bool has_gated_{false};
   rclcpp::Time last_gated_steady_{0, 0, RCL_STEADY_TIME};

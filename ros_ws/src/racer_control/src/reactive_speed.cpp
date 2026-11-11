@@ -76,6 +76,12 @@ double ReactiveSpeedCommand::update(double target_range_m, double steering_rad, 
   return limiter_.limit(smoothed, dt_s);
 }
 
+double ReactiveSpeedCommand::update_target(double target_speed_mps, double dt_s) {
+  const double raw = std::isfinite(target_speed_mps) ? target_speed_mps : config_.min_speed_mps;
+  const double smoothed = config_.speed_time_constant_s > 0.0 ? filter_.update(raw, dt_s) : raw;
+  return limiter_.limit(smoothed, dt_s);
+}
+
 void ReactiveSpeedCommand::reset() {
   filter_.reset();
   limiter_ = SpeedRateLimiter(config_.max_acceleration_mps2);

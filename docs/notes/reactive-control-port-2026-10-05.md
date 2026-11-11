@@ -198,12 +198,12 @@ This is a checkpoint, not a tuned optimum: one evening of hand tuning on one lan
 0.9 m/s. To record a better set later, add a new dated profile rather than editing this one.
 Any launch argument given explicitly still wins over the profile (for example
 `max_speed_mps:=0.7`), and the profile wins over `params_file`. `profile:=none`, the default,
-passes nothing extra and keeps the node defaults (and `max_speed_mps` 2.0) exactly as before.
+passes nothing extra and keeps the node defaults (and `max_speed_mps` 1.43; 2.0 before the 2026-11-10 calibration divided every speed by 1.401) exactly as before.
 
 | Parameter | Profile | Node default |
 |---|---|---|
-| `min_speed_mps` | 0.5 | 0.5 |
-| `max_speed_mps` | 0.9 | 2.0 |
+| `min_speed_mps` | 0.36 (0.5 until 2026-11-10) | 0.36 (0.5) |
+| `max_speed_mps` | 0.64 (0.9) | 1.43 (2.0) |
 | `k_steer` | 0.4 | 0.5 |
 | `free_space_threshold_m` | 0.6 | 1.5 |
 | `steering_gain` | 1.6 | 1.0 |

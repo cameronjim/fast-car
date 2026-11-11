@@ -205,8 +205,9 @@ class ParkNode : public rclcpp::Node {
 
     c.search_speed_mps = declare_ranged_double(
         *this, "search_speed_mps", 0.5, 0.05, std::min(2.0, vp.limits.global_speed_cap_mps),
-        "SEARCH and every forward move (m/s). Keep it at or above about 0.44 m/s on the car: the "
-        "VESC speed loop does nothing below its s_pid_min_erpm.");
+        "SEARCH and every forward move (m/s, true speed). The VESC speed loop does nothing below "
+        "its s_pid_min_erpm (150 ERPM in the committed VESC config, about 0.05 m/s with the "
+        "committed drivetrain).");
     c.park_speed_mps = declare_ranged_double(*this, "park_speed_mps", -0.5,
                                              std::max(-2.0, vp.limits.min_velocity_mps), -0.05,
                                              "Every reverse move (m/s, negative).");

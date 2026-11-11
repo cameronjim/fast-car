@@ -42,8 +42,11 @@ FLOOR_2026_10_07_PROFILE: dict[str, float | int | bool | str] = {
 }
 """First floor settings, 2026-10-07 (NOT yet driven on the car).
 
-0.5 m/s both ways: the slowest the VESC speed loop reliably drives (it does nothing below about
-0.44 m/s, s_pid_min_erpm). settle_s 0.3 s: the servo slews at most 3.2 rad/s
+0.5 m/s both ways, true speed. Never driven, so the 2026-11-10 calibration (speeds were 1.401
+times the truth before it) did not convert them: they are the intended pace, and the arcs are
+measured in true metres now (the VESC does nothing below s_pid_min_erpm, about 0.05 m/s; the
+older "0.44 m/s" figure was the 900 ERPM setting before 2026-09-29, in inflated units).
+settle_s 0.3 s: the servo slews at most 3.2 rad/s
 (steering.max_rate_rad_per_s), so full lock to full lock (0.80 rad at the 0.95 fraction) takes
 0.25 s, and park_node ramps it at half that rate first. require_odometry true: the arcs are
 measured with the VESC's wheel odometry (/odom/wheel), never guessed from the command on the car.

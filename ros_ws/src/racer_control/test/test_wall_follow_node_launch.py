@@ -33,6 +33,7 @@ import launch_testing.actions
 import launch_testing.asserts
 import pytest
 import rclpy
+import yaml
 from ackermann_msgs.msg import AckermannDriveStamped
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription
@@ -43,7 +44,13 @@ from sensor_msgs.msg import LaserScan
 _PARAMS_FILE = str(Path(__file__).resolve().parent / "fixtures" / "wall_follow_test_params.yaml")
 _SCAN_TIMEOUT_S = 0.2
 _MAX_SPEED_MPS = 1.0
-_MAX_STEERING_RAD = 0.4189 + 1e-3
+# The planning steering limit comes from the committed config, not a copy of its number: it was
+# 0.4189 until the 2026-11-10 calibration and is the measured right-lock angle now.
+with open(
+    Path(__file__).resolve().parents[4] / "config" / "vehicle_params.yaml", encoding="utf-8"
+) as _handle:
+    _COMMITTED_MAX_STEERING_RAD = float(yaml.safe_load(_handle)["steering"]["max_angle_rad"])
+_MAX_STEERING_RAD = _COMMITTED_MAX_STEERING_RAD + 1e-3
 _TARGET_DISTANCE_M = 0.6  # the node's default target_distance_m
 
 _FOV_RAD = 4.7

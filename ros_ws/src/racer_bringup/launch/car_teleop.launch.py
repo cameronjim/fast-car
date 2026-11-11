@@ -157,7 +157,10 @@ _LOCALIZATION_LAUNCH_FILE = os.path.join(
 #: FIRST-DRIVE TELEOP PROFILE (GitHub issue #72). keyboard_teleop_node's tap sizes default to
 #: a derivation from vehicle_params (one 50 Hz control period at the vehicle's maximum
 #: acceleration / steering rate: 0.19 m/s and 0.064 rad per key event). For a first drive on
-#: the real car the speed tap is set to 0.25 m/s instead, because:
+#: the real car the speed tap is set to 0.18 m/s instead (0.25 until the 2026-11-10 calibration;
+#: speeds were 1.401 times the true ones then, so the tap and the minimum below are divided by
+#: 1.401 and the pulses are unchanged: 0.25 / 2.91 = 0.18 / 2.08 of the forward range). The
+#: arithmetic below is the original one at the then full scale of 5.0 m/s, kept as the record:
 #:
 #:   * with racer_drivers' deadband offset (vehicle_params actuation.throttle_deadband_us,
 #:     50 us) and the frame compensation (GitHub issue #77), ONE tap of 0.25 m/s commands
@@ -173,16 +176,16 @@ _LOCALIZATION_LAUNCH_FILE = os.path.join(
 #: drive needed it changed. Hold-to-ramp is unchanged: holding W adds one step per key-repeat
 #: event. This profile only applies when this launch starts the keyboard node
 #: (start_teleop:=true); the supported second-terminal `ros2 run` passes the same value with
-#: `--ros-args -p speed_step_mps:=0.25` (docs/notes/first-boot-runbook.md "Launch and drive").
-FIRST_DRIVE_SPEED_STEP_MPS = 0.25
+#: `--ros-args -p speed_step_mps:=0.18` (docs/notes/first-boot-runbook.md "Launch and drive").
+FIRST_DRIVE_SPEED_STEP_MPS = 0.18
 
 #: First-drive minimum commanded speed (owner-tested on the car, 2026-09-30): the first tap
 #: from rest commands this speed, so the car starts moving at once instead of the operator
 #: tapping through the VESC deadband, and a throttle-down that would land below it goes
-#: straight to 0 (no crawl). With the 0.25 m/s step above the ladder is 0, 0.8, 1.05, 1.3 ...
+#: straight to 0 (no crawl). With the 0.18 m/s step above the ladder is 0, 0.57, 0.75, 0.93 ...
 #: The supported second-terminal `ros2 run` passes
-#: `--ros-args -p min_speed_mps:=0.8 -p speed_step_mps:=0.25`.
-FIRST_DRIVE_MIN_SPEED_MPS = 0.8
+#: `--ros-args -p min_speed_mps:=0.57 -p speed_step_mps:=0.18`.
+FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 
 #: Everything a drive has to be reconstructable from (CLAUDE.md invariant 5). Passed to
 #: `ros2 bag record --regex`, not as a positional topic list, for two reasons: a topic that

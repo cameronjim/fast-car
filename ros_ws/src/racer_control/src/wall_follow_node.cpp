@@ -55,13 +55,14 @@ class WallFollowNode : public rclcpp::Node {
         config_(build_config()),
         pid_(build_gains()),
         speed_limiter_(build_speed_rate_limiter()) {
-    max_speed_mps_ = declare_ranged_double(
-        *this, "max_speed_mps", 1.5, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
-        "Speed on a straight (m/s). Range-limited to vehicle_params "
-        "limits.global_speed_cap_mps.");
-    min_speed_mps_ = declare_ranged_double(*this, "min_speed_mps", 0.5, 0.0,
+    max_speed_mps_ = declare_ranged_double(*this, "max_speed_mps", 1.07, 0.0,
                                            VEHICLE_PARAMS.limits.global_speed_cap_mps,
-                                           "Floor under the steering slowdown (m/s).");
+                                           "Speed on a straight (m/s, true speed; the old 1.5 / "
+                                           "1.401). Range-limited to vehicle_params "
+                                           "limits.global_speed_cap_mps.");
+    min_speed_mps_ = declare_ranged_double(
+        *this, "min_speed_mps", 0.36, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
+        "Floor under the steering slowdown (m/s, true speed; the old 0.5 / 1.401).");
     if (min_speed_mps_ > max_speed_mps_) {
       throw std::invalid_argument("wall_follow_node: min_speed_mps must not exceed max_speed_mps");
     }

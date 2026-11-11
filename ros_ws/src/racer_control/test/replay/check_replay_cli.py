@@ -35,7 +35,9 @@ import tempfile
 from pathlib import Path
 
 TOLERANCE = 1e-6
-MAX_STEERING_RAD = 0.4189  # config/vehicle_params.yaml steering.max_angle_rad
+MAX_STEERING_RAD = (
+    0.449  # config/vehicle_params.yaml steering.max_angle_rad (0.4189 before 2026-11-10)
+)
 WHEELBASE_M = 0.3302  # config/vehicle_params.yaml chassis.wheelbase_m
 # The target_mode lane_centre output keys (null / [] in the gap modes).
 LANE_KEYS = {"lane_aim_x_m", "lane_aim_y_m", "lane_half_width_m", "lane_width_m", "lane_trace"}

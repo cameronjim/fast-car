@@ -5,7 +5,7 @@ inspects the parameters the node would be started with; no process is started an
 graph is needed (same approach as racer_bringup/test/test_car_teleop_profile.py). What it
 pins:
 
-  * `profile:=none` (the default) is the old behaviour: no profile entry, max_speed_mps 2.0.
+  * `profile:=none` (the default) is the old behaviour: no profile entry, max_speed_mps 1.43.
   * `profile:=floor-2026-10-06` hands the node exactly the checkpoint parameter set, with the
     right types (a double parameter rejects an int, an integer parameter rejects a float).
   * any launch argument given explicitly overrides the profile value, the profile overrides
@@ -29,8 +29,8 @@ _LAUNCH_FILE = pathlib.Path(__file__).resolve().parents[1] / "launch" / "gap_fol
 # also edit this test (and the checkpoint table in
 # docs/notes/reactive-control-port-2026-10-05.md).
 _FLOOR_2026_10_06 = {
-    "min_speed_mps": 0.5,
-    "max_speed_mps": 0.9,
+    "min_speed_mps": 0.36,  # was 0.5 before the 2026-11-10 calibration (old 0.5 / 1.401)
+    "max_speed_mps": 0.64,  # was 0.9 (old 0.9 / 1.401): speeds are true speeds since schema 0.14.0
     "k_steer": 0.4,
     "free_space_threshold_m": 0.6,
     "steering_gain": 1.6,
@@ -120,7 +120,7 @@ def test_floor_profile_constant_is_the_checkpoint():
 
 def test_none_profile_is_the_old_behaviour():
     entries = _node_parameters()
-    assert entries == [{"max_speed_mps": 2.0}]
+    assert entries == [{"max_speed_mps": 1.43}]
     assert isinstance(entries[0]["max_speed_mps"], float)
 
 

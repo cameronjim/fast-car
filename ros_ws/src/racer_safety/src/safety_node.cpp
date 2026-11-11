@@ -116,8 +116,10 @@
 // bound still apply. It can only raise the TTC speed, never lower it below the request.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <limits>
 #include <memory>
 #include <nav_msgs/msg/odometry.hpp>
@@ -499,6 +501,10 @@ class SafetyNode : public rclcpp::Node {
   }
 
   void on_timer() {
+    // Never evaluate or publish against a context that is shutting down (see main()).
+    if (!rclcpp::ok()) {
+      return;
+    }
     // `now` stamps outgoing messages; `steady_now` measures elapsed time. See CLOCK POLICY.
     const rclcpp::Time now = this->now();
     const rclcpp::Time steady_now = steady_clock_.now();
@@ -637,19 +643,53 @@ class SafetyNode : public rclcpp::Node {
 
 }  // namespace racer_safety
 
+namespace {
+
+// Set by the SIGINT / SIGTERM handler below, polled by the spin loop in main(). A lock-free atomic
+// flag is one of the few things a signal handler may touch.
+std::atomic<bool> g_stop_requested{false};
+
+extern "C" void request_stop(int /*signal*/) { g_stop_requested.store(true); }
+
+}  // namespace
+
+// SHUTDOWN. rclcpp's default SIGINT handler runs rclcpp::shutdown() on its own thread, which
+// invalidates the rcl context while this node's executor thread can be in the middle of a callback
+// (a /drive publish, a subscription take) on that same context, and then the node is destroyed
+// against a context that is already gone. CI on 2026-11-10 saw safety_node die with exit code -11
+// (SIGSEGV) at test shutdown, right after its neighbour exited on the same SIGINT. A segfault in
+// the safety node is not acceptable even at shutdown, so this process handles the signals itself:
+// the handler only sets a flag, the one executor thread notices it between callbacks, the node
+// stops being spun and is destroyed with the context still valid, and only then is the context
+// shut down. Nothing runs concurrently with the teardown. (The window is a few microseconds wide
+// per cycle, which is why it takes many runs to hit; test/check_safety_node_sigint.py repeats
+// the shutdown with the inputs streaming.)
 int main(int argc, char** argv) {
-  rclcpp::init(argc, argv);
+  rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+  struct sigaction action {};
+  action.sa_handler = request_stop;
+  sigemptyset(&action.sa_mask);
+  sigaction(SIGINT, &action, nullptr);
+  sigaction(SIGTERM, &action, nullptr);
+
+  int status = 0;
   try {
     auto node = std::make_shared<racer_safety::SafetyNode>();
-    rclcpp::spin(node);
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    // Wakes at least every 20 ms (and on the signal's EINTR) to look at the flag.
+    while (rclcpp::ok() && !g_stop_requested.load()) {
+      executor.spin_once(std::chrono::milliseconds(20));
+    }
+    executor.remove_node(node);
   } catch (const std::exception& e) {
     RCLCPP_FATAL(rclcpp::get_logger("safety_node"), "safety_node: fatal startup error: %s",
                  e.what());
-    rclcpp::shutdown();
-    return 1;
+    status = 1;
   }
+  // The node and the executor are gone; only now does the context go.
   if (rclcpp::ok()) {
     rclcpp::shutdown();
   }
-  return 0;
+  return status;
 }

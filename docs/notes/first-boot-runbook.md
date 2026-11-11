@@ -53,8 +53,10 @@ container to the LAN for discovery to happen at all -- confirm `echo $ROS_DOMAIN
 the running container prints `42` before trusting `ros2 topic list` output.
 
 Also note the throttle map's scale. `actuation.throttle_full_scale_mps` was 5.0 m/s until
-2026-10-06 and is now 2.91 m/s, derived from the VESC's 6000 ERPM cap and the drivetrain
-fields (still PROVISIONAL until wheel speed is measured against pulse width). The numbers in
+2026-10-06, then 2.91 m/s, and is 2.08 m/s since the 2026-11-10 calibration (the tyre radius
+had been entered as a diameter and the gear ratio was re-derived from a push test, see
+docs/notes/calibration-2026-11-10.md). It is derived from the VESC's 6000 ERPM cap and the
+drivetrain fields, and not yet measured against pulse width on the bench. The numbers in
 the rest of this paragraph are the ORIGINAL 5.0 m/s map, kept as the record of the first
 drives: with the 1000/1500/2000 us ends, **a commanded 1 m/s was 100 us off neutral: 1600 us forward, 1400 us
 reverse**, and 5 m/s or anything above it saturates at 2000 us. It used to be scaled by
@@ -473,14 +475,14 @@ or braking on this ESC.
      by the launch file):
 
 ```sh
-docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node --ros-args -p min_speed_mps:=0.8 -p speed_step_mps:=0.25'
+docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node --ros-args -p min_speed_mps:=0.57 -p speed_step_mps:=0.18'
 ```
 
-     `speed_step_mps:=0.25` is the first-drive tap size (GitHub issue #72; the rationale is
+     `speed_step_mps:=0.18` is the first-drive tap size (0.25 until 2026-11-10; every speed was 1.401 times the true one before the calibration, so the numbers were divided by 1.401 and the car does what it did) (GitHub issue #72; the rationale is
      `FIRST_DRIVE_SPEED_STEP_MPS` in `car_teleop.launch.py`). Without it the node uses the
-     derived 0.19 m/s. `min_speed_mps:=0.8` is the minimum commanded speed (owner-tested
-     2026-09-30, `FIRST_DRIVE_MIN_SPEED_MPS`): the first tap from rest commands 0.8 m/s, and a
-     throttle-down that would land below 0.8 stops the car. Without it (default 0.0) the
+     derived 0.19 m/s. `min_speed_mps:=0.57` (0.8 before the calibration) is the minimum commanded speed (owner-tested
+     2026-09-30, `FIRST_DRIVE_MIN_SPEED_MPS`): the first tap from rest commands 0.57 m/s, and a
+     throttle-down that would land below 0.57 stops the car. Without it (default 0.0) the
      minimum is disabled. Both values must be floats. The startup line prints the step and
      the minimum it is actually using.
 
@@ -723,9 +725,11 @@ the acceptance is read off the mux diagnostic.
    | 1600 us | 0.5556 (= (1600 - 1550) x 5 / 450) | about 1630577 | 1594.5 | 1592 to 1608 |
    | 2000 us | 5.0 | 2038217 | 1993.2 | 1992 to 2000, and `THR` NOT `OUT_OF_RANGE`; the mux forwards it as read |
 
-   And on steering, with speed 0: `steering_angle` 0.0 must read 1500 +- 8 us; full left
-   (0.4189) predicts 1088.6 us and full right (-0.4189) predicts 1870.5 us, each within 8 us of
-   the calibrated 1094 / 1875.
+   And on steering, with speed 0: `steering_angle` 0.0 must read 1500 +- 8 us. Since schema
+   0.14.0 the angle goes through the per-side table (`steering.pwm_to_angle_table`), so full
+   left (+0.449, the planning limit, which stops short of the 1094 us left stop) predicts 1134.5
+   us and full right (-0.449) predicts 1870.5 us, each within 8 us. (Before 0.14.0: +0.4189 read
+   1088.6 us and -0.4189 read 1870.5 us, against the 1094 / 1875 stops.)
 4. **If a reading is outside its band, re-derive the achieved period from it; do not tune
    around it.** For a reading of R us with the written duty D ns and requested period P ns
    (4000000): the controller's count is `c = round(256 x D / P)` and the achieved period is
@@ -745,11 +749,11 @@ Record the readings in `docs/notes/build-log.md`.
 
 ### What a keyboard tap does now (2026-09-30)
 
-With the first-drive profile (`min_speed_mps:=0.8 -p speed_step_mps:=0.25`, see step 15.3 or
+With the first-drive profile (`min_speed_mps:=0.57 -p speed_step_mps:=0.18`, see step 15.3 or
 `car_teleop.launch.py`'s `FIRST_DRIVE_MIN_SPEED_MPS` / `FIRST_DRIVE_SPEED_STEP_MPS`), the
-rule is: from rest, W commands max(0.8, 0.25) = 0.8 m/s; above that W adds 0.25; S subtracts
-0.25, and if the result would be below 0.8 it goes to exactly 0 (a clean stop, no crawl
-below the minimum). SPACE and `q` are unchanged (zero). Speeds between 0 and 0.8 are never
+rule is: from rest, W commands max(0.57, 0.18) = 0.57 m/s; above that W adds 0.18; S subtracts
+0.18, and if the result would be below 0.57 it goes to exactly 0 (a clean stop, no crawl
+below the minimum). SPACE and `q` are unchanged (zero). Speeds between 0 and 0.57 are never
 commanded. Pulse arithmetic uses the deadband offset from `actuation.throttle_deadband_us`
 (see `config/vehicle_params.yaml` for the current value) and is checked in racer_drivers'
 gtests; speed 0 is always exactly 1500 us.
@@ -834,32 +838,39 @@ first laps.
    was not rebuilt after pulling (step 6). Every escape logs `reverse escape N/3: ...` when it
    starts and `complete`, `timed out` or `aborted` when it ends.
 3. Any launch argument given explicitly overrides the profile, for example
-   `profile:=floor-2026-10-06 max_speed_mps:=0.7`. Leave `laser_yaw_from_vehicle_params` alone:
+   `profile:=floor-2026-10-06 max_speed_mps:=0.5`. Leave `laser_yaw_from_vehicle_params` alone:
    on the car the LiDAR yaw comes from `config/vehicle_params.yaml`.
 4. Stop with Ctrl-C in the second terminal. gap_follow_node then stops publishing and
    safety_node brakes on the `/drive_raw` silence; the kill switch is still the first thing to
    reach for if the car does anything unexpected, including backing up when you did not expect
    it.
 
-### Safety floor test, body-distance gate (vehicle_params 0.13.0; NOT yet run on the car)
+### Safety floor test, body-distance gate (vehicle_params 0.14.0; NOT yet run on the car)
 
 Since 2026-11-02 safety_node measures every obstacle distance from the swept body (front bumper,
-or the leading corner on an arc) instead of the LiDAR head, brakes at TTC 0.34 s on that
-distance with a 0.05 m floor, and raises the TTC speed to `/odom/wheel` when the car is faster
-than its request. gap_follow_node escapes after 5 s of refusal even when it thinks it sees a
-way through, and its timer no longer waits for the scan callback. Why, and the bag replay behind
-the numbers: `docs/notes/safety-floor-review-2026-11-02.md`. Do these in order before the first
-drive with it.
+or the leading corner on an arc) instead of the LiDAR head, and raises the TTC speed to
+`/odom/wheel` when the car is faster than its request. Since 2026-11-10 (schema 0.14.0, the
+calibration in `docs/notes/calibration-2026-11-10.md`) it brakes at TTC 0.60 s on that distance
+(release 0.71 s) with a 0.10 m floor, in TRUE speeds: the tyre radius and gear ratio were wrong,
+so every speed in the software was 1.40 times the truth until then. gap_follow_node escapes after
+5 s of refusal even when it thinks it sees a way through, and its timer no longer waits for the
+scan callback. Why, and the bag replay behind the numbers:
+`docs/notes/safety-floor-review-2026-11-02.md` and the 2026-11-10 note. Do these in order before
+the first drive with it.
 
-1. **Measure both overhangs first.** The brake point now moves one for one with them, and both
-   are still placeholders. Car on the bench, tape measure: front axle centre to the foremost
-   point of the front bumper (body included) is `chassis.front_overhang_m` (placeholder 0.13);
-   rear axle centre to the rearmost point (body included) is `chassis.rear_overhang_m`
-   (placeholder 0.12). Write them into `config/vehicle_params.yaml` tagged MEASURED with the
-   date, bump `meta.schema_version` to 0.13.1 (value change, rule 5) and commit. If the front
-   one differs from 0.13 m by more than 1 cm, re-run the replay with the new value before
-   driving: `uv run --project tools python tools/replay_safety.py <both October bags>
-   --set front_overhang_m=<value>` must still print `below 0.04 m: 0`.
+0. **Same request, 1.40 times the speed.** A follower speed request is now the true straight-line
+   wheel speed. The October floor runs at "0.8 m/s" were 0.57 m/s on the floor; the same
+   `max_speed_mps` now makes the car 1.40 times faster than it was then (through corners it is
+   slower than the request, the wheels slip). Lower the follower's `max_speed_mps` by that
+   factor first if you want the October pace, and confirm the calibration once on the bench or the
+   floor before any run: push the car along a taped 3.00 m with the throttle killed and read the
+   along-track distance of `/odom/wheel` (`pose.pose.position.x`, the change over the push): it
+   must be 3.00 m, give or take 0.1 m (it read 4.14 and 4.27 m with the 0.13.0 values).
+1. **The overhangs are measured (0.11 and 0.14 m, 2026-11-10).** The brake point moves one for one
+   with them. Re-measure only if the bumper changes. If the front one differs from 0.11 m by more
+   than 1 cm, re-run the replay with the new value before driving: `uv run --project tools python
+   tools/replay_safety.py --recorded-with 0.13.0 --before-rule october <the October bags> --set
+   front_overhang_m=<value>` and compare with the table in the 2026-11-10 note.
 2. **Build optimised.** The 2026-10-25 stutter came from a scan callback that took 20 to 50 ms on
    the Jetson; the code is now much cheaper and threaded, but build the workspace with
    `colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release` (step 6 builds without
@@ -867,7 +878,7 @@ drive with it.
 3. **Start the stack with the VESC telemetry**, so `/odom/wheel` is used by the gate and recorded:
    `ros2 launch racer_bringup car_teleop.launch.py lidar:=true vesc:=true`. The `safety_node up:`
    line must say `distances from the swept body, TTC speed bound decaying at 1.00 m/s^2, wheel
-   speed from /odom/wheel while fresh (0.10 s)` and `ttc_brake_s=0.340000`. Without the VESC
+   speed from /odom/wheel while fresh (0.10 s)` and `ttc_brake_s=0.600000`. Without the VESC
    UART the gate still works on the request alone.
 4. **Wheels off the ground, a box 0.30 m ahead of the bumper:** with the gap follower running at
    its crawl the wheels must stop (one `ttc` brake engage), and must restart when the box is
@@ -877,11 +888,13 @@ drive with it.
    driven): `ros2 launch racer_control gap_follow.launch.py profile:=lane-2026-10-25`. The startup
    WARN must now say `... or for 5.00 s whatever the arc`. Kill switch in a second person's hand.
 6. **What to look for, then check with the bag.** Brakes should come earlier on the approach to a
-   wall than in October and end clear of the foam. A brake on the entry to a corner at 1 m/s or
-   more is expected (the replay found 9 such brakes at 1.0 to 1.4 m/s requests): if those feel
-   like cut-offs, lower `max_speed_mps`, do not lower the TTC. A car refused for 5 s backs out and
+   wall than in October and end clear of the foam. A brake on the entry to a corner at 0.7 m/s or
+   more is expected (the 2026-11-10 note counts the new brakes the replay found on approaches the
+   car drove freely, and they are all at those speeds): if those feel like cut-offs, lower
+   `max_speed_mps`, do not lower the TTC. A car refused for 5 s backs out and
    logs `reverse escape N/3: ... although the probe sees a clear forward arc`. Copy the bag off and
-   run `tools/replay_safety.py` on it: the `end (m)` column is the real end clearance measured from
+   run `tools/replay_safety.py --recorded-with current` on it (`0.13.0` is for the bags up to
+   2026-11-10 only): the `end (m)` column is the real end clearance measured from
    the scans (want 0.04 m or more on every brake), `watchdog engages: recorded` should be near
    zero (it was 186 on 2026-10-25), and with `/odom/wheel` in the bag the stopping model
    (`actuation.stop_latency_s`, `stop_deceleration_mps2`) can be re-derived from real speeds.
@@ -1306,8 +1319,10 @@ nothing fuses it as a pose; frames `odom` / `base_link`, no TF) and `/telemetry/
 (raw, the non-SI driver-boundary value) and `fault` (a name such as `NONE` or `OVER_TEMP_FET`,
 or `STALE_NO_VESC_DATA` while nothing arrives). Speed is ERPM / `drivetrain.pole_pairs` /
 `drivetrain.gear_ratio` x 2 pi x `tires.nominal_radius_m`, from the generated binding only; with
-today's PROVISIONAL gear ratio and tyre radius that is 0.000485 m/s per ERPM, so the VESC's 6000
-ERPM cap reads 2.91 m/s, the same number as `actuation.throttle_full_scale_mps`.
+today's gear ratio (8.32, derived from a push test) and measured tyre radius (0.055 m) that is
+0.000346 m/s per ERPM, so the VESC's 6000 ERPM cap reads 2.08 m/s, the same number as
+`actuation.throttle_full_scale_mps`. (With the 0.13.0 values it read 2.91 m/s, 1.40 times the
+truth.)
 
 **It is read-only, and it must stay that way.** The motor is commanded ONLY by the PPM pulse
 through the layer-1 mux (`CLAUDE.md` invariant 1). Upstream `vesc_driver` subscribes six

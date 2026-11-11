@@ -1,5 +1,9 @@
 # Safety node floor review, 2026-11-02 (analysis only, nothing changed)
 
+**Update 2026-11-10:** the speeds in this note (and the thresholds chosen from them) were 1.40
+times the true speeds, and the steering angles were off by 7 to 20 per cent; see
+`docs/notes/calibration-2026-11-10.md` for the corrected re-tune (TTC 0.60 s, floor 0.10 m).
+
 Owner report: "safety node is causing car to run into things, it should be slightly more
 forgiving". Checked against the two track bags from the last driving sessions.
 

@@ -84,3 +84,11 @@ Not applied here: it changes the training distribution, so it belongs with the r
 validate. Nothing consumes them. Fix with a schema bump after 118 merges (or drop the fields when
 the Pacejka fit lands). Kept out of this PR to avoid the 0.13.0 to 0.14.0 conflict and the v0
 contract refusal.
+
+## Merge note
+
+Main gained PR 118 (vehicle_params 0.14.0) while this was open. The v0 re-evaluation above ran on
+0.13.0, before that merge; the v0 `policy.pt` contract names 0.13.0 and the loader will now refuse
+it against main, as designed. `test_overrides_apply_to_a_copy` hard-coded the old committed
+steering limit (0.4189) and failed on merged main; it now compares against the committed value
+read from the binding (the override must still differ from it).

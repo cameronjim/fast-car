@@ -144,7 +144,7 @@ def test_racing_line_on_a_round_island_respects_the_steering_the_body_and_runs_w
     grid = mt.load_map(round_island)
     cx, cy = mt.trace_centreline(grid, (1.0, -0.9))
     car = pipeline.car_geometry()
-    left_k, right_k = mt.curvature_limits(car.wheelbase_m, 0.504, 0.449, 1.0)
+    left_k, right_k = mt.curvature_limits(car.wheelbase_m, *pipeline.steering_limits(), 1.0)
     line = mt.racing_line(
         grid,
         cx,
@@ -198,19 +198,9 @@ def test_pipeline_raceline_from_map_writes_a_loadable_csv_and_a_report(tmp_path,
     assert out.with_suffix(".json").is_file()
 
 
-def test_commands_read_high_scales_the_planned_speeds(tmp_path, round_island):
-    plain = pipeline.raceline_from_map(
-        round_island, tmp_path / "a.csv", seed_xy=(1.0, -0.9), v_max_mps=0.5
-    )
-    scaled = pipeline.raceline_from_map(
-        round_island,
-        tmp_path / "b.csv",
-        seed_xy=(1.0, -0.9),
-        v_max_mps=0.5,
-        commands_read_high=1.401,
-    )
-    a, b = _csv(plain.csv), _csv(scaled.csv)
-    assert b[:, 5].max() == pytest.approx(a[:, 5].max() * 1.401, rel=1e-4)
+def test_curvature_limits_come_from_vehicle_params_steering():
+    left, right = pipeline.steering_limits()
+    assert left == pytest.approx(0.449) and right == pytest.approx(0.449)  # schema 0.14.0
 
 
 def test_write_surface_map_keeps_free_cells_and_only_the_wall_faces(tmp_path):
@@ -222,20 +212,3 @@ def test_write_surface_map_keeps_free_cells_and_only_the_wall_faces(tmp_path):
     assert grid.occupied[:, 2].all()  # the face touching free floor
     assert not grid.occupied[:, 0].any()  # the inside of the wall is unknown
     assert not grid.occupied[:, 5:].any()
-
-
-def test_real_car_file_matches_the_tracker_launch_profile():
-    """The offline tools and track_follow.launch.py carry the same 2026-11-10 steering numbers."""
-    import importlib.util
-
-    real = pipeline.load_real_car()
-    path = _REPO / "ros_ws" / "src" / "racer_control" / "launch" / "track_follow.launch.py"
-    spec = importlib.util.spec_from_file_location("track_follow_launch", path)
-    module = importlib.util.module_from_spec(spec)
-    pytest.importorskip("launch")  # the launch file imports ROS launch
-    spec.loader.exec_module(module)
-    profile = module.CALIB_2026_11_10_PROFILE
-    assert profile["max_steering_left_rad"] == pytest.approx(real.left_lock_rad)
-    assert profile["max_steering_right_rad"] == pytest.approx(real.right_lock_rad)
-    assert profile["steering_command_per_rad_left"] == pytest.approx(real.command_per_rad_left)
-    assert profile["steering_command_per_rad_right"] == pytest.approx(real.command_per_rad_right)

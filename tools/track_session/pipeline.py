@@ -3,14 +3,12 @@
 `track_session.py` (the CLI) and the sim bench (tests/l5_reactive_bench) both call these, so what
 the bench drives on is made the way the car's session makes it.
 
-Physical constants come from the generated vehicle_params binding (`raceline.params_loader`),
-except the steering locks and the speed scale, which are the 2026-11-10 floor measurements in
-`real_car_2026-11-10.yaml` until the calibration lands in vehicle_params.
+Physical constants, steering limits included, come from the generated vehicle_params binding
+(`raceline.params_loader`).
 """
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import math
 import sys
@@ -18,7 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 _TOOLS = Path(__file__).resolve().parents[1]
 if str(_TOOLS) not in sys.path:
@@ -29,41 +26,17 @@ from raceline.io import write_raceline_csv
 from raceline.params_loader import load_vehicle_params
 from raceline.raceline import build_raceline_from_centerline
 
-REAL_CAR_YAML = Path(__file__).resolve().parent / "real_car_2026-11-10.yaml"
 
-
-@dataclass(frozen=True)
-class RealCar:
-    """The measured steering (per side, the locks that matter) and the command mapping."""
-
-    command_full_lock_rad: float
-    left_lock_rad: float
-    right_lock_rad: float
-    speed_reading_over_true: float
-
-    @property
-    def command_per_rad_left(self) -> float:
-        """Command (rad) needed per radian of true road-wheel angle, to the left."""
-        return self.command_full_lock_rad / self.left_lock_rad
-
-    @property
-    def command_per_rad_right(self) -> float:
-        return self.command_full_lock_rad / self.right_lock_rad
-
-
-def load_real_car(path: Path = REAL_CAR_YAML) -> RealCar:
-    real = yaml.safe_load(Path(path).read_text())["real_car"]
-    return RealCar(
-        command_full_lock_rad=float(real["command_full_lock_rad"]),
-        left_lock_rad=float(real["effective_left_lock_rad"]),
-        right_lock_rad=float(real["effective_right_lock_rad"]),
-        speed_reading_over_true=float(real["speed_reading_over_true"]),
-    )
+def steering_limits() -> tuple[float, float]:
+    """The planning limits on the true road-wheel angle, (left, right), both positive, from
+    vehicle_params (schema 0.14.0: the symmetric, right-hand 0.449 rad; the left stop's 0.504 rad is
+    in the pulse table, not in what planners may ask for)."""
+    steering = load_vehicle_params().steering
+    return float(steering.max_angle_rad), float(-steering.min_angle_rad)
 
 
 def car_geometry(front_overhang_m: float | None = None, rear_overhang_m: float | None = None):
-    """The body about the rear axle from vehicle_params (overhangs overridable: the 2026-11-10
-    tape measurements, 0.14 rear and 0.11 front, are not in the yaml yet)."""
+    """The body about the rear axle from vehicle_params (overhangs overridable for what-ifs)."""
     chassis = load_vehicle_params().chassis
     return mt.CarGeometry(
         wheelbase_m=chassis.wheelbase_m,
@@ -143,13 +116,11 @@ def raceline_from_map(
     *,
     direction: str = "ccw",
     seed_xy: tuple[float, float] = (0.0, 0.0),
-    real_car: RealCar | None = None,
     margin: float = 0.85,
     body_clearance_m: float = 0.08,
     v_max_mps: float = 0.9,
     a_lat_mps2: float = 2.0,
     a_long_mps2: float = 1.0,
-    commands_read_high: float = 1.0,
     clearance_candidates: tuple[float, ...] | None = None,
     front_overhang_m: float | None = None,
     rear_overhang_m: float | None = None,
@@ -158,18 +129,14 @@ def raceline_from_map(
 ) -> SessionLine:
     """Map -> centreline -> racing line -> speed profile -> CSV.
 
-    Speeds are planned as TRUE speeds (``v_max_mps``, ``a_lat_mps2``, ``a_long_mps2``); with
-    ``commands_read_high`` (1.401 until the calibration lands) the CSV holds the commands that
-    produce them.
-
-    ``clearance_candidates`` (widest first, e.g. (0.15, 0.12, 0.08, 0.05)) replaces
-    ``body_clearance_m``: the first one the track allows is used and reported.
+    Speeds are TRUE speeds (``v_max_mps``, ``a_lat_mps2``, ``a_long_mps2``): since vehicle_params
+    0.14.0 a speed command is a true speed.
 
     ``margin`` scales the curvature the steering can hold on each side (tan(lock) / wheelbase)
     so the controller keeps some steering to correct with; ``body_clearance_m`` is how far the
     whole body outline stays off the walls. ``centre_only`` writes the centreline itself with the
     speed profile (no offset): the plain-centreline baseline."""
-    real = real_car or load_real_car()
+    left_lock, right_lock = steering_limits()
     car = car_geometry(front_overhang_m, rear_overhang_m)
     grid = mt.load_map(map_yaml)
     cx, cy = mt.trace_centreline(grid, seed_xy)
@@ -180,7 +147,7 @@ def raceline_from_map(
         cx, cy = cx[::-1].copy(), cy[::-1].copy()
     elif direction != "ccw":
         raise ValueError("direction must be ccw or cw")
-    kl, kr = mt.curvature_limits(car.wheelbase_m, real.left_lock_rad, real.right_lock_rad, margin)
+    kl, kr = mt.curvature_limits(car.wheelbase_m, left_lock, right_lock, margin)
     if centre_only:
         line = mt.LineResult(cx, cy, np.zeros(len(cx)), 0.0, 0.0, 0.0, 0, 0, 0)
         px, py = cx, cy
@@ -210,12 +177,6 @@ def raceline_from_map(
         resample_ds_m=0.05,
         smooth_window=3,
     )
-    if commands_read_high != 1.0:
-        # The car moves at 1 / commands_read_high of what it is commanded (1.401 on 2026-11-10):
-        # the CSV holds commands, so the speeds planned as TRUE speeds are scaled up.
-        result = dataclasses.replace(
-            result, target_speed_mps=result.target_speed_mps * commands_read_high
-        )
     vp = load_vehicle_params()
     write_raceline_csv(
         out_csv,
@@ -227,14 +188,13 @@ def raceline_from_map(
             "source_map": Path(map_yaml).name,
             "direction": direction,
             "centre_only": str(centre_only),
-            "left_lock_rad": real.left_lock_rad,
-            "right_lock_rad": real.right_lock_rad,
+            "left_lock_rad": left_lock,
+            "right_lock_rad": right_lock,
             "curvature_margin": margin,
             "body_clearance_m": body_clearance_m,
             "v_max_mps": v_max_mps,
             "a_lat_mps2": a_lat_mps2,
             "a_long_mps2": a_long_mps2,
-            "commands_read_high": commands_read_high,
         },
     )
     # The CSV's curvature column is a 5 cm finite difference, noisy at a tight bend; the radius

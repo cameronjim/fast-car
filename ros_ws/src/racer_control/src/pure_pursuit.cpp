@@ -39,13 +39,8 @@ PurePursuitCommand PurePursuitController::compute_command(const Raceline& raceli
   }
 
   double steering_angle_rad = std::atan(commanded_curvature_1pm * config_.wheelbase_m);
-  const double left_limit_rad = config_.max_steering_left_rad > 0.0
-                                    ? config_.max_steering_left_rad
-                                    : config_.max_steering_angle_rad;
-  const double right_limit_rad = config_.max_steering_right_rad > 0.0
-                                     ? config_.max_steering_right_rad
-                                     : config_.max_steering_angle_rad;
-  steering_angle_rad = std::clamp(steering_angle_rad, -right_limit_rad, left_limit_rad);
+  steering_angle_rad = std::clamp(steering_angle_rad, -config_.max_steering_angle_rad,
+                                  config_.max_steering_angle_rad);
 
   return PurePursuitCommand{steering_angle_rad, nearest_point.target_speed_mps};
 }

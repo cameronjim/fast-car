@@ -7,34 +7,26 @@ them, (4) the new "new track session" routine, and (5) the root cause work on th
 flake. Everything ran in the ros-dev image on the dev machine (Apple silicon, Docker). Nothing
 here has run on the Jetson or the car.
 
-## What depends on the pending calibration PR (branch `calib/2026-11-10`)
+## The calibration has landed (vehicle_params 0.14.0, PR 118)
 
-`config/vehicle_params.yaml` was not touched. Until the PR lands, the 2026-11-10 floor
-measurements live in `tools/track_session/real_car_2026-11-10.yaml` (left lock 0.504 rad = 0.60 m
-rear-axle radius, right lock 0.449 rad = 0.69 m, a full steering command of 0.4189 rad turning
-the wheels that far, speeds reading 1.401 times the truth). Used by:
+This note was first written against the car as measured on 2026-11-10 before the calibration
+(left lock 0.504 rad, right 0.449 rad, a full command of 0.4189 rad turning the wheels that far,
+speed commands reading 1.401 times the truth), carried by a temporary yaml, a launch profile and
+tracker/bridge parameters. All of that is deleted: `tools/track_session/real_car_2026-11-10.yaml`,
+`track_follow.launch.py`'s `calib-2026-11-10` profile, `tracker_node`'s per-side limit and
+command-scale parameters, the pure pursuit per-side limits, and the bridge's command and speed scale
+options. The tools and the sim read `config/vehicle_params.yaml`: steering planning limit 0.449 rad
+each way (the right-hand lock, 0.69 m turning radius, used both ways), commands are true angles and
+true speeds, overhangs 0.14 / 0.11 m. `--commands-read-high` is gone (it would default to 1.0, so
+it did nothing). Bags recorded before the calibration are mapped with `--speed-divisor 1.401
+--steer-scale-left 1.203 --steer-scale-right 1.072`; the oval map below was made that way and is
+unchanged.
 
-* the bridge's car model (`steering_limit_left_rad`, `steering_limit_right_rad`,
-  `steering_cmd_scale_left`, `steering_cmd_scale_right`, `speed_cmd_scale`), selected as `--car
-  today` in the bench: **every sim result below is for that car**;
-* the tracker's compensation: `tracker_node` parameters `max_steering_left_rad`,
-  `max_steering_right_rad`, `steering_command_per_rad_left`, `steering_command_per_rad_right` (all
-  default to the old behaviour) and `track_follow.launch.py`'s `calib-2026-11-10` profile;
-* the raceline tool's curvature limits and `--commands-read-high 1.401`, and the offline mapper's
-  speed divisor and steering model.
-
-All speeds in the tables are TRUE speeds (the sim car moves at the commanded speed), top speed
-0.64 m/s = tonight's 0.9 commanded divided by 1.401, unless stated. When the PR lands: replace the
-yaml by the generated binding, run the tracker with `profile:=none` (the compensation becomes 1.0
-and the limits come from vehicle_params), and delete the profile and the yaml. `safety_node` and
-`gap_follow_node` still clamp steering to the binding's symmetric 0.4189 rad command, which is
-exactly the full lock of the car as it is today, so nothing in the results needs the PR except
-the items above; after the PR the gap_follow runs should be repeated, since the speeds it
-commands become true speeds (it will go 1.4 times faster at the same profile).
-
-Also not in the yaml yet: the 2026-11-10 tape measurements of the overhangs (rear 0.14 m, front
-0.11 m, `/Users/cameronjim/code/car-data/overhang-measured-2026-11-10.patch`). The body box in the
-bench and the raceline tool use vehicle_params' provisional 0.12 / 0.13; the difference is 1 cm.
+Section 3 first shows the tables rerun on the calibrated car (the sim's steering limited to the
+vehicle_params 0.449 rad each way, 0.64 m/s), then the original tables from the uncalibrated car,
+kept because they show what the 0.60 m left lock was worth. What changed: counter-clockwise and
+clockwise are now the same car, so the pairs of rows are the same to within 0.1 s; the car gave up
+its tighter left turn, so thin-island ends cost more (below).
 
 ## 1. Tonight's track, mapped from the floor bags
 
@@ -128,7 +120,7 @@ trouble (tables below). The sim also runs at a real-time factor of 1.00 in every
 Metrics per run: laps (3, or fewer if it stalled), safety brakes (`safety_node` TTC engagements,
 `b`), reverse escapes (`e`), wall contacts (`c`), minimum body clearance (the body rectangle to the
 wall faces, m, `clr`), lap time. All runs: the real command path (driver, /drive_raw,
-`safety_node`, /drive, bridge), the car above, 0.64 m/s true top speed, the real LiDAR mount, seed
+`safety_node`, /drive, bridge), the car of the table in question, 0.64 m/s true top speed, the real LiDAR mount, seed
 11. A run ends at 3 laps, 150 s, a wall contact count, or when the car has stood still for 12 s
 (`stalled`: `safety_node` latched with a driver that cannot get out). One run per cell, not seeds:
 the sim is deterministic apart from process timing, and repeated cells of this table (the
@@ -154,7 +146,65 @@ Drivers:
   map -> odom (the car's odometry stack on the track's map, surfaces-only like slam_toolbox, sensor
   errors on: wheel speed scale 1.02, wheelspin, 0.01 rad steering trim, 2 cm scan noise).
 
-### The family, both directions (3 laps)
+### With the calibration (vehicle_params 0.14.0), 3 laps
+
+Gap columns: the lane profile as it is, and the recommended settings (lookahead 0.8 m, outside
+entry 0.25 m); tracker columns use the widest of 0.15 to 0.05 m body clearance the line allows.
+Same bench, same 0.64 m/s.
+
+| Track | Dir | gap_follow (lane profile, lookahead 0.6) | gap_follow, lookahead 0.8 + outside entry 0.25 | tracker, ground truth | tracker, localised |
+|---|---|---|---|---|---|
+| st_w1.0_s2_r0.0 | ccw | 3 laps 30.7s, 16b 12e 0c, clr 0.085 | 3 laps 23.2s, 6b 6e 0c, clr 0.083 | 0 laps, 1b 0e 0c, clr 0.131 | 0 laps, 1b 0e 0c, clr 0.156 |
+| st_w1.0_s2_r0.0 | cw | 3 laps 30.3s, 14b 12e 0c, clr 0.094 | 3 laps 23.2s, 6b 6e 0c, clr 0.077 | 0 laps, 1b 0e 0c, clr 0.146 | 0 laps, 1b 0e 0c, clr 0.149 |
+| st_w1.0_s2_r0.2 | ccw | 3 laps 18.3s, 0b 0e 0c, clr 0.158 | 3 laps 18.2s, 0b 0e 0c, clr 0.137 | 3 laps 13.7s, 0b 0e 0c, clr 0.113 | 0 laps, 11b 0e 0c, clr 0.074 |
+| st_w1.0_s2_r0.2 | cw | 3 laps 18.3s, 0b 0e 0c, clr 0.162 | 3 laps 18.2s, 0b 0e 0c, clr 0.141 | 3 laps 12.8s, 0b 0e 0c, clr 0.115 | 0 laps, 10b 0e 0c, clr 0.069 |
+| st_w1.0_s2_r0.4 | ccw | 3 laps 19.7s, 0b 0e 0c, clr 0.204 | 3 laps 19.6s, 0b 0e 0c, clr 0.198 | 3 laps 15.5s, 0b 0e 0c, clr 0.118 | 3 laps 15.7s, 4b 0e 0c, clr 0.085 |
+| st_w1.0_s2_r0.4 | cw | 3 laps 19.7s, 0b 0e 0c, clr 0.208 | 3 laps 19.7s, 0b 0e 0c, clr 0.197 | 3 laps 14.9s, 0b 0e 0c, clr 0.122 | 0 laps, 28b 0e 0c, clr 0.065 |
+| st_w1.0_s2_r0.8 | ccw | 3 laps 23.1s, 0b 0e 0c, clr 0.230 | 3 laps 23.3s, 0b 0e 0c, clr 0.226 | 3 laps 19.0s, 0b 0e 0c, clr 0.242 | 3 laps 18.8s, 0b 0e 0c, clr 0.211 |
+| st_w1.0_s2_r0.8 | cw | 3 laps 23.1s, 0b 0e 0c, clr 0.230 | 3 laps 23.2s, 0b 0e 0c, clr 0.226 | 3 laps 18.9s, 0b 0e 0c, clr 0.241 | 3 laps 19.0s, 0b 0e 0c, clr 0.190 |
+| st_w1.0_s1_r0.0 | ccw | 3 laps 26.2s, 15b 11e 0c, clr 0.093 | 3 laps 19.8s, 7b 6e 0c, clr 0.104 | 0 laps, 1b 0e 0c, clr 0.153 | 0 laps, 1b 0e 0c, clr 0.159 |
+| st_w1.0_s1_r0.0 | cw | 3 laps 26.2s, 15b 11e 0c, clr 0.099 | 3 laps 19.7s, 7b 6e 0c, clr 0.095 | 0 laps, 1b 0e 0c, clr 0.160 | 0 laps, 1b 0e 0c, clr 0.162 |
+| st_w1.0_s4_r0.0 | ccw | 3 laps 37.5s, 16b 12e 0c, clr 0.094 | 3 laps 29.7s, 6b 6e 0c, clr 0.082 | 0 laps, 1b 0e 0c, clr 0.145 | 0 laps, 1b 0e 0c, clr 0.126 |
+| st_w1.0_s4_r0.0 | cw | 3 laps 36.4s, 12b 12e 0c, clr 0.093 | 3 laps 29.7s, 7b 6e 0c, clr 0.093 | 0 laps, 1b 0e 0c, clr 0.116 | 0 laps, 1b 0e 0c, clr 0.158 |
+| st_w1.2_s2_r0.0 | ccw | 3 laps 18.7s, 0b 0e 0c, clr 0.082 | 3 laps 17.9s, 0b 0e 0c, clr 0.079 | 0 laps, 1b 0e 0c, clr 0.247 | 0 laps, 1b 0e 0c, clr 0.254 |
+| st_w1.2_s2_r0.0 | cw | 3 laps 18.6s, 0b 0e 0c, clr 0.086 | 3 laps 17.9s, 0b 0e 0c, clr 0.087 | 0 laps, 2b 0e 0c, clr 0.274 | 0 laps, 2b 0e 0c, clr 0.274 |
+| st_w1.2_s2_r0.4 | ccw | 3 laps 20.5s, 0b 0e 0c, clr 0.312 | 3 laps 20.7s, 0b 0e 0c, clr 0.295 | 3 laps 16.0s, 0b 0e 0c, clr 0.332 | 3 laps 15.9s, 0b 0e 0c, clr 0.292 |
+| st_w1.2_s2_r0.4 | cw | 3 laps 20.5s, 0b 0e 0c, clr 0.312 | 3 laps 20.7s, 0b 0e 0c, clr 0.295 | 3 laps 16.0s, 0b 0e 0c, clr 0.336 | 3 laps 16.0s, 0b 0e 0c, clr 0.276 |
+| st_w0.8_s1_r0.2 | ccw | 3 laps 42.3s, 80b 16e 0c, clr 0.042 | 3 laps 27.6s, 17b 11e 0c, clr 0.065 | 0 laps, 2b 0e 0c, clr 0.103 | 0 laps, 4b 0e 0c, clr 0.119 |
+| st_w0.8_s1_r0.2 | cw | 3 laps 36.7s, 58b 15e 0c, clr 0.041 | 3 laps 27.0s, 20b 11e 0c, clr 0.067 | 0 laps, 9b 0e 0c, clr 0.056 | 0 laps, 1b 0e 0c, clr 0.092 |
+| rr_w1.0_2x1.5_r0.0 | ccw | 3 laps 25.3s, 33b 0e 0c, clr 0.059 | 3 laps 20.4s, 0b 0e 0c, clr 0.159 | 3 laps 15.4s, 0b 0e 0c, clr 0.091 | 0 laps, 17b 0e 0c, clr 0.075 |
+| rr_w1.0_2x1.5_r0.0 | cw | 3 laps 21.4s, 1b 0e 0c, clr 0.070 | 3 laps 20.4s, 0b 0e 0c, clr 0.159 | 3 laps 15.4s, 0b 0e 0c, clr 0.113 | 1 laps 95.3s, 58b 0e 0c, clr 0.065 |
+| rr_w1.0_3x2_r0.4 | ccw | 3 laps 24.0s, 0b 0e 0c, clr 0.205 | 3 laps 23.8s, 0b 0e 0c, clr 0.201 | 3 laps 19.1s, 0b 0e 0c, clr 0.121 | 3 laps 18.9s, 0b 0e 0c, clr 0.105 |
+| rr_w1.0_3x2_r0.4 | cw | 3 laps 24.0s, 0b 0e 0c, clr 0.205 | 3 laps 23.8s, 0b 0e 0c, clr 0.200 | 3 laps 19.0s, 0b 0e 0c, clr 0.120 | 2 laps 47.2s, 95b 0e 0c, clr 0.068 |
+| rr_w1.2_2x1.6_r0.8 | ccw | 3 laps 18.9s, 0b 0e 0c, clr 0.335 | 3 laps 18.8s, 0b 0e 0c, clr 0.326 | 3 laps 17.0s, 0b 0e 0c, clr 0.126 | 3 laps 16.9s, 0b 0e 0c, clr 0.108 |
+| rr_w1.2_2x1.6_r0.8 | cw | 3 laps 18.9s, 0b 0e 0c, clr 0.333 | 3 laps 18.9s, 0b 0e 0c, clr 0.324 | 3 laps 16.7s, 0b 0e 0c, clr 0.125 | 3 laps 22.1s, 28b 0e 0c, clr 0.072 |
+| oval_2026-11-10 | ccw | 3 laps 20.4s, 6b 6e 0c, clr 0.074 | 3 laps 20.0s, 6b 6e 0c, clr 0.104 | 0 laps, 1b 0e 0c, clr 0.035 | 0 laps, 0b 0e 0c, clr 0.035 |
+| oval_2026-11-10 | cw | 3 laps 20.4s, 6b 6e 0c, clr 0.118 | 3 laps 18.6s, 5b 5e 0c, clr 0.106 | 0 laps, 1b 0e 0c, clr 0.176 | 0 laps, 0b 0e 0c, clr 0.173 |
+
+
+What the calibration changed:
+
+* **gap_follow with the plain lane profile got worse on the thin islands** (12 escapes per 3
+  laps in both directions, lap 30.7 s on the 2 m straight, where it was 23.3 s counter-clockwise
+  and 31.7 s clockwise): the car can no longer turn left at 0.60 m. **The recommended settings are
+  now the clear winner, not a refinement**: 6 escapes and 23.2 s in both directions, 6 to 7 cm of
+  clearance or more, and on the 0.8 m lane 11 against 15 to 16 escapes and 27 s against 37 to 42 s
+  (no wall contact in either, but 17 to 20 brakes in three laps). On the oval
+  they take 18.6 to 20.0 s with 5 to 6 escapes in both directions, against 20.4 s and 6 for the
+  plain profile.
+* **The tracker is unchanged**: laps every family track with an island end radius of 0.2 m or more
+  and every rounded rectangle, 25 percent faster than gap_follow; stalls on every thin island,
+  the 0.8 m lane and the oval, for the reasons in finding 2. It additionally lost the 1.2 m
+  thin-island stadium counter-clockwise (it lapped it with 3 brakes before).
+* **The tracker on the localised pose got worse**: on 5 tracks where the ground-truth tracker laps
+  cleanly it now stalls or brakes 4 to 95 times in at least one direction (it was clean counter-clockwise
+  before). Position
+  error is similar; the line asks for the same 0.69 m turns both ways, so there is no 0.60 m
+  left lock to hide a 10 cm error in. Localisation error and the sensor-noise question of finding 4
+  stay open.
+
+### Before the calibration (the car as measured on 2026-11-10), 3 laps
+
 
 Gap columns: the lane profile as it is, and the recommended settings (lookahead 0.8 m, outside entry 0.25 m). gap_follow rows are from the build with PR 115's reverse escape merged; tracker rows use the widest of 0.15 to 0.05 m body clearance the line allows.
 
@@ -188,7 +238,7 @@ Gap columns: the lane profile as it is, and the recommended settings (lookahead 
 b = safety brakes, e = reverse escapes, c = wall contacts, clr = minimum body clearance (m); a negative clearance is a wall contact.
 
 
-### Tonight's oval (the SLAM map as the world)
+### Tonight's oval before the calibration (the SLAM map as the world)
 
 | Track | Dir | gap_follow (0.6) | lookahead 0.8 | outside entry 0.25 | lookahead 0.8 + outside 0.25 | lookahead 0.8 + outside 0.35 | tracker, ground truth | tracker, localised |
 |---|---|---|---|---|---|---|---|---|
@@ -279,7 +329,7 @@ Findings:
 | map from a bag | `tools/track_session/map_from_bag.sh <bag> /data/maps/<id>/<id>` or `track_session.py map <bag> --name <id>` | `<id>.yaml/.pgm`, pose graph |
 | map live on the car | drive one slow lap with `car_teleop.launch.py mapping:=true`, then `track_session.py save-map --out <prefix>` | the same |
 | lane report | `track_session.py analyze <id>.yaml` | width, island, ends, centreline CSV |
-| raceline | `track_session.py raceline <id>.yaml --v-max 0.64 --commands-read-high 1.401` | `<id>_ccw.csv`, `<id>_cw.csv`, JSON, PNG; exit 2 if not feasible |
+| raceline | `track_session.py raceline <id>.yaml --v-max 0.64` | `<id>_ccw.csv`, `<id>_cw.csv`, JSON, PNG; exit 2 if not feasible |
 | run | `track_session.py tracker <id>_ccw.csv <id>.yaml` prints the two launch commands | `car_teleop.launch.py ... localization:=true map:=...` and `ros2 launch racer_control track_follow.launch.py raceline:=...` |
 
 Built: `tools/raceline/map_track.py` (flood fill of the lane, distance field, centreline trace,
@@ -347,3 +397,11 @@ broken map (0.114 / 0.31 / 0.39 / 0.76), written up in the test. What the test c
 the stack that the canary correctly reports; rerun it once and look at the numbers before calling a failure
 real.
 
+### Later: PR 121 and the gap_follow canary
+
+PR 121 (the canary holds a `/map` subscription and retries `save_map`; 2 `save_map` failures in 36
+runs at 1 CPU before, 0 after) is open, not merged, at the time of writing. The gap_follow canary
+(straight 2 m, ccw) failed once in CI with 7 safety brakes against a limit of 6 taken from 3-lap
+numbers; 24 local runs with vehicle_params 0.14.0 gave 4 brakes (23 runs) or 5, always 4 escapes,
+lap 23.13 to 23.55 s, clearance 0.080 to 0.0995 m, so the 7 is a loaded runner (the TTC latch
+engaging twice in an escape). The limits are now brakes 10 and escapes 8, justified in the test.

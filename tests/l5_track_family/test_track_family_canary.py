@@ -1,18 +1,17 @@
 """L5 canary: the raceline tracker laps two family tracks, both directions.
 
 Each case runs tests/l5_reactive_bench/track_family_runner.py: bridge_node on the track, safety_node
-and tracker_node on the real command path (no remap), the car as measured on 2026-11-10 (left
-lock 0.504 rad, right lock 0.449 rad, the command mapping the tracker compensates for), the
-tracker on ground-truth pose, the raceline made from the track's own map by tools/track_session
-(the pipeline a track session runs: centreline, minimum-curvature line inside the lane with the
-body kept off the walls, speed profile at 0.64 m/s, tonight's top true speed).
+and tracker_node on the real command path (no remap), the car of vehicle_params 0.14.0 (steering
+0.449 rad each way), the tracker on ground-truth pose, the raceline made from the track's own map
+by tools/track_session (the pipeline a track session runs: centreline, minimum-curvature line
+inside the lane with the body kept off the walls, speed profile at 0.64 m/s).
 
 THRESHOLDS are from measured runs (docs/notes/track-session-2026-11-11.md, tracker rows), with
-margin, at 2 laps:
-  stadium, 1.0 m lane, 2 m straights, island end radius 0.4 m   lap 15.1 to 15.3 s, 0 brakes,
-      minimum body clearance 0.115 to 0.116 m, both directions
+margin, at 3 laps, vehicle_params 0.14.0:
+  stadium, 1.0 m lane, 2 m straights, island end radius 0.4 m   lap 14.9 to 15.5 s, 0 brakes,
+      minimum body clearance 0.118 to 0.122 m, both directions
   rounded rectangle, 1.0 m lane, 3 x 2 m island, corner radius 0.4 m   lap 19.0 to 19.1 s, 0
-      brakes, minimum body clearance 0.119 to 0.121 m, both directions
+      brakes, minimum body clearance 0.120 to 0.121 m, both directions
 Limits: the laps, no wall contact, no safety_node brake, clearance at least 0.06 m, mean lap time
 within a factor 1.4 either side of the measured one (a different controller or a bridge change
 shows up there; wall-clock jitter does not, the runs are real time at a real-time factor of 1.0).
@@ -68,8 +67,6 @@ def test_tracker_laps_the_track_without_touching_a_wall_or_braking(case, reverse
         json.dumps(params),
         "--driver",
         "tracker",
-        "--car",
-        "today",
         "--stop-after-laps",
         str(LAPS),
         "--duration",

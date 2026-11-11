@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import yaml
-from jsonschema import Draft202012Validator
 
 from racer_track_perception import preprocess
 from racer_track_perception import track as tr
@@ -165,10 +165,12 @@ def load_bundle(
     if not isinstance(manifest, dict):
         raise ManifestInvalid("manifest.yaml is not a mapping")
 
-    errors = sorted(
-        Draft202012Validator(_schema(schema_path)).iter_errors(manifest),
-        key=lambda e: list(e.absolute_path),
-    )
+    schema = _schema(schema_path)
+    # validator_for picks the draft the schema names (2020-12 where jsonschema has it; the
+    # system jsonschema on JetPack's Ubuntu falls back to its newest draft, which reads this
+    # schema the same: it uses only $defs references, if/then and the common keywords).
+    validator = jsonschema.validators.validator_for(schema)(schema)
+    errors = sorted(validator.iter_errors(manifest), key=lambda e: list(e.absolute_path))
     if errors:
         first = errors[0]
         where = "/".join(str(p) for p in first.absolute_path) or "(top level)"

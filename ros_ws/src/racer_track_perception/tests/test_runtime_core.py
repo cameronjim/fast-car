@@ -10,6 +10,7 @@ from racer_track_perception import core
 from racer_track_perception import track as tr
 from racer_track_perception.runtime import CircConv1dV0, ModelFormatError
 from racer_track_perception.vehicle import LiveVehicle
+from scan_fixture import SCAN, corridor_ranges
 
 
 def reference_forward(w: dict[str, np.ndarray], x: np.ndarray) -> np.ndarray:
@@ -115,30 +116,6 @@ def test_format_errors(tmp_path: Path) -> None:
 
 
 # -- core ---------------------------------------------------------------------------------------
-
-SCAN = {
-    "angle_min": -math.pi,
-    "angle_increment": 2 * math.pi / 720,
-    "range_min": 0.05,
-    "range_max": 12.0,
-}
-
-
-def corridor_ranges(live: LiveVehicle) -> np.ndarray:
-    """A synthetic scan of a straight 1 m lane, from the head, laser frame (mount yaw applied)."""
-    n = 720
-    bearings = SCAN["angle_min"] + np.arange(n) * SCAN["angle_increment"]
-    vb = bearings + live.mount.yaw_rad
-    r = np.full(n, np.inf)
-    s, c = np.sin(vb), np.cos(vb)
-    for wall_y in (0.5, -0.5):
-        with np.errstate(divide="ignore", invalid="ignore"):
-            t = (wall_y - live.mount.y_m) / s
-        ok = t > 0
-        r[ok] = np.minimum(r[ok], t[ok])
-    r[np.abs(c) < 1e-9] = np.inf
-    r[r > 8.0] = np.inf
-    return r
 
 
 def test_geometric_perceiver_on_a_synthetic_lane(live: LiveVehicle) -> None:

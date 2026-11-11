@@ -1,0 +1,20 @@
+[project]
+name = "pnp-bundle-schema"
+version = "0.1.0"
+description = "Schema tests for the Plug-and-Play model bundle manifest (config/pnp/bundle.schema.json)."
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml",
+    "jsonschema",
+    "pytest",
+    "pytest-cov",
+    "hypothesis",
+]
+
+[tool.uv]
+# Test-only manifest, not a wheel to build.
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

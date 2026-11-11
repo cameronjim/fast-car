@@ -312,6 +312,7 @@ def compute_metrics(
     env_dt_s: float = 0.01,
     steering_swing_rad: float = STEERING_REVERSAL_SWING_RAD,
     clearance_stride: int = 2,
+    wall_thickness_m: float = WALL_THICKNESS_M,
 ) -> dict:
     """The benchmark's result for one run (JSON-serialisable).
 
@@ -374,7 +375,10 @@ def compute_metrics(
     contact_times = {c[0] for c in recording.contacts}
     indices.update(i for i, o in enumerate(odom) if o[0] in contact_times)
     clearance = min(
-        (body_clearance_m(odom[i][1], odom[i][2], odom[i][3], box, walls) for i in sorted(indices)),
+        (
+            body_clearance_m(odom[i][1], odom[i][2], odom[i][3], box, walls, wall_thickness_m)
+            for i in sorted(indices)
+        ),
         default=CLEARANCE_CAP_M,
     )
     result["min_body_clearance_m"] = round(clearance, 4)

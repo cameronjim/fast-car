@@ -225,6 +225,7 @@ if(BUILD_TESTING)
   # (same approach as racer_bringup's test_car_teleop_profile.py).
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_gap_follow_launch_profile test/test_gap_follow_launch_profile.py)
+  ament_add_pytest_test(test_tracker_launch_profile test/test_tracker_launch_profile.py)
   # park_node (roadmap 2.9): IDLE publishes nothing; ~/start refused without odometry
   # (require_odometry); SEARCH drives straight; safety_node holding the car -> ABORT naming the
   # phase; ~/abort; ~/three_point_turn refused in a narrow lane; never publishes /drive.
@@ -253,6 +254,11 @@ if(BUILD_TESTING)
   # map -> odom from TF; no map -> odom (or a stale one) stops /drive_raw.
   add_launch_test(test/test_tracker_node_pose_frame_launch.py
     TARGET test_tracker_node_pose_frame_launch
+    TIMEOUT 120
+  )
+  # Per-side steering limits and the command-per-radian scales (2026-11-11 track session).
+  add_launch_test(test/test_tracker_node_steering_launch.py
+    TARGET test_tracker_node_steering_launch
     TIMEOUT 120
   )
 

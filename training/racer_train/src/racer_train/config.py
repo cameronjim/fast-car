@@ -22,7 +22,9 @@ from typing import Any
 import yaml
 
 from racer_train.envelope_config import EnvelopeSettings
+from racer_train.randomization import RandomizationConfig
 from racer_train.reward import RewardWeights
+from racer_train.tracks import TrackFamilyConfig
 
 
 @dataclass(frozen=True)
@@ -47,12 +49,36 @@ class ActionSettings:
 
 
 @dataclass(frozen=True)
+class TracksSettings:
+    """Procedural track pool for the v0 env (racer_train.tracks). When absent the env falls
+    back to the single committed `track_csv` (the S.3 behaviour)."""
+
+    family: TrackFamilyConfig = field(default_factory=TrackFamilyConfig)
+    train_pool_size: int = 60
+    train_seed_base: int = 1000
+
+
+@dataclass(frozen=True)
+class EpisodeSettings:
+    """How an episode starts. `rolling` starts anywhere on the line at a random fraction of
+    the base target speed (training: covers the whole track quickly); `standing` starts at
+    the first raceline point at rest (evaluation: a real lap from a real start)."""
+
+    start: str = "rolling"
+    start_lateral_m: float = 0.08
+    start_heading_rad: float = 0.12
+
+
+@dataclass(frozen=True)
 class EnvSettings:
     track_csv: str = "config/tracks/gym_oval/raceline.csv"
     lidar_downsample_factor: int = 10
     timestep_s: float = 0.02  # 50 Hz, claude-docs/08-learning.md "Inference target: 50 Hz"
     max_episode_steps: int = 2000
     action: ActionSettings = field(default_factory=ActionSettings)
+    observation_profile: str = "s3"
+    tracks: TracksSettings | None = None
+    episode: EpisodeSettings = field(default_factory=EpisodeSettings)
 
 
 @dataclass(frozen=True)
@@ -65,6 +91,12 @@ class SACSettings:
     train_freq: int = 1
     gradient_steps: int = 1
     net_arch: tuple[int, ...] = (64, 64)
+    gamma: float = 0.99
+    tau: float = 0.005
+    checkpoint_every_steps: int = 0  # 0 = only the final checkpoint
+    eval_every_steps: int = 0  # 0 = no periodic in-training evaluation
+    eval_episodes: int = 12
+    normalization_steps: int = 3000  # env steps used to fit the frozen observation statistics
 
 
 @dataclass(frozen=True)
@@ -76,6 +108,13 @@ class ExperimentConfig:
     envelope: EnvelopeSettings
     reward: RewardWeights
     sac: SACSettings
+    randomization: RandomizationConfig = field(default_factory=RandomizationConfig)
+    # In-memory overrides applied on top of the generated vehicle_params binding (nested
+    # field names, e.g. {"steering": {"max_angle_rad": 0.504}}). They exist so a training run
+    # can use measurements that are not in config/vehicle_params.yaml YET (the 2026-11-10
+    # calibration lands on its own branch); they are part of the hashed config, so a contract
+    # always records exactly what was assumed. Never written back to vehicle_params.yaml.
+    vehicle_overrides: dict[str, Any] = field(default_factory=dict)
 
 
 def _pure_pursuit_from_dict(raw: dict[str, Any]) -> PurePursuitSettings:
@@ -86,10 +125,32 @@ def _action_from_dict(raw: dict[str, Any]) -> ActionSettings:
     return ActionSettings(**raw)
 
 
+def _tupled(raw: dict[str, Any]) -> dict[str, Any]:
+    """YAML lists -> tuples (the dataclasses are frozen/hashable and typed with tuples)."""
+    return {k: (tuple(v) if isinstance(v, list) else v) for k, v in raw.items()}
+
+
+def _tracks_from_dict(raw: dict[str, Any]) -> TracksSettings:
+    raw = dict(raw)
+    family_raw = raw.pop("family", {})
+    return TracksSettings(family=TrackFamilyConfig(**_tupled(family_raw)), **raw)
+
+
 def _env_from_dict(raw: dict[str, Any]) -> EnvSettings:
     raw = dict(raw)
     action_raw = raw.pop("action", {})
-    return EnvSettings(action=_action_from_dict(action_raw), **raw)
+    tracks_raw = raw.pop("tracks", None)
+    episode_raw = raw.pop("episode", {})
+    return EnvSettings(
+        action=_action_from_dict(action_raw),
+        tracks=_tracks_from_dict(tracks_raw) if tracks_raw is not None else None,
+        episode=EpisodeSettings(**episode_raw),
+        **raw,
+    )
+
+
+def _randomization_from_dict(raw: dict[str, Any]) -> RandomizationConfig:
+    return RandomizationConfig(**_tupled(raw))
 
 
 def _envelope_from_dict(raw: dict[str, Any]) -> EnvelopeSettings:
@@ -121,6 +182,8 @@ def config_from_dict(raw: dict[str, Any]) -> ExperimentConfig:
         envelope=_envelope_from_dict(raw["envelope"]),
         reward=_reward_from_dict(raw.get("reward", {})),
         sac=_sac_from_dict(raw.get("sac", {})),
+        randomization=_randomization_from_dict(raw.get("randomization", {})),
+        vehicle_overrides=dict(raw.get("vehicle_overrides", {})),
     )
 
 

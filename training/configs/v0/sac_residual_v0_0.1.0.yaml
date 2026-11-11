@@ -1,0 +1,119 @@
+# SAC residual, v0 (2026-11-11). PRE-SYSID. NOT THE THESIS RESULT.
+#
+# Phase 3 system ID has not run, so every dynamics number below is either a 2026-11-10 hand
+# measurement of the real car or a deliberately wide guess; none is a fit. Phase 3 will
+# recalibrate the sim and roadmap 5.1 retrains, which supersedes this file. A v0 policy is a
+# pipeline proof plus a first, honest look at whether a residual helps in sim at the real
+# car's scale, nothing more (claude-docs/00-project-overview.md, 08-learning.md).
+#
+# Never edit this file after it has produced a committed result; copy it and bump the semver.
+#
+# Physical constants not listed under `vehicle_overrides` come from config/vehicle_params.yaml
+# via the generated binding (CLAUDE.md invariant 2).
+name: sac_residual_v0
+
+seed: 0
+
+# Mirrors the pending calibration branch calib/2026-11-10 (another change owns
+# config/vehicle_params.yaml; this file never writes to it). Applied in memory on top of the
+# committed binding. Sources, all 2026-11-10 measurements unless noted:
+#   steering: effective limit LEFT 0.504 rad (turning radius 0.60 m), RIGHT 0.449 rad (0.69 m),
+#             vs the committed symmetric +-0.4189. Left positive (06-vehicle-params.md).
+#   overhangs: front 0.11 m, rear 0.14 m (committed placeholders 0.13 / 0.12).
+#   throttle_full_scale_mps: real top speed ~2.08 m/s at the VESC ERPM cap; the committed 2.91
+#             is wrong by 1.401x (2.91 / 1.401 = 2.077).
+#   stop_latency_s: command to the first sign of deceleration ~0.13 s (committed 0.20).
+#   max_acceleration_mps2: 3.0 is a PROVISIONAL assumption, not a measurement. It only sets
+#             the envelope's per-step speed rate limit (the committed 9.51 is the gym's value
+#             and is far above anything this car can do); the sim's own acceleration limit is
+#             randomised separately below.
+vehicle_overrides:
+  steering:
+    min_angle_rad: -0.449
+    max_angle_rad: 0.504
+  chassis:
+    front_overhang_m: 0.11
+    rear_overhang_m: 0.14
+  actuation:
+    throttle_full_scale_mps: 2.077
+    stop_latency_s: 0.13
+    max_acceleration_mps2: 3.0
+
+env:
+  lidar_downsample_factor: 30 # 1080 raw beams over 270 deg -> 36 beams of 7.5 deg, min-pooled
+  timestep_s: 0.02 # 50 Hz, claude-docs/08-learning.md "Inference target: 50 Hz"
+  max_episode_steps: 1500 # 30 s per training episode
+  observation_profile: v0
+  # Raw action in [-1, 1] maps to the residual the envelope allows, no more: a scale above
+  # the envelope bound would make most random actions "violations" before learning starts.
+  # steering: 0.05 of the 0.953 rad range = 0.0477 rad; speed: 0.008 of the 25 m/s range
+  # (-5 .. 20, the committed limits the deploy node will also derive) = 0.20 m/s. Halved from the first pilot after 300k-step pilots showed full authority (0.10 / 0.016) did worse than the tracker. Scales sit
+  # 1% under the bound so float rounding never flags a full-scale action as clipped.
+  action:
+    steering_scale_rad: 0.0471
+    speed_scale_mps: 0.198
+  episode:
+    start: rolling
+    start_lateral_m: 0.08
+    start_heading_rad: 0.12
+  tracks:
+    train_pool_size: 80
+    train_seed_base: 1000
+    family:
+      lane_width_m: 1.0
+      shapes: [stadium, rounded_rect]
+      shape_weights: [0.5, 0.5]
+      inner_radius_m: [0.0, 0.8]
+      stadium_straight_m: [1.0, 4.0]
+      rect_side_m: [1.8, 4.5]
+      max_offset_m: 0.25
+      v_max_mps: 2.0
+      a_lat_max_mps2: 3.5
+      a_long_max_mps2: 1.5
+
+# Tuned in sim (racer_train.tune_base, 4 grid passes over lookahead range, curvature
+# reference, raceline lateral-acceleration cap and top speed, under the full randomisation;
+# see docs/notes/residual-v0-2026-11-11.md for the sweep and its budget). The tracker's own
+# defaults (0.4 / 1.5 / 0.4) are for racing speeds and corner-cut or oscillate at 2 m/s in a
+# 1 m lane with 0.1 s of steering lag. These are SIM-tuned values; the real tracker is tuned
+# on hardware in roadmap Phase 4, and a deployed run must launch the tracker with the same
+# values or the residual rides on a different base than it trained on.
+pure_pursuit:
+  lookahead_min_m: 1.0
+  lookahead_max_m: 1.3
+  lookahead_curvature_ref_1pm: 1.0
+
+envelope:
+  residual_fraction_steering: 0.05
+  residual_fraction_speed: 0.008
+  # Identical for the tracker-only and tracker+residual arms (09-evaluation.md: identical
+  # speed caps). Just under the real 2.08 m/s top speed.
+  speed_cap_mps: 2.0
+  ood_threshold: 3.0
+  # First five observation fields: velocity, yaw rate, slip proxy, lateral error, heading err.
+  ood_reference_state: [1.8, 0.0, 0.0, 0.0, 0.0]
+  ood_reference_scale: [0.8, 2.5, 0.3, 0.2, 0.4]
+
+reward:
+  progress_weight: 1.0
+  crash_penalty: 50.0
+  envelope_violation_penalty: 0.1
+
+randomization:
+  enabled: true
+
+sac:
+  total_timesteps: 4000000
+  learning_rate: 0.0003
+  buffer_size: 1000000
+  batch_size: 256
+  learning_starts: 10000
+  train_freq: 1
+  gradient_steps: 1
+  net_arch: [128, 128]
+  gamma: 0.99
+  tau: 0.005
+  checkpoint_every_steps: 250000
+  eval_every_steps: 250000
+  eval_episodes: 16
+  normalization_steps: 40000

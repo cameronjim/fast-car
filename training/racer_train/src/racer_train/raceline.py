@@ -31,6 +31,8 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 _COLUMNS = ("s_m", "x_m", "y_m", "heading_rad", "curvature_1pm", "target_speed_mps")
 
 
@@ -57,6 +59,10 @@ class Raceline:
         if not points:
             raise RacelineLoadError("Raceline: refusing to construct from zero points")
         self._points = points
+        # Vectorised copies for the O(n) nearest-point scan (same arithmetic and the same
+        # first-minimum tie-break as the scalar loop it replaces: dx*dx + dy*dy in float64).
+        self._xs = np.array([p.x_m for p in points], dtype=np.float64)
+        self._ys = np.array([p.y_m for p in points], dtype=np.float64)
         # Closed-loop total length, used only by racer_train.reward's progress wraparound --
         # NOT part of the ported pure-pursuit algorithm itself. The raceline CSV's s_m column
         # does not include the closing segment from the last point back to the first (see
@@ -124,16 +130,17 @@ class Raceline:
     def nearest_index(self, x: float, y: float) -> int:
         """Index of the closest raceline point to (x, y). Mirrors
         `racer_control::Raceline::nearest_index` (O(n) linear scan)."""
-        best_index = 0
-        best_dist2 = math.inf
-        for i, point in enumerate(self._points):
-            dx = point.x_m - x
-            dy = point.y_m - y
-            dist2 = dx * dx + dy * dy
-            if dist2 < best_dist2:
-                best_dist2 = dist2
-                best_index = i
-        return best_index
+        dx = self._xs - x
+        dy = self._ys - y
+        return int(np.argmin(dx * dx + dy * dy))
+
+    def index_ahead(self, from_index: int, distance_m: float) -> int:
+        """Index `distance_m` of arc length ahead of `from_index` (wrapping), assuming the
+        roughly uniform point spacing `tools/raceline` produces. Used only for the policy's
+        curvature-preview observation, not by the ported pure-pursuit algorithm."""
+        n = len(self._points)
+        mean_spacing_m = self.length_m / n
+        return (from_index + round(distance_m / mean_spacing_m)) % n
 
     def advance_to_lookahead(self, from_index: int, x: float, y: float, lookahead_m: float) -> int:
         """Mirrors `racer_control::Raceline::advance_to_lookahead`: walk forward (with

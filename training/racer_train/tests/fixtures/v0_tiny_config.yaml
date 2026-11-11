@@ -1,0 +1,69 @@
+# Tiny v0-mode config for tests: procedural walled tracks, randomisation, v0 observation
+# profile, a handful of steps. Produces no reportable result (see smoke_config.yaml's note).
+name: sac_residual_v0_tiny
+
+seed: 0
+
+vehicle_overrides:
+  steering:
+    min_angle_rad: -0.449
+    max_angle_rad: 0.504
+  chassis:
+    front_overhang_m: 0.11
+    rear_overhang_m: 0.14
+  actuation:
+    throttle_full_scale_mps: 2.077
+    stop_latency_s: 0.13
+    max_acceleration_mps2: 3.0
+
+env:
+  lidar_downsample_factor: 30
+  timestep_s: 0.02
+  max_episode_steps: 400
+  observation_profile: v0
+  action:
+    steering_scale_rad: 0.0943
+    speed_scale_mps: 0.396
+  episode:
+    start: rolling
+  tracks:
+    train_pool_size: 3
+    train_seed_base: 1000
+    family:
+      lane_width_m: 1.0
+      shapes: [stadium, rounded_rect]
+      shape_weights: [0.5, 0.5]
+      v_max_mps: 2.0
+      a_lat_max_mps2: 3.5
+
+pure_pursuit:
+  lookahead_min_m: 1.0
+  lookahead_max_m: 1.3
+  lookahead_curvature_ref_1pm: 1.0
+
+envelope:
+  residual_fraction_steering: 0.10
+  residual_fraction_speed: 0.016
+  speed_cap_mps: 2.0
+  ood_threshold: 3.0
+  ood_reference_state: [1.8, 0.0, 0.0, 0.0, 0.0]
+  ood_reference_scale: [0.8, 2.5, 0.3, 0.2, 0.4]
+
+reward:
+  progress_weight: 1.0
+  crash_penalty: 10.0
+  envelope_violation_penalty: 0.1
+
+randomization:
+  enabled: true
+
+sac:
+  total_timesteps: 300
+  learning_rate: 0.0003
+  buffer_size: 1000
+  batch_size: 32
+  learning_starts: 50
+  train_freq: 1
+  gradient_steps: 1
+  net_arch: [16, 16]
+  normalization_steps: 400

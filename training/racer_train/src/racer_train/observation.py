@@ -29,7 +29,56 @@ LOW_DIM_FIELDS: tuple[tuple[str, str], ...] = (
     ("raceline_lateral_error_m", "m"),
     ("raceline_heading_error_rad", "rad"),
 )
+
+# v0 profile (2026-11): the S.3 five plus what a RESIDUAL needs to be a function of. A residual
+# acts on the base controller's command, so it must see that command (and the command it just
+# sent, because actuator lag and transport delay make the history matter), plus a short
+# curvature preview of the raceline ahead (the base controller is the only other thing that
+# knows the corner is coming). Every field is derivable on the car from the tracker's own
+# internals, /odom and the localiser; none needs a sensor the car lacks. `slip_proxy` is the
+# kinematic understeer indicator tan(delta_cmd) - L*yaw_rate/max(v, v_floor): zero when the
+# car turns as its steering commands say, nonzero when it slides; it replaces the S.3
+# definition (the sim's true slip angle, which no sensor on the car can measure).
+LOW_DIM_FIELDS_V0: tuple[tuple[str, str], ...] = (
+    ("velocity_mps", "m/s"),
+    ("yaw_rate_rad_s", "rad/s"),
+    ("slip_proxy", "dimensionless"),
+    ("raceline_lateral_error_m", "m"),
+    ("raceline_heading_error_rad", "rad"),
+    ("base_steering_rad", "rad"),
+    ("base_speed_mps", "m/s"),
+    ("raceline_curvature_near_1pm", "1/m"),
+    ("raceline_curvature_far_1pm", "1/m"),
+    ("prev_steering_cmd_rad", "rad"),
+    ("prev_speed_cmd_mps", "m/s"),
+)
+# The envelope's OOD scorer looks only at the first five (the "where is the car" state).
+OOD_STATE_DIM = 5
+
+LOW_DIM_PROFILES: dict[str, tuple[tuple[str, str], ...]] = {
+    "s3": LOW_DIM_FIELDS,
+    "v0": LOW_DIM_FIELDS_V0,
+}
 OBS_DTYPE = "float32"
+
+# Beyond this the LiDAR return carries no information a 1 m lane policy can use, and the real
+# sensor's 12 m limit differs from the sim's: clip so the two agree.
+LIDAR_CLIP_M = 5.0
+SLIP_PROXY_SPEED_FLOOR_MPS = 0.3
+SLIP_PROXY_LIMIT = 2.0
+
+
+def slip_proxy_from(
+    steering_cmd_rad: float, yaw_rate_rad_s: float, velocity_mps: float, wheelbase_m: float
+) -> float:
+    """Kinematic understeer indicator, dimensionless: tan(delta) - L * yaw_rate / v.
+
+    `wheelbase_m` comes from vehicle_params at the call site (CLAUDE.md invariant 2). The
+    speed floor keeps the ratio finite at standstill; the result is clipped to +-2.
+    """
+    v = max(abs(velocity_mps), SLIP_PROXY_SPEED_FLOOR_MPS)
+    value = math.tan(steering_cmd_rad) - wheelbase_m * yaw_rate_rad_s / v
+    return max(-SLIP_PROXY_LIMIT, min(SLIP_PROXY_LIMIT, value))
 
 
 @dataclass(frozen=True)
@@ -116,3 +165,12 @@ def build_observation(
         dtype=np.float32,
     )
     return np.concatenate([low_dim, np.asarray(downsampled_scan, dtype=np.float32)])
+
+
+def build_observation_vector(
+    low_dim: tuple[float, ...], downsampled_scan: np.ndarray
+) -> np.ndarray:
+    """Flat float32 observation for any profile: `low_dim` (profile order) then the beams."""
+    return np.concatenate(
+        [np.asarray(low_dim, dtype=np.float32), np.asarray(downsampled_scan, dtype=np.float32)]
+    )

@@ -8,6 +8,13 @@ pinhole camera model and a robust LiDAR range inside the box's angular window (t
 every edge case are in racer_perception/fusion.py), and publishes racer_msgs/
 ObjectDetectionArray on /perception/objects, one array per detection array (empty arrays too).
 
+INPUT. `input:=detections` (default) reads Detection2DArray boxes. `input:=poses` reads
+racer_msgs/PoseDetectionArray on /perception/poses instead (detector_node `mode:=pose`): the
+same fusion, and each object on /perception/objects and /perception/target also carries the
+person's keypoints (racer_msgs/ObjectDetection.keypoints), which the spiderbot pose rules read.
+If the pose array states its image width, that width is used for the pinhole bearing instead of
+`image_width_px` (the box and keypoints are in that image).
+
 A missing, stale or empty scan never drops a detection: it is published with range_m NaN,
 range_valid false and a range_status saying why (no_scan, stale_scan, no_returns).
 
@@ -34,7 +41,7 @@ import math
 import sys
 
 import rclpy
-from racer_msgs.msg import ObjectDetection, ObjectDetectionArray
+from racer_msgs.msg import Keypoint2D, ObjectDetection, ObjectDetectionArray, PoseDetectionArray
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.logging import get_logger
 from rclpy.node import Node
@@ -50,6 +57,7 @@ from racer_perception.fusion import (
     fuse_detection,
     resolve_laser_yaw_rad,
 )
+from racer_perception.keypoints import LAYOUT_COCO17, Keypoint
 from racer_perception.person_tracker import PersonTracker
 
 EXIT_BAD_CONFIG = 2
@@ -64,6 +72,19 @@ def s_to_stamp(stamp, seconds: float) -> None:
     whole = math.floor(seconds)
     stamp.sec = int(whole)
     stamp.nanosec = round((seconds - whole) * 1e9) % 1_000_000_000
+
+
+def pose_to_raw_detection(det) -> RawDetection:
+    """A racer_msgs/PoseDetection as a RawDetection with its keypoints."""
+    return RawDetection(
+        class_name=det.class_name,
+        score=float(det.score),
+        cx_px=float(det.box_cx_px),
+        cy_px=float(det.box_cy_px),
+        width_px=float(det.box_width_px),
+        height_px=float(det.box_height_px),
+        keypoints=tuple(Keypoint(k.x_px, k.y_px, k.confidence) for k in det.keypoints),
+    )
 
 
 def to_raw_detection(det) -> RawDetection:
@@ -94,6 +115,12 @@ def to_object_msg(obj: FusedObject) -> ObjectDetection:
     msg.box_cy_px = float(obj.cy_px)
     msg.box_width_px = float(obj.width_px)
     msg.box_height_px = float(obj.height_px)
+    if obj.keypoints:
+        msg.keypoint_layout = LAYOUT_COCO17
+        msg.keypoints = [
+            Keypoint2D(x_px=float(k.x_px), y_px=float(k.y_px), confidence=float(k.confidence))
+            for k in obj.keypoints
+        ]
     return msg
 
 
@@ -107,6 +134,8 @@ class FusionNode(Node):
             )
 
         declare("detections_topic", "/perception/detections", "Detection2DArray input.")
+        declare("poses_topic", "/perception/poses", "PoseDetectionArray input (input:=poses).")
+        declare("input", "detections", "'detections' (boxes) or 'poses' (boxes + keypoints).")
         declare("scan_topic", "/scan", "LaserScan input.")
         declare("objects_topic", "/perception/objects", "ObjectDetectionArray output.")
         declare("target_topic", "/perception/target", "ObjectDetection output (nearest person).")
@@ -155,6 +184,9 @@ class FusionNode(Node):
                 "the vehicle_params value (CLAUDE.md invariant 2)"
             )
         self._laser_yaw = yaw
+        self._input = str(get("input"))
+        if self._input not in ("detections", "poses"):
+            raise ValueError(f"input must be 'detections' or 'poses', got {self._input!r}")
         self._camera = CameraModel(
             int(get("image_width_px")), float(get("hfov_rad")), float(get("camera_yaw_rad"))
         )
@@ -176,9 +208,14 @@ class FusionNode(Node):
         )
         self._target_pub = self.create_publisher(ObjectDetection, str(get("target_topic")), rel_qos)
         self.create_subscription(LaserScan, str(get("scan_topic")), self._on_scan, scan_qos)
-        self.create_subscription(
-            Detection2DArray, str(get("detections_topic")), self._on_detections, rel_qos
-        )
+        if self._input == "poses":
+            self.create_subscription(
+                PoseDetectionArray, str(get("poses_topic")), self._on_poses, rel_qos
+            )
+        else:
+            self.create_subscription(
+                Detection2DArray, str(get("detections_topic")), self._on_detections, rel_qos
+            )
         self.get_logger().info(
             f"fusion up: lidar yaw {self._laser_yaw:.4f} rad, camera {self._camera.image_width_px} "
             f"px / {self._camera.hfov_rad:.3f} rad hfov / yaw {self._camera.yaw_rad:.3f} rad"
@@ -196,20 +233,32 @@ class FusionNode(Node):
         )
 
     def _on_detections(self, msg: Detection2DArray) -> None:
-        stamp_s = stamp_to_s(msg.header.stamp)
+        self._fuse_and_publish(msg.header, [to_raw_detection(d) for d in msg.detections], None)
+
+    def _on_poses(self, msg: PoseDetectionArray) -> None:
+        width = int(msg.image_width_px) or None
+        self._fuse_and_publish(
+            msg.header, [pose_to_raw_detection(d) for d in msg.detections], width
+        )
+
+    def _fuse_and_publish(self, header, raws: list[RawDetection], width_px: int | None) -> None:
+        camera = self._camera
+        if width_px is not None and width_px != camera.image_width_px:
+            camera = CameraModel(width_px, camera.hfov_rad, camera.yaw_rad)
+        stamp_s = stamp_to_s(header.stamp)
         fused = [
             fuse_detection(
-                to_raw_detection(det),
+                raw,
                 stamp_s,
-                self._camera,
+                camera,
                 self._scan,
                 self._max_scan_age_s,
                 self._closest_fraction,
             )
-            for det in msg.detections
+            for raw in raws
         ]
         out = ObjectDetectionArray()
-        out.header = msg.header
+        out.header = header
         out.header.frame_id = BASE_FRAME
         out.detections = [to_object_msg(o) for o in fused]
         self._objects_pub.publish(out)

@@ -16,6 +16,11 @@ Starts:
   * detector_node (detector:=true): CompressedImage -> /perception/detections
   * fusion_node   (fusion:=true):   + /scan -> /perception/objects and /perception/target
 
+POSE MODE (`mode:=pose`, roadmap 5.3): detector_node runs yolov8n-pose and also publishes
+/perception/poses (people with 17 keypoints); fusion_node reads that instead of the plain boxes,
+so /perception/objects and /perception/target carry the keypoints the spiderbot rules need.
+`mode:=detect` (default) is unchanged.
+
 `detector:=false` runs fusion alone (replaying recorded detections, or a different detector).
 Without ultralytics detector_node exits with code 3 and a clear message, and since a launch
 description cannot tell the two nodes apart on exit, that exit shuts the launch down
@@ -32,7 +37,7 @@ from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandle
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -43,7 +48,12 @@ DETECTOR_ARGUMENTS = {
         "CompressedImage topic to run the detector on.",
         "image_topic",
     ),
-    "model": ("yolov8n.pt", "YOLO weights: a bare name lives in model_cache_dir.", "model"),
+    "mode": ("detect", "detect (boxes) or pose (people with keypoints).", "mode"),
+    "model": (
+        "",
+        "YOLO weights (a bare name lives in model_cache_dir); empty = the mode's pinned default.",
+        "model",
+    ),
     "device": ("cpu", "cpu or cuda (cuda needs --runtime nvidia and a CUDA torch).", "device"),
     "model_cache_dir": (
         "~/.cache/racer_perception",
@@ -107,17 +117,21 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[detector_params],
         condition=IfCondition(LaunchConfiguration("detector")),
     )
+    fusion_params = _parameters(
+        FUSION_ARGUMENTS, {"image_width_px": int, "hfov_rad": float, "camera_yaw_rad": float}
+    )
+    fusion_params["input"] = ParameterValue(
+        PythonExpression(
+            ["'poses' if '", LaunchConfiguration("mode"), "' == 'pose' else 'detections'"]
+        ),
+        value_type=str,
+    )
     fusion = Node(
         package="racer_perception",
         executable="fusion_node",
         name="fusion_node",
         output="screen",
-        parameters=[
-            _parameters(
-                FUSION_ARGUMENTS,
-                {"image_width_px": int, "hfov_rad": float, "camera_yaw_rad": float},
-            )
-        ],
+        parameters=[fusion_params],
         condition=IfCondition(LaunchConfiguration("fusion")),
     )
     stop_on_detector_exit = RegisterEventHandler(

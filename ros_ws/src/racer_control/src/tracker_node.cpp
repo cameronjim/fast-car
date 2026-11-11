@@ -140,7 +140,15 @@ class TrackerNode : public rclcpp::Node {
 
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
         odom_topic, command_qos, std::bind(&TrackerNode::on_odom, this, std::placeholders::_1));
-    drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive_raw",
+    rcl_interfaces::msg::ParameterDescriptor drive_topic_descriptor;
+    drive_topic_descriptor.description =
+        "Where the command goes. /drive_raw (default): straight to safety_node. A policy "
+        "deployment (racer_policy/policy_node, roadmap 5.2) sets /tracker/command: this node "
+        "then HANDS OFF its command to policy_node, which adds a bounded residual and is the "
+        "only publisher of /drive_raw. Nothing else about the command changes.";
+    const std::string drive_topic =
+        this->declare_parameter<std::string>("drive_topic", "/drive_raw", drive_topic_descriptor);
+    drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic,
                                                                                     command_qos);
 
     steering_command_per_rad_left_ = declare_positive_double(
@@ -180,9 +188,11 @@ class TrackerNode : public rclcpp::Node {
     }
 
     RCLCPP_INFO(this->get_logger(),
-                "tracker_node up: %zu raceline point(s), %.1f Hz control rate, following %s%s%s",
+                "tracker_node up: %zu raceline point(s), %.1f Hz control rate, following %s%s%s, "
+                "publishing %s",
                 raceline_.size(), control_rate_hz, odom_topic.c_str(),
-                pose_frame_.empty() ? "" : " composed into frame ", pose_frame_.c_str());
+                pose_frame_.empty() ? "" : " composed into frame ", pose_frame_.c_str(),
+                drive_topic.c_str());
   }
 
  private:

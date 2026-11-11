@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_policy</name>
+  <version>0.1.0</version>
+  <description>
+    The deployment-contract loader (ROS-free: racer_policy.load_contract,
+    verify_against_environment, deploy.load_deployment) and policy_node, which runs a learned
+    residual on top of the tracker's command and publishes /drive_raw only (roadmap 5.2
+    scaffolding; it does not deploy on hardware and does not pass gate G3). torch is a
+    deploy-time dependency imported lazily; it is not declared here because it comes from the
+    car image, not rosdep.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>ackermann_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_msgs</depend>
+  <depend>tf2_ros_py</depend>
+  <depend>racer_tools</depend>
+  <depend>python3-yaml</depend>
+  <depend>python3-jsonschema</depend>
+  <depend>python3-numpy</depend>
+
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -256,6 +256,12 @@ if(BUILD_TESTING)
     TARGET test_tracker_node_pose_frame_launch
     TIMEOUT 120
   )
+  # drive_topic (2026-11-11): the handoff to racer_policy's policy_node publishes
+  # /tracker/command instead of /drive_raw; the default is unchanged.
+  add_launch_test(test/test_tracker_node_drive_topic_launch.py
+    TARGET test_tracker_node_drive_topic_launch
+    TIMEOUT 120
+  )
   # Per-side steering limits and the command-per-radian scales (2026-11-11 track session).
   add_launch_test(test/test_tracker_node_steering_launch.py
     TARGET test_tracker_node_steering_launch

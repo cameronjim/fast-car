@@ -11,6 +11,9 @@ world), with the car as measured and three drivers:
                 (the same pipeline a track session runs), following GROUND TRUTH pose
   tracker_loc   the same raceline, following the LOCALISED pose: the car's odometry (wheel
                 speed, modelled steering, EKF) and AMCL on the track's map, sensor errors on
+  tracker_policy the tracker in HANDOFF mode (drive_topic /tracker/command, lookahead from the
+                policy directory's policy_meta.yaml) plus racer_policy's policy_node, which adds
+                the bounded residual and is the only publisher of /drive_raw (--policy-dir)
 
 The car (--car): `gym` is the simulator's own 0.4189 rad symmetric steering; `today` is the car
 measured on 2026-11-10 (tools/track_session/real_car_2026-11-10.yaml): left lock 0.504 rad, right
@@ -59,7 +62,7 @@ TRACKS = (
     "rounded_rect",
     "map",
 )
-DRIVERS = ("gap_follow", "tracker", "tracker_loc")
+DRIVERS = ("gap_follow", "tracker", "tracker_loc", "tracker_policy")
 CARS = ("gym", "today")
 LOCALISATION_LAUNCH = REPO_ROOT / "ros_ws" / "src" / "racer_bringup" / "launch"
 # The sensor errors the localisation canaries use (sim_autopilot.launch.py SIM_SENSOR_NOISE).
@@ -237,7 +240,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 "scan_range_max_m",
             )
             bridge.update({k: car_like[k] for k in lidar_keys})
-    if args.driver == "tracker":
+    if args.driver in ("tracker", "tracker_policy"):
         bridge["ground_truth_rear_odom_offset_x_m"] = -cg_to_rear
 
     nodes: dict[str, dict] = {
@@ -264,8 +267,32 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             tracker.update({"odom_topic": "/odom", "pose_frame": "map"})
         else:
             tracker["odom_topic"] = "/sim/ground_truth_rear_odom"
+        if args.driver == "tracker_policy":
+            if not args.policy_dir:
+                raise ValueError("--driver tracker_policy needs --policy-dir")
+            policy_dir = Path(args.policy_dir)
+            meta = yaml.safe_load((policy_dir / "policy_meta.yaml").read_text())
+            base_settings = meta["must_match_at_deploy"]["base_controller"]
+            tracker.update(
+                {
+                    k: base_settings[k]
+                    for k in ("lookahead_min_m", "lookahead_max_m", "lookahead_curvature_ref_1pm")
+                }
+            )
+            tracker["drive_topic"] = "/tracker/command"
+            nodes["policy_node"] = {
+                "policy_dir": str(policy_dir),
+                "raceline_path": str(raceline_csv),
+                "odom_topic": tracker["odom_topic"],
+                "pose_frame": "",
+                "tracker_command_topic": "/tracker/command",
+                "laser_yaw_from_vehicle_params": mounted,
+            }
         nodes["tracker_node"] = tracker
         stack.append(("tracker_node", [base._executable("racer_control", "tracker_node")]))
+        if args.driver == "tracker_policy":
+            stack.append(("policy_node", [base._executable("racer_policy", "policy_node")]))
+            result["policy_dir"] = str(args.policy_dir)
         result.update({"tracker_params": tracker, "raceline": report})
         if args.track == "map":
             # The imported map's start pose comes from its centreline file: give it the raceline
@@ -376,6 +403,20 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     node.create_subscription(AckermannDriveStamped, "/drive_raw", on_drive_raw, reliable)
     node.create_subscription(AckermannDriveStamped, "/drive", on_drive, reliable)
     node.create_subscription(SafetyEvent, "/safety/events", on_event, reliable)
+    policy_status: dict = {}
+    policy_events: list[dict] = []
+    if args.driver == "tracker_policy":
+        from std_msgs.msg import String
+
+        def on_policy_status(msg) -> None:
+            policy_status.clear()
+            policy_status.update(json.loads(msg.data))
+
+        def on_policy_event(msg) -> None:
+            policy_events.append(json.loads(msg.data))
+
+        node.create_subscription(String, "/policy/status", on_policy_status, reliable)
+        node.create_subscription(String, "/policy/events", on_policy_event, reliable)
     reset_client = node.create_client(Trigger, "/sim/reset")
     initial_pose_pub = node.create_publisher(PoseWithCovarianceStamped, "/initialpose", reliable)
 
@@ -515,6 +556,18 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         )
         result.update(metrics)
         result["stopped_because"] = stopped_because
+        if args.driver == "tracker_policy":
+            for _ in range(150):  # let the 1 Hz status of the last second arrive
+                rclpy.spin_once(node, timeout_sec=0.01)
+            result["policy_status"] = dict(policy_status)
+            # CLAUDE.md invariant 1 / 04-architecture.md: policy_node is the only publisher of
+            # /drive_raw in a policy run, safety_node the only publisher of /drive.
+            result["publishers"] = {
+                "/drive_raw": node.count_publishers("/drive_raw"),
+                "/drive": node.count_publishers("/drive"),
+                "/tracker/command": node.count_publishers("/tracker/command"),
+            }
+            result["policy_events"] = list(policy_events)
         t_first = recording.odom[0][0] if recording.odom else 0.0
         result["safety_events"] = [
             {**e, "t_s": round(e["t_s"] - t_first, 2)} for e in event_details
@@ -550,6 +603,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--track-params-json", default="{}")
     parser.add_argument("--reverse", action="store_true", help="drive the loop clockwise")
     parser.add_argument("--driver", default="gap_follow", choices=DRIVERS)
+    parser.add_argument("--policy-dir", help="policy directory (driver tracker_policy)")
     parser.add_argument("--profile", default="lane-2026-10-25", help="gap_follow profile")
     parser.add_argument("--params-json", default="{}", help="gap_follow parameters on top")
     parser.add_argument("--tracker-params-json", default="{}", help="tracker_node parameters")

@@ -861,25 +861,53 @@ def to_ground_truth_frame(result: RunResult, gt_from_map) -> None:
     result.pairs = moved
 
 
-def save_slam_map(test, node, path_stem: Path, timeout_s: float = 60.0) -> Path:
-    """Calls /slam_toolbox/save_map, the service the car's runbook uses, and waits for the yaml."""
+def save_slam_map(test, node, path_stem: Path, timeout_s: float = 60.0, attempts: int = 3) -> Path:
+    """Calls /slam_toolbox/save_map, the service the car's runbook uses, and waits for the yaml.
+
+    save_map answered 255 (undefined failure) in one CI run (PR 116, 2026-11-11), intermittently.
+    The service builds a nav2 map_saver INSIDE slam_toolbox that subscribes to /map and gives up
+    after 2 s without a message, while slam_toolbox publishes /map from its visualisation thread
+    once a second and ONLY while someone is subscribed (updateMap returns early with no
+    subscriber). So the first subscriber in the process's life, the map_saver, waits for the
+    publish cycle (up to 1 s plus discovery plus the time updateMap takes) inside its 2 s: on a
+    starved runner that loses. This keeps a subscription of its own on /map from before the call,
+    so slam_toolbox is already publishing (and /map, a latched topic, already holds the latest map)
+    when the map_saver arrives, waits until a map has been seen, and retries a failed call, up to
+    `attempts` times, one second apart: the retry is bounded and a map_saver that fails every time
+    still fails the test."""
     from slam_toolbox.srv import SaveMap
     from std_msgs.msg import String
 
+    seen: list = []
+    keepalive = node.create_subscription(OccupancyGrid, "/map", seen.append, latched_qos())
+    deadline = time.monotonic() + timeout_s
+    while not seen and time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.1)
+    test.assertTrue(seen, "slam_toolbox published no /map")
     client = node.create_client(SaveMap, "/slam_toolbox/save_map")
     test.assertTrue(client.wait_for_service(timeout_sec=30.0), "/slam_toolbox/save_map missing")
     yaml_path = path_stem.with_suffix(".yaml")
-    if yaml_path.exists():
-        yaml_path.unlink()
-    future = client.call_async(SaveMap.Request(name=String(data=str(path_stem))))
-    rclpy.spin_until_future_complete(node, future, timeout_sec=timeout_s)
-    test.assertIsNotNone(future.result(), "save_map did not answer")
-    test.assertEqual(future.result().result, SaveMap.Response.RESULT_SUCCESS, "save_map failed")
+    result = None
+    for attempt in range(attempts):
+        if yaml_path.exists():
+            yaml_path.unlink()
+        future = client.call_async(SaveMap.Request(name=String(data=str(path_stem))))
+        rclpy.spin_until_future_complete(node, future, timeout_sec=timeout_s)
+        test.assertIsNotNone(future.result(), "save_map did not answer")
+        result = future.result().result
+        if result == SaveMap.Response.RESULT_SUCCESS:
+            break
+        print(f"[l5_localization] save_map attempt {attempt + 1} answered {result}", flush=True)
+        end = time.monotonic() + 1.0
+        while time.monotonic() < end:
+            rclpy.spin_once(node, timeout_sec=0.1)
+    test.assertEqual(result, SaveMap.Response.RESULT_SUCCESS, "save_map failed")
     deadline = time.monotonic() + timeout_s
     while not yaml_path.exists() and time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.1)
     test.assertTrue(yaml_path.exists(), f"save_map wrote no {yaml_path}")
     time.sleep(1.0)  # map_saver writes the pgm and yaml back to back
+    node.destroy_subscription(keepalive)
     return yaml_path
 
 

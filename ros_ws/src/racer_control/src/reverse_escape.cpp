@@ -11,6 +11,14 @@ namespace {
 // this is a numerical guard, not a vehicle constant).
 constexpr double kStoppedSpeedMps = 1e-6;
 
+// Turn memory (2026-11-11 clockwise floor run). Time constant of the low-pass over the wanted
+// steering while the car is actually moving forward, and the magnitude below which the memory
+// is too weak to choose a side. The time constant is a filter choice, not a vehicle constant:
+// long enough to outlast the half second of wish drift seen while the car sat nose-on to the
+// wall, short enough to follow a chicane.
+constexpr double kTurnMemoryTimeConstantS = 0.5;
+constexpr double kTurnMemoryMinRad = 0.05;
+
 // Garbage or negative time is no time (the same convention as the filters).
 double safe_dt(double dt_s) { return (std::isfinite(dt_s) && dt_s > 0.0) ? dt_s : 0.0; }
 
@@ -28,6 +36,13 @@ void ReverseEscape::track_forward(const EscapeInput& input, EscapeOutput& out) {
   }
   // Forward progress since the last escape ended, from what the car was actually sent.
   if (fresh && *input.gated_speed_mps > kStoppedSpeedMps) {
+    // Turn memory: which way the car was really turning while it still moved. Only updated
+    // while safety_node lets the car move, so the wish's drift while braked nose-on to a wall
+    // cannot erase it.
+    if (std::isfinite(input.forward_steering_rad)) {
+      const double alpha = std::min(1.0, dt / kTurnMemoryTimeConstantS);
+      turn_memory_rad_ += alpha * (input.forward_steering_rad - turn_memory_rad_);
+    }
     forward_progress_m_ += *input.gated_speed_mps * dt;
     if (forward_progress_m_ >= config_.escape_distance_m && attempts_ > 0) {
       attempts_ = 0;
@@ -46,13 +61,18 @@ void ReverseEscape::start(const EscapeInput& input, EscapeOutput& out) {
   elapsed_s_ = 0.0;
   speed_magnitude_mps_ = 0.0;
   rear_blocked_s_ = 0.0;
-  // Opposite to the wanted forward steering: the nose swings toward where the follower wanted
-  // to go while the car backs up (reverse_escape.hpp).
+  // Opposite to the turn the car was making: the nose swings toward where it was turning while
+  // the car backs up (reverse_escape.hpp). The side comes from the turn memory when it is
+  // strong enough, else from the current wish. 2026-11-11 clockwise run: after 1.5 s braked
+  // nose-on to the outer wall the wish had drifted from -0.42 to about +0.003 rad, the old rule
+  // reversed with the SAME lock, the nose swung further into the turn and the car looped.
   const double magnitude = std::abs(config_.escape_steering_rad);
+  const double side = std::abs(turn_memory_rad_) >= kTurnMemoryMinRad ? turn_memory_rad_
+                                                                      : input.forward_steering_rad;
   steering_rad_ = 0.0;
-  if (input.forward_steering_rad > 0.0) {
+  if (side > 0.0) {
     steering_rad_ = -magnitude;
-  } else if (input.forward_steering_rad < 0.0) {
+  } else if (side < 0.0) {
     steering_rad_ = magnitude;
   }
   out.event = EscapeEvent::kStarted;
@@ -145,6 +165,7 @@ void ReverseEscape::reset() {
   speed_magnitude_mps_ = 0.0;
   rear_blocked_s_ = 0.0;
   retry_wait_s_ = 0.0;
+  turn_memory_rad_ = 0.0;
 }
 
 }  // namespace racer_control

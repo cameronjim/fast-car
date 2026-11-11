@@ -31,7 +31,7 @@ def _entities():
 
 
 def test_first_drive_speed_step_is_the_documented_value():
-    assert _load_launch_module().FIRST_DRIVE_SPEED_STEP_MPS == 0.25
+    assert _load_launch_module().FIRST_DRIVE_SPEED_STEP_MPS == 0.18
 
 
 def test_speed_step_argument_defaults_to_the_first_drive_profile():
@@ -51,7 +51,7 @@ def test_keyboard_node_receives_the_speed_step_as_a_float_parameter():
     ]
     assert len(keyboard) == 1
     context = LaunchContext()
-    context.launch_configurations["teleop_speed_step_mps"] = "0.25"
+    context.launch_configurations["teleop_speed_step_mps"] = "0.18"
     context.launch_configurations["allow_reverse"] = "false"
     # launch_ros keeps the raw parameter dicts until the node is executed; evaluate the one
     # entry this test is about the way launch_ros will.
@@ -64,11 +64,11 @@ def test_keyboard_node_receives_the_speed_step_as_a_float_parameter():
     assert "speed_step_mps" in merged
     value = merged["speed_step_mps"].evaluate(context)
     assert isinstance(value, float)
-    assert value == 0.25
+    assert value == 0.18
 
 
 def test_first_drive_min_speed_is_the_documented_value():
-    assert _load_launch_module().FIRST_DRIVE_MIN_SPEED_MPS == 0.8
+    assert _load_launch_module().FIRST_DRIVE_MIN_SPEED_MPS == 0.57
 
 
 def test_min_speed_argument_defaults_to_the_first_drive_profile():
@@ -88,7 +88,7 @@ def test_keyboard_node_receives_the_min_speed_as_a_float_parameter():
     ]
     assert len(keyboard) == 1
     context = LaunchContext()
-    context.launch_configurations["teleop_min_speed_mps"] = "0.8"
+    context.launch_configurations["teleop_min_speed_mps"] = "0.57"
     merged = {}
     for entry in keyboard[0]._Node__parameters:
         for key, value in entry.items():
@@ -97,4 +97,4 @@ def test_keyboard_node_receives_the_min_speed_as_a_float_parameter():
     assert "min_speed_mps" in merged
     value = merged["min_speed_mps"].evaluate(context)
     assert isinstance(value, float)
-    assert value == 0.8
+    assert value == 0.57

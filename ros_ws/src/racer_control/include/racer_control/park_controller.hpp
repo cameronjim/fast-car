@@ -66,7 +66,8 @@
 //   * require_odometry false (sim fixtures): the distance is integrated from the gated /drive
 //     speed (or, while that is stale, this controller's own request), odom_fallback() turns true
 //     and park_node WARNs once per second. The real car moves less than commanded (it lags, and
-//     the VESC does nothing below about 0.44 m/s), so a fallback run comes up SHORT.
+//     the VESC does nothing below s_pid_min_erpm, about 0.05 m/s), so a fallback run comes up
+//     SHORT.
 //
 // BLOCKED. While a nonzero speed is requested, a gated /drive speed of zero (safety_node braking
 // the request) or no fresh gated /drive at all accumulates time; after blocked_abort_s: ABORT,

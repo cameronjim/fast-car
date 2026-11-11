@@ -475,14 +475,14 @@ or braking on this ESC.
      by the launch file):
 
 ```sh
-docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node --ros-args -p min_speed_mps:=0.8 -p speed_step_mps:=0.25'
+docker exec -it <container> bash -lc 'source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash && ros2 run racer_tools keyboard_teleop_node --ros-args -p min_speed_mps:=0.57 -p speed_step_mps:=0.18'
 ```
 
-     `speed_step_mps:=0.25` is the first-drive tap size (GitHub issue #72; the rationale is
+     `speed_step_mps:=0.18` is the first-drive tap size (0.25 until 2026-11-10; every speed was 1.401 times the true one before the calibration, so the numbers were divided by 1.401 and the car does what it did) (GitHub issue #72; the rationale is
      `FIRST_DRIVE_SPEED_STEP_MPS` in `car_teleop.launch.py`). Without it the node uses the
-     derived 0.19 m/s. `min_speed_mps:=0.8` is the minimum commanded speed (owner-tested
-     2026-09-30, `FIRST_DRIVE_MIN_SPEED_MPS`): the first tap from rest commands 0.8 m/s, and a
-     throttle-down that would land below 0.8 stops the car. Without it (default 0.0) the
+     derived 0.19 m/s. `min_speed_mps:=0.57` (0.8 before the calibration) is the minimum commanded speed (owner-tested
+     2026-09-30, `FIRST_DRIVE_MIN_SPEED_MPS`): the first tap from rest commands 0.57 m/s, and a
+     throttle-down that would land below 0.57 stops the car. Without it (default 0.0) the
      minimum is disabled. Both values must be floats. The startup line prints the step and
      the minimum it is actually using.
 
@@ -749,11 +749,11 @@ Record the readings in `docs/notes/build-log.md`.
 
 ### What a keyboard tap does now (2026-09-30)
 
-With the first-drive profile (`min_speed_mps:=0.8 -p speed_step_mps:=0.25`, see step 15.3 or
+With the first-drive profile (`min_speed_mps:=0.57 -p speed_step_mps:=0.18`, see step 15.3 or
 `car_teleop.launch.py`'s `FIRST_DRIVE_MIN_SPEED_MPS` / `FIRST_DRIVE_SPEED_STEP_MPS`), the
-rule is: from rest, W commands max(0.8, 0.25) = 0.8 m/s; above that W adds 0.25; S subtracts
-0.25, and if the result would be below 0.8 it goes to exactly 0 (a clean stop, no crawl
-below the minimum). SPACE and `q` are unchanged (zero). Speeds between 0 and 0.8 are never
+rule is: from rest, W commands max(0.57, 0.18) = 0.57 m/s; above that W adds 0.18; S subtracts
+0.18, and if the result would be below 0.57 it goes to exactly 0 (a clean stop, no crawl
+below the minimum). SPACE and `q` are unchanged (zero). Speeds between 0 and 0.57 are never
 commanded. Pulse arithmetic uses the deadband offset from `actuation.throttle_deadband_us`
 (see `config/vehicle_params.yaml` for the current value) and is checked in racer_drivers'
 gtests; speed 0 is always exactly 1500 us.
@@ -838,7 +838,7 @@ first laps.
    was not rebuilt after pulling (step 6). Every escape logs `reverse escape N/3: ...` when it
    starts and `complete`, `timed out` or `aborted` when it ends.
 3. Any launch argument given explicitly overrides the profile, for example
-   `profile:=floor-2026-10-06 max_speed_mps:=0.7`. Leave `laser_yaw_from_vehicle_params` alone:
+   `profile:=floor-2026-10-06 max_speed_mps:=0.5`. Leave `laser_yaw_from_vehicle_params` alone:
    on the car the LiDAR yaw comes from `config/vehicle_params.yaml`.
 4. Stop with Ctrl-C in the second terminal. gap_follow_node then stops publishing and
    safety_node brakes on the `/drive_raw` silence; the kill switch is still the first thing to

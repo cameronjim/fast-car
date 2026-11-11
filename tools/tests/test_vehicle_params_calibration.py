@@ -114,3 +114,45 @@ def test_the_overhangs_are_the_taped_ones():
     chassis = PARAMS["chassis"]
     assert chassis["front_overhang_m"] == 0.11  # 10 to 11 cm, the upper end (brakes earlier)
     assert chassis["rear_overhang_m"] == 0.14
+
+
+def vesc_s_pid_min_erpm() -> float:
+    newest = max((REPO / "config" / "vesc").glob("*-fsesc67-motor.xml"))
+    return float(ET.parse(newest).getroot().find(".//s_pid_min_erpm").text)
+
+
+def test_the_slowest_speed_the_vesc_acts_on_is_computed_not_remembered():
+    """Comments in racer_control quote this ("about 0.05 m/s"); the old "0.44 m/s" was the 900
+    ERPM setting of before 2026-09-29 in the inflated units. Speed = erpm / pole pairs / gear
+    ratio x 2 pi x radius / 60, from the committed VESC config and the drivetrain."""
+    drivetrain = PARAMS["drivetrain"]
+    erpm = vesc_s_pid_min_erpm()
+    slowest = (
+        erpm
+        / drivetrain["pole_pairs"]
+        / drivetrain["gear_ratio"]
+        * 2.0
+        * math.pi
+        * PARAMS["tires"]["nominal_radius_m"]
+        / 60.0
+    )
+    assert erpm == 150
+    assert slowest == pytest.approx(0.052, abs=0.002)
+    # Every converted follower speed stays well above it.
+    for converted in (0.36, 0.57, 0.18):
+        assert converted > 3.0 * slowest
+
+
+def test_converted_speeds_are_the_old_ones_over_the_pulse_ratio():
+    """Pulse-preserving conversion: a request r maps to r / full_scale of the forward range, so
+    the old request over the old full scale (2.91) must equal the new one over the new (2.08)."""
+    new_scale = PARAMS["actuation"]["throttle_full_scale_mps"]
+    for old, new in (
+        (0.5, 0.36),  # gap_follow min_speed_mps, escape speed magnitude, wall_follow min
+        (0.9, 0.64),  # floor profile max_speed_mps
+        (2.0, 1.43),  # gap_follow max_speed_mps default
+        (1.5, 1.07),  # wall_follow max_speed_mps default
+        (0.8, 0.57),  # first-drive teleop minimum
+        (0.25, 0.18),  # first-drive teleop tap
+    ):
+        assert new / new_scale == pytest.approx(old / 2.91, rel=0.02), (old, new)

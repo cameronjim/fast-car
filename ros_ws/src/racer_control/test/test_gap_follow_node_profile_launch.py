@@ -8,7 +8,7 @@ covers that).
 
 Checks:
   * the node's own parameter service reports every profile value, with the override winning;
-  * the published speed never exceeds the profile's 0.9 m/s;
+  * the published speed never exceeds the profile's 0.64 m/s;
   * speed smoothing is live: a step DOWN in the target range (the speed rate limiter never
     limits deceleration, so without the low-pass the speed would drop in one cycle) is spread
     over many control cycles.
@@ -44,16 +44,16 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 
 _PARAMS_FILE = str(Path(__file__).resolve().parent / "fixtures" / "gap_follow_test_params.yaml")
-_PROFILE_MAX_SPEED_MPS = 0.9
-_PROFILE_MIN_SPEED_MPS = 0.5
+_PROFILE_MAX_SPEED_MPS = 0.64
+_PROFILE_MIN_SPEED_MPS = 0.36
 _FOV_RAD = 4.7
 _NUM_RAYS = 1080
 
 # What the running node must report: the floor-2026-10-06 profile, with the explicit
 # target_range_median_scans:=3 launch argument replacing the profile's 5.
 _EXPECTED = {
-    "min_speed_mps": 0.5,
-    "max_speed_mps": 0.9,
+    "min_speed_mps": 0.36,
+    "max_speed_mps": 0.64,
     "k_steer": 0.4,
     "free_space_threshold_m": 0.6,
     "steering_gain": 1.6,
@@ -182,15 +182,15 @@ class TestGapFollowNodeFloorProfile(unittest.TestCase):
                 self.assertEqual(got[name], expected, name)
 
     def test_b_speed_steps_down_smoothly_and_stays_under_the_profile_cap(self):
-        # Open room: target range 5 m, raw speed at the 0.9 m/s cap. The ramp up is bounded by
+        # Open room: target range 5 m, raw speed at the 0.64 m/s cap. The ramp up is bounded by
         # the rate limiter (0.1 x vehicle_params max acceleration) plus the low-pass lag.
         self._feed(_uniform_scan(5.0), 5.0)
         self.assertGreater(len(self.received), 0, "no /drive_raw on a nominal scan")
         settled = self.received[-1].drive.speed
-        self.assertGreater(settled, 0.8, "speed did not settle near the 0.9 m/s cap")
+        self.assertGreater(settled, 0.55, "speed did not settle near the 0.64 m/s cap")
 
-        # Walls at 0.55 m all round: raw speed drops to the 0.5 m/s floor (0.55 m x 1/s,
-        # clamped to [0.5, 0.9]) in one scan. Unfiltered, that is one 0.35 m/s step.
+        # Walls at 0.55 m all round: raw speed drops to about the 0.36 m/s floor (0.55 m x 0.71 1/s = 0.39,
+        # clamped to [0.36, 0.64]) in one scan. Unfiltered, that is one 0.25 m/s step.
         self.received.clear()
         self._feed(_uniform_scan(0.55), 3.0)
         self.assertGreater(len(self.received), 20)

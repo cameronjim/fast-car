@@ -47,7 +47,7 @@
 //     A zero wanted steering backs straight out.
 //   * DISTANCE has no odometry to come from (no /odom yet): it is the integral of the COMMANDED
 //     escape speed magnitude over time. ASSUMPTION, stated: the car moves at the commanded
-//     speed. It does not, quite: the VESC does nothing below about 0.44 m/s (s_pid_min_erpm), so
+//     speed. It does not, quite: the VESC does nothing below s_pid_min_erpm (about 0.05 m/s), so
 //     the first part of the ramp is counted but not driven, and a brake from the gate stops it
 //     early. The real escape is therefore SHORTER than escape_distance_m, never longer, and
 //     escape_max_s bounds it in time either way.
@@ -80,11 +80,12 @@
 namespace racer_control {
 
 struct ReverseEscapeConfig {
-  double escape_after_s = 1.5;         // forward-blocked this long before an escape may start
-  double escape_speed_mps = -0.5;      // < 0; the VESC needs at least about 0.44 m/s
-  double escape_steering_rad = 0.0;    // magnitude: steering.max_angle_rad from the binding
-  double escape_distance_m = 0.4;      // commanded-speed integral that ends an escape
-  double escape_max_s = 2.0;           // time limit of one escape
+  double escape_after_s = 1.5;       // forward-blocked this long before an escape may start
+  double escape_speed_mps = -0.36;   // < 0; true speed (the old -0.5 / 1.401)
+  double escape_steering_rad = 0.0;  // magnitude: steering.max_angle_rad from the binding
+  double escape_distance_m =
+      0.29;                   // commanded-speed integral that ends an escape (old 0.4 / 1.401)
+  double escape_max_s = 2.0;  // time limit of one escape
   double escape_retry_after_s = 3.0;   // wait after an aborted escape
   int escape_max_attempts = 3;         // escapes without forward progress before holding
   double block_debounce_s = 0.1;       // a rear block must persist this long to abort

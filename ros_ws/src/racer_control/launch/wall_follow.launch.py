@@ -24,7 +24,7 @@ from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 _NODE = "wall_follow_node"
-_DEFAULT_MAX_SPEED_MPS = "1.5"
+_DEFAULT_MAX_SPEED_MPS = "1.07"  # the old 1.5 / 1.401 (true speed since schema 0.14.0)
 
 
 def generate_launch_description() -> LaunchDescription:

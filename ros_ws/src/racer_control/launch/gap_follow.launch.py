@@ -14,10 +14,10 @@ changed per session; `params_file` takes a ROS parameter YAML for the rest.
 extra, so the node defaults apply as before; `floor-2026-10-06` is FLOOR_2026_10_06_PROFILE,
 the parameters of the first working floor laps (a checkpoint, not a tuned optimum).
 Precedence, lowest to highest: node defaults, `params_file`, the profile, then any launch
-argument given explicitly here. So `profile:=floor-2026-10-06 max_speed_mps:=0.7` runs the
-profile at 0.7 m/s.
+argument given explicitly here. So `profile:=floor-2026-10-06 max_speed_mps:=0.5` runs the
+profile at 0.5 m/s.
 
-`max_speed_mps` defaults to empty: the profile's value if it has one, otherwise 2.0, which
+`max_speed_mps` defaults to empty: the profile's value if it has one, otherwise 1.43 (the old 2.0 in true speed), which
 (as before this argument could be empty) is passed to the node and overrides the params file.
 
 `forward_preference` and `gap_switch_margin` (gap selection weighting and hysteresis, see
@@ -65,11 +65,11 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 _NODE = "gap_follow_node"
-_DEFAULT_MAX_SPEED_MPS = 2.0
+_DEFAULT_MAX_SPEED_MPS = 1.43  # the old 2.0 / 1.401 (true speed since schema 0.14.0)
 
 FLOOR_2026_10_06_PROFILE: dict[str, float | int | bool] = {
-    "min_speed_mps": 0.5,
-    "max_speed_mps": 0.9,
+    "min_speed_mps": 0.36,  # the old 0.5 / 1.401: true speed since schema 0.14.0
+    "max_speed_mps": 0.64,  # the old 0.9 / 1.401: the speeds the floor laps were driven at
     "k_steer": 0.4,
     "free_space_threshold_m": 0.6,
     "steering_gain": 1.6,
@@ -98,7 +98,7 @@ FLOOR_2026_10_06_PROFILE: dict[str, float | int | bool] = {
     "centering_max_range_m": 1.5,
     # Reverse escape added after the same bags showed the car stuck nose-in to corners tighter
     # than its turning circle. THE CAR CAN REVERSE ON ITS OWN WITH THIS PROFILE. The escape_*
-    # timings are the node defaults (1.5 s, -0.5 m/s, 0.4 m, 2.0 s, retry 3.0 s, 3 attempts).
+    # timings are the node defaults (1.5 s, -0.36 m/s, 0.29 m, 2.0 s, retry 3.0 s, 3 attempts; the speed and distance are the old -0.5 m/s and 0.4 m divided by 1.401).
     # Not yet driven on the floor.
     "reverse_escape": True,
     # 0.5 m, not the node default 0.3 m (sim escape scenario, 2026-10-06 night): safety_node
@@ -123,7 +123,7 @@ docs/notes/reactive-control-port-2026-10-05.md, "Checkpoint 2026-10-06: first wo
 laps", for the known limits.
 
 This is a CHECKPOINT to get back to a known working state, NOT a tuned optimum: it is one
-evening's hand tuning on one lane at 0.5 to 0.9 m/s. Record a later tuned set as a new profile
+evening's hand tuning on one lane at 0.36 to 0.64 m/s true (0.5 to 0.9 in the inflated units it was written in, calibration-2026-11-10.md). Record a later tuned set as a new profile
 with its own date rather than editing the values above; try new values with launch arguments
 or a params file on top of it.
 """

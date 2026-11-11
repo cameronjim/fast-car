@@ -187,6 +187,125 @@ This is where the owner's report that the car is braked in corners it can make s
 the 56 October brakes were that, and under the correct radius the safety node does not make
 them.
 
+## Counter-clockwise runs: does 0.60 s / 0.10 m add brakes where the car was fine?
+
+Left-steering brakes (counter-clockwise), old rule as driven against the new rule in true units
+(`replay_safety.py --recorded-with 0.13.0`, same method; "new" is a trip of the new rule on no
+recorded approach, in brackets those after which the car drove on freely):
+
+| Run | Old rule | Recorded brakes | New rule on those approaches | Under 4 cm predicted | New brakes (free) |
+|---|---|---|---|---|---|
+| 2026-11-10 first run, counter-clockwise laps (the one that lapped acceptably) | head floor 0.25 m, TTC 0.30 s | 13 | 12 trip earlier, 1 not at all | 0 (min 6.0 cm) | 0 (0) |
+| 2026-10-24 and 10-25, mostly counter-clockwise | same | 53 | 35 earlier, 17 not at all, 1 no trip (the 94.76 s case) | 1 | 15 (10) |
+
+So on the 2026-11-10 counter-clockwise laps the new rule adds NO brake on an approach the car
+drove freely, and brakes earlier on every approach the old rule braked on (all 12 were
+crawl-speed full-lock floor trips). The October bags, which were driven at up to 0.71 m/s true, do
+get new brakes: 15 (10 where the car drove on), at 0.4 to 0.5 m of path distance and requests of
+0.6 to 0.85 m/s, which is the stopping model's price at those speeds (about 0.5 s of braking
+time). If those feel like cut-offs the lever is the follower's corner speed, not a smaller TTC.
+For "slightly more forgiving": 17 of the 53 October counter-clockwise brakes disappear (the
+corrected, tighter arc clears the wall), and the one that does not stop in time is below.
+
+## The 12 predictions still under 4 cm: impact speed
+
+Estimated with the stopping model (0.2 s latency, 1.0 m/s^2): the car reaches the wall at
+`min(v, sqrt(2 x 1.0 x shortfall))`, v the approach speed measured by scan matching. All but one
+are the clockwise crawl corners.
+
+| Bag, time | Predicted end clearance | Approach speed | Impact speed if it hits |
+|---|---|---|---|
+| 11-10 second run, 657.3 s | 0.0 cm | 0.45 m/s | touches, about 0 |
+| 666.2 s | -2.1 cm | 0.27 | 0.20 m/s |
+| 705.5 s | -1.7 cm | 0.27 | 0.18 |
+| 744.6 s | +2.1 cm | 0.26 | no contact, 2 cm margin |
+| 765.8 s | -1.9 cm | 0.23 | 0.19 |
+| 1265.9 s | -5.3 cm | 0.26 | 0.26 (the gate saw no trip) |
+| 1277.2 s | -8.4 cm | 0.30 | 0.30 |
+| 1308.4 s | -8.8 cm | 0.24 | 0.24 (no trip) |
+| 1319.5 s | +2.8 cm | 0.29 | no contact |
+| 1392.8 s | +2.4 cm | 0.31 | no contact |
+| 1412.9 s | -1.0 cm | 0.30 | 0.14 |
+| 10-25, 94.76 s | -29 cm | 0.71 | 0.71, the gate sees no wall at all |
+
+Eight of the eleven clockwise cases would touch foam at 0.14 to 0.30 m/s, a bump with a 3.7 kg car
+into foam board; three keep 2 to 3 cm. The 10-25 case is the only one at speed and it is a model
+failure (the corrected arc is clear, the car stopped 7 cm from the wall), not a threshold one.
+
+## A conservative turning radius for the gate?
+
+Variant: the planners keep the median table, the safety gate is given the 75th-percentile radii
+(left 0.64 m = 0.4746 rad, right 0.74 m = 0.4195 rad, nearly the old 0.4189), same rule. Replay of
+all four bags:
+
+| | Median (committed) | Gate at p75 radius |
+|---|---|---|
+| under 4 cm predicted | 12 | 13 |
+| later than recorded | 4 | 9 |
+| brakes with nothing in the path (disappear) | 28 | 10 |
+| new brakes (free) | 20 (15) | 17 (16) |
+| clockwise second run, under 4 cm | 11 | 10 |
+
+The p75 gate keeps 18 of the corner brakes the median gate drops (October counter-clockwise: 8
+disappear instead of 17), so it brings back exactly the braking-in-corners-the-car-makes that
+this calibration was meant to remove, and it does NOT fix the residue (13 against 12 under 4 cm,
+and more later-than-recorded, because the old arc was the wide one). **Recommendation: keep the
+median radius in the gate.** The residue is a tangential-graze and understeer problem, and
+the right fix is a gate radius that grows with speed, which needs a measurement of the radius at
+0.5 to 1.0 m/s (a taped circle on the floor, or the 2026-11-10 odometry plus yaw rate with
+`/imu`); nothing was switched. `tools/safety_replay/calibration.py` would take a second table
+for it.
+
+## Speeds converted so the car does what it did
+
+Every speed a person tuned or tested on the car was in the old units (a request 1.401 times the
+true speed on a straight), so with the new scale the same number would make the car about 40 per
+cent faster than anything driven. All of them are divided by 1.401. That factor, not the scan
+matching one (1.35), because it is the direct measurement, and because it is exactly what keeps
+the throttle PULSE the same: the pulse is `request / actuation.throttle_full_scale_mps` of the
+forward range, and 2.91 / 2.08 = 1.399, so 0.5 / 2.91 = 0.36 / 2.08 to within 0.2 per cent
+(`test_converted_speeds_are_the_old_ones_over_the_pulse_ratio`). Rounded to two decimals.
+
+| Where | Old | New |
+|---|---|---|
+| gap_follow `floor-2026-10-06` and `lane-2026-10-25` profiles: `min_speed_mps` / `max_speed_mps` | 0.5 / 0.9 | 0.36 / 0.64 |
+| gap_follow node defaults: `max_speed_mps`, `min_speed_mps`, `k_speed_per_s`, `escape_speed_mps`, `escape_distance_m` | 2.0, 0.5, 1.0, -0.5, 0.4 | 1.43, 0.36, 0.71, -0.36, 0.29 |
+| gap_follow launch default `max_speed_mps` (no profile) | 2.0 | 1.43 |
+| wall_follow `max_speed_mps` / `min_speed_mps` (node and launch default) | 1.5 / 0.5 | 1.07 / 0.36 |
+| car_teleop first-drive minimum / tap, and the runbook commands | 0.8 / 0.25 | 0.57 / 0.18 |
+| the runbook's `max_speed_mps:=` example | 0.7 | 0.5 |
+
+Notes on these. `escape_distance_m` is integrated from the commanded speed with no odometry, so
+0.4 m commanded was 0.29 m driven; it is converted with the speed (the escape then takes the same
+time). `k_speed_per_s` (speed = k x range) is converted so the speed law is scaled as a whole.
+The teleop pair was "owner-tested 2026-09-30", when the full scale was 5.0 m/s; since 2026-10-06
+(2.91) the same request has been faster, and the conversion keeps the pulses of the last
+configuration it was used with. The reverse-escape probe distance, the lane and corner distances,
+`free_space_threshold_m` and every other length are geometry in metres and are NOT converted,
+nor are the steering gains.
+
+One test input had to be pinned because of this: the two reverse-escape canaries
+(`tests/l5_reactive_lap`) run the floor profile, and the round-corner scenario only needs the
+escape when the car meets the corner at the old speeds. With the converted profile (slower) the
+car rounded it without ever backing out (0 escapes, the canary's pass condition is that it fires),
+so `ESCAPE_CANARY_SPEEDS` in `l5_reactive_common.py` pins min 0.5, max 0.9, `k_speed_per_s` 1.0,
+escape speed -0.5 and escape distance 0.4 for those two scenarios; nothing was loosened, and
+the wall-contact criterion is untouched. The other lap canaries pass on the converted profile.
+
+NOT converted, deliberately: **park_node** (profile `floor-2026-10-07`, 0.5 m/s both ways) and
+its distances. It has never been driven, so there is no behaviour to preserve; its speeds are the
+intended pace, its arcs are geometry computed from the turning radius, and `/odom/wheel` is true
+metres now, which is what the planner assumed all along (on the car the old odometry would have
+made every arc 29 per cent short). The sim park canary publishes true metres and is unchanged.
+The **tracker** has no speed constants of its own (it follows the raceline's `target_speed_mps`)
+and has never been driven on the car. The sim canaries' own speeds (`tests/l5_*`) are true
+metres in the sim and are untouched. The "VESC needs at least about 0.44 m/s" comments were stale
+twice over: they came from `s_pid_min_erpm` 900 (before 2026-09-29, now 150 in the committed VESC
+config) in the inflated units. From the binding it is 150 ERPM / pole pairs 2 / gear ratio 8.32 x
+2 pi x 0.055 m / 60 = 0.052 m/s (`test_the_slowest_speed_the_vesc_acts_on_is_computed_not_remembered`
+recomputes it; it is also not the 0.31 m/s that 900 ERPM would give). The comments now say about
+0.05 m/s and name the setting.
+
 ## Sim, before and after
 
 Same image (`ros-dev:loc`), the CI scripts unchanged, run on a copy of main (before) and this
@@ -200,16 +319,16 @@ simulators) and re-run alone.
 
 | Test | Before | After |
 |---|---|---|
-| l5_reactive_lap, CCW 2 laps | 26.14 s, pass | 26.03 s, pass |
-| l5_reactive_lap, CW 2 laps | 26.13 s, pass | 25.77 s, pass |
-| escape canary, square corner | 26.08 s, 1 escape | 25.88 s, 1 escape |
-| escape canary, round corner | 26.41 s, 1 escape, 0.226 m off the centreline | 29.95 s, 1 escape, 0.271 m (limit 0.395 m) |
-| l5_tracker_lap, 2 laps | 12.48 s, pass | 12.45 s, pass |
-| l5_tracker_lap, Oschersleben 1 lap | 24.71 s | 33.63 s (band 15 to 90 s; the raceline speed cap is 2.08 m/s now) |
+| l5_reactive_lap, CCW 2 laps | 26.14 s, pass | 31.76 s, pass (the floor profile speeds are converted, so slower) |
+| l5_reactive_lap, CW 2 laps | 26.13 s, pass | 31.59 s, pass |
+| escape canary, square corner | 26.08 s, 1 escape | 26.21 s, 1 escape |
+| escape canary, round corner | 26.41 s, 1 escape, 0.226 m off the centreline | 29.00 s, 1 escape, 0.272 m (limit 0.395 m); speeds pinned, see below |
+| l5_tracker_lap, 2 laps | 12.48 s, pass | 12.48 s, pass |
+| l5_tracker_lap, Oschersleben 1 lap | 24.71 s | 24.71 s (an earlier run of this branch read 33.6 s on a loaded machine, discarded) |
 | e2e_sim_safety (10 tests) | pass | pass |
-| l5_park, min body clearance | pass, 0.204 m | pass, 0.219 m |
-| l5_reactive_bench, CI battery (lane_square, lane_open_side, chicane) | brakes 4 / 0 / 0, min clearance 0.047 / 0.187 / 0.220 m, 0 contacts | brakes 12 / 0 / 0 (the TTC 0.60 s), 0.052 / 0.204 / 0.231 m, 0 contacts |
-| l5_localization (mapping, oval, lane) | pass | pass; the oval runs at 2.08 m/s instead of 2.91, heading max 0.087 to 0.055 rad; the lane heading max went 0.100 to 0.184 rad, inside its threshold |
+| l5_park, min body clearance | pass, 0.204 m | pass, 0.218 m |
+| l5_reactive_bench, CI battery (lane_square, lane_open_side, chicane; lap time, brakes, min clearance) | 41.6 s, 4, 0.047 m / 25.5 s, 0, 0.187 m / 25.4 s, 0, 0.220 m; 0 contacts | 54.0 s, 7, 0.101 m / 33.8 s, 0, 0.234 m / 33.9 s, 0, 0.234 m; 0 contacts (profile speeds converted, TTC 0.60 s) |
+| l5_localization (mapping, oval, lane) | pass | pass; the oval runs at 2.08 m/s instead of 2.91 (laps 17.1 s, heading max 0.087 to 0.051 rad); the lane heading max 0.100 to 0.159 rad, inside its threshold |
 
 `tests/sim_regression` and every Python suite (`run_python_tests.sh`) pass unchanged, apart from
 the two goldens below. Not re-run: the five-track `reactive_bench` for the two profiles the

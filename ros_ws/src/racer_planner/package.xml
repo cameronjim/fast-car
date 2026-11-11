@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_planner</name>
+  <version>0.1.0</version>
+  <description>
+    MPPI sampling planner for the Plug-and-Play racer (claude-docs/13, part C): mppi_planner_node
+    drives the car from a local track (racer_pnp_msgs/LocalTrack), the raw /scan and the wheel
+    speed with a bundled dynamics model, publishing /drive_raw only. The ROS-free core
+    (racer_planner_core) holds the model step, bundle loader, solver and decision logic.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>ackermann_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>racer_pnp_msgs</depend>
+  <depend>yaml-cpp</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>ament_index_python</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-numpy</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

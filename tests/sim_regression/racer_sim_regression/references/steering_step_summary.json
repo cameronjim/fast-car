@@ -1,7 +1,8 @@
 {
   "meta": {
     "racer_gym_version": "0.1.0",
-    "repo_commit": "6b22c46d85a7c3139244d7dff10d5f7e15763599",
+    "regeneration_reason": "Sim tyre units fix (branch sim/tyre-units): the placeholder Pacejka tyre used f1tenth_gym's dimensionless C_Sf/C_Sr (4.7/5.5) as N/rad; it is now mu*C_S*Fz_static (94/101 N/rad), as stock gym F_y = mu*C_S*Fz*alpha implies. Integrator also takes stiffness-aware RK4 substeps (stable below 0.4 m/s at dt 0.01). Only the tyre-dependent maneuvers (steering_step, constant_radius_circle) changed; throttle_step and coastdown are unchanged and were not regenerated. Owner-approved. See docs/notes/sim-tyre-fix-2026-11-11.md.",
+    "repo_commit": "f495e63254aa0dde3eef510c69c8d8a1f8cdfe13",
     "seed": 1234,
     "vehicle_params_fallback_flags": {
       "command_to_torque_delay": true,
@@ -13,18 +14,18 @@
     },
     "vehicle_params_meta": {
       "fit_date": "2026-08-22",
-      "schema_version": "0.1.0",
+      "schema_version": "0.13.0",
       "sysid_session_id": "none-preliminary"
     }
   },
   "records": [
     {
       "cruise_speed_mps": 3.0,
-      "steady_state_slip_angle_rad": -0.373437397280205,
-      "steady_state_yaw_rate_radps": 0.39813640876455336,
+      "steady_state_slip_angle_rad": 0.0012465521924315704,
+      "steady_state_yaw_rate_radps": 1.2043937468315955,
       "steer_target_rad": 0.15,
-      "yaw_rate_overshoot_frac": 0.7049787481558157,
-      "yaw_rate_settling_time_s": 3.2800000000000002
+      "yaw_rate_overshoot_frac": 0.003927446030072256,
+      "yaw_rate_settling_time_s": 0.17
     }
   ]
 }

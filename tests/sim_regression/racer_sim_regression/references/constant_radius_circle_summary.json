@@ -1,7 +1,8 @@
 {
   "meta": {
     "racer_gym_version": "0.1.0",
-    "repo_commit": "6b22c46d85a7c3139244d7dff10d5f7e15763599",
+    "regeneration_reason": "Sim tyre units fix (branch sim/tyre-units): the placeholder Pacejka tyre used f1tenth_gym's dimensionless C_Sf/C_Sr (4.7/5.5) as N/rad; it is now mu*C_S*Fz_static (94/101 N/rad), as stock gym F_y = mu*C_S*Fz*alpha implies. Integrator also takes stiffness-aware RK4 substeps (stable below 0.4 m/s at dt 0.01). Only the tyre-dependent maneuvers (steering_step, constant_radius_circle) changed; throttle_step and coastdown are unchanged and were not regenerated. Owner-approved. See docs/notes/sim-tyre-fix-2026-11-11.md.",
+    "repo_commit": "f495e63254aa0dde3eef510c69c8d8a1f8cdfe13",
     "seed": 1234,
     "vehicle_params_fallback_flags": {
       "command_to_torque_delay": true,
@@ -13,31 +14,31 @@
     },
     "vehicle_params_meta": {
       "fit_date": "2026-08-22",
-      "schema_version": "0.1.0",
+      "schema_version": "0.13.0",
       "sysid_session_id": "none-preliminary"
     }
   },
   "records": [
     {
       "speed_target_mps": 1.5,
-      "steady_state_lateral_accel_mps2": 0.6226880533889928,
-      "steady_state_slip_angle_rad": -0.15901169278875643,
-      "steady_state_speed_mps": 1.4999999999909874,
-      "steady_state_yaw_rate_radps": 0.41512536892848945
+      "steady_state_lateral_accel_mps2": 0.9638769095964025,
+      "steady_state_slip_angle_rad": 0.056279521648828386,
+      "steady_state_speed_mps": 1.4999999999909872,
+      "steady_state_yaw_rate_radps": 0.6425846064014626
     },
     {
       "speed_target_mps": 2.5,
-      "steady_state_lateral_accel_mps2": 1.0525095379933134,
-      "steady_state_slip_angle_rad": -0.3210087290302575,
+      "steady_state_lateral_accel_mps2": 2.5771006655826745,
+      "steady_state_slip_angle_rad": 0.023683079631958127,
       "steady_state_speed_mps": 2.499999999984516,
-      "steady_state_yaw_rate_radps": 0.42100381519993285
+      "steady_state_yaw_rate_radps": 1.0308402662394545
     },
     {
       "speed_target_mps": 3.5,
-      "steady_state_lateral_accel_mps2": 1.2916792999665838,
-      "steady_state_slip_angle_rad": -0.4120195187819583,
+      "steady_state_lateral_accel_mps2": 4.757402203951809,
+      "steady_state_slip_angle_rad": -0.025988394740205006,
       "steady_state_speed_mps": 3.499999999974274,
-      "steady_state_yaw_rate_radps": 0.3690512285645937
+      "steady_state_yaw_rate_radps": 1.3592577725676507
     }
   ]
 }

@@ -58,6 +58,9 @@ def main() -> None:
     REFERENCES_DIR.mkdir(parents=True, exist_ok=True)
     for name in names:
         trajectory, summary, meta = run_maneuver(name)
+        # Keep the reason WITH the file, not only in the log banner and the PR: the next
+        # reader of a reference should see why it last changed.
+        meta = {**meta, "regeneration_reason": args.reason.strip()}
         regenerate_golden(
             trajectory, REFERENCES_DIR / f"{name}_trajectory.json", reason=args.reason, meta=meta
         )

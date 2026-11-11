@@ -60,23 +60,42 @@ def test_placeholder_pacejka_peak_matches_mu_times_static_axle_load(repo_vehicle
     assert math.isclose(result.dyn_params.pacejka_rear.d_peak_n, mu * static.rear_n, rel_tol=1e-9)
 
 
-def test_placeholder_pacejka_small_slip_slope_matches_linear_cornering_stiffness(
+def test_placeholder_pacejka_small_slip_slope_is_gym_stiffness_in_newtons_per_radian(
     repo_vehicle_params,
 ):
-    """B*C*D (Magic Formula's E=0 small-slip cornering stiffness identity) must reproduce
-    tires.linear_cornering_stiffness_front/rear_n_per_rad exactly -- the whole point of the
-    placeholder is to agree with stock f1tenth_gym's linear tire model at small slip."""
+    """B*C*D (Magic Formula's E=0 small-slip cornering stiffness identity) must equal the
+    stiffness stock f1tenth_gym's linear tire model implies in N/rad: mu * C_S * Fz_static.
+
+    This replaces the earlier form of this test, which asserted B*C*D == C_S itself (4.7) and so
+    encoded the unit bug the sim tyre fix removed: the gym's C_S is dimensionless and multiplies
+    mu and the axle load. The yaml fields still carry the gym's dimensionless values under an
+    N/rad name (a follow-up, see docs/notes/sim-tyre-fix-2026-11-11.md); the dynamics read the
+    gym's own defaults, which are asserted equal to them here so a divergence is noticed."""
+    from f1tenth_gym.envs.f110_env import F110Env
+    from racer_gym.dynamics.load_transfer import static_axle_loads
+
+    gym = F110Env.default_config()["params"]
+    tires = repo_vehicle_params.tires
+    assert tires.linear_cornering_stiffness_front_n_per_rad == gym["C_Sf"]
+    assert tires.linear_cornering_stiffness_rear_n_per_rad == gym["C_Sr"]
+
+    static = static_axle_loads(
+        repo_vehicle_params.chassis.mass_kg,
+        repo_vehicle_params.chassis.cg_to_front_axle_m,
+        repo_vehicle_params.chassis.cg_to_rear_axle_m,
+    )
+    mu = tires.surface_friction_coefficient
     result = build_dyn_params(repo_vehicle_params, DT_S)
     front = result.dyn_params.pacejka_front
     rear = result.dyn_params.pacejka_rear
     assert math.isclose(
         front.b_stiffness * front.c_shape * front.d_peak_n,
-        repo_vehicle_params.tires.linear_cornering_stiffness_front_n_per_rad,
+        mu * gym["C_Sf"] * static.front_n,
         rel_tol=1e-9,
     )
     assert math.isclose(
         rear.b_stiffness * rear.c_shape * rear.d_peak_n,
-        repo_vehicle_params.tires.linear_cornering_stiffness_rear_n_per_rad,
+        mu * gym["C_Sr"] * static.rear_n,
         rel_tol=1e-9,
     )
 

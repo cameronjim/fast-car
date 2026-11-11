@@ -28,7 +28,15 @@ from .hostinfo import HostInfo
 GAP_FOLLOW_PROFILES = ("none", "floor-2026-10-06", "lane-2026-10-25")
 PARK_PROFILES = ("none", "floor-2026-10-07")
 
-DRIVE_MODES = ("gap_follow", "wall_follow", "tracker", "park", "ml_policy", "spiderbot")
+DRIVE_MODES = ("gap_follow", "wall_follow", "tracker", "park", "ml_policy", "spiderbot", "pnp")
+
+#: The Plug-and-Play driver (racer_bringup pnp.launch.py): perception backends, the speed cap bounds
+#: in m/s (the planner and the dynamics bundle's validity range refuse above what they cover), and
+#: where model bundles live as the stack container sees them.
+PNP_BACKENDS = ("net", "geometric")
+PNP_SPEED_RANGE = (0.2, 1.5)
+PNP_DEFAULT_SPEED_MPS = 0.5
+PNP_MODELS_IN_CONTAINER = "/workspace/data/pnp/models/"
 
 #: Pose rules of racer_apps' spiderbot (racer_apps/spiderbot/pose_rules.py). test_spiderbot_whitelist
 #: checks this against the source so the two cannot drift.
@@ -298,6 +306,10 @@ def ros_cmd_for(
     raceline_container_path: str = "",
     pose_frame: str = "map",
     policy_container_path: str = "",
+    pnp_perception_container_path: str = "",
+    pnp_dynamics_container_path: str = "",
+    pnp_backend: str = "net",
+    pnp_v_max_mps: float = PNP_DEFAULT_SPEED_MPS,
 ) -> str:
     """The ros2 command for a driving mode. Raises CommandError for anything off the lists."""
     if mode == "gap_follow":
@@ -330,7 +342,44 @@ def ros_cmd_for(
             f"policy_dir:={_quoted_ok(policy)} raceline:={_quoted_ok(line)} "
             f"pose_frame:={_quoted_ok(pose_frame)}"
         )
+    if mode == "pnp":
+        return _pnp_cmd(
+            pnp_perception_container_path, pnp_dynamics_container_path, pnp_backend, pnp_v_max_mps
+        )
     raise CommandError(f"unknown driving mode {mode!r}")
+
+
+def _pnp_bundle(path: str, what: str) -> str:
+    """A bundle directory directly under /workspace/data/pnp/models/, shell-safe."""
+    path = _inside_repo(path, what)
+    name = path[len(PNP_MODELS_IN_CONTAINER) :] if path.startswith(PNP_MODELS_IN_CONTAINER) else ""
+    if not NAME_RE.match(name):
+        raise CommandError(f"{what} must be a directory under {PNP_MODELS_IN_CONTAINER}")
+    return _quoted_ok(path)
+
+
+def _pnp_cmd(perception: str, dynamics: str, backend: str, v_max_mps: float) -> str:
+    """`ros2 launch racer_bringup pnp.launch.py ...` from checked bundle paths, a fixed backend
+    and a speed cap formatted here. The nodes refuse any bundle that does not match this car;
+    this only keeps the command inside the whitelist. The launch also refuses to start without
+    a recorder, so a drive that is not logged cannot be started from the app either."""
+    if backend not in PNP_BACKENDS:
+        raise CommandError(f"pnp backend must be one of {list(PNP_BACKENDS)}")
+    if isinstance(v_max_mps, bool) or not isinstance(v_max_mps, (int, float)):
+        raise CommandError("pnp speed cap must be a number")
+    low, high = PNP_SPEED_RANGE
+    if not (low <= float(v_max_mps) <= high):
+        raise CommandError(f"pnp speed cap must be between {low} and {high} m/s")
+    dynamics_arg = _pnp_bundle(dynamics, "dynamics bundle")
+    if backend == "net":
+        perception_arg = f"perception_bundle:={_pnp_bundle(perception, 'perception bundle')} "
+    else:
+        perception_arg = ""
+    return (
+        "ros2 launch racer_bringup pnp.launch.py "
+        f"{perception_arg}dynamics_bundle:={dynamics_arg} "
+        f"backend:={backend} v_max_mps:={float(v_max_mps):.2f}"
+    )
 
 
 def spiderbot_cmd(

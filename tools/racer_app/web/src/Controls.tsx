@@ -48,6 +48,10 @@ export function Controls(p: Props) {
   const [parkProfile, setParkProfile] = useState("floor-2026-10-07");
   const [raceline, setRaceline] = useState("");
   const [policyName, setPolicyName] = useState("");
+  const [pnpBackend, setPnpBackend] = useState("geometric");
+  const [pnpDynamics, setPnpDynamics] = useState("");
+  const [pnpPerception, setPnpPerception] = useState("");
+  const [pnpSpeed, setPnpSpeed] = useState(0.5);
   const [override, setOverride] = useState(false);
   const [reason, setReason] = useState("");
   const [needsOverride, setNeedsOverride] = useState<string | null>(null);
@@ -68,6 +72,10 @@ export function Controls(p: Props) {
     patrol?: string;
     rule?: string;
     speed_mps?: number;
+    pnp_perception?: string;
+    pnp_dynamics?: string;
+    pnp_backend?: string;
+    pnp_v_max_mps?: number;
   }) => {
     const err = await act(() =>
       api.startDrive({ ...body, override, override_reason: override ? reason : "" }),
@@ -81,6 +89,17 @@ export function Controls(p: Props) {
   };
 
   const policy = options?.policy ?? status?.policy ?? null;
+  const pnp = options?.pnp ?? null;
+  const pnpRange = pnp?.speed_range ?? [0.2, 1.5];
+  const pnpNeedsPerception = pnpBackend === "net";
+  const pnpReady =
+    !!pnp?.available &&
+    stackUp &&
+    !driving &&
+    (pnp.dynamics.length === 1 || !!pnpDynamics) &&
+    (!pnpNeedsPerception || pnp.perception.length === 1 || !!pnpPerception) &&
+    pnpSpeed >= pnpRange[0] &&
+    pnpSpeed <= pnpRange[1];
   const perception = status?.perception ?? options?.perception ?? null;
   const spiderbot = status?.spiderbot ?? options?.spiderbot ?? null;
   const speedRange = options?.spiderbot_speed_range ?? [0.1, 1.0];
@@ -223,6 +242,55 @@ export function Controls(p: Props) {
           {policy?.available
             ? "Tracker plus a bounded learned residual, on the raceline chosen above. Same localisation needs as the tracker. The policy node refuses to start on any mismatch with this car's parameters. First trials: wheels off the ground, hand on the knob."
             : `disabled: ${policy?.reason ?? "unknown"}`}
+        </div>
+        <div class="row">
+          <select value={pnpBackend} onChange={(e) => setPnpBackend(e.currentTarget.value)} aria-label="Plug-and-Play perception backend" disabled={!pnp?.available}>
+            {(pnp?.backends ?? ["geometric", "net"]).map((x) => <option key={x}>{x}</option>)}
+          </select>
+          <select value={pnpDynamics} onChange={(e) => setPnpDynamics(e.currentTarget.value)} aria-label="Plug-and-Play dynamics bundle" disabled={!pnp?.available}>
+            <option value="">{pnp?.dynamics.length === 1 ? pnp.dynamics[0] : "dynamics bundle"}</option>
+            {pnp?.dynamics.map((x) => <option key={x}>{x}</option>)}
+          </select>
+          {pnpNeedsPerception && (
+            <select value={pnpPerception} onChange={(e) => setPnpPerception(e.currentTarget.value)} aria-label="Plug-and-Play perception bundle" disabled={!pnp?.available}>
+              <option value="">{pnp?.perception.length === 1 ? pnp.perception[0] : "perception bundle"}</option>
+              {pnp?.perception.map((x) => <option key={x}>{x}</option>)}
+            </select>
+          )}
+        </div>
+        <div class="row">
+          <label>
+            Speed cap {pnpSpeed.toFixed(2)} m/s
+            <input
+              type="range"
+              aria-label="Plug-and-Play speed cap"
+              min={pnpRange[0]}
+              max={pnpRange[1]}
+              step={0.05}
+              value={pnpSpeed}
+              onInput={(e) => setPnpSpeed(Number(e.currentTarget.value))}
+              disabled={!pnp?.available}
+            />
+          </label>
+          <button
+            disabled={!pnpReady}
+            title={pnp?.available ? "Mapless driver: track perception plus the MPPI planner" : pnp?.reason}
+            aria-describedby="pnp-reason"
+            onClick={() =>
+              drive({
+                mode: "pnp",
+                pnp_backend: pnpBackend,
+                pnp_dynamics: pnpDynamics,
+                pnp_perception: pnpNeedsPerception ? pnpPerception : "",
+                pnp_v_max_mps: pnpSpeed,
+              })
+            }
+          >Plug-and-Play</button>
+        </div>
+        <div id="pnp-reason" class="sub">
+          {pnp?.available
+            ? "Drives a track it has never seen: no map, no pose. Needs only the stack and its recorder. The nodes refuse any bundle that does not match this car. Start at a low cap, wheels off the ground first, hand on the knob."
+            : `disabled: ${pnp?.reason ?? "unknown"}`}
         </div>
         {needsOverride && (
           <div class="override">

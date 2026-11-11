@@ -231,6 +231,7 @@ class Controller:
             "racelines": [r.id for r in self.racelines()],
             "drive_modes": list(cmd.DRIVE_MODES),
             "policy": self.policy_status(),
+            "pnp": self.pnp_status(),
             "patrols": self.patrols(),
             "spiderbot_rules": list(cmd.SPIDERBOT_RULES),
             "spiderbot_speed_range": list(cmd.SPIDERBOT_SPEED_RANGE),
@@ -596,6 +597,41 @@ class Controller:
             }
         return {"available": True, "reason": "", "valid": valid}
 
+    def pnp_status(self) -> dict[str, Any]:
+        """Can the Plug-and-Play driver be launched, and with which bundles. A bundle is listed
+        when data/pnp/models/<id>/manifest.yaml parses and names a kind; the nodes themselves
+        refuse any bundle that does not match this car (checksums, vehicle_params, io)."""
+        found: dict[str, list[str]] = {"track_perception": [], "dynamics": []}
+        base = self.s.pnp_models_dir
+        if base.is_dir():
+            for d in sorted(base.iterdir()):
+                manifest = d / "manifest.yaml"
+                if d.is_symlink() or not d.is_dir() or not cmd.NAME_RE.match(d.name):
+                    continue
+                if not manifest.is_file():
+                    continue
+                try:
+                    kind = yaml.safe_load(manifest.read_text(encoding="utf-8")).get("kind")
+                except (OSError, ValueError, AttributeError, yaml.YAMLError):
+                    continue
+                if kind in found:
+                    found[kind].append(d.name)
+        status: dict[str, Any] = {
+            "perception": found["track_perception"],
+            "dynamics": found["dynamics"],
+            "backends": list(cmd.PNP_BACKENDS),
+            "speed_range": list(cmd.PNP_SPEED_RANGE),
+            "default_speed": cmd.PNP_DEFAULT_SPEED_MPS,
+        }
+        launch = self.s.repo_dir / "ros_ws" / "src" / "racer_bringup" / "launch" / "pnp.launch.py"
+        if not found["dynamics"]:
+            reason = "no dynamics bundle (manifest.yaml, kind dynamics) under data/pnp/models"
+        elif not launch.exists():
+            reason = "racer_bringup has no pnp.launch.py"
+        else:
+            reason = ""
+        return {"available": not reason, "reason": reason, **status}
+
     def _run_loader(self, directory: Path) -> CmdResult:
         """Run `python3 -m racer_policy.check`, the same load_deployment the node runs at
         startup (contract checksum and version, live vehicle_params version, observation
@@ -668,6 +704,10 @@ class Controller:
         rule: str = "arms_raised",
         speed_mps: float = cmd.SPIDERBOT_DEFAULT_SPEED_MPS,
         policy: str = "",
+        pnp_perception: str = "",
+        pnp_dynamics: str = "",
+        pnp_backend: str = "net",
+        pnp_v_max_mps: float = cmd.PNP_DEFAULT_SPEED_MPS,
     ) -> dict[str, Any]:
         action = f"drive.start.{mode}"
         params: dict[str, Any] = {"mode": mode, "profile": profile, "raceline": raceline}
@@ -675,6 +715,15 @@ class Controller:
             params.update({"patrol": patrol, "rule": rule, "speed_mps": speed_mps})
         if mode == "ml_policy":
             params["policy"] = policy
+        if mode == "pnp":
+            params.update(
+                {
+                    "perception": pnp_perception,
+                    "dynamics": pnp_dynamics,
+                    "backend": pnp_backend,
+                    "v_max_mps": pnp_v_max_mps,
+                }
+            )
         if mode not in cmd.DRIVE_MODES:
             raise ActionError(f"unknown driving mode {mode!r}", 400)
         with self._drive_lock:
@@ -683,7 +732,14 @@ class Controller:
             used_override = False
             try:
                 ros_cmd, label = self._prepare_drive(
-                    mode, profile, raceline, patrol, rule, speed_mps, policy
+                    mode,
+                    profile,
+                    raceline,
+                    patrol,
+                    rule,
+                    speed_mps,
+                    policy,
+                    (pnp_perception, pnp_dynamics, pnp_backend, pnp_v_max_mps),
                 )
                 used_override = self._gate_drive(override, override_reason)
                 if self.drive_mode() is not None:
@@ -743,8 +799,11 @@ class Controller:
         rule: str = "arms_raised",
         speed_mps: float = cmd.SPIDERBOT_DEFAULT_SPEED_MPS,
         policy: str = "",
+        pnp: tuple[str, str, str, float] = ("", "", "net", cmd.PNP_DEFAULT_SPEED_MPS),
     ) -> tuple[str, str]:
         """Validate a driving request against the whitelist: (ros2 command, mode label)."""
+        if mode == "pnp":
+            return self._prepare_pnp(*pnp)
         if mode == "spiderbot":
             status = self.spiderbot_status()
             if not status["available"]:
@@ -797,6 +856,45 @@ class Controller:
             profile = "lane-2026-10-25" if mode == "gap_follow" else "floor-2026-10-07"
         label = f"{mode}:{profile}" if profile else mode
         return cmd.ros_cmd_for(mode, profile=profile), label
+
+    def _prepare_pnp(
+        self, perception: str, dynamics: str, backend: str, v_max_mps: float
+    ) -> tuple[str, str]:
+        status = self.pnp_status()
+        if not status["available"]:
+            raise ActionError("Plug-and-Play is disabled: " + status["reason"], 409)
+        if backend not in cmd.PNP_BACKENDS:
+            raise ActionError(f"backend must be one of {list(cmd.PNP_BACKENDS)}", 400)
+        if not dynamics and len(status["dynamics"]) == 1:
+            dynamics = status["dynamics"][0]
+        if dynamics not in status["dynamics"]:
+            raise ActionError(
+                f"choose a dynamics bundle (available: {', '.join(status['dynamics'])})", 400
+            )
+        if backend == "net":
+            if not perception and len(status["perception"]) == 1:
+                perception = status["perception"][0]
+            if perception not in status["perception"]:
+                raise ActionError(
+                    "backend net needs a perception bundle "
+                    f"(available: {', '.join(status['perception']) or 'none'})",
+                    400,
+                )
+        else:
+            perception = ""
+        models = self.s.pnp_models_dir
+        return (
+            cmd.ros_cmd_for(
+                "pnp",
+                pnp_perception_container_path=(
+                    cmd.container_path(self.s.repo_dir, models / perception) if perception else ""
+                ),
+                pnp_dynamics_container_path=cmd.container_path(self.s.repo_dir, models / dynamics),
+                pnp_backend=backend,
+                pnp_v_max_mps=v_max_mps,
+            ),
+            f"pnp:{backend}",
+        )
 
     def _signal_drive(self, signal: str) -> bool:
         """Send `signal` to the driving launch. True if a live process was found."""

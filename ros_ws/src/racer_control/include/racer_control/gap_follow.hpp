@@ -412,6 +412,36 @@ LaneBoundaries find_lane_boundaries(const LanePoints& points, const LaneGeometry
 LanePoint trace_lane_centre(const LanePoints& points, double lookahead_m, double half_width_m,
                             double window_m, std::vector<LanePoint>& trace);
 
+// OUTSIDE ENTRY (apply_outside_entry; added 2026-11-11, off by default). On a 1 m lane round a thin
+// island the end is a 180 degree turn the car's 0.60 m (left) or 0.69 m (right) turning radius
+// barely fits (docs/notes/track-session-2026-11-11.md): turned into from the middle of the lane
+// it runs out of lane (the floor bags of 2026-11-10: full lock, 0.25 m off the outer wall, then
+// safety_node brakes). The way round is a wide line: run to the OUTSIDE of the coming turn, turn in
+// late. Given the centreline trace walked out to a horizon (the lookahead and beyond), the heading
+// change before the aim point (`near`, what the turn has already done inside the lookahead) and
+// the heading change from the aim point to the end of the trace (`far`, what is still coming):
+//   * a turn is coming when |far| exceeds `turn_rad`; the weight grows from 0 there to 1 at
+//     twice that;
+//   * the weight is cut to 0 as the turn arrives in the lookahead: factor 1 - |near| / turn_rad
+//     (clamped at 0) when near turns the same way as far (the car is turning in: aim at the
+//     centreline again, so it crosses over from the outside); 1 when near turns the other way;
+//   * the aim point moves sideways, to the OUTSIDE of the turn (opposite far's sign), by
+//     weight * min(offset_m, room), room = the distance from the aim point to the nearest return
+//     on that side less the body half width, `margin_m` and 0.05 m: never into the wall.
+// Everything is in the rear-axle frame. offset_m <= 0, or a trace too short for the horizon, leaves
+// the aim as it is.
+struct OutsideEntry {
+  LanePoint aim;
+  double weight = 0.0;
+  double shift_m = 0.0;  // lateral displacement of the aim point, left positive
+  double near_rad = 0.0;
+  double far_rad = 0.0;
+};
+
+OutsideEntry apply_outside_entry(const std::vector<LanePoint>& trace, std::size_t aim_index,
+                                 const LanePoints& points, double offset_m, double turn_rad,
+                                 double half_width_m, double margin_m);
+
 // atan(2 L sin(alpha) / l_d) clamped to +/- max_steering_rad (see PURE PURSUIT above). An aim
 // point at the rear axle (l_d < 1e-9), a non-positive wheelbase or a non-finite input gives 0.
 double pure_pursuit_steering(const LanePoint& aim, double wheelbase_m, double max_steering_rad);
@@ -599,6 +629,11 @@ struct GapFollowConfig {
   // wheelbase from swept_path.wheelbase_m; nothing here is a vehicle constant.
   double lane_lookahead_m = 0.6;
   double lane_default_half_width_m = 0.55;
+  // Outside entry (target_mode kLaneCentre only, see apply_outside_entry). outside_entry_offset_m
+  // 0 (the default) is off and the pipeline is bit-identical to the one without it.
+  double outside_entry_offset_m = 0.0;
+  double outside_entry_horizon_m = 1.6;
+  double outside_entry_turn_rad = 0.35;
 };
 
 struct GapFollowResult {
@@ -625,8 +660,11 @@ struct GapFollowResult {
   LanePoint lane_aim;
   double lane_half_width_m = 0.0;               // h used for this scan
   std::optional<double> lane_measured_width_m;  // W measured on this scan, if any
-  bool swept_path_clamped = false;              // the swept-path clamp reduced |steering|
-  double steering_rad = 0.0;                    // after clamps and corner override, BEFORE low-pass
+  // Outside entry: how far the aim point was moved to the outside of the coming turn (m, signed
+  // as lateral displacement in the rear-axle frame, left positive); 0 when off or no turn ahead.
+  double outside_entry_shift_m = 0.0;
+  bool swept_path_clamped = false;  // the swept-path clamp reduced |steering|
+  double steering_rad = 0.0;        // after clamps and corner override, BEFORE low-pass
 };
 
 class GapFollower {

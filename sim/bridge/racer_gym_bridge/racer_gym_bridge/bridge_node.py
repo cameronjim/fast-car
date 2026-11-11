@@ -55,6 +55,7 @@ map, which would fetch from api.f1tenth.org on first use.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import math
 
@@ -221,7 +222,18 @@ def build_track_from_synthetic(synthetic: SyntheticTrack, reverse_direction: boo
         y=synthetic.centreline_y,
         velx=np.full_like(synthetic.centreline_x, 1.0),
     )
-    occupancy, origin = rasterize_walls(synthetic.walls, synthetic.bounds(), track.spec.resolution)
+    if synthetic.occupancy is not None:
+        # An imported map (track_loader.map_track): the grid is the world as it is.
+        if abs(synthetic.occupancy_resolution_m - track.spec.resolution) > 1e-9:
+            raise ValueError(
+                f"map resolution {synthetic.occupancy_resolution_m} m differs from the gym's "
+                f"{track.spec.resolution} m"
+            )
+        occupancy, origin = synthetic.occupancy, synthetic.occupancy_origin
+    else:
+        occupancy, origin = rasterize_walls(
+            synthetic.walls, synthetic.bounds(), track.spec.resolution
+        )
     track.occupancy_map = occupancy
     track.spec = dataclasses.replace(track.spec, origin=origin)
     return track
@@ -235,6 +247,7 @@ def build_env(
     pocket: Pocket | None = None,
     accel_control: bool = False,
     synthetic: SyntheticTrack | None = None,
+    vehicle_overrides: dict | None = None,
 ) -> gym.Env:
     """Construct the pinned f1tenth_gym env: single ego agent, headless.
 
@@ -247,6 +260,9 @@ def build_env(
 
     ``synthetic`` (the reactive bench): a ``track_loader.SyntheticTrack``, which takes
     precedence over ``raceline_path``.
+
+    ``vehicle_overrides``: entries of the gym's vehicle ``params`` to replace (e.g. ``s_min`` and
+    ``s_max``, the steering limits, which the gym applies separately on each side).
     """
     if synthetic is not None:
         track = build_track_from_synthetic(synthetic, reverse_direction)
@@ -265,6 +281,8 @@ def build_env(
     }
     if accel_control:
         config["control_input"] = list(_ACCEL_CONTROL_INPUT)
+    if vehicle_overrides:
+        config["params"] = dict(vehicle_overrides)
     return gym.make(_GYM_ENV_ID, config=config, render_mode=None)
 
 
@@ -320,6 +338,7 @@ class BridgeNode(Node):
         self._declare_park_scenario_parameters()
         self._declare_localization_parameters()
         synthetic = self._declare_synthetic_track()
+        vehicle_overrides = self._declare_vehicle_model()
 
         self.env = build_env(
             self._seed,
@@ -329,6 +348,7 @@ class BridgeNode(Node):
             pocket,
             self._mirror_reverse_speed_control,
             synthetic,
+            vehicle_overrides,
         )
 
         scan_sim = self.env.unwrapped.sim.agents[0].scan_simulator
@@ -405,6 +425,11 @@ class BridgeNode(Node):
             if self._publish_wheel_odom
             else None
         )
+        self._rear_odom_pub = (
+            self.create_publisher(Odometry, "/sim/ground_truth_rear_odom", odom_qos)
+            if self._rear_odom_offset_x_m != 0.0
+            else None
+        )
         self._map_pub = self.create_publisher(OccupancyGrid, "/sim/map", map_qos)
         self._drive_sub = self.create_subscription(
             AckermannDriveStamped, "/drive", self._on_drive, drive_qos
@@ -444,11 +469,11 @@ class BridgeNode(Node):
         return response
 
     def _on_timer(self) -> None:
-        longitudinal = self._latest_speed
+        longitudinal = self._latest_speed * self._speed_cmd_scale
         if self._mirror_reverse_speed_control:
             params = self.env.unwrapped.params
             longitudinal = mirrored_speed_to_accel(
-                self._latest_speed,
+                longitudinal,
                 float(self.env.unwrapped.sim.agents[0].state[3]),
                 float(params["a_max"]),
                 float(params["v_max"]),
@@ -456,9 +481,17 @@ class BridgeNode(Node):
             )
         # steering_offset_rad (default 0): an uncalibrated servo trim. The wheels point this far
         # off what /drive asked for, and nothing downstream is told.
-        action = drive_cmd_to_action(
-            self._latest_steering_angle + self._steering_offset_rad, longitudinal
-        )
+        steering = self._latest_steering_angle
+        if self._steering_cmd_scale_left != 1.0 or self._steering_cmd_scale_right != 1.0:
+            steering *= (
+                self._steering_cmd_scale_left if steering >= 0.0 else self._steering_cmd_scale_right
+            )
+        steering += self._steering_offset_rad
+        if self._steering_limit_left_rad > 0.0:
+            steering = min(steering, self._steering_limit_left_rad)
+        if self._steering_limit_right_rad > 0.0:
+            steering = max(steering, -self._steering_limit_right_rad)
+        action = drive_cmd_to_action(steering, longitudinal)
         obs, _reward, terminated, truncated, _info = self.env.step(action)
         if terminated or truncated:
             if not self._warned_terminated:
@@ -508,6 +541,12 @@ class BridgeNode(Node):
         angular = odom_msg.twist.twist.angular
         angular.x, angular.y, angular.z = odom_fields.angular
         self._odom_pub.publish(odom_msg)
+        if self._rear_odom_pub is not None:
+            rear = copy.deepcopy(odom_msg)
+            yaw_now = float(agent_obs["pose_theta"])
+            rear.pose.pose.position.x = position.x + self._rear_odom_offset_x_m * math.cos(yaw_now)
+            rear.pose.pose.position.y = position.y + self._rear_odom_offset_x_m * math.sin(yaw_now)
+            self._rear_odom_pub.publish(rear)
 
         if self._wheel_odom_pub is not None:
             self._integrate_and_publish_wheel_odom(
@@ -718,6 +757,62 @@ class BridgeNode(Node):
                 ),
             ).value
         )
+        straight_length = float(
+            self.declare_parameter(
+                "synthetic_straight_length_m",
+                2.0,
+                ParameterDescriptor(
+                    description=(
+                        "stadium / rounded_rect: length (m) of the island's straight (a "
+                        "rounded_rect island's length)."
+                    ),
+                    floating_point_range=float_range(0.0, 20.0),
+                ),
+            ).value
+        )
+        island_width = float(
+            self.declare_parameter(
+                "synthetic_island_width_m",
+                1.5,
+                ParameterDescriptor(
+                    description="rounded_rect: width (m) of the island.",
+                    floating_point_range=float_range(0.0, 20.0),
+                ),
+            ).value
+        )
+        island_radius = float(
+            self.declare_parameter(
+                "synthetic_island_radius_m",
+                0.4,
+                ParameterDescriptor(
+                    description=(
+                        "stadium / rounded_rect: radius (m) of the island's ends or corners; 0 is "
+                        "a thin wall (stadium) or square corners (rounded_rect). The lane's outer "
+                        "wall is this plus the lane width."
+                    ),
+                    floating_point_range=float_range(0.0, 5.0),
+                ),
+            ).value
+        )
+        map_yaml = str(
+            self.declare_parameter(
+                "synthetic_map_yaml",
+                "",
+                ParameterDescriptor(description="map track: the map_server yaml to import."),
+            ).value
+        )
+        map_centreline = str(
+            self.declare_parameter(
+                "synthetic_map_centreline",
+                "",
+                ParameterDescriptor(
+                    description=(
+                        "map track: centreline CSV (tools/raceline/map_track.py) giving the "
+                        "start pose and direction."
+                    )
+                ),
+            ).value
+        )
         if not name:
             return None
         return track_loader.build_synthetic_track(
@@ -728,7 +823,91 @@ class BridgeNode(Node):
             box_gap_m=box_gap,
             jog_offset_m=jog_offset,
             room_size_m=room_size,
+            straight_length_m=straight_length,
+            island_width_m=island_width,
+            island_radius_m=island_radius,
+            map_yaml=map_yaml,
+            map_centreline_csv=map_centreline,
         )
+
+    def _declare_vehicle_model(self) -> dict | None:
+        """The car's steering as measured, not the gym's symmetric 0.4189 rad (2026-11-11). Every
+        default keeps the old behaviour. Returns the gym ``params`` overrides (or None)."""
+
+        def described(description: str, low: float, high: float) -> ParameterDescriptor:
+            return ParameterDescriptor(
+                description=description,
+                floating_point_range=[FloatingPointRange(from_value=low, to_value=high, step=0.0)],
+            )
+
+        self._steering_limit_left_rad = float(
+            self.declare_parameter(
+                "steering_limit_left_rad",
+                0.0,
+                described(
+                    "Physical road-wheel angle at left full lock (rad, positive). 0.0 (default) "
+                    "keeps the gym's 0.4189. The car's measured left lock is 0.504 (rear-axle "
+                    "radius 0.60 m).",
+                    0.0,
+                    1.2,
+                ),
+            ).value
+        )
+        self._steering_limit_right_rad = float(
+            self.declare_parameter(
+                "steering_limit_right_rad",
+                0.0,
+                described(
+                    "Physical road-wheel angle at right full lock (rad, positive). 0.0 (default) "
+                    "keeps the gym's 0.4189. The car's measured right lock is 0.449 (0.69 m).",
+                    0.0,
+                    1.2,
+                ),
+            ).value
+        )
+        self._steering_cmd_scale_left = float(
+            self.declare_parameter(
+                "steering_cmd_scale_left",
+                1.0,
+                described(
+                    "Road-wheel angle per radian commanded to the left: 1.0 (default) = /drive is "
+                    "the true angle. The car today turns 0.504 / 0.4189 = 1.203 times what a left "
+                    "command says (uncalibrated servo gain).",
+                    0.2,
+                    3.0,
+                ),
+            ).value
+        )
+        self._steering_cmd_scale_right = float(
+            self.declare_parameter(
+                "steering_cmd_scale_right",
+                1.0,
+                described(
+                    "As steering_cmd_scale_left, to the right (today 0.449 / 0.4189 = 1.072).",
+                    0.2,
+                    3.0,
+                ),
+            ).value
+        )
+        self._speed_cmd_scale = float(
+            self.declare_parameter(
+                "speed_cmd_scale",
+                1.0,
+                described(
+                    "True ground speed per m/s commanded: 1.0 (default) = /drive speed is the "
+                    "true speed. The car today moves at 1 / 1.401 = 0.714 of the commanded speed "
+                    "(tyre radius and gear ratio not calibrated).",
+                    0.2,
+                    3.0,
+                ),
+            ).value
+        )
+        overrides: dict = {}
+        if self._steering_limit_left_rad > 0.0:
+            overrides["s_max"] = self._steering_limit_left_rad
+        if self._steering_limit_right_rad > 0.0:
+            overrides["s_min"] = -self._steering_limit_right_rad
+        return overrides or None
 
     def _declare_park_scenario_parameters(self) -> None:
         """The rest of the roadmap 2.9 parameters; every default keeps the old behaviour."""
@@ -937,6 +1116,21 @@ class BridgeNode(Node):
                     "range_max says so. 0.0 (default) keeps the gym's own.",
                     0.0,
                     100.0,
+                ),
+            ).value
+        )
+        self._rear_odom_offset_x_m = float(
+            self.declare_parameter(
+                "ground_truth_rear_odom_offset_x_m",
+                0.0,
+                described(
+                    "When non-zero, also publish /sim/ground_truth_rear_odom: the ground-truth "
+                    "Odometry with the pose moved this far along the heading (-cg_to_rear_axle_m "
+                    "puts it at the rear axle, where a tracker on ground truth wants it; "
+                    "/sim/ground_truth_odom stays at the gym's pose, the centre of gravity). "
+                    "Default 0.0 (off).",
+                    -2.0,
+                    2.0,
                 ),
             ).value
         )

@@ -62,8 +62,10 @@ class Settings:
     host: str = "0.0.0.0"
     foxglove_url: str = "ws://127.0.0.1:8765"
     image: str = "car:local"
+    perception_image: str = "car:perception"  # the GPU image: INSTALL_TORCH + INSTALL_PERCEPTION
     stack_container: str = "car-stack"
     camera_container: str = "car-camera"
+    perception_container: str = "car-perception"
     token_sha256: str = ""
     thresholds: Thresholds = field(default_factory=Thresholds)
 
@@ -78,6 +80,14 @@ class Settings:
     @property
     def racelines_user_dir(self) -> Path:
         return self.repo_dir / "data" / "racelines"
+
+    @property
+    def patrols_dir(self) -> Path:
+        return self.repo_dir / "data" / "patrols"
+
+    @property
+    def perception_cache_dir(self) -> Path:
+        return self.repo_dir / "data" / "perception-cache"
 
     @property
     def policies_dir(self) -> Path:
@@ -137,6 +147,7 @@ def load_settings(path: Path | None = None) -> Settings:
         host=str(raw.get("host", "0.0.0.0")),
         foxglove_url=str(raw.get("foxglove_url", "ws://127.0.0.1:8765")),
         image=str(raw.get("image", "car:local")),
+        perception_image=str(raw.get("perception_image", "car:perception")),
         token_sha256=str(raw.get("token_sha256", "")),
         thresholds=thresholds,
     )

@@ -10,8 +10,15 @@ frame, EMPTY when nothing was found, so a consumer can tell "nothing there" from
 dead". Each detection carries the class name (hypothesis.class_id), the score and the box in
 image pixels; the header is the image's header (stamp and frame_id), unchanged.
 
-Optionally (`publish_debug_image`, default false) a JPEG with the boxes drawn goes out on
-`debug_image_topic` for Foxglove.
+POSE MODE (`mode:=pose`, default `detect`). The detector runs a YOLO pose model (default
+yolov8n-pose.pt) and ALSO publishes racer_msgs/PoseDetectionArray on /perception/poses: the
+same people, same order, same header, each with its 17 COCO keypoints in image pixels
+(racer_msgs/Keypoint2D). /perception/detections keeps going out as before (the person boxes),
+so fusion and every box consumer work unchanged; fusion_node `input:=poses` carries the
+keypoints through to /perception/objects.
+
+Optionally (`publish_debug_image`, default false) a JPEG with the boxes (and skeletons) drawn
+goes out on `debug_image_topic` for Foxglove.
 
 Needs `ultralytics` and PyTorch, which only the INSTALL_PERCEPTION=required car image has. If
 they are missing, or device:=cuda has no CUDA, this logs ONE error and exits with code 3
@@ -32,6 +39,7 @@ import sys
 import time
 
 import rclpy
+from racer_msgs.msg import Keypoint2D, PoseDetection, PoseDetectionArray
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.logging import get_logger
 from rclpy.node import Node
@@ -40,10 +48,12 @@ from sensor_msgs.msg import CompressedImage
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 
 from racer_perception.fusion import RawDetection
+from racer_perception.keypoints import LAYOUT_COCO17
 from racer_perception.throttle import FrameThrottle
 from racer_perception.yolo_backend import (
     DEFAULT_CACHE_DIR,
     EXIT_DETECTOR_UNAVAILABLE,
+    TASKS,
     DetectorBackend,
     DetectorUnavailable,
     load_yolo_backend,
@@ -71,6 +81,29 @@ def to_detection_array(header, detections: list[RawDetection]) -> Detection2DArr
     return out
 
 
+def to_pose_array(header, detections: list[RawDetection], image_size=(0, 0)) -> PoseDetectionArray:
+    """Pack RawDetection records (with keypoints) into a PoseDetectionArray."""
+    out = PoseDetectionArray()
+    out.header = header
+    out.image_width_px = int(image_size[0])
+    out.image_height_px = int(image_size[1])
+    for d in detections:
+        det = PoseDetection()
+        det.class_name = d.class_name
+        det.score = float(d.score)
+        det.box_cx_px = float(d.cx_px)
+        det.box_cy_px = float(d.cy_px)
+        det.box_width_px = float(d.width_px)
+        det.box_height_px = float(d.height_px)
+        det.keypoint_layout = LAYOUT_COCO17 if d.keypoints else ""
+        for k in d.keypoints:
+            det.keypoints.append(
+                Keypoint2D(x_px=float(k.x_px), y_px=float(k.y_px), confidence=float(k.confidence))
+            )
+        out.detections.append(det)
+    return out
+
+
 class DetectorNode(Node):
     def __init__(self, backend: DetectorBackend | None = None, **node_kwargs) -> None:
         super().__init__("detector_node", **node_kwargs)
@@ -82,7 +115,18 @@ class DetectorNode(Node):
 
         declare("image_topic", "/camera/usb/image_raw/compressed", "CompressedImage input.")
         declare("detections_topic", "/perception/detections", "Detection2DArray output.")
-        declare("model", "yolov8n.pt", "Model file: a bare name lives in model_cache_dir.")
+        declare(
+            "mode",
+            "detect",
+            "'detect' (boxes) or 'pose' (people with 17 keypoints, also on poses_topic).",
+        )
+        declare("poses_topic", "/perception/poses", "PoseDetectionArray output (pose mode).")
+        declare(
+            "model",
+            "",
+            "Weights: a bare name lives in model_cache_dir (pinned, sha256 checked); empty "
+            "means the mode's default (yolov8n.pt, yolov8n-pose.pt).",
+        )
         declare("device", "cpu", "'cpu', 'cuda' or 'cuda:N'. No silent fallback.")
         declare("model_cache_dir", DEFAULT_CACHE_DIR, "Where weights are cached/downloaded.")
         declare(
@@ -107,6 +151,9 @@ class DetectorNode(Node):
         def get(name):
             return self.get_parameter(name).value
 
+        self._mode = str(get("mode"))
+        if self._mode not in TASKS:
+            raise DetectorUnavailable(f"mode must be one of {list(TASKS)}, got {self._mode!r}")
         self._publish_debug = bool(get("publish_debug_image"))
         self._throttle = FrameThrottle(float(get("rate_hz")))
         if backend is None:
@@ -115,6 +162,7 @@ class DetectorNode(Node):
                 str(get("device")),
                 str(get("model_cache_dir")),
                 float(get("score_threshold")),
+                self._mode,
             )
         self._backend = backend
 
@@ -125,6 +173,11 @@ class DetectorNode(Node):
             history=HistoryPolicy.KEEP_LAST, depth=10, reliability=ReliabilityPolicy.RELIABLE
         )
         self._pub = self.create_publisher(Detection2DArray, str(get("detections_topic")), out_qos)
+        self._pose_pub = None
+        if self._mode == "pose":
+            self._pose_pub = self.create_publisher(
+                PoseDetectionArray, str(get("poses_topic")), out_qos
+            )
         self._debug_pub = None
         if self._publish_debug:
             self._debug_pub = self.create_publisher(
@@ -140,7 +193,8 @@ class DetectorNode(Node):
         self._last_stats_s = time.monotonic()
         self.create_timer(_STATS_PERIOD_S, self._log_stats)
         self.get_logger().info(
-            f"detector up: {get('model')} on {get('device')}, {get('rate_hz')} Hz max, "
+            f"detector up ({self._mode}): {get('model') or 'default model'} on "
+            f"{get('device')}, {get('rate_hz')} Hz max, "
             f"{get('image_topic')} -> {get('detections_topic')}"
         )
 
@@ -157,6 +211,9 @@ class DetectorNode(Node):
         self._infer_s_total += time.monotonic() - started
         self._infer_count += 1
         self._pub.publish(to_detection_array(msg.header, detections))
+        if self._pose_pub is not None:
+            size = getattr(self._backend, "image_size", (0, 0))
+            self._pose_pub.publish(to_pose_array(msg.header, detections, size))
         if self._debug_pub is not None:
             try:
                 debug = CompressedImage()

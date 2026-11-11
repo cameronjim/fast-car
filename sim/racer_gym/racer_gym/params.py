@@ -17,15 +17,20 @@ overview.md's regime table -- the saturated regime is never claimed regardless o
 state):
 
   * `tires.pacejka_front` / `tires.pacejka_rear` (null until a Phase 3 sysid fit): a Pacejka
-    curve is SYNTHESIZED from fields that ARE already populated in vehicle_params.yaml
-    (`tires.surface_friction_coefficient`, `tires.linear_cornering_stiffness_front/rear_n_per_rad`
-    -- both currently copied from f1tenth_gym's own `mu`/`C_Sf`/`C_Sr` defaults, see that
-    file's header comment) so that the placeholder curve's PEAK matches mu*Fz_nominal and its
-    SMALL-SLIP-ANGLE SLOPE matches the existing linear cornering stiffness -- i.e. it agrees
-    with stock f1tenth_gym's linear tire model at small slip angles and saturates at the same
-    friction limit, which is the best-justified placeholder available before a real fit
-    exists. Shape/curvature factors (C=1.3, E=0) are generic Magic-Formula textbook defaults,
-    not per-vehicle numbers.
+    curve is SYNTHESIZED so that its PEAK is mu*Fz_static (mu from
+    `tires.surface_friction_coefficient`) and its SMALL-SLIP-ANGLE SLOPE equals the stiffness
+    stock f1tenth_gym's own linear tire model implies, IN NEWTONS PER RADIAN. That conversion
+    is the point of `gym_cornering_stiffness_n_per_rad` below: the gym's `C_Sf`/`C_Sr`
+    (`F110Env.default_config()["params"]`, read programmatically) are DIMENSIONLESS
+    coefficients that multiply mu and the axle's normal load, F_y = mu * C_S * Fz * alpha
+    (see `vehicle_dynamics_st`: mu*m/(lf+lr) * C_Sf * (g*lr - a*h) = mu * C_Sf * Fz_front).
+    The previous revision fed C_Sf = 4.7 straight in as N/rad, a factor mu*Fz = 20 too soft:
+    a 1.8 m turning radius at full lock and 2 m/s where the car measured 0.60 m (and the
+    fixed model gives about 0.60 m at 0.3 m/s, see tests/test_low_speed_turning.py and
+    docs/notes/sim-tyre-fix-2026-11-11.md). This is still a PLACEHOLDER (the gym's numbers are
+    a different, larger car); it is only unit-correct now. Phase 3 replaces it with a fit.
+    Shape/curvature factors (C=1.3, E=0) are generic Magic-Formula textbook defaults, not
+    per-vehicle numbers.
 
   * `steering.time_constant_s` / `actuation.throttle_time_constant_s` (null until Phase 2/3
     measurement): fall back to tau=0, i.e. NO first-order lag -- identical to stock
@@ -296,16 +301,30 @@ class DynParamsResult:
         return any(self.fallback_flags.values())
 
 
+def gym_cornering_stiffness_n_per_rad(
+    dimensionless_c_s: float, mu: float, fz_static_n: float
+) -> float:
+    """Convert f1tenth_gym's dimensionless `C_Sf` / `C_Sr` to a force stiffness in N/rad.
+
+    Stock `vehicle_dynamics_st` computes the axle lateral force as
+    F_y = mu * C_S * Fz * alpha, with Fz the axle's static normal load m*g*l_other/(lf+lr)
+    (plus its longitudinal transfer term, which racer_gym handles separately). So the
+    stiffness in N/rad is mu * C_S * Fz_static, NOT C_S.
+    """
+    return mu * dimensionless_c_s * fz_static_n
+
+
 def _synthesize_pacejka(
     mu: float, linear_cornering_stiffness_n_per_rad: float, fz_nominal_n: float
 ) -> PacejkaParams:
-    """Build a placeholder Pacejka curve calibrated to the existing (gym-sourced) mu and
-    linear cornering stiffness -- see module docstring's fallback policy."""
+    """Build a placeholder Pacejka curve with peak mu*Fz and small-slip slope
+    `linear_cornering_stiffness_n_per_rad` (a force stiffness in N/rad -- see
+    `gym_cornering_stiffness_n_per_rad` for converting the gym's dimensionless values)."""
     c_shape = 1.3  # generic Magic-Formula shape-factor default (textbook value), not fitted
     e_curvature = 0.0  # no curvature correction until a real fit supplies one
     d_peak_n = mu * fz_nominal_n
     # Small-slip-angle cornering stiffness of the Magic Formula is B*C*D (standard identity
-    # for E=0); solve for B so the placeholder curve's initial slope matches the existing
+    # for E=0); solve for B so the placeholder curve's initial slope matches the requested
     # linear cornering stiffness exactly.
     b_stiffness = linear_cornering_stiffness_n_per_rad / (c_shape * d_peak_n)
     return PacejkaParams(
@@ -351,16 +370,22 @@ def build_dyn_params(vehicle_params: Any, dt_s: float) -> DynParamsResult:
         pacejka_front = PacejkaParams(**dataclasses.asdict(tires.pacejka_front))
     else:
         gym_defaults = _f1tenth_gym_defaults()
+        mu = tires.surface_friction_coefficient
         pacejka_front = _synthesize_pacejka(
-            tires.surface_friction_coefficient, gym_defaults["C_Sf"], static.front_n
+            mu,
+            gym_cornering_stiffness_n_per_rad(gym_defaults["C_Sf"], mu, static.front_n),
+            static.front_n,
         )
 
     if tires.pacejka_rear is not None:
         pacejka_rear = PacejkaParams(**dataclasses.asdict(tires.pacejka_rear))
     else:
         gym_defaults = _f1tenth_gym_defaults()
+        mu = tires.surface_friction_coefficient
         pacejka_rear = _synthesize_pacejka(
-            tires.surface_friction_coefficient, gym_defaults["C_Sr"], static.rear_n
+            mu,
+            gym_cornering_stiffness_n_per_rad(gym_defaults["C_Sr"], mu, static.rear_n),
+            static.rear_n,
         )
 
     steer_tau_s = 0.0 if steering.time_constant_s is None else steering.time_constant_s

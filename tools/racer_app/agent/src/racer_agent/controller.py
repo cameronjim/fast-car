@@ -101,7 +101,7 @@ class Controller:
         states: dict[str, str] = {}
         if not res.ok:
             return states
-        ours = {self.s.stack_container, self.s.camera_container}
+        ours = {self.s.stack_container, self.s.camera_container, self.s.perception_container}
         for line in res.stdout.splitlines():
             name, _, state = line.partition("\t")
             if name in ours:
@@ -183,6 +183,8 @@ class Controller:
             "ros_connected": bool(snap.ros and snap.ros.connected),
             "autostart": self.autostart_enabled(),
             "policy": self.policy_status(),
+            "perception": self.perception_status(snap),
+            "spiderbot": self.spiderbot_status(),
             "thresholds": {
                 "disk_red_gb": self.s.thresholds.disk_red_gb,
                 "cameras_min_free_gb": self.s.thresholds.cameras_min_free_gb,
@@ -210,6 +212,17 @@ class Controller:
                 found.append(Raceline(f"data:{p.stem}", p, "data"))
         return found
 
+    def patrols(self) -> list[str]:
+        """Patrol files the agent found itself: data/patrols/NAME.yaml, plain files, valid names."""
+        base = self.s.patrols_dir
+        if not base.is_dir():
+            return []
+        return sorted(
+            p.stem
+            for p in base.glob("*.yaml")
+            if p.is_file() and not p.is_symlink() and cmd.NAME_RE.match(p.stem)
+        )
+
     def options(self) -> dict[str, Any]:
         return {
             "gap_follow_profiles": list(cmd.GAP_FOLLOW_PROFILES),
@@ -218,6 +231,14 @@ class Controller:
             "racelines": [r.id for r in self.racelines()],
             "drive_modes": list(cmd.DRIVE_MODES),
             "policy": self.policy_status(),
+            "patrols": self.patrols(),
+            "spiderbot_rules": list(cmd.SPIDERBOT_RULES),
+            "spiderbot_speed_range": list(cmd.SPIDERBOT_SPEED_RANGE),
+            "spiderbot_default_speed": cmd.SPIDERBOT_DEFAULT_SPEED_MPS,
+            "perception_modes": list(cmd.PERCEPTION_MODES),
+            "perception_devices": list(cmd.PERCEPTION_DEVICES),
+            "perception": self.perception_status(),
+            "spiderbot": self.spiderbot_status(),
         }
 
     def vehicle(self) -> dict[str, Any]:
@@ -432,6 +453,108 @@ class Controller:
     # driving
     # ------------------------------------------------------------------------------------
 
+    # ------------------------------------------------------------------------------------
+    # perception and the spiderbot (roadmap 5.1, 5.3). Both need the GPU image.
+    # ------------------------------------------------------------------------------------
+
+    def _perception_image_present(self) -> bool:
+        return self.runner.run(
+            ["docker", "image", "inspect", self.s.perception_image], timeout=15
+        ).ok
+
+    def perception_status(self, snap: Snapshot | None = None) -> dict[str, Any]:
+        """Can perception be started, and is it running. Disabled with a reason, never hidden."""
+        if snap is not None:
+            running = snap.containers.get(self.s.perception_container) == "running"
+        else:
+            running = self.container_states().get(self.s.perception_container) == "running"
+        if not self._perception_image_present():
+            return {
+                "available": False,
+                "running": running,
+                "reason": f"the GPU image {self.s.perception_image} is not built on this car "
+                "(docker build with INSTALL_TORCH=required and INSTALL_PERCEPTION=required, "
+                "docker/car/README.md Perception)",
+            }
+        return {"available": True, "running": running, "reason": ""}
+
+    def spiderbot_status(self) -> dict[str, Any]:
+        """Can the spiderbot patrol be launched at all. Dynamic conditions (stack, pose,
+        perception running) are checked, and refused with their own message, at start."""
+        perception = self.perception_status()
+        if not perception["available"]:
+            return {"available": False, "reason": perception["reason"]}
+        if not (self.s.repo_dir / "ros_ws" / "install" / "racer_apps").exists():
+            return {
+                "available": False,
+                "reason": "racer_apps is not built in ros_ws (colcon build on the car)",
+            }
+        if not self.patrols():
+            return {
+                "available": False,
+                "reason": "no patrol file under data/patrols (record a loop on the map first)",
+            }
+        return {"available": True, "reason": ""}
+
+    def start_perception(
+        self, mode: str = "pose", device: str = "cuda", actor: str = ""
+    ) -> dict[str, Any]:
+        params = {"mode": mode, "device": device}
+        with self._lock:
+            try:
+                status = self.perception_status()
+                if not status["available"]:
+                    raise ActionError(status["reason"], 409)
+                states = self.container_states()
+                if states.get(self.s.camera_container) != "running":
+                    raise ActionError(
+                        "start the cameras first: perception reads the camera topic", 409
+                    )
+                name = self.s.perception_container
+                if states.get(name) == "running":
+                    raise ActionError("perception is already running", 409)
+                if name in states:
+                    self.runner.run(["docker", "rm", name], timeout=20)
+                self.s.perception_cache_dir.mkdir(parents=True, exist_ok=True)
+                argv = cmd.perception_run_argv(
+                    self.host,
+                    self.s.repo_dir,
+                    self.s.perception_cache_dir,
+                    self.s.perception_image,
+                    name,
+                    mode,
+                    device,
+                )
+                res = self.runner.run(argv, timeout=120)
+                if not res.ok:
+                    raise ActionError(f"docker run failed: {res.tail()}", 500)
+            except ActionError as exc:
+                self._log("perception.start", False, actor, exc.message, params=params)
+                raise
+            except cmd.CommandError as exc:
+                self._log("perception.start", False, actor, str(exc), params=params)
+                raise ActionError(str(exc), 400) from exc
+            self._invalidate()
+            self._log("perception.start", True, actor, f"{mode} on {device}", params=params)
+            return {"message": f"perception starting ({mode}, {device})", **params}
+
+    def stop_perception(self, actor: str = "") -> dict[str, Any]:
+        with self._lock:
+            how = self._stop_container(self.s.perception_container)
+            self._invalidate()
+            self._log("perception.stop", True, actor, how)
+            return {"message": f"perception {how}"}
+
+    def _spiderbot_precondition(self, snap: Snapshot) -> None:
+        if snap.containers.get(self.s.perception_container) != "running":
+            raise ActionError("the spiderbot needs perception running: start it first", 409)
+        if (snap.ros.rate("/perception/objects") if snap.ros else 0.0) <= 0.0:
+            raise ActionError(
+                "perception is running but /perception/objects is silent (is the camera "
+                "publishing, and is perception in pose mode?)",
+                409,
+            )
+
     def policy_status(self) -> dict[str, Any]:
         """Is an ML policy launchable? Only if a policy dir passes racer_policy's own loader."""
         base = self.s.policies_dir
@@ -538,9 +661,14 @@ class Controller:
         override: bool = False,
         override_reason: str = "",
         actor: str = "",
+        patrol: str = "",
+        rule: str = "arms_raised",
+        speed_mps: float = cmd.SPIDERBOT_DEFAULT_SPEED_MPS,
     ) -> dict[str, Any]:
         action = f"drive.start.{mode}"
         params: dict[str, Any] = {"mode": mode, "profile": profile, "raceline": raceline}
+        if mode == "spiderbot":
+            params.update({"patrol": patrol, "rule": rule, "speed_mps": speed_mps})
         if mode not in cmd.DRIVE_MODES:
             raise ActionError(f"unknown driving mode {mode!r}", 400)
         with self._drive_lock:
@@ -548,12 +676,16 @@ class Controller:
                 generation = self._stop_generation
             used_override = False
             try:
-                ros_cmd, label = self._prepare_drive(mode, profile, raceline)
+                ros_cmd, label = self._prepare_drive(
+                    mode, profile, raceline, patrol, rule, speed_mps
+                )
                 used_override = self._gate_drive(override, override_reason)
                 if self.drive_mode() is not None:
                     raise ActionError("a driving launch is already running: stop it first", 409)
-                if mode == "tracker":
+                if mode in ("tracker", "spiderbot"):
                     self._tracker_precondition(self.snapshot(fresh=True))
+                if mode == "spiderbot":
+                    self._spiderbot_precondition(self.snapshot(fresh=True))
                 self.runner.run(
                     [
                         "docker",
@@ -596,8 +728,28 @@ class Controller:
             )
             return {"message": f"{running} started", "mode": running, "override": used_override}
 
-    def _prepare_drive(self, mode: str, profile: str, raceline: str) -> tuple[str, str]:
+    def _prepare_drive(
+        self,
+        mode: str,
+        profile: str,
+        raceline: str,
+        patrol: str = "",
+        rule: str = "arms_raised",
+        speed_mps: float = cmd.SPIDERBOT_DEFAULT_SPEED_MPS,
+    ) -> tuple[str, str]:
         """Validate a driving request against the whitelist: (ros2 command, mode label)."""
+        if mode == "spiderbot":
+            status = self.spiderbot_status()
+            if not status["available"]:
+                raise ActionError("the spiderbot is disabled: " + status["reason"], 409)
+            if patrol not in self.patrols():
+                raise ActionError(f"unknown patrol {patrol!r}", 400)
+            path = self.s.patrols_dir / f"{patrol}.yaml"
+            container_path = cmd.container_path(self.s.repo_dir, path)
+            return (
+                cmd.spiderbot_cmd(container_path, rule, speed_mps),
+                f"spiderbot:{patrol}",
+            )
         if mode == "ml_policy":
             status = self.policy_status()
             if not status["available"]:

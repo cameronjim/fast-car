@@ -28,7 +28,17 @@ from .hostinfo import HostInfo
 GAP_FOLLOW_PROFILES = ("none", "floor-2026-10-06", "lane-2026-10-25")
 PARK_PROFILES = ("none", "floor-2026-10-07")
 
-DRIVE_MODES = ("gap_follow", "wall_follow", "tracker", "park", "ml_policy")
+DRIVE_MODES = ("gap_follow", "wall_follow", "tracker", "park", "ml_policy", "spiderbot")
+
+#: Pose rules of racer_apps' spiderbot (racer_apps/spiderbot/pose_rules.py). test_spiderbot_whitelist
+#: checks this against the source so the two cannot drift.
+SPIDERBOT_RULES = ("arms_raised", "one_arm_raised", "person_present", "arm_swing")
+#: Detector modes of racer_perception's perception.launch.py, and the devices it accepts here.
+PERCEPTION_MODES = ("pose", "detect")
+PERCEPTION_DEVICES = ("cuda", "cpu")
+#: Patrol speed bounds in m/s. The launch file enforces its own ceiling (1.0) and vehicle_params.
+SPIDERBOT_SPEED_RANGE = (0.1, 1.0)
+SPIDERBOT_DEFAULT_SPEED_MPS = 0.5
 PARK_SERVICES = {
     "start": "/park_node/start",
     "three_point_turn": "/park_node/three_point_turn",
@@ -53,6 +63,10 @@ PWM_SYSFS = (
 )
 FASTDDS_UDP_ONLY = "/workspace/ros_ws/src/racer_bringup/config/fastdds_udp_only.xml"
 CAMERA_USB_TOPIC = "/camera/usb/image_raw/compressed"
+#: Where perception caches weights inside its container (HOME is /tmp there) and where the spiderbot
+#: writes its event log and snapshots, as the container sees them.
+PERCEPTION_CACHE_IN_CONTAINER = "/tmp/.cache/racer_perception"
+SPIDERBOT_OUTPUT_IN_CONTAINER = "/workspace/data/spiderbot"
 
 
 class CommandError(ValueError):
@@ -203,6 +217,56 @@ def camera_run_argv(
     return argv
 
 
+def perception_run_argv(
+    host: HostInfo,
+    repo_dir: Path,
+    cache_dir: Path,
+    image: str,
+    container: str,
+    mode: str = "pose",
+    device: str = "cuda",
+) -> list[str]:
+    """`docker run -d --name car-perception --runtime nvidia ...` for perception.launch.py.
+
+    The same flags as the camera container (docs/notes/perception-2026-10-23.md "Running it"):
+    host network, the NVIDIA runtime, the UDP-only DDS profile, the repo at /workspace, and a
+    weights cache volume. No device is passed through: it reads the camera topic, not the camera.
+    It never goes in car-stack and publishes nothing the command path reads.
+    """
+    if mode not in PERCEPTION_MODES:
+        raise CommandError(f"perception mode must be one of {list(PERCEPTION_MODES)}")
+    if device not in PERCEPTION_DEVICES:
+        raise CommandError(f"perception device must be one of {list(PERCEPTION_DEVICES)}")
+    launch = f"ros2 launch racer_perception perception.launch.py mode:={mode} device:={device}"
+    return [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        container,
+        "--network",
+        "host",
+        "--runtime",
+        "nvidia",
+        "--user",
+        f"{host.uid}:{host.gid}",
+        "-e",
+        "HOME=/tmp",
+        "-e",
+        f"FASTRTPS_DEFAULT_PROFILES_FILE={FASTDDS_UDP_ONLY}",
+        "-v",
+        f"{cache_dir}:{PERCEPTION_CACHE_IN_CONTAINER}",
+        "-v",
+        f"{repo_dir}:/workspace",
+        "-w",
+        "/workspace/ros_ws",
+        image,
+        "bash",
+        "-lc",
+        f"source /opt/ros/humble/setup.bash && source install/setup.bash && exec {launch}",
+    ]
+
+
 # -- inside the stack container ------------------------------------------------------------
 
 
@@ -247,6 +311,34 @@ def ros_cmd_for(
             f"-p pose_frame:={_quoted_ok(pose_frame)}"
         )
     raise CommandError(f"unknown driving mode {mode!r}")
+
+
+def spiderbot_cmd(
+    patrol_container_path: str,
+    rule: str = "arms_raised",
+    speed_mps: float = SPIDERBOT_DEFAULT_SPEED_MPS,
+) -> str:
+    """`ros2 launch racer_apps spiderbot.launch.py ...`: patrol, rule and speed from closed sets.
+
+    The patrol is a file the agent found itself under data/patrols (the caller passes its
+    container path); the rule is one of SPIDERBOT_RULES; the speed is a number inside
+    SPIDERBOT_SPEED_RANGE formatted here, never passed through as text. The launch file
+    enforces its own ceiling and the vehicle_params limits on top.
+    """
+    if not patrol_container_path.startswith("/workspace/") or ".." in patrol_container_path:
+        raise CommandError("the patrol must be a file inside the repo")
+    if rule not in SPIDERBOT_RULES:
+        raise CommandError(f"spiderbot rule must be one of {list(SPIDERBOT_RULES)}")
+    if isinstance(speed_mps, bool) or not isinstance(speed_mps, (int, float)):
+        raise CommandError("patrol speed must be a number")
+    low, high = SPIDERBOT_SPEED_RANGE
+    if not (low <= float(speed_mps) <= high):
+        raise CommandError(f"patrol speed must be between {low} and {high} m/s")
+    return (
+        "ros2 launch racer_apps spiderbot.launch.py "
+        f"patrol:={_quoted_ok(patrol_container_path)} rule:={rule} "
+        f"speed_mps:={float(speed_mps):.2f} output_dir:={SPIDERBOT_OUTPUT_IN_CONTAINER}"
+    )
 
 
 #: Prints the running mode and exits 0 when the drive process is alive, else exits 1.

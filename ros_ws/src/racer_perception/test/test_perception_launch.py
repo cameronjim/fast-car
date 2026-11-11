@@ -61,7 +61,8 @@ def test_arguments_and_defaults():
     defaults = _defaults(_description().entities)
     assert defaults["detector"] == "true" and defaults["fusion"] == "true"
     assert defaults["image_topic"] == "/camera/usb/image_raw/compressed"
-    assert defaults["model"] == "yolov8n.pt"
+    assert defaults["model"] == ""  # empty: the mode's pinned default
+    assert defaults["mode"] == "detect"
     assert defaults["device"] == "cpu"
     assert defaults["rate_hz"] == "10.0"
     assert defaults["debug_image"] == "false"
@@ -84,7 +85,11 @@ def test_detector_exit_shuts_the_launch_down():
 
 def test_car_stack_does_not_start_perception():
     text = _CAR_TELEOP.read_text()
-    assert "perception" not in text.replace("racer_perception_", "")
+    # What must stay out of car-stack is the package, its launch file and its nodes. The recorder
+    # regex DOES name the /perception/* topics since 2026-11-11 (a spiderbot run has to be
+    # reconstructable from its bag, invariant 5), which the old bare-word check forbade.
+    for forbidden in ("racer_perception", "perception.launch", "detector_node", "fusion_node"):
+        assert forbidden not in text.replace("racer_perception_", ""), forbidden
 
 
 @pytest.mark.skipif(_HAS_ULTRALYTICS, reason="ultralytics installed: would try to fetch weights")

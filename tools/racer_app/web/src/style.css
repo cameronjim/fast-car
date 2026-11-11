@@ -99,3 +99,8 @@ button.danger { border-color: var(--red); color: var(--red); }
 @media (min-width: 900px) {
   .stop { left: auto; right: 24px; width: 260px; }
 }
+.carbar { display: flex; gap: 8px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--line); background: var(--card); font-size: 13px; }
+.lvl-amber { color: var(--amber); }
+button.link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px 0; font: inherit; text-decoration: underline; }
+.cars { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 6px; }
+.login input[type="text"] { font: inherit; padding: 6px 8px; }

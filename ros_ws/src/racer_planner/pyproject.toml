@@ -1,0 +1,19 @@
+[project]
+name = "racer-planner-tests"
+version = "0.1.0"
+description = """
+Standalone manifest so a bare `uv run pytest` has something to run for ros_ws/src/racer_planner,
+which is a C++ package. Its Python files are L3 launch tests (they need rclpy and the built
+mppi_planner_node, so they skip here via pytest.importorskip and run for real under colcon test)
+and the numpy fixture generator test/fixtures/make_fixture.py. The ROS-free logic is C++,
+covered by gtest.
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "pytest",
+    "pytest-cov",
+    "numpy",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]

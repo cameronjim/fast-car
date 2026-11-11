@@ -14,6 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import pytest
+
+# Skips cleanly under a bare `uv run pytest` (no ROS); runs for real under colcon test.
+pytest.importorskip("rclpy")
+
 import launch
 import launch_testing
 import launch_testing.actions

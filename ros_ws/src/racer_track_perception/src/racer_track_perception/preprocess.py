@@ -52,7 +52,7 @@ def _valid_beams(
     if r.size == 0 or not (math.isfinite(a0) and math.isfinite(da)):
         return empty, empty, empty, empty
     with np.errstate(invalid="ignore"):
-        valid = np.isfinite(r) & (r >= r_lo) & (r <= r_hi)
+        valid = np.isfinite(r) & (r > 0.0) & (r >= r_lo) & (r <= r_hi)
     if not valid.any():
         return empty, empty, empty, empty
     idx = np.nonzero(valid)[0]
@@ -69,6 +69,24 @@ def _valid_beams(
     return r[keep], bearing[keep], x[keep], y[keep]
 
 
+def _tensor(r: NDArray[np.float64], bearing: NDArray[np.float64]) -> NDArray[np.float32]:
+    out = np.zeros((1, 2, N_BINS), dtype=np.float32)
+    out[0, 0, :] = 1.0
+    if r.size == 0:
+        return out
+    bins = np.floor((bearing + math.pi) / _BIN_WIDTH_RAD + _EDGE_EPS).astype(np.int64)
+    bins = np.clip(bins, 0, N_BINS - 1)
+    pooled = np.ones(N_BINS, dtype=np.float64)
+    np.minimum.at(pooled, bins, np.minimum(r, RANGE_CLIP_M) / RANGE_CLIP_M)
+    out[0, 0, :] = pooled.astype(np.float32)
+    out[0, 1, bins] = 1.0
+    return out
+
+
+def _points(x: NDArray[np.float64], y: NDArray[np.float64]) -> NDArray[np.float32]:
+    return np.stack([x, y], axis=1).astype(np.float32)
+
+
 def scan_to_tensor(
     ranges: Any,
     angle_min: float,
@@ -82,17 +100,7 @@ def scan_to_tensor(
     r, bearing, _x, _y = _valid_beams(
         ranges, angle_min, angle_increment, range_min, range_max, mount, body
     )
-    out = np.zeros((1, 2, N_BINS), dtype=np.float32)
-    out[0, 0, :] = 1.0
-    if r.size == 0:
-        return out
-    bins = np.floor((bearing + math.pi) / _BIN_WIDTH_RAD + _EDGE_EPS).astype(np.int64)
-    bins = np.clip(bins, 0, N_BINS - 1)
-    pooled = np.ones(N_BINS, dtype=np.float64)
-    np.minimum.at(pooled, bins, np.minimum(r, RANGE_CLIP_M) / RANGE_CLIP_M)
-    out[0, 0, :] = pooled.astype(np.float32)
-    out[0, 1, bins] = 1.0
-    return out
+    return _tensor(r, bearing)
 
 
 def scan_to_points(
@@ -108,4 +116,20 @@ def scan_to_points(
     _r, _b, x, y = _valid_beams(
         ranges, angle_min, angle_increment, range_min, range_max, mount, body
     )
-    return np.stack([x, y], axis=1).astype(np.float32)
+    return _points(x, y)
+
+
+def scan_to_tensor_and_points(
+    ranges: Any,
+    angle_min: float,
+    angle_increment: float,
+    range_min: float,
+    range_max: float,
+    mount: LidarMount,
+    body: BodyFootprint,
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """`scan_to_tensor` and `scan_to_points` from one pass over the beams."""
+    r, bearing, x, y = _valid_beams(
+        ranges, angle_min, angle_increment, range_min, range_max, mount, body
+    )
+    return _tensor(r, bearing), _points(x, y)

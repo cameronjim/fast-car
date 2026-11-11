@@ -80,7 +80,7 @@ def test_no_return_bins_are_one_and_zero(live: LiveVehicle) -> None:
 
 def test_invalid_beams_are_not_returns(live: LiveVehicle) -> None:
     mount = dataclasses.replace(live.mount, yaw_rad=0.0)
-    ranges = [math.nan, math.inf, -1.0, RANGE_MIN / 2, RANGE_MAX * 2]
+    ranges = [math.nan, math.inf, -1.0, 0.0, RANGE_MIN / 2, RANGE_MAX * 2]
     t = tensor(live, ranges, 0.0, inc=0.2, mount=mount)
     assert t[0, 1].sum() == 0.0
 

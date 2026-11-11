@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-racer-track-perception = { path = "../../ros_ws/src/racer_track_perception" }
+racer-track-perception = { path = "../../ros_ws/src/racer_track_perception", editable = true }
 
 [dependency-groups]
 dev = [

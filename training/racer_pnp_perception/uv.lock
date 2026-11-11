@@ -755,7 +755,7 @@ train = [
 requires-dist = [
     { name = "numpy" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "racer-track-perception", directory = "../../ros_ws/src/racer_track_perception" },
+    { name = "racer-track-perception", editable = "../../ros_ws/src/racer_track_perception" },
 ]
 
 [package.metadata.requires-dev]
@@ -774,7 +774,7 @@ train = [{ name = "torch", specifier = ">=2.2" }]
 [[package]]
 name = "racer-track-perception"
 version = "0.1.0"
-source = { directory = "../../ros_ws/src/racer_track_perception" }
+source = { editable = "../../ros_ws/src/racer_track_perception" }
 dependencies = [
     { name = "jsonschema" },
     { name = "numpy" },

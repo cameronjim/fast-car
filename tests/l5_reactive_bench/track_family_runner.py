@@ -135,6 +135,8 @@ def make_raceline(args, synthetic, map_yaml: Path, work: Path) -> tuple[Path, di
     from pipeline import raceline_from_map
 
     options = json.loads(args.raceline_json)
+    if args.clearances:
+        options["clearance_candidates"] = [float(v) for v in args.clearances.split(",")]
     if "clearance_candidates" in options:
         options["clearance_candidates"] = tuple(options["clearance_candidates"])
     seed_xy = (float(synthetic.centreline_x[0]), float(synthetic.centreline_y[0]))
@@ -200,6 +202,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         car_like = helpers.car_like_bridge_parameters(load_vehicle_params(), args.noise)
         if localised:
             bridge.update(car_like)
+            bridge.update({k: float(v) for k, v in (kv.split("=") for kv in args.noise_set)})
         else:
             lidar_keys = (
                 "lidar_offset_x_m",
@@ -261,6 +264,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                         str(LOCALISATION_LAUNCH / "localization.launch.py"),
                         f"map:={map_yaml}",
                         "set_initial_pose:=false",
+                        *([f"amcl_params_file:={args.amcl_params}"] if args.amcl_params else []),
+                        *([f"ekf_params_file:={args.ekf_params}"] if args.ekf_params else []),
                     ],
                 )
             )
@@ -298,8 +303,16 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     )
     rear_pose: list = [None]
     loc_errors: list[float] = []
+    loc_series: list[tuple] = []
     tf_buffer = Buffer()
     TransformListener(tf_buffer, node, spin_thread=False)
+
+    def odom_yaw() -> float:
+        """Heading of the EKF's odom -> base_link (the odometry alone, before AMCL's correction)."""
+        if not tf_buffer.can_transform("odom", "base_link", rclpy.time.Time()):
+            return float("nan")
+        q = tf_buffer.lookup_transform("odom", "base_link", rclpy.time.Time()).transform.rotation
+        return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
     def on_odom(msg) -> None:
         q = msg.pose.pose.orientation
@@ -319,10 +332,22 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             and tf_buffer.can_transform("map", "base_link", rclpy.time.Time())
         ):
             tf = tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
-            loc_errors.append(
-                math.hypot(
-                    tf.transform.translation.x - rear_pose[0][0],
-                    tf.transform.translation.y - rear_pose[0][1],
+            tq = tf.transform.rotation
+            est_yaw = math.atan2(
+                2.0 * (tq.w * tq.z + tq.x * tq.y), 1.0 - 2.0 * (tq.y * tq.y + tq.z * tq.z)
+            )
+            ex, ey = tf.transform.translation.x, tf.transform.translation.y
+            gx, gy, gyaw = rear_pose[0]
+            dx, dy = ex - gx, ey - gy
+            loc_errors.append(math.hypot(dx, dy))
+            loc_series.append(
+                (
+                    base._stamp_s(msg.header.stamp),
+                    math.cos(gyaw) * dx + math.sin(gyaw) * dy,  # along the car's heading
+                    -math.sin(gyaw) * dx + math.cos(gyaw) * dy,  # across it, left positive
+                    math.atan2(math.sin(est_yaw - gyaw), math.cos(est_yaw - gyaw)),
+                    gyaw,
+                    odom_yaw(),
                 )
             )
 
@@ -403,6 +428,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 rclpy.spin_once(node, timeout_sec=0.05)
         recording.clear()
         loc_errors.clear()
+        loc_series.clear()
         pending_reset = None
         initial_pose_until = 0.0
         consumed = 0
@@ -499,12 +525,22 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 "p95": round(float(np.percentile(err, 95)), 4),
                 "max": round(float(err.max()), 4),
             }
+            ser = np.array(loc_series)
+            result["localisation_error_split"] = {
+                "along_mean_m": round(float(ser[:, 1].mean()), 4),
+                "along_p95_abs_m": round(float(np.percentile(np.abs(ser[:, 1]), 95)), 4),
+                "cross_mean_m": round(float(ser[:, 2].mean()), 4),
+                "cross_p95_abs_m": round(float(np.percentile(np.abs(ser[:, 2]), 95)), 4),
+                "heading_p95_abs_rad": round(float(np.percentile(np.abs(ser[:, 3]), 95)), 4),
+            }
         if args.trace_out:
             np.savez_compressed(
                 args.trace_out,
                 odom=np.array(recording.odom),
                 drive_raw=np.array(recording.drive_raw),
                 drive=np.array(recording.drive),
+                loc=np.array(loc_series),
+                events=np.array([e["t_s"] for e in event_details]),
             )
     except RuntimeError as e:
         result["error"] = str(e)
@@ -534,6 +570,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--car", default="params", choices=CARS)
     parser.add_argument("--lidar", default="mounted", choices=("mounted", "aligned"))
     parser.add_argument("--noise", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--noise-set",
+        action="append",
+        default=[],
+        help="override one bridge sensor noise parameter on a localised run, name=value "
+        "(wheel_speed_scale=1.0, steering_offset_rad=0 ...); repeatable",
+    )
+    parser.add_argument(
+        "--clearances",
+        help="body clearance candidates for the raceline, widest first, comma separated "
+        "(overrides clearance_candidates in --raceline-json)",
+    )
+    parser.add_argument("--amcl-params", help="amcl_params_file for a localised run (tuning)")
+    parser.add_argument("--ekf-params", help="ekf_params_file for a localised run (tuning)")
     parser.add_argument("--duration", type=float, default=150.0, help="run time cap (s)")
     parser.add_argument("--stop-after-laps", type=int, default=3)
     parser.add_argument("--stop-after-contacts", type=int, default=0)

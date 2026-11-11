@@ -32,10 +32,15 @@ amcl:
     transform_tolerance: 0.2
     robot_model_type: nav2_amcl::DifferentialMotionModel
 
+    # 2026-11-11 (docs/notes/localised-tracker-2026-11-11.md): alpha1 0.1 -> 0.2, alpha2 0.02 -> 0.1 and
+    # the update thresholds 0.1 -> 0.05 (m, rad). On the track family at 0.64 m/s the EKF's heading
+    # drifts 0.09 rad over the first 90 degree turn (the dynamic car understeers against the
+    # kinematic yaw rate, more with a steering trim) and the old noise let the cloud correct it too
+    # slowly: 54 safety brakes in 3 laps of the 0.2 m stadium counter-clockwise became 4.
     # Motion noise: alpha1 rotation from rotation, alpha2 rotation from translation, alpha3
     # translation from translation, alpha4 translation from rotation (alpha5 is omni only).
-    alpha1: 0.1
-    alpha2: 0.02
+    alpha1: 0.2
+    alpha2: 0.1
     alpha3: 0.1
     alpha4: 0.02
     alpha5: 0.02
@@ -50,8 +55,8 @@ amcl:
     recovery_alpha_slow: 0.0
 
     # Filter update thresholds.
-    update_min_d: 0.1
-    update_min_a: 0.1
+    update_min_d: 0.05
+    update_min_a: 0.05
 
     # Laser model, sized for the C1 (vehicle_params sensors.lidar_spec: 0.05 to 12 m, 720
     # beams over 360 degrees). The likelihood field does not ray cast: it needs a map with thin

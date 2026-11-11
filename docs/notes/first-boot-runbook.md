@@ -2010,7 +2010,7 @@ line has to run wide.
 
 Writes `<track>_ccw.csv` and `<track>_cw.csv` (tracker_node's format), a JSON report and a PNG
 each. The line is the minimum-curvature path inside the lane with the whole body outline kept off
-the walls (the widest of 0.15 to 0.05 m the lane allows) and the curvature held under the car's
+the walls (the widest of 0.25 to 0.05 m the lane allows: 0.25 first because the localised car brakes on lines that pass closer than about 0.2 m, see the note) and the curvature held under the car's
 steering on each side (85 percent of tan(lock) / wheelbase). It exits 2 and says NOT FEASIBLE when
 the lane does not allow it: believe it, and use `gap_follow` there. `--v-max` is the top TRUE
 speed; start at 0.5.

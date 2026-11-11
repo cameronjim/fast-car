@@ -36,7 +36,7 @@ sys.path.insert(0, str(HERE))
 
 import pipeline
 
-AUTO_CLEARANCES = (0.15, 0.12, 0.10, 0.08, 0.06, 0.05)
+AUTO_CLEARANCES = (0.25, 0.20, 0.15, 0.12, 0.10, 0.08, 0.06, 0.05)
 
 
 def cmd_map(args: argparse.Namespace) -> int:
@@ -302,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         "--body-clearance",
         type=float,
         default=None,
-        help="body outline to wall, m; default: the widest of 0.15 0.12 0.10 0.08 0.06 0.05 the "
+        help="body outline to wall, m; default: the widest of 0.25 0.20 0.15 0.12 0.10 0.08 0.06 0.05 the "
         "track allows",
     )
     p.add_argument("--front-overhang", type=float, default=None)

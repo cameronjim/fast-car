@@ -14,6 +14,10 @@ world), with the car as measured and three drivers:
   tracker_policy the tracker in HANDOFF mode (drive_topic /tracker/command, lookahead from the
                 policy directory's policy_meta.yaml) plus racer_policy's policy_node, which adds
                 the bounded residual and is the only publisher of /drive_raw (--policy-dir)
+  pnp           the Plug-and-Play driver, no map and no pose: racer_track_perception's
+                track_perception_node and racer_planner's mppi_planner_node (--backend,
+                --perception-bundle, --dynamics-bundle, --v-max-mps), with the car's LiDAR,
+                scan noise and 50 Hz /odom/wheel; parameters come from pnp.launch.py
 
 The car (--car): `params` (default) gives the simulator's steering the limits of vehicle_params
 (0.449 rad each way, schema 0.14.0: commands are true angles and true speeds); `gym` is the
@@ -60,7 +64,7 @@ TRACKS = (
     "rounded_rect",
     "map",
 )
-DRIVERS = ("gap_follow", "tracker", "tracker_loc", "tracker_policy")
+DRIVERS = ("gap_follow", "tracker", "tracker_loc", "tracker_policy", "pnp")
 CARS = ("gym", "params")
 LOCALISATION_LAUNCH = REPO_ROOT / "ros_ws" / "src" / "racer_bringup" / "launch"
 # The sensor errors the localisation canaries use (sim_autopilot.launch.py SIM_SENSOR_NOISE).
@@ -218,6 +222,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             bridge.update({k: car_like[k] for k in lidar_keys})
     if args.driver in ("tracker", "tracker_policy"):
         bridge["ground_truth_rear_odom_offset_x_m"] = -cg_to_rear
+    pnp_launch = None
+    if args.driver == "pnp":
+        pnp_launch = base._load_module("pnp_launch", LOCALISATION_LAUNCH / "pnp.launch.py")
+        bridge.update({k: car_like[k] for k in ("publish_wheel_odom", "wheel_odom_rate_hz")})
+        bridge["scan_noise_std_m"] = helpers.SIM_SENSOR_NOISE["scan_noise_std_m"]
 
     nodes: dict[str, dict] = {
         "bridge_node": bridge,
@@ -234,6 +243,17 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         nodes["gap_follow_node"] = gap
         stack.append(("gap_follow_node", [base._executable("racer_control", "gap_follow_node")]))
         result.update({"profile": args.profile, "overrides": overrides, "gap_follow_params": gap})
+    elif args.driver == "pnp":
+        perception, planner = pnp_launch.parameters_for(
+            args.perception_bundle, args.dynamics_bundle, args.backend, args.v_max_mps, mounted
+        )
+        nodes["track_perception_node"], nodes["mppi_planner_node"] = perception, planner
+        for package, name in (
+            ("racer_track_perception", "track_perception_node"),
+            ("racer_planner", "mppi_planner_node"),
+        ):
+            stack.append((name, [base._executable(package, name)]))
+        result.update({"backend": args.backend, "v_max_mps": args.v_max_mps, "pnp": nodes})
     else:
         raceline_csv, report = make_raceline(args, walls_synthetic, map_yaml, work)
         tracker = dict(LANE_TRACKER_DEFAULTS)
@@ -415,6 +435,13 @@ def run_benchmark(args: argparse.Namespace) -> dict:
 
         node.create_subscription(String, "/policy/status", on_policy_status, reliable)
         node.create_subscription(String, "/policy/events", on_policy_event, reliable)
+    planner_states: list[int] = []
+    if args.driver == "pnp":
+        from racer_pnp_msgs.msg import PlannerStatus
+
+        node.create_subscription(
+            PlannerStatus, "/pnp/planner/status", lambda m: planner_states.append(m.state), reliable
+        )
     reset_client = node.create_client(Trigger, "/sim/reset")
     initial_pose_pub = node.create_publisher(PoseWithCovarianceStamped, "/initialpose", reliable)
 
@@ -567,6 +594,17 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 "/tracker/command": node.count_publishers("/tracker/command"),
             }
             result["policy_events"] = list(policy_events)
+        if args.driver == "pnp":
+            result["planner_states"] = {
+                str(s): planner_states.count(s) for s in set(planner_states)
+            }
+            # Every /safety/events PHASE_ENGAGE with SEVERITY_BRAKE, whatever gate raised it.
+            result["safety_brakes"] = sum(1 for e in recording.events if e[2] == 0 and e[3] == 2)
+            # The command path: only the planner on /drive_raw, only safety_node on /drive.
+            result["publisher_nodes"] = {
+                topic: sorted(i.node_name for i in node.get_publishers_info_by_topic(topic))
+                for topic in ("/drive_raw", "/drive")
+            }
         t_first = recording.odom[0][0] if recording.odom else 0.0
         result["safety_events"] = [
             {**e, "t_s": round(e["t_s"] - t_first, 2)} for e in event_details
@@ -613,6 +651,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reverse", action="store_true", help="drive the loop clockwise")
     parser.add_argument("--driver", default="gap_follow", choices=DRIVERS)
     parser.add_argument("--policy-dir", help="policy directory (driver tracker_policy)")
+    parser.add_argument("--perception-bundle", default="", help="track_perception bundle (pnp)")
+    parser.add_argument("--dynamics-bundle", default="", help="dynamics bundle (pnp)")
+    parser.add_argument("--backend", default="geometric", choices=("net", "geometric"))
+    parser.add_argument("--v-max-mps", type=float, default=0.6, help="pnp planner speed cap")
     parser.add_argument("--profile", default="lane-2026-10-25", help="gap_follow profile")
     parser.add_argument("--params-json", default="{}", help="gap_follow parameters on top")
     parser.add_argument("--tracker-params-json", default="{}", help="tracker_node parameters")

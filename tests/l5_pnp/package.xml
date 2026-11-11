@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>l5_pnp</name>
+  <version>0.1.0</version>
+  <description>
+    L5 canary for the Plug-and-Play driver (tests/l5_pnp): the full chain in sim through the real
+    command path (racer_gym_bridge with the car's LiDAR, racer_track_perception's
+    track_perception_node, racer_planner's mppi_planner_node, racer_safety's safety_node) laps
+    tracks the driver never saw, with no map and no pose. Uses
+    tests/l5_reactive_bench/track_family_runner.py (driver pnp).
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>racer_gym_bridge</exec_depend>
+  <exec_depend>racer_track_perception</exec_depend>
+  <exec_depend>racer_planner</exec_depend>
+  <exec_depend>racer_pnp_msgs</exec_depend>
+  <exec_depend>racer_safety</exec_depend>
+  <exec_depend>racer_msgs</exec_depend>
+  <exec_depend>racer_tools</exec_depend>
+  <exec_depend>racer_bringup</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

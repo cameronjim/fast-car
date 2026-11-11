@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_apps</name>
+  <version>0.1.0</version>
+  <description>
+    Roadmap phase 5 applications on top of the racer (OPTIONAL, outside the thesis;
+    docs/notes/spiderbot-2026-11-11.md). Today: the spiderbot (5.3), waypoint patrol on the AMCL
+    map with a pose rule held over N frames that stops the car, turns it towards the person,
+    raises an alert and resumes. The decisions (pose rules, state machine, patrol geometry,
+    command shaping) are pure Python and L1-tested without ROS. spiderbot_node publishes
+    /drive_raw only, through safety_node; it never publishes /drive. fake_detector_node feeds the
+    simulator synthetic people. Nothing here starts unless its own launch file is run.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>ackermann_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros_py</depend>
+  <depend>racer_msgs</depend>
+  <depend>racer_perception</depend>
+  <depend>racer_control</depend>
+  <depend>racer_tools</depend>
+  <depend>python3-yaml</depend>
+
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

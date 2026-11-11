@@ -65,7 +65,27 @@ DEBIAN_FRONTEND=noninteractive`), and the image was missing `ros-humble-foxglove
 `car_teleop.launch.py` starts by default. If a future build appears stuck, look for a debconf
 prompt in the log before assuming it is slow.
 
-### When phase 5 needs torch
+### When phase 5 needs torch (updated 2026-11-11: the wheels are pinned now)
+
+The torch and torchvision wheels, the Python dependencies and the YOLO weights are pinned in
+`docker/car/` by URL and sha256 (see `docker/car/README.md` "Perception"), so the build on the
+Jetson is just:
+
+```sh
+cd ~/car
+nohup docker build --build-arg INSTALL_TORCH=required --build-arg INSTALL_PERCEPTION=required \
+  -t car:perception docker/car > ~/car-perception-build.log 2>&1 &
+```
+
+then the first on-device check, which only the Jetson can do:
+
+```sh
+docker run --rm --runtime nvidia car:perception bash -lc \
+  'python3 -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"'
+```
+
+`True` and `Orin` mean the 6.1 userspace and the wheel work on the 6.2.1 host. The older note below
+(hand-resolving a wheel) is kept for the case where the pins have to move.
 
 ```sh
 docker build \

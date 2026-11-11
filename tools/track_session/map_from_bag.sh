@@ -5,15 +5,18 @@
 #   tools/track_session/map_from_bag.sh <bag dir | .mcap | .npz> <out prefix> [feeder options]
 #
 #   tools/track_session/map_from_bag.sh /data/bags/2026-11-11T03-54-11_car_teleop \
-#       /data/maps/2026-11-10-oval/oval --speed-divisor 1.401
+#       /data/maps/2026-11-10-oval/oval --speed-divisor 1.401 \
+#       --steer-scale-left 1.203 --steer-scale-right 1.072   (the 2026-11-10 bags only)
 #
 # The bag is extracted to an npz first (extract_bag.py, `uv run --project tools`), then replayed
 # by bag_feeder.py with a /clock; the map is saved as <out prefix>.yaml/.pgm (nav2 map_server
 # format, what localization.launch.py wants) and <out prefix>.posegraph/.data. Feeder options:
-# --speed-divisor X (divide /odom/wheel speeds by X, the VESC's tyre radius error; 1.401 on the
-# car's 2026-11-10 reading), --twist-source feeder|node (feeder = measured per-side steering from
-# real_car_2026-11-10.yaml, node = the real wheel_twist_node with vehicle_params' symmetric
-# limits), --rate R (playback speed, 1.0 default; keep it at 1 for twist-source node, whose
+# --speed-divisor X (divide /odom/wheel speeds by X: 1.0, the default, for a bag from the calibrated
+# car; 1.401 for the 2026-11-10 bags, recorded before the tyre radius was calibrated),
+# --steer-scale-left/right (true wheel angle per command radian: 1.0 default; 1.203 and 1.072 for
+# the 2026-11-10 bags), --twist-source feeder|node (feeder = the twist from those scales, node = the
+# real wheel_twist_node, which cannot represent an uncalibrated servo), --rate R (playback speed,
+# 1.0 default; keep it at 1 for twist-source node, whose
 # staleness check runs on the wall clock).
 #
 # Environment: IMAGE (default ros-dev:local), VOLUME (workspace volume, default

@@ -35,6 +35,8 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from racer_perception.keypoints import Keypoint
+
 #: range_status values (mirrored in racer_msgs/ObjectDetection.msg).
 STATUS_OK = "ok"
 STATUS_NO_SCAN = "no_scan"
@@ -185,6 +187,8 @@ class RawDetection:
     cy_px: float
     width_px: float
     height_px: float
+    #: Body keypoints (pose mode, COCO-17 order), image pixels. Empty for plain boxes.
+    keypoints: tuple[Keypoint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -204,6 +208,7 @@ class FusedObject:
     cy_px: float
     width_px: float
     height_px: float
+    keypoints: tuple[Keypoint, ...] = ()
 
 
 def fuse_detection(
@@ -250,4 +255,5 @@ def fuse_detection(
         cy_px=det.cy_px,
         width_px=det.width_px,
         height_px=det.height_px,
+        keypoints=det.keypoints,
     )

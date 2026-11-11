@@ -53,9 +53,22 @@ export function Controls(p: Props) {
   const [needsOverride, setNeedsOverride] = useState<string | null>(null);
   const [mapName, setMapName] = useState("");
 
+  // perception and the spiderbot
+  const [patrol, setPatrol] = useState("");
+  const [rule, setRule] = useState("arms_raised");
+  const [patrolSpeed, setPatrolSpeed] = useState(0.5);
+
   const act = (fn: () => Promise<ActionReply>) => run(fn, notify, refresh);
 
-  const drive = async (body: { mode: string; profile?: string; raceline?: string; policy?: string }) => {
+  const drive = async (body: {
+    mode: string;
+    profile?: string;
+    raceline?: string;
+    policy?: string;
+    patrol?: string;
+    rule?: string;
+    speed_mps?: number;
+  }) => {
     const err = await act(() =>
       api.startDrive({ ...body, override, override_reason: override ? reason : "" }),
     );
@@ -68,6 +81,9 @@ export function Controls(p: Props) {
   };
 
   const policy = options?.policy ?? status?.policy ?? null;
+  const perception = status?.perception ?? options?.perception ?? null;
+  const spiderbot = status?.spiderbot ?? options?.spiderbot ?? null;
+  const speedRange = options?.spiderbot_speed_range ?? [0.1, 1.0];
 
   return (
     <>
@@ -111,6 +127,24 @@ export function Controls(p: Props) {
         <div class="sub">About 6 MB/s per camera into the bag. Needs {status?.thresholds.cameras_min_free_gb ?? 10} GiB free; the disk guard stops them when space runs low.</div>
       </section>
 
+      <section class="card" aria-label="Perception">
+        <h3>Perception <span class={`pill ${perception?.running ? "lvl-green" : "lvl-amber"}`}>{perception?.running ? "on" : "off"}</span></h3>
+        <div class="row">
+          <button
+            disabled={!perception?.available || perception?.running || !status?.cameras.running}
+            title={perception?.reason}
+            aria-describedby="perception-reason"
+            onClick={() => act(() => api.startPerception({ mode: "pose", device: "cuda" }))}
+          >Start perception (pose, GPU)</button>
+          <button disabled={!perception?.running} onClick={() => act(() => api.stopPerception())}>Stop perception</button>
+        </div>
+        <div id="perception-reason" class="sub">
+          {perception?.available
+            ? status?.cameras.running ? "Runs the person and pose detector on the camera. Drives nothing." : "Start the cameras first."
+            : `disabled: ${perception?.reason ?? "unknown"}`}
+        </div>
+      </section>
+
       <section class="card" aria-label="Driving">
         <h3>Driving <span class={`pill ${driving ? "lvl-amber" : "lvl-green"}`}>{driving ?? "idle"}</span></h3>
         <div class="warn">
@@ -143,6 +177,35 @@ export function Controls(p: Props) {
           <button disabled={!driving?.startsWith("park")} onClick={() => parkCmd("start")}>Park</button>
           <button disabled={!driving?.startsWith("park")} onClick={() => parkCmd("three_point_turn")}>Three-point turn</button>
           <button disabled={!driving?.startsWith("park")} onClick={() => act(() => api.park("abort"))}>Abort</button>
+        </div>
+        <div class="row">
+          <select value={patrol} onChange={(e) => setPatrol(e.currentTarget.value)} aria-label="Patrol">
+            <option value="">patrol</option>
+            {(options?.patrols ?? []).map((x) => <option key={x}>{x}</option>)}
+          </select>
+          <select value={rule} onChange={(e) => setRule(e.currentTarget.value)} aria-label="Pose rule">
+            {(options?.spiderbot_rules ?? ["arms_raised"]).map((x) => <option key={x}>{x}</option>)}
+          </select>
+          <input
+            type="number"
+            aria-label="Patrol speed in metres per second"
+            min={speedRange[0]}
+            max={speedRange[1]}
+            step={0.1}
+            value={patrolSpeed}
+            onInput={(e) => setPatrolSpeed(Number(e.currentTarget.value))}
+          />
+          <button
+            disabled={!spiderbot?.available || !stackUp || !!driving || !patrol}
+            title={spiderbot?.reason}
+            aria-describedby="spiderbot-reason"
+            onClick={() => drive({ mode: "spiderbot", patrol, rule, speed_mps: patrolSpeed })}
+          >Spiderbot patrol</button>
+        </div>
+        <div id="spiderbot-reason" class="sub">
+          {spiderbot?.available
+            ? "Patrols the loop on the map. Stops, turns to face a person who holds the pose, raises an alert, then resumes. Needs localisation and perception running. Goes through the safety node like every other drive."
+            : `disabled: ${spiderbot?.reason ?? "unknown"}`}
         </div>
         <div class="row">
           <select value={policyName} onChange={(e) => setPolicyName(e.currentTarget.value)} aria-label="ML policy" disabled={!policy?.available}>

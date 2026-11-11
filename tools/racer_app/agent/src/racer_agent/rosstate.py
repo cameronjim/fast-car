@@ -40,7 +40,7 @@ VALUE_TOPICS = {
     "/telemetry/vesc/fault": "fault",
 }
 #: Topics that are only counted, for a rate. Not decoded.
-RATE_TOPICS = ("/scan", "/pose", "/odom/wheel")
+RATE_TOPICS = ("/scan", "/pose", "/odom/wheel", "/perception/objects")
 #: Topics whose presence in the bridge's channel list is itself a check.
 PRESENCE_TOPICS = ("/drive", "/drive_raw", "/safety/events", "/map")
 

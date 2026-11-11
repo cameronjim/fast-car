@@ -4,7 +4,7 @@ the tracker it rides on.
 Each case runs tests/l5_reactive_bench/track_family_runner.py twice on the same world: once
 with the tracker alone (driver `tracker`) and once with `tracker_policy`: tracker_node in
 HANDOFF mode (drive_topic /tracker/command), racer_policy's policy_node, and safety_node on the
-real command path, ground-truth pose, the car as measured on 2026-11-10, 1.0 m lane, 2 m
+real command path, ground-truth pose, the car as in vehicle_params 0.14.0, 1.0 m lane, 2 m
 straights, island end radius 0.4 m, raceline at 0.64 m/s (the same world as
 tests/l5_track_family).
 
@@ -93,8 +93,6 @@ def _run(driver: str, reverse: bool, work: Path, policy_dir: Path | None) -> dic
         json.dumps(TRACK),
         "--driver",
         driver,
-        "--car",
-        "today",
         "--stop-after-laps",
         str(LAPS),
         "--duration",

@@ -67,6 +67,36 @@ describe("Api", () => {
     expect(init.headers.Authorization).toBe("Bearer t");
   });
 
+  it("perception and spiderbot go through the fixed routes with their fields", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(reply(200, { ok: true }));
+    const api = new Api(memoryTokens("t"), fetchImpl);
+    await api.startPerception({ mode: "pose", device: "cuda" });
+    await api.stopPerception();
+    await api.startDrive({ mode: "spiderbot", patrol: "loop", rule: "arms_raised", speed_mps: 0.5 });
+    const calls = fetchImpl.mock.calls.map((c) => `${c[1].method} ${c[0]}`);
+    expect(calls).toEqual([
+      "POST /api/perception/start",
+      "POST /api/perception/stop",
+      "POST /api/drive/start",
+    ]);
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ mode: "pose", device: "cuda" });
+    expect(JSON.parse(fetchImpl.mock.calls[2][1].body)).toEqual({
+      mode: "spiderbot",
+      patrol: "loop",
+      rule: "arms_raised",
+      speed_mps: 0.5,
+    });
+    for (const c of fetchImpl.mock.calls) expect(c[1].headers.Authorization).toBe("Bearer t");
+  });
+
+  it("a disabled spiderbot reply keeps the reason for the UI", async () => {
+    const body = { ok: false, error: "the spiderbot is disabled: the GPU image car:perception is not built" };
+    const api = new Api(memoryTokens("t"), vi.fn().mockResolvedValue(reply(409, body)));
+    const err = await api.startDrive({ mode: "spiderbot", patrol: "loop" }).catch((e) => e);
+    expect(err.status).toBe(409);
+    expect(err.message).toContain("car:perception");
+  });
+
   it("a 401 calls onUnauthorized", async () => {
     const api = new Api(memoryTokens("bad"), vi.fn().mockResolvedValue(reply(401, { ok: false, error: "missing or wrong token" })));
     const handler = vi.fn();

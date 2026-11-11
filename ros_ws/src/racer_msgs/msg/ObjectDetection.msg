@@ -31,3 +31,8 @@ float32 box_cx_px
 float32 box_cy_px
 float32 box_width_px
 float32 box_height_px
+
+# Body keypoints in IMAGE pixels, when the detector ran in pose mode (see Keypoint2D.msg for the
+# conventions and PoseDetection.msg for the layout names). EMPTY for plain box detections.
+string keypoint_layout      # "" when keypoints is empty, else e.g. "coco17"
+racer_msgs/Keypoint2D[] keypoints

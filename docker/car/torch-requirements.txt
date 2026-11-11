@@ -1,0 +1,15 @@
+# Installed by docker/car/Dockerfile's INSTALL_TORCH=required layer with `pip3 install --no-deps`:
+# exactly torch's own pure-Python dependencies (the wheel's Requires-Dist, torch 2.8.0), never
+# torch itself, so pip cannot resolve or replace the pinned Jetson wheel. Exact pins from
+# `uv pip compile --python-platform aarch64-unknown-linux-gnu --python-version 3.10`, 2026-11-11.
+# numpy is here, held below 2, because ROS 2 Humble's compiled Python packages are built
+# against numpy 1.x and torch wants a numpy for tensor.numpy().
+filelock==4.1.0
+fsspec==2026.9.0
+jinja2==3.1.6
+markupsafe==3.0.4
+mpmath==1.3.0
+networkx==3.4.2
+numpy==1.26.4
+sympy==1.14.0
+typing-extensions==4.16.0

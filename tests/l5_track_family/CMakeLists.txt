@@ -16,6 +16,11 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gap_follow_family_canary test_gap_follow_family_canary.py
     TIMEOUT 900
   )
+  # The tracker on the LOCALISED pose (AMCL + EKF, sensor errors on): the configuration of the
+  # real car, both directions on two 1 m lane tracks.
+  ament_add_pytest_test(test_tracker_localised_canary test_tracker_localised_canary.py
+    TIMEOUT 1200
+  )
 endif()
 
 ament_package()

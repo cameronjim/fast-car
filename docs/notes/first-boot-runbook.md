@@ -1972,11 +1972,10 @@ expect" first: on a lane around 0.8 m wide or an island end this tight the track
 against safety_node's corridor, and `gap_follow` with reverse escape (optionally with outside
 entry) is the driver that gets round.
 
-Until the calibration PR (branch `calib/2026-11-10`) puts the measured steering and speed scale in
-`config/vehicle_params.yaml`, the tools take them from `tools/track_session/real_car_2026-11-10.yaml`
-(left lock 0.504 rad, right lock 0.449 rad, commands read 1.401 times the true speed) and
-`track_follow.launch.py` has the `calib-2026-11-10` profile. After it lands: delete both and run
-`profile:=none`.
+The steering limits (0.449 rad each way, vehicle_params 0.14.0), the speed scale and the overhangs
+are read from `config/vehicle_params.yaml`; commands are true angles and true speeds, so nothing is
+scaled. Bags recorded before the calibration (2026-11-10) are mapped with `--speed-divisor 1.401
+--steer-scale-left 1.203 --steer-scale-right 1.072`.
 
 ### T1. Map (one slow lap, Jetson teleop, as in M3) and save
 
@@ -2007,11 +2006,11 @@ line has to run wide.
 ### T3. Raceline
 
     uv run --project tools python tools/track_session/track_session.py raceline \
-        /data/maps/<track>/<track>.yaml --v-max 0.64 --commands-read-high 1.401
+        /data/maps/<track>/<track>.yaml --v-max 0.9
 
 Writes `<track>_ccw.csv` and `<track>_cw.csv` (tracker_node's format), a JSON report and a PNG
 each. The line is the minimum-curvature path inside the lane with the whole body outline kept off
-the walls (the widest of 0.15 to 0.05 m the lane allows) and the curvature held under the car's
+the walls (the widest of 0.25 to 0.05 m the lane allows: 0.25 first because the localised car brakes on lines that pass closer than about 0.2 m, see the note) and the curvature held under the car's
 steering on each side (85 percent of tan(lock) / wheelbase). It exits 2 and says NOT FEASIBLE when
 the lane does not allow it: believe it, and use `gap_follow` there. `--v-max` is the top TRUE
 speed; start at 0.5.

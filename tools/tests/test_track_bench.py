@@ -38,14 +38,14 @@ def test_family_covers_the_requested_ranges():
 def test_command_carries_the_variant_and_the_direction(tmp_path):
     run = bench.plan(
         "family",
-        {"x": {"driver": "tracker", "raceline": {"v_max_mps": 0.5}, "car": "today", "laps": 2}},
+        {"x": {"driver": "tracker", "raceline": {"v_max_mps": 0.5}, "car": "params", "laps": 2}},
         ["cw"],
     )[0]
     command = bench.command(run, 107, tmp_path, ["--noise"])
     assert "--reverse" in command
     assert command[command.index("--driver") + 1] == "tracker"
     assert json.loads(command[command.index("--raceline-json") + 1]) == {"v_max_mps": 0.5}
-    assert command[command.index("--car") + 1] == "today"
+    assert command[command.index("--car") + 1] == "params"
     assert command[command.index("--stop-after-laps") + 1] == "2"
     assert command[command.index("--domain-id") + 1] == "107"
     assert command[-1] == "--noise"

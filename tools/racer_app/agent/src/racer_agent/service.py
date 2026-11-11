@@ -60,6 +60,14 @@ class DriveBody(Body):
     policy: str = ""
     override: bool = False
     override_reason: str = ""
+    patrol: str = ""
+    rule: str = "arms_raised"
+    speed_mps: float = 0.5
+
+
+class PerceptionBody(Body):
+    mode: str = "pose"
+    device: str = "cuda"
 
 
 class ParkBody(Body):
@@ -247,6 +255,14 @@ def create_app(
     @guarded.post("/cameras/stop")
     def cameras_stop(actor: str = Depends(need_auth)) -> dict[str, Any]:
         return ok(c.stop_cameras(actor))
+
+    @guarded.post("/perception/start")
+    def perception_start(body: PerceptionBody, actor: str = Depends(need_auth)) -> dict[str, Any]:
+        return ok(c.start_perception(body.mode, body.device, actor))
+
+    @guarded.post("/perception/stop")
+    def perception_stop(actor: str = Depends(need_auth)) -> dict[str, Any]:
+        return ok(c.stop_perception(actor))
 
     @guarded.post("/drive/start")
     def drive_start(body: DriveBody, actor: str = Depends(need_auth)) -> dict[str, Any]:

@@ -158,7 +158,6 @@ def command(run: dict, domain_id: int, out: Path, extra: list[str]) -> list[str]
         "tracker": "--tracker-params-json",
         "raceline": "--raceline-json",
         "car": "--car",
-        "speed_scale": "--speed-scale",
         "duration": "--duration",
         "laps": "--stop-after-laps",
         "stall_s": "--stall-s",
@@ -249,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         "--variant",
         action="append",
         default=[],
-        help="name=JSON spec (driver, profile, params, tracker, raceline, car, speed_scale, ...)",
+        help="name=JSON spec (driver, profile, params, tracker, raceline, car, ...)",
     )
     p_run.add_argument("--extra", default="", help="extra runner arguments, space separated")
     p_list = sub.add_parser("list")

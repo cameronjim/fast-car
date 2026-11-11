@@ -95,6 +95,47 @@ jobs:
       - name: Compile + run tools/jetson_heartbeat host-logic tests
         run: .github/scripts/jetson_heartbeat_host_tests.sh
 
+  racer-app:
+    name: racer app (web UI typecheck + vitest + build, deploy script lint)
+    runs-on: ubuntu-latest
+    # tools/racer_app (docs/notes/racer-app-2026-11-11.md). The Python half, the backend agent,
+    # is tested by unit-and-property above (run_python_tests.sh, 90 percent gate) together with
+    # its install/uninstall script tests. This job covers the TypeScript half and builds the UI
+    # exactly as the Jetson's install.sh does, from the committed lockfile, so a dist/ that does
+    # not build fails here and not at the car. No hardware, no docker, no ROS.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+
+      - name: Install web dependencies from the lockfile
+        run: npm ci
+        working-directory: tools/racer_app/web
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: tools/racer_app/web
+
+      - name: Vitest (data parsing, ROS link, API client, no-publish guard)
+        run: npm test
+        working-directory: tools/racer_app/web
+
+      - name: Build dist/
+        run: npm run build
+        working-directory: tools/racer_app/web
+
+      - name: Keep the built UI
+        uses: actions/upload-artifact@v4
+        with:
+          name: racer-app-web-dist
+          path: tools/racer_app/web/dist
+          retention-days: 14
+
+      - name: ShellCheck the install and uninstall scripts
+        run: shellcheck tools/racer_app/deploy/install.sh tools/racer_app/deploy/uninstall.sh
+
   l3-and-cpp:
     name: L3 node tests + C++ build (ros-dev)
     runs-on: ubuntu-latest

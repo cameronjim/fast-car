@@ -1,0 +1,37 @@
+[project]
+name = "racer-agent"
+version = "0.1.0"
+description = """
+The racer app's backend agent (docs/notes/racer-app-2026-11-11.md). Runs on the Jetson HOST
+under systemd, never inside the stack container. It starts and stops the car-stack and
+car-camera containers and the driving launches with a fixed whitelist of docker commands,
+serves the browser UI, runs the pre-drive checks and keeps the disk from filling up. It never
+publishes to a ROS topic: the command path is untouched (CLAUDE.md invariant 1).
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi==0.136.1",
+    "uvicorn==0.38.0",
+    "websockets==15.0.1",
+    "pyyaml==6.0.3",
+]
+
+[project.scripts]
+racer-agent = "racer_agent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/racer_agent"]
+
+[dependency-groups]
+dev = [
+    "pytest==8.4.2",
+    "pytest-cov==7.0.0",
+    "httpx==0.28.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

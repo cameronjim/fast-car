@@ -1858,6 +1858,94 @@ Foxglove's "Publish pose estimate" on `/initialpose` (map frame).
 Driving the raceline tracker on this pose (tracker_node `pose_frame:=map`) needs a raceline
 written in this map's frame, which is a later step.
 
+## Using the app (racer-agent web UI; UNVERIFIED on the car, written 2026-11-11)
+
+The app replaces the ssh-and-docker-commands part of a session: it starts the stack, the cameras
+and the driving launches with the same commands this runbook uses, shows the pre-drive checks, and
+has a STOP ALL button. Design, thresholds and what is untested: `docs/notes/racer-app-2026-11-11.md`.
+**It does not replace anything in the safety section above.** Wheels off the ground for the first
+runs, a second person on the RC kill knob, and the knob armed and tested before power reaches the
+motor, every session. The app never publishes to the command path and its STOP is a software stop:
+Wi-Fi can drop.
+
+### A1. Install (once, then again after every `git pull`)
+
+```sh
+ssh racer@racer-car
+cd ~/car && tools/racer_app/deploy/install.sh
+```
+
+It prints an access token once: save it. Re-running is safe and keeps the token and your autostart
+choice. It needs the docker group, `python3` 3.10 or newer, and installs `uv` (pinned) if missing.
+Check: `systemctl status racer-agent` (active), `curl -s localhost:8080/health`.
+
+### A2. Open it
+
+From the Mac: `python3 tools/racer_app/find_car.py` (mDNS, then a scan of the local network). Or
+`http://racer-car.local:8080/` on a phone or laptop on the same Wi-Fi. Paste the token once; the
+browser remembers it. The page is only reachable from private addresses.
+
+**The desktop app (Racer).** Same UI, as an app that finds the car by itself. Get the installer
+from the "Racer desktop" workflow run on GitHub (Actions, the run for the branch, Artifacts) and
+unzip it. The builds are unsigned, so the first launch shows a warning:
+
+- **Mac:** open the `.dmg`, drag Racer to Applications. First time, right-click Racer, choose
+  Open, then Open again in the dialog (a double click only offers Move to Bin). If macOS says the
+  app is damaged, run `xattr -dr com.apple.quarantine /Applications/Racer.app` once.
+- **Windows:** run the `.msi` (or the `-setup.exe`). SmartScreen says "Windows protected your
+  PC": click More info, then Run anyway.
+- **Linux:** `chmod +x Racer*.AppImage && ./Racer*.AppImage`, or install the `.deb`.
+
+On launch it looks for the car on the Wi-Fi (mDNS first, then it scans the local subnet) and
+connects when it finds one; with several cars it lists them. It remembers the last car, goes
+looking again by itself when the Jetson reboots, and follows it if it comes back on a different
+address. If it finds nothing, type the address (for example `192.168.1.50`) in the box. The first
+time it asks for the access token that install printed: paste it once and it is kept in the Mac
+Keychain, Windows Credential Manager or the Linux Secret Service. Like the web page it never drives
+the car, STOP ALL is still a software stop, and the knob is still the stop that works.
+
+### A3. A session
+
+1. **Power the car.** With autostart on (the default after install) the stack comes up by itself
+   about a minute after the Jetson boots: LiDAR and VESC, no cameras, recorder running. In the
+   UI the Stack card says running and the checks list fills in. If it does not, look at
+   `journalctl -u racer-stack` (a full disk makes it refuse, on purpose).
+2. **Read the checks.** Required checks must be green to drive: stack, recorder, battery (3S, 3.70
+   V per cell or better), disk (5 GiB is the hard floor, 15 is green), safety node, LiDAR `/scan`,
+   VESC telemetry and fault, heartbeat service, temperatures. Wi-Fi, cameras, containers and
+   uptime are shown but never gate. Amber or red on a required check means the Driving card asks
+   for an override and a typed reason, which goes in the action log. A missing stack, a missing
+   recorder or a disk under 5 GiB cannot be overridden.
+3. **Cameras (optional).** Start cameras. They add roughly 6 MB/s each to the bag, need 10 GiB free
+   to start, and the disk guard stops them below 7 GiB. The thumbnails refresh about once a second.
+4. **Drive.** Pick gap follow (profile `lane-2026-10-25`), wall follow, tracker (needs the stack
+   started with localisation, a live pose, and a raceline in that map's frame) or park. The
+   car does not move until you arm it with the knob and the launch starts publishing; the launch
+   is the same process as in "Gap follow from the launch file" above, including the reverse escape.
+   Park has Park, Three-point turn and Abort buttons once its launch is running.
+5. **Stop.** STOP ALL (bottom of the screen) sends SIGINT to the driving launch, the same as Ctrl-C
+   in the second terminal; `safety_node` then brakes on the `/drive_raw` silence and the stack keeps
+   recording. If anything does something you did not expect, the knob is the first thing to reach
+   for, not the button.
+6. **Mapping.** Stack card: tick mapping, Start stack (or Restart), drive the lap slowly with the
+   teleop, type a map name and Save map (writes `data/maps/NAME.yaml`, refuses to overwrite). Then
+   restart with localisation and choose that map.
+7. **Finish.** Stop stack closes the bag cleanly. Reboot and Shut down stop everything cleanly
+   first. The Bags card shows folder sizes and can delete old ones (not the one being recorded).
+
+### A4. What to check on the first run on the bench
+
+- `systemctl status racer-agent racer-stack` and `journalctl -u racer-agent` after a reboot: the
+  stack container is up and `docker top car-stack -eo args` shows `ros2 bag record`.
+- The dashboard shows speed from `/odom/wheel`, battery volts from the VESC, the LiDAR scan with
+  the car outline from `vehicle_params`, and the front of the car at the top. Put a hand in front of
+  the LiDAR: the dots must appear in front of the car outline, not behind it.
+- Start gap follow with the motor unpowered or wheels off the ground, press STOP ALL, and confirm
+  in the action log and `/safety/events` that the launch ended and `safety_node` braked.
+- Pull the Wi-Fi mid-run (bench, wheels off): the launch keeps running, which is exactly why the
+  knob matters. Write down what happened in `docs/notes/build-log.md`.
+- Power-cycle the Jetson with the stack running: the next agent start logs an unclean shutdown.
+
 ## New track session (UNVERIFIED on the car, written 2026-11-11; proven only in the sim)
 
 The owner rebuilds the track every session, so nothing here is tuned to one layout: a mapping

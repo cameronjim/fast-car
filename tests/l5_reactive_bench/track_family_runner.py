@@ -66,6 +66,7 @@ TRACKS = (
 )
 DRIVERS = ("gap_follow", "tracker", "tracker_loc", "tracker_policy", "pnp")
 CARS = ("gym", "params")
+PNP_SCAN_BEAMS = 720
 LOCALISATION_LAUNCH = REPO_ROOT / "ros_ws" / "src" / "racer_bringup" / "launch"
 # The sensor errors the localisation canaries use (sim_autopilot.launch.py SIM_SENSOR_NOISE).
 LANE_TRACKER_DEFAULTS = {
@@ -227,6 +228,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         pnp_launch = base._load_module("pnp_launch", LOCALISATION_LAUNCH / "pnp.launch.py")
         bridge.update({k: car_like[k] for k in ("publish_wheel_odom", "wheel_odom_rate_hz")})
         bridge["scan_noise_std_m"] = helpers.SIM_SENSOR_NOISE["scan_noise_std_m"]
+        # The C1 as it runs on the car: 720 beams over the full circle.
+        bridge["lidar_num_beams"] = PNP_SCAN_BEAMS
+        bridge["lidar_fov_rad"] = 2.0 * math.pi * (PNP_SCAN_BEAMS - 1) / PNP_SCAN_BEAMS
 
     nodes: dict[str, dict] = {
         "bridge_node": bridge,

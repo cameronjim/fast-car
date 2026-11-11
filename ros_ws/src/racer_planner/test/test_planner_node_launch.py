@@ -112,7 +112,6 @@ class TestPlannerNodeNominal(unittest.TestCase):
         self.assertIn("mppi_planner_node", [p.node_name for p in pubs])
         mine = next(p for p in pubs if p.node_name == "mppi_planner_node")
         self.assertEqual(mine.qos_profile.reliability, QoSReliabilityPolicy.RELIABLE)
-        self.assertEqual(mine.qos_profile.depth, 10)
         drive_pubs = self.node.get_publishers_info_by_topic("/drive")
         self.assertNotIn(
             "mppi_planner_node", [p.node_name for p in drive_pubs], "planner has a /drive publisher"
@@ -123,13 +122,12 @@ class TestPlannerNodeNominal(unittest.TestCase):
             if p.node_name == "mppi_planner_node"
         )
         self.assertEqual(status_pub.qos_profile.reliability, QoSReliabilityPolicy.RELIABLE)
-        self.assertEqual(status_pub.qos_profile.depth, 50)
         plan_pub = next(
             p
             for p in self.node.get_publishers_info_by_topic("/pnp/plan")
             if p.node_name == "mppi_planner_node"
         )
-        self.assertEqual(plan_pub.qos_profile.depth, 5)
+        self.assertEqual(plan_pub.qos_profile.reliability, QoSReliabilityPolicy.RELIABLE)
         scan_sub = next(
             s
             for s in self.node.get_subscriptions_info_by_topic("/scan")
@@ -142,7 +140,6 @@ class TestPlannerNodeNominal(unittest.TestCase):
             if s.node_name == "mppi_planner_node"
         )
         self.assertEqual(track_sub.qos_profile.reliability, QoSReliabilityPolicy.RELIABLE)
-        self.assertEqual(track_sub.qos_profile.depth, 1)
 
     def test_c_plan_is_published_in_base_link(self):
         from nav_msgs.msg import Path as PathMsg

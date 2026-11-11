@@ -36,6 +36,11 @@ run "evaluation/analysis" line90
 # Normal packages: reported, not gated.
 run "training/racer_train" report
 run "tools" report
+# The racer app's backend agent (tools/racer_app/agent): the docker command whitelist, the
+# pre-drive checks, the disk guard and the HTTP API, all tested against a fake docker/systemd/ROS
+# layer. Gated at 90 percent because it decides what the app is allowed to make the car's
+# computer do. The web UI half (vitest) runs in the racer-app job of ci.yml.
+run "tools/racer_app/agent" line90
 run "sim/racer_gym" report
 
 # L4/L5/L6 test harness scaffolds (roadmap task 0.9, claude-docs/12-testing.md).

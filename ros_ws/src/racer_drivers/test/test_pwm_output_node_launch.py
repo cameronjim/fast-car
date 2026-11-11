@@ -30,6 +30,7 @@ import os
 # uses 77 and 79, racer_safety 78, racer_bringup 82.
 os.environ.setdefault("ROS_DOMAIN_ID", "81")
 
+import itertools
 import json
 import pathlib
 import shutil
@@ -72,6 +73,21 @@ _STEERING_LEFT_US = (
     _STEERING_MAX_US if _PARAMS["steering"]["pwm_left_bound"] == "pwm_max_us" else _STEERING_MIN_US
 )
 _STEERING_RIGHT_US = _STEERING_MIN_US if _STEERING_LEFT_US == _STEERING_MAX_US else _STEERING_MAX_US
+_STEERING_TABLE = sorted(
+    (point["pwm_us"], point["angle_rad"]) for point in _PARAMS["steering"]["pwm_to_angle_table"]
+)
+
+
+def _table_pulse_us(angle_rad: float) -> float:
+    """The pulse the committed steering.pwm_to_angle_table gives for an angle: the inverse of its
+    piecewise-linear pulse -> angle reading, written out here independently of the node."""
+    for (p0, a0), (p1, a1) in itertools.pairwise(_STEERING_TABLE):
+        low, high = sorted((a0, a1))
+        if low <= angle_rad <= high:
+            return p0 + (p1 - p0) * (angle_rad - a0) / (a1 - a0)
+    raise ValueError(f"angle {angle_rad} is outside the committed steering table")
+
+
 _THROTTLE_NEUTRAL_US = _PARAMS["actuation"]["throttle_pwm_neutral_us"]
 # The PWM frame period is a vehicle_params field too now (GitHub issue #66), so it is derived
 # here like every other physical constant in this file rather than typed in as 20_000_000.
@@ -243,13 +259,17 @@ class TestPwmOutputNode(unittest.TestCase):
         publisher = self.node.create_publisher(AckermannDriveStamped, "/drive", _reliable_qos())
         self._spin_for(0.3)
 
-        # Full left, half full-scale speed. Expected pulses are computed from
-        # config/vehicle_params.yaml, mirroring the node's own linear map.
+        # The planning limit to the left, half full-scale speed. Expected pulses are computed from
+        # config/vehicle_params.yaml: the steering table's inverse for the angle (since schema
+        # 0.14.0 the planning limit is the weaker right-hand lock, so this is short of the left
+        # stop), and the throttle map's linear span.
         steering = _STEERING_MAX_ANGLE_RAD
         speed = _SPEED_FULL_SCALE_MPS / 2.0
         self._publish_steadily(publisher, _make_drive(steering, speed), seconds=1.0)
 
-        expected_steering_us = _STEERING_LEFT_US  # left end per steering.pwm_left_bound
+        expected_steering_us = _table_pulse_us(steering)
+        # On the left (short-pulse) side, short of the stop the table puts at the left bound.
+        self.assertNotEqual(expected_steering_us, _STEERING_LEFT_US)
         # Half full scale: neutral + deadband, then half of what is left of the forward range.
         expected_throttle_us = (
             _THROTTLE_NEUTRAL_US

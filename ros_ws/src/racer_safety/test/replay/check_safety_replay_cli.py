@@ -217,9 +217,18 @@ def main():
                 0.0, drive=drop, gap_from=lambda t: 3.0 if t < 1.05 else 0.40 + bumper, t_end=1.5
             )
         )
-        with_bound = first_trip(records(run(cli, ["--stream", str(stream)])))
+        # This scenario's numbers (0.4 s of TTC on the request, about 0.2 s on the bound) are
+        # written for a 0.34 s brake threshold, so it pins that rule instead of the committed one
+        # (0.60 s since schema 0.14.0).
+        rule = ["--set", "ttc_brake_s=0.34", "--set", "ttc_warning_s=0.45"]
+        with_bound = first_trip(records(run(cli, ["--stream", str(stream), *rule])))
         without = first_trip(
-            records(run(cli, ["--stream", str(stream), "--set", "speed_bound_deceleration_mps2=0"]))
+            records(
+                run(
+                    cli,
+                    ["--stream", str(stream), *rule, "--set", "speed_bound_deceleration_mps2=0"],
+                )
+            )
         )
         check(with_bound is not None, "the speed bound must trip after the request drop")
         if with_bound:

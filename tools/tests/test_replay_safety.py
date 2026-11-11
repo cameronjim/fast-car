@@ -10,6 +10,7 @@ tree, or PATH); the CLI's own ctest covers it in CI.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
@@ -28,7 +29,7 @@ from follower_replay.bag import (
     ScanRecord,
     read_bag,
 )
-from safety_replay import analysis, motion, stream
+from safety_replay import analysis, calibration, motion, stream
 
 MOUNT = motion.Mount(0.285, 0.0, math.pi)
 BODY = motion.Body(0.3302 + 0.13, 0.12, 0.155)
@@ -348,11 +349,17 @@ def test_find_cli(tmp_path, monkeypatch):
 
 FAKE_CLI = f"""#!{sys.executable}
 import json, sys
+import os
 args = sys.argv[1:]
+if os.environ.get("FAKE_CLI_LOG") and "--describe" not in args:
+    with open(os.environ["FAKE_CLI_LOG"], "a") as log:
+        stream = args[args.index("--stream") + 1]
+        first_d = next(l for l in open(stream) if l.startswith("D"))
+        log.write(json.dumps({{"args": args, "first_d": first_d.split()}}) + "\\n")
 if "--describe" in args:
     print(json.dumps({{"lidar_mount_x_m": 0.285, "lidar_mount_y_m": 0.0, "laser_yaw_rad": 3.141593,
         "wheelbase_m": 0.3302, "front_overhang_m": 0.13, "rear_overhang_m": 0.12, "width_m": 0.31,
-        "ttc_brake_s": 0.34, "min_forward_clearance_m": 0.05}}))
+        "ttc_brake_s": 0.34, "min_forward_clearance_m": 0.05, "max_steering_rad": 0.449}}))
     sys.exit(0)
 if "bad=1" in args:
     print("nope", file=sys.stderr)
@@ -515,13 +522,16 @@ def test_command_line_end_to_end_with_a_fake_cli(scene_bag, tmp_path, capsys):
     cli = tmp_path / "safety_replay_cli"
     cli.write_text(FAKE_CLI)
     cli.chmod(cli.stat().st_mode | stat.S_IEXEC)
-    status = replay_safety.main([str(scene_bag), "--cli", str(cli), "--table"])
+    status = replay_safety.main(
+        [str(scene_bag), "--cli", str(cli), "--table", "--recorded-with", "current"]
+    )
     out = capsys.readouterr().out
     assert status == 0, out
     assert "before-rule replay reproduces 1 of them" in out
     assert "| 1.55 | ttc |" in out
-    assert replay_safety.main([str(scene_bag), "--cli", str(cli), "--set", "bad=1"]) == 2
-    assert replay_safety.main([str(scene_bag), "--cli", str(tmp_path / "missing")]) == 2
+    base = [str(scene_bag), "--recorded-with", "current"]
+    assert replay_safety.main([*base, "--cli", str(cli), "--set", "bad=1"]) == 2
+    assert replay_safety.main([*base, "--cli", str(tmp_path / "missing")]) == 2
 
 
 def _real_cli() -> Path | None:
@@ -544,3 +554,218 @@ def test_real_cli_brakes_earlier_with_the_body_rule(bag, tmp_path):
     assert described["distance_from_body"] == 1
     assert json.dumps(described)
     assert os.path.basename(str(cli)) == stream.CLI_NAME
+
+
+# -- calibration: old-unit bags in the committed units ---------------------------------------
+
+OLD = calibration.RECORDED_0_13_0
+# The committed map's numbers, typed in on purpose (the conversion test is a golden of the
+# 2026-11-10 measurements): left stop 1094 us = 0.504 rad, neutral 1500 us, right stop 1875 us
+# = 0.449 rad.
+NEW = calibration.Current(
+    pwm_left_us=1094.0,
+    pwm_neutral_us=1500.0,
+    pwm_right_us=1875.0,
+    table=((1094.0, 0.504), (1500.0, 0.0), (1875.0, -0.449)),
+    planning_limit_rad=0.449,
+)
+
+
+def test_a_recorded_full_lock_becomes_the_measured_real_angle_of_that_stop():
+    # The old linear map sent +/- 0.4189 to the two stops, which the table reads as 0.504 / 0.449.
+    assert calibration.steering_rad(OLD, NEW, 0.4189) == pytest.approx(0.504)
+    assert calibration.steering_rad(OLD, NEW, -0.4189) == pytest.approx(-0.449)
+    assert calibration.steering_rad(OLD, NEW, 0.0) == 0.0
+    # Halfway to a stop is halfway in angle, on each side (a straight line from neutral).
+    assert calibration.steering_rad(OLD, NEW, 0.4189 / 2) == pytest.approx(0.252)
+    assert calibration.steering_rad(OLD, NEW, -0.4189 / 2) == pytest.approx(-0.2245)
+    # Beyond the old limit the old map clamped at the stop; so does the conversion.
+    assert calibration.steering_rad(OLD, NEW, 1.0) == pytest.approx(0.504)
+    assert calibration.steering_rad(OLD, NEW, -1.0) == pytest.approx(-0.449)
+    assert math.isnan(calibration.steering_rad(OLD, NEW, math.nan))
+
+
+def test_old_pulse_and_table_angle_round_trip_the_published_numbers():
+    assert calibration.old_pulse_us(OLD, NEW, 0.4189) == pytest.approx(1094.0)
+    assert calibration.old_pulse_us(OLD, NEW, -0.4189) == pytest.approx(1875.0)
+    assert calibration.old_pulse_us(OLD, NEW, math.nan) == 1500.0
+    assert calibration.table_angle_rad(NEW, 900.0) == 0.504  # held past the first point
+    assert calibration.table_angle_rad(NEW, 2000.0) == -0.449  # and the last
+    assert calibration.table_angle_rad(NEW, 1500.0) == 0.0
+    assert NEW.steer_limit_rad == 0.504
+
+
+def test_speeds_are_divided_by_the_push_test_ratio():
+    assert OLD.speed_ratio == 1.401
+    assert calibration.speed_mps(OLD, 1.401) == pytest.approx(1.0)
+    assert calibration.speed_mps(OLD, -0.7005) == pytest.approx(-0.5)
+
+
+def test_convert_bag_converts_three_topics_and_nothing_else(bag):
+    converted = calibration.convert_bag(bag, OLD, NEW)
+    assert converted.drive_raw[10].speed_mps == pytest.approx(SPEED / 1.401)
+    assert converted.drive[0].speed_mps == pytest.approx(SPEED / 1.401)
+    assert converted.odom[10].speed_mps == pytest.approx(bag.odom[10].speed_mps / 1.401)
+    assert converted.odom[10].log_time_s == bag.odom[10].log_time_s
+    assert converted.scans is bag.scans and converted.events is bag.events
+    assert bag.drive_raw[10].speed_mps == SPEED  # the input is not modified
+    steered = BagData(drive_raw=[DriveRecord(1.0, 0.4189, 0.8, 1.0)])
+    assert calibration.convert_bag(steered, OLD, NEW).drive_raw[0].steering_rad == (
+        pytest.approx(0.504)
+    )
+    kept = calibration.convert_bag(steered, OLD, NEW, steering=False)
+    assert kept.drive_raw[0].steering_rad == 0.4189
+    assert kept.drive_raw[0].speed_mps == pytest.approx(0.8 / 1.401)
+
+
+def test_the_committed_file_loads_as_a_calibration():
+    current = calibration.load_current()
+    assert current.pwm_left_us < current.pwm_neutral_us < current.pwm_right_us
+    assert [round(a, 3) for _, a in current.table] == [0.504, 0.0, -0.449]
+    assert current.steer_limit_rad >= current.planning_limit_rad
+    # The committed table agrees with the one this test types in.
+    assert current.table == NEW.table and current.planning_limit_rad == NEW.planning_limit_rad
+
+
+def test_a_null_table_cannot_convert(tmp_path):
+    params = tmp_path / "vehicle_params.yaml"
+    params.write_text(
+        "steering: {pwm_to_angle_table: null, pwm_left_bound: pwm_min_us, pwm_min_us: 1094.0,"
+        " pwm_max_us: 1875.0, pwm_neutral_us: 1500.0, max_angle_rad: 0.4189}\n"
+    )
+    with pytest.raises(ValueError, match="pwm_to_angle_table is null"):
+        calibration.load_current(params)
+
+
+def test_prepare_writes_a_raw_and_a_converted_stream(bag, tmp_path):
+    prep = replay_safety.prepare("scene", tmp_path, OLD, NEW, bag=bag)
+    raw = next(l for l in prep.raw_stream.read_text().splitlines() if l.startswith("D")).split()
+    new = next(l for l in prep.converted_stream.read_text().splitlines() if l.startswith("D"))
+    assert float(raw[3]) == pytest.approx(SPEED)
+    assert float(new.split()[3]) == pytest.approx(SPEED / 1.401, rel=1e-6)
+    assert prep.lock_rad == 0.504
+    same = replay_safety.prepare("scene", tmp_path, None, None, bag=bag)
+    assert same.converted is same.raw and same.lock_rad is None
+
+
+def test_after_rule_runs_on_converted_units_and_the_before_rule_on_raw(
+    scene_bag, tmp_path, monkeypatch, capsys
+):
+    cli = tmp_path / "safety_replay_cli"
+    cli.write_text(FAKE_CLI)
+    cli.chmod(cli.stat().st_mode | stat.S_IEXEC)
+    log = tmp_path / "cli.log"
+    monkeypatch.setenv("FAKE_CLI_LOG", str(log))
+    status = replay_safety.main([str(scene_bag), "--cli", str(cli), "--recorded-with", "0.13.0"])
+    out = capsys.readouterr().out
+    assert status == 0, out
+    assert "bags converted from 0.13.0 (speed / 1.401" in out
+    before, after = (json.loads(line) for line in log.read_text().splitlines())
+    assert "--cycles" not in before["args"] and "--cycles" in after["args"]
+    assert float(before["first_d"][3]) == pytest.approx(SPEED)
+    assert float(after["first_d"][3]) == pytest.approx(SPEED / 1.401, rel=1e-6)
+    # The converted left lock is wider than the planning limit, so the gate is given it.
+    assert "max_steering_rad=0.504" in after["args"]
+    assert "max_steering_rad=0.504" not in before["args"]
+
+
+def test_current_units_are_replayed_as_recorded(scene_bag, tmp_path, monkeypatch, capsys):
+    cli = tmp_path / "safety_replay_cli"
+    cli.write_text(FAKE_CLI)
+    cli.chmod(cli.stat().st_mode | stat.S_IEXEC)
+    log = tmp_path / "cli.log"
+    monkeypatch.setenv("FAKE_CLI_LOG", str(log))
+    assert (
+        replay_safety.main([str(scene_bag), "--cli", str(cli), "--recorded-with", "current"]) == 0
+    )
+    capsys.readouterr()
+    before, after = (json.loads(line) for line in log.read_text().splitlines())
+    assert float(before["first_d"][3]) == pytest.approx(float(after["first_d"][3]))
+    assert not any(a.startswith("max_steering_rad") for a in after["args"])
+
+
+def test_the_recorded_with_flag_is_required(scene_bag):
+    with pytest.raises(SystemExit) as raised:
+        replay_safety.main([str(scene_bag)])
+    assert raised.value.code == 2
+
+
+def test_sweep_prints_one_row_per_value(scene_bag, tmp_path, capsys):
+    cli = tmp_path / "safety_replay_cli"
+    cli.write_text(FAKE_CLI)
+    cli.chmod(cli.stat().st_mode | stat.S_IEXEC)
+    status = replay_safety.main(
+        [
+            str(scene_bag),
+            "--cli",
+            str(cli),
+            "--recorded-with",
+            "current",
+            "--sweep",
+            "ttc_brake_s=0.3,0.4",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert status == 0, out
+    rows = [line for line in out.splitlines() if line.startswith("| 0.")]
+    assert [row.split("|")[1].strip() for row in rows] == ["0.3", "0.4"]
+    assert all(row.split("|")[2].strip() == "1" for row in rows)  # the one recorded brake
+
+
+def test_parse_sweep_and_before_rule_choices():
+    assert replay_safety.parse_sweep("ttc_brake_s=0.3, 0.4") == ("ttc_brake_s", [0.3, 0.4])
+    for bad in ("x", "x=", "=1", "x=a,b"):
+        with pytest.raises(stream.ReplayError):
+            replay_safety.parse_sweep(bad)
+    assert replay_safety.BEFORE_RULES["0.13.0"]["ttc_brake_s"] == 0.34
+    assert replay_safety.BEFORE_RULES["october"] is stream.LEGACY_RULE
+
+
+# -- the car's own static returns -------------------------------------------------------------
+
+
+def with_self_post(scan: ScanRecord, range_m: float = 0.185) -> ScanRecord:
+    """The scan with one beam straight back at a post 0.10 m ahead of the rear axle (0.185 m
+    behind the head): a part of the car, in every scan, as in the 2026-11 bags."""
+    ranges = list(scan.ranges)
+    ranges[N_RAYS // 2] = range_m  # laser bearing 0, vehicle bearing pi, the beam to the rear
+    return dataclasses.replace(scan, ranges=tuple(ranges))
+
+
+@pytest.fixture(scope="module")
+def posted_bag(bag) -> BagData:
+    return dataclasses.replace(bag, scans=[with_self_post(s) for s in bag.scans])
+
+
+def test_a_post_in_every_scan_is_found_as_the_cars_own_part(posted_bag, bag):
+    mask = motion.static_self_returns(posted_bag.scans, MOUNT, BODY)
+    assert mask and all(abs(x * motion.SELF_CELL_M - 0.10) < 0.03 for x, _ in mask)
+    assert motion.static_self_returns(bag.scans, MOUNT, BODY) == frozenset()  # a clean car
+    assert motion.static_self_returns([], MOUNT, BODY) == frozenset()
+
+
+def test_a_return_in_a_few_scans_is_not_the_car(bag):
+    few = [with_self_post(s) for s in bag.scans[:3]]
+    mixed = few + list(bag.scans[3:])
+    assert motion.static_self_returns(mixed, MOUNT, BODY) == frozenset()
+
+
+def test_without_self_drops_the_cells_and_keeps_the_rest():
+    mask = frozenset({(5, 0)})
+    points = np.array([[0.10, 0.0], [0.11, 0.01], [0.30, 0.0], [0.10, 0.2]])
+    kept = motion.without_self(points, mask)
+    assert kept.tolist() == [[0.30, 0.0], [0.10, 0.2]]
+    assert motion.without_self(points, None) is points
+    assert motion.without_self(points, frozenset()) is points
+    assert len(motion.without_self(np.empty((0, 2)), mask)) == 0
+
+
+def test_the_cars_own_post_does_not_read_as_a_contact_or_anchor_the_matching(posted_bag, bag):
+    mask = motion.static_self_returns(posted_bag.scans, MOUNT, BODY)
+    clean = analysis.analyse(bag, [trip(T_BRAKE, 0.3)], [], MOUNT, BODY).rows[0]
+    blind = analysis.analyse(posted_bag, [trip(T_BRAKE, 0.3)], [], MOUNT, BODY).rows[0]
+    aware = analysis.analyse(posted_bag, [trip(T_BRAKE, 0.3)], [], MOUNT, BODY, ignore=mask).rows[0]
+    assert blind.end_clearance_m == 0.0 and blind.contact  # the post, inside the footprint
+    assert aware.end_clearance_m == pytest.approx(clean.end_clearance_m, abs=0.003)
+    assert aware.travel_m == pytest.approx(clean.travel_m, abs=0.01)
+    assert not aware.contact

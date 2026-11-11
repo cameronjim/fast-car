@@ -771,34 +771,180 @@ MappingConfig committed_steering_config() {
   config.steering.min_us = 1094.0;
   config.steering.neutral_us = 1500.0;
   config.steering.max_us = 1875.0;
-  config.steering_min_angle_rad = -0.4189;
-  config.steering_max_angle_rad = 0.4189;
+  // PER-SIDE CALIBRATION, MEASURED 2026-11-10 (schema 0.14.0): effective angle at each stop by
+  // LiDAR scan matching, left 0.504 rad at 1094 us, right 0.449 rad at 1875 us. Planning is
+  // symmetric at the weaker (right) value, so the left stop itself is not commanded.
+  config.steering_min_angle_rad = -0.449;
+  config.steering_max_angle_rad = 0.449;
+  config.steering_table = {{1094.0, 0.504}, {1500.0, 0.0}, {1875.0, -0.449}};
   config.left_is_pwm_max = false;  // pwm_left_bound: "pwm_min_us" -- shorter pulse is LEFT
   return config;
 }
 
-TEST(SteeringAngleToPulse, CommittedCalibrationFullLeftIsPwmMinUs) {
-  const MappingConfig config = committed_steering_config();
-  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.4189), 1094.0, 1e-6);
-}
+// A command of +0.449 rad is 0.449 / 0.504 of the 406 us from neutral to the left stop.
+constexpr double kCommittedFullLeftCommandUs = 1500.0 - 406.0 * 0.449 / 0.504;  // 1138.30
 
 TEST(SteeringAngleToPulse, CommittedCalibrationFullRightIsPwmMaxUs) {
   const MappingConfig config = committed_steering_config();
-  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.4189), 1875.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.449), 1875.0, 1e-6);
+}
+
+TEST(SteeringAngleToPulse, CommittedCalibrationFullLeftCommandStopsShortOfTheLeftStop) {
+  const MappingConfig config = committed_steering_config();
+  // The planning limit is the weaker right-hand angle, so the left stop (0.504 rad, 1094 us) is
+  // not reached by any command; 0.449 rad on the left is 1138.3 us.
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.449), kCommittedFullLeftCommandUs,
+              1e-6);
+  EXPECT_GT(racer_drivers::steering_angle_to_pulse_us(config, 0.449), 1094.0 + 40.0);
 }
 
 TEST(SteeringAngleToPulse, CommittedCalibrationZeroIsNeutral) {
   const MappingConfig config = committed_steering_config();
   EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.0), 1500.0, 1e-6);
+  EXPECT_EQ(racer_drivers::steering_angle_to_pulse_us(config, 0.0), 1500.0);
+  EXPECT_EQ(racer_drivers::steering_angle_to_pulse_us(config, -0.0), 1500.0);
 }
 
-TEST(SteeringAngleToPulse, CommittedCalibrationOutOfRangeAnglesClampToTheEndpointsNeverBeyond) {
+TEST(SteeringAngleToPulse, CommittedCalibrationOutOfRangeAnglesClampToThePlanningLimit) {
   const MappingConfig config = committed_steering_config();
-  // Epsilon and far over both directions: clamps exactly at the endpoint, never past it.
-  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.4189 + kEps), 1094.0, 1e-6);
-  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 100.0), 1094.0, 1e-6);
-  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.4189 - kEps), 1875.0, 1e-6);
+  // Epsilon and far over both directions: clips exactly at the planning limit, never past it.
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.449 + kEps),
+              kCommittedFullLeftCommandUs, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 100.0), kCommittedFullLeftCommandUs,
+              1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.449 - kEps), 1875.0, 1e-6);
   EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -100.0), 1875.0, 1e-6);
+}
+
+TEST(SteeringAngleToPulse, CommittedCalibrationGoldenValuesInTheMiddleOfEachSide) {
+  const MappingConfig config = committed_steering_config();
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.2), 1500.0 - 406.0 * 0.2 / 0.504,
+              1e-6);  // 1338.89
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.2), 1500.0 + 375.0 * 0.2 / 0.449,
+              1e-6);  // 1667.04
+}
+
+TEST(SteeringTable, AnAngleGivesThatRealAngleOnBothSides) {
+  // The point of the table: pulse -> real angle (the table read forwards) of the pulse the
+  // mapping chose must be the commanded angle, left and right, where a symmetric linear map would
+  // be off by 12 percent on the left and 7 percent on the right (0.4189 vs 0.504 / 0.449).
+  const MappingConfig config = committed_steering_config();
+  const auto table_angle = [&config](double pulse_us) {
+    const auto& t = config.steering_table;
+    for (std::size_t i = 0; i + 1 < t.size(); ++i) {
+      if (pulse_us >= t[i].pwm_us && pulse_us <= t[i + 1].pwm_us) {
+        return t[i].angle_rad + (t[i + 1].angle_rad - t[i].angle_rad) * (pulse_us - t[i].pwm_us) /
+                                    (t[i + 1].pwm_us - t[i].pwm_us);
+      }
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+  };
+  for (double angle = -0.449; angle <= 0.449; angle += 0.001) {
+    const double pulse = racer_drivers::steering_angle_to_pulse_us(config, angle);
+    EXPECT_NEAR(table_angle(pulse), angle, 1e-9) << "angle=" << angle;
+  }
+}
+
+TEST(SteeringTable, PulseFallsMonotonicallyWithAngleToTheLeftAndRisesToTheRight) {
+  const MappingConfig config = committed_steering_config();
+  double previous = racer_drivers::steering_angle_to_pulse_us(config, -0.449);
+  for (double angle = -0.448; angle <= 0.449; angle += 0.001) {
+    const double pulse = racer_drivers::steering_angle_to_pulse_us(config, angle);
+    EXPECT_LT(pulse, previous) << "angle=" << angle;
+    previous = pulse;
+  }
+}
+
+TEST(SteeringTable, LeftIsPwmMaxMirrorsTheTable) {
+  // The same calibration with the servo mounted the other way round: pulse ascending, angle too.
+  MappingConfig config = committed_steering_config();
+  config.left_is_pwm_max = true;
+  config.steering_table = {{1094.0, -0.449}, {1500.0, 0.0}, {1875.0, 0.504}};
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.449), 1094.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.449),
+              1500.0 + 375.0 * 0.449 / 0.504, 1e-6);
+  EXPECT_EQ(racer_drivers::steering_angle_to_pulse_us(config, 0.0), 1500.0);
+  EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
+}
+
+TEST(SteeringTable, ANullTableKeepsTheStraightLineFromNeutralToEachStop) {
+  MappingConfig config = committed_steering_config();
+  config.steering_table.clear();
+  config.steering_min_angle_rad = -0.4189;
+  config.steering_max_angle_rad = 0.4189;
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.4189), 1094.0, 1e-6);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, -0.4189), 1875.0, 1e-6);
+}
+
+TEST(SteeringTable, NonFiniteInputIsNeutral) {
+  const MappingConfig config = committed_steering_config();
+  for (double angle : {kNaN, kInf, -kInf}) {
+    EXPECT_EQ(racer_drivers::steering_angle_to_pulse_us(config, angle), 1500.0);
+  }
+}
+
+TEST(SteeringTable, ACalibrationWiderThanThePlanningLimitIsClippedToTheLimit) {
+  // A table that reaches further than the limits (the committed one on the left) is fine: the
+  // limits clip the command first.
+  MappingConfig config = committed_steering_config();
+  config.steering_max_angle_rad = 0.3;
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.4),
+              racer_drivers::steering_angle_to_pulse_us(config, 0.3), 1e-9);
+}
+
+TEST(SteeringTable, TheTableIsPiecewiseLinearThroughAnInteriorPoint) {
+  MappingConfig config = committed_steering_config();
+  config.steering_table = {{1094.0, 0.504}, {1300.0, 0.2}, {1500.0, 0.0}, {1875.0, -0.449}};
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.2), 1300.0, 1e-9);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.1), 1400.0, 1e-9);
+  EXPECT_NEAR(racer_drivers::steering_angle_to_pulse_us(config, 0.35),
+              1300.0 - 206.0 * (0.35 - 0.2) / (0.504 - 0.2), 1e-9);
+  EXPECT_FALSE(racer_drivers::validate_config(config).has_value());
+}
+
+TEST(SteeringTable, TheCommittedTableValidates) {
+  EXPECT_FALSE(racer_drivers::validate_config(committed_steering_config()).has_value());
+}
+
+// Each way a table can be wrong is a refusal that names the table, not a repair.
+TEST(SteeringTable, RefusesEveryMalformedTable) {
+  const auto refusal = [](auto mutate) {
+    MappingConfig config = committed_steering_config();
+    mutate(config);
+    const auto bad = racer_drivers::validate_config(config);
+    return bad.value_or(std::string());
+  };
+  const auto names_the_table = [](const std::string& message) {
+    return message.find("pwm_to_angle_table") != std::string::npos;
+  };
+  EXPECT_TRUE(names_the_table(refusal([](MappingConfig& c) { c.steering_table.resize(1); })));
+  EXPECT_TRUE(
+      names_the_table(refusal([](MappingConfig& c) { c.steering_table[1].angle_rad = kNaN; })));
+  EXPECT_TRUE(
+      names_the_table(refusal([](MappingConfig& c) { c.steering_table[0].pwm_us = kInf; })));
+  EXPECT_TRUE(names_the_table(refusal([](MappingConfig& c) {
+    std::swap(c.steering_table[0], c.steering_table[2]);  // pulse descending
+  })));
+  EXPECT_TRUE(names_the_table(refusal([](MappingConfig& c) {
+    c.steering_table[0].angle_rad = -0.5;  // angle no longer falls with pulse
+  })));
+  EXPECT_TRUE(names_the_table(refusal([](MappingConfig& c) {
+    c.left_is_pwm_max = true;  // the committed table has left at the SHORT pulse
+  })));
+  EXPECT_TRUE(
+      names_the_table(refusal([](MappingConfig& c) { c.steering_table[0].pwm_us = 1000.0; })));
+  EXPECT_TRUE(
+      names_the_table(refusal([](MappingConfig& c) { c.steering_table[2].pwm_us = 1900.0; })));
+  EXPECT_TRUE(names_the_table(refusal([](MappingConfig& c) {
+    c.steering_table[1].pwm_us = 1490.0;  // angle 0 away from steering.pwm_neutral_us
+  })));
+  EXPECT_TRUE(names_the_table(refusal([](MappingConfig& c) {
+    c.steering_table = {{1094.0, 0.504}, {1300.0, 0.1}, {1875.0, -0.449}};  // no angle 0
+  })));
+  EXPECT_TRUE(names_the_table(
+      refusal([](MappingConfig& c) { c.steering_max_angle_rad = 0.6; })));  // past the left end
+  EXPECT_TRUE(names_the_table(
+      refusal([](MappingConfig& c) { c.steering_min_angle_rad = -0.6; })));  // past the right end
 }
 
 TEST(SteeringAngleToPulse, CommittedCalibrationNeverLeaves1094To1875ForAnyAngle) {

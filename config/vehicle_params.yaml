@@ -111,6 +111,28 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.13.0 -> 0.14.0 on 2026-11-10: the first calibration from real
+# measurements (docs/notes/calibration-2026-11-10.md). No field added or removed (the
+# steering.pwm_to_angle_table key was already in the schema, null), but eight values change and
+# the table is filled in. Rule 5 bumps on any change; this is a minor bump because the meaning of
+# every speed and steering angle in a recorded bag changes (tools/safety_replay/calibration.py
+# converts old bags). In short:
+#   * chassis.front_overhang_m 0.13 -> 0.11 and rear_overhang_m 0.12 -> 0.14, MEASURED by tape.
+#   * tires.nominal_radius_m 0.1095 -> 0.055, MEASURED: the committed number was the tyre
+#     DIAMETER (0.11 m) entered as a radius.
+#   * drivetrain.gear_ratio 11.82 -> 8.32, DERIVED from the push test (3.00 m taped, /odom/wheel
+#     logged 4.139 and 4.266 m, a logged/true ratio of 1.401), tooth counts NOT verified.
+#   * actuation.throttle_full_scale_mps 2.91 -> 2.08, DERIVED from those two and the VESC's
+#     6000 ERPM cap. Every speed request is now the true wheel speed on a straight; the same
+#     request made the car go 1.40 times slower than the software believed before.
+#   * steering.pwm_to_angle_table filled in (left stop 0.504 rad, right stop 0.449 rad, MEASURED
+#     by LiDAR scan matching at full lock) and steering.min_angle_rad / max_angle_rad
+#     -0.4189 / 0.4189 -> -0.449 / 0.449: the old numbers were the gym's s_max, never measured.
+#   * limits.ttc_brake_s, ttc_warning_s, min_forward_clearance_m re-tuned on all the floor bags
+#     in the corrected units (see the limits section).
+# Consumers of every field above are unchanged in code except racer_drivers/pwm_output_node,
+# which now maps a steering angle to a pulse through the table.
+#
 # schema_version bumped 0.12.0 -> 0.13.0 on 2026-11-02: two new REQUIRED fields,
 # actuation.stop_latency_s and actuation.stop_deceleration_mps2 (DERIVED, see the actuation
 # section), and the obstacle gate's distances are now measured from the swept BODY instead of the
@@ -300,7 +322,7 @@ chassis:
   # the rear corridor's clearance floor.
   # Since schema 0.13.0 the reverse gate measures its distance from this line's leading point,
   # so the rear brake point moves one for one with this value.
-  rear_overhang_m: 0.12            # PROVISIONAL (placeholder, NOT measured) -- see above
+  rear_overhang_m: 0.14            # MEASURED 2026-11-10 by tape, about 14 cm (owner) -- see above
   # Front axle centre to the front bumper line, along +x (added 2026-10-06 night, schema
   # 0.11.0). The rear axle to front bumper distance is wheelbase_m + front_overhang_m:
   # racer_safety's forward arc corridor takes its outer boundary from the outer front corner's
@@ -313,7 +335,7 @@ chassis:
   # distance is the distance from the front bumper line (or the leading corner on an arc), so
   # an error here moves the brake point one for one. MEASURE IT BEFORE THE NEXT FLOOR TEST
   # (docs/notes/first-boot-runbook.md, "Safety floor test, body-distance gate").
-  front_overhang_m: 0.13           # PROVISIONAL (placeholder, NOT measured) -- see above
+  front_overhang_m: 0.11           # MEASURED 2026-11-10 by tape, 10 to 11 cm, upper end taken (owner) -- see above
 
 tires:
   surface_friction_coefficient: 1.0489               # gym: mu
@@ -321,12 +343,12 @@ tires:
   linear_cornering_stiffness_rear_n_per_rad: 5.4562   # gym: C_Sr (placeholder for a full Pacejka fit)
   pacejka_front: null               # needs Phase 3 sysid (constant-radius sweeps, see 07-sim-and-sysid.md)
   pacejka_rear: null                # needs Phase 3 sysid
-  nominal_radius_m: 0.1095          # PROVISIONAL, ASSUMED (not measured): 4.31 in tires per
-                                     # Traxxas published Slash 4x4 VXL specs, source: vendor-
-                                     # supplied Hobbywing G3 spec table, 2026-09-27. This field's
-                                     # description calls for a MEASURED, drift-tracked value
-                                     # (tires wear) -- this is not that yet; replace with a Phase 1
-                                     # wheel measurement per sysid/drift/ before treating it as fitted.
+  nominal_radius_m: 0.055           # MEASURED 2026-11-10 (owner, tape): tyre diameter 11 cm, so radius
+                                     # 0.055 m. The committed 0.1095 was the 4.31 in Traxxas Slash
+                                     # figure, which is a diameter, entered as a radius. This
+                                     # field's description calls for a drift-tracked value (tyres
+                                     # wear): re-measure it per sysid/drift/. Centimetre-level
+                                     # tape measurement, so about +/- 1 percent.
   compound_id: "unknown-pending-phase3-tire-spec"
   surface_id: "unknown-pending-venue-survey"
   kinematic_dynamic_switch_velocity_mps: 7.319        # gym: v_switch
@@ -334,11 +356,22 @@ tires:
 drivetrain:
   # Hobbywing Xerun 3652SD-4500KV-G3 (HW30401064). Source: vendor-supplied Hobbywing G3 spec
   # table, 2026-09-27. 4 poles -> 2 pole pairs (poles / 2).
-  gear_ratio: 11.82                 # PROVISIONAL, ASSUMED (not measured): stock Traxxas Slash 4x4
-                                     # overall drive ratio per Traxxas published VXL specs, source:
-                                     # vendor-supplied Hobbywing G3 spec table, 2026-09-27. Not
-                                     # confirmed against this car's actual spur/pinion count; needs
-                                     # Phase 1 drivetrain assembly measurement to un-provisional.
+  gear_ratio: 8.32                  # DERIVED 2026-11-10 from the owner's push test, tooth counts NOT
+                                     # verified. The car was pushed by hand along a taped 3.00 m
+                                     # twice with the throttle killed; /odom/wheel logged 4.139 and
+                                     # 4.266 m, a mean logged/true ratio of 1.401. /odom/wheel is
+                                     # erpm / pole_pairs / gear_ratio * 2 pi * radius, so the
+                                     # logged distance scales with radius / gear_ratio. The radius
+                                     # is measured (0.055 m, below), so the ratio follows:
+                                     # 11.82 * (0.055 / 0.1095) * 1.401 = 8.32. Likely a larger
+                                     # pinion fitted with the Xerun motor swap (the 11.82 was the
+                                     # stock Traxxas Slash 4x4 overall ratio, never confirmed
+                                     # against this car). An independent check on the 2026-11-10
+                                     # driven bags (LiDAR scan matching against /odom/wheel) gave
+                                     # a ratio of 1.35 to 1.43 on straights, so the push test is
+                                     # good to a few percent. Count the pinion and spur teeth (and
+                                     # the transmission ratio) and replace this with the counted
+                                     # value.
   pole_pairs: 2                     # source: vendor-supplied Hobbywing G3 spec table, 2026-09-27
                                      # (4 poles / 2 = 2 pole pairs, Hobbywing Xerun 3652SD-4500KV-G3)
   motor_kv_rad_per_s_per_v: 471.2389  # source: vendor-supplied Hobbywing G3 spec table, 2026-09-27.
@@ -369,15 +402,38 @@ drivetrain:
   # 2026-09-27 entry.
 
 steering:
-  min_angle_rad: -0.4189            # gym: s_min
-  max_angle_rad: 0.4189             # gym: s_max
+  # PLANNING LIMITS, symmetric, MEASURED 2026-11-10. The car's right lock is the weaker one:
+  # 0.449 rad effective (rear-axle turning radius 0.69 m), against 0.504 rad (0.60 m) to the left,
+  # so both limits are the right-hand value. Every planner and the safety node's arc corridor
+  # read max_angle_rad alone and assume the car can turn that hard to either side; the larger
+  # of the two would make them predict a left-turn radius the car can make and a right-turn
+  # radius it cannot. The left stop's 0.504 rad is in pwm_to_angle_table below, so the pulse map
+  # stays true on the left; planning cannot ask for the extra left lock (a deliberate loss of
+  # about 11 percent of left angle: 0.60 m -> 0.69 m turning radius to the left). The old
+  # -0.4189 / 0.4189 were the f1tenth_gym default (s_min / s_max), never measured.
+  min_angle_rad: -0.449             # MEASURED 2026-11-10: right lock, effective (see pwm_to_angle_table)
+  max_angle_rad: 0.449              # MEASURED 2026-11-10: the right-hand value, used both ways
   min_rate_rad_per_s: -3.2          # gym: sv_min
   max_rate_rad_per_s: 3.2           # gym: sv_max
   time_constant_s: null             # needs Phase 2/3 measurement
-  pwm_to_angle_table: null          # STILL ASSUMED LINEAR between pwm_min_us/pwm_max_us and the
-                                     # corresponding angle limits -- a measured table is a later
-                                     # task (roadmap), not this one. Only the two endpoints and
-                                     # neutral below are measured so far.
+  # PER-SIDE STEERING CALIBRATION, MEASURED 2026-11-10 (docs/notes/calibration-2026-11-10.md).
+  # Piecewise linear, pulse ascending, LEFT positive (a shorter pulse is left, see pwm_left_bound).
+  # Method: scan matching of consecutive LiDAR scans while the car held full lock at about 0.27 m/s,
+  # about 1500 scan pairs. Left stop (1094 us): rear-axle turning radius median 0.60 m (quartiles
+  # 0.56 and 0.64), effective bicycle steer atan(wheelbase / R) = 28.9 deg = 0.504 rad. Right stop
+  # (1875 us): 0.69 m (0.64 to 0.74), 25.7 deg = 0.449 rad. 1500 us is straight (measured
+  # 2026-09-21). An independent scan-matching pass over the 2026-11-10 driven bags gave 0.62 m
+  # left and 0.69 to 0.70 m right.
+  # CAVEAT: this is the EFFECTIVE angle at low speed, with tyre slip, not a direct measurement of
+  # the front wheels; the real road-wheel angle is probably a little larger. Only the two stops
+  # and the neutral were measured, so the three points make each side a straight line from
+  # neutral, which is what the servo is assumed to do in between. Replace with a direct
+  # steering-angle check (a protractor or a turntable at a few pulse widths), which also tests the
+  # straight-line assumption.
+  pwm_to_angle_table:
+    - {pwm_us: 1094.0, angle_rad: 0.504}    # left stop
+    - {pwm_us: 1500.0, angle_rad: 0.0}      # neutral
+    - {pwm_us: 1875.0, angle_rad: -0.449}   # right stop
   # MEASURED 2026-09-21 evening, on the car, wheels off the ground, mux armed, commanded via
   # the Jetson PWM (docs/notes/bench-session-2026-09-20.md's steering endpoint follow-up,
   # docs/notes/build-log.md's 2026-09-21 evening entry). Method: sweep the commanded pulse
@@ -439,7 +495,17 @@ actuation:
   # motor (the VESC speed loop's s_pid_min_erpm is 900, i.e. about 0.44 m/s real). Still
   # PROVISIONAL: gear_ratio and nominal_radius_m are assumed, so measure wheel speed against
   # pulse width on the bench and replace this with the observed value at throttle_pwm_max_us.
-  throttle_full_scale_mps: 2.91     # DERIVED 2026-10-06 from l_max_erpm, pole_pairs, gear_ratio, tire radius -- see above
+  # 2026-11-10: re-derived with the measured tyre radius and the push-test gear ratio:
+  # 6000 ERPM / pole_pairs 2 / gear_ratio 8.32 * 2 pi * 0.055 m / 60 = 2.077 m/s. The old 2.91
+  # was 1.401 times the true speed at the VESC cap (2.91 / 1.401 = 2.077): every request was
+  # that much faster in the software's mind than on the floor. With this value a request is the
+  # true straight-line wheel speed: the same request now makes the car go 1.40 times FASTER than
+  # it did in October, so a follower speed tuned on the floor then needs rescaling (a 0.8 m/s
+  # request was 0.57 m/s on the floor). At full lock the car measured slower than a request (the
+  # wheels slip, 0.55 to 0.7 of it), see the calibration note.
+  # tools/tests/test_vehicle_params_calibration.py recomputes this from the three source fields
+  # and the committed VESC l_max_erpm, so it cannot drift from them.
+  throttle_full_scale_mps: 2.08     # DERIVED 2026-11-10 from l_max_erpm, pole_pairs, gear_ratio, tire radius -- see above
   # PWM FRAME PERIOD on the Jetson's two sysfs PWM channels (GitHub issue #66). This is the
   # carrier period racer_drivers/pwm_output_node writes to <channel>/period, in microseconds
   # (the sysfs value is this x 1000, in nanoseconds).
@@ -631,8 +697,23 @@ limits:
   # corners the car made. The 9 new brakes at 0.34 are all at 1.0 to 1.4 m/s requests on the
   # entry to a turn, with the bumper 0.27 to 0.43 m from the wall. The release line stays 0.45 s
   # (now on the body distance). PROVISIONAL: depends on the placeholder front_overhang_m.
-  ttc_warning_s: 0.45               # PROVISIONAL (release line, body distance, 2026-11-02 replay, see 0.13.0 note)
-  ttc_brake_s: 0.34                 # PROVISIONAL (body distance, 2026-11-02 replay, see 0.13.0 note)
+  #
+  # RE-TUNED 2026-11-10, schema 0.14.0 (docs/notes/calibration-2026-11-10.md): the 0.34 / 0.45 /
+  # 0.05 above were chosen with the software believing speeds 1.40 times the truth, so in true
+  # speeds they were 0.14 s of real braking time. Replayed in corrected units on all four floor
+  # bags (101 recorded brakes, tools/replay_safety.py --recorded-with 0.13.0): 0.34 left 30 brakes
+  # later than the recorded one and 49 predicted under 4 cm; 0.60 / 0.71 / 0.10 leaves the October
+  # bags and the first 2026-11-10 run with none later and at most one under 4 cm, and costs 20 new
+  # brakes (15 where the car drove on) on 804 + 407 + 1018 + 1556 s of driving. 0.60 s is the knee (below
+  # it the October bags still fail, above it nothing improves until 0.75 s and the new brakes
+  # double), and it covers the stopping model (0.2 s latency, 1 m/s^2, 4 cm margin) up to about
+  # 0.7 m/s true. NOT MET: 12 predictions stay under 4 cm and 4 brakes stay later than recorded,
+  # in the clockwise run, where the corrected right-hand arc measures a grazed wall farther away
+  # than the old one did; no TTC below 0.9 s fixes them. The release line keeps the old 0.11 s gap.
+  # The floor 0.10 m is the stopping distance at the speed where the TTC term crosses it (0.17 m/s)
+  # plus the 4 cm margin; 0.05 to 0.15 m replay identically.
+  ttc_warning_s: 0.71               # PROVISIONAL (release line, body distance, true units, 2026-11-10 replay, see the 0.14.0 note above)
+  ttc_brake_s: 0.60                 # PROVISIONAL (body distance, true units, 2026-11-10 replay, see the 0.14.0 note above)
   # Distance floor for racer_safety's obstacle gate (added 2026-10-06, schema 0.7.0). If the
   # nearest valid return inside the forward sector below is closer than this, forward throttle
   # is held at zero whatever the requested speed, with the same latch as the TTC brake
@@ -648,7 +729,7 @@ limits:
   # straight ahead and much more so in corners, where the TTC now does the work. It only matters
   # at crawl speeds (below 0.15 m/s the 0.34 s TTC asks for less than 0.05 m); replaying the
   # October bags, 0.05 and 0.08 gave identical brakes. PROVISIONAL.
-  min_forward_clearance_m: 0.05     # PROVISIONAL (body distance, 2026-11-02 replay, see 0.13.0 note)
+  min_forward_clearance_m: 0.10     # PROVISIONAL (body distance, 2026-11-10 replay, see the 0.14.0 note above)
   # Half angle of the forward sector, in the VEHICLE frame (base_link, x forward, left
   # positive). Since schema 0.9.0 (2026-10-06 floor test) this is only the OUTER bound of the
   # obstacle gate's in-path test: no return outside it is ever considered, whatever
@@ -735,10 +816,15 @@ meta:
   # Added 2026-11-02 (schema 0.13.0): actuation.stop_latency_s and stop_deceleration_mps2 are
   # DERIVED from LiDAR scan matching (not odometry); the three limits.ttc_* / min_forward_clearance_m
   # values are re-chosen for the body-distance gate and stay PROVISIONAL.
+  # Updated 2026-11-10 (schema 0.14.0): both overhangs are now MEASURED (tape), tires.
+  # nominal_radius_m is MEASURED, drivetrain.gear_ratio and actuation.throttle_full_scale_mps are
+  # DERIVED (push test; tooth counts unverified), steering.pwm_to_angle_table and the two angle
+  # limits are MEASURED (effective angle at low speed, by scan matching), and the three limits.ttc_*
+  # / min_forward_clearance_m values are re-tuned in true units and stay PROVISIONAL.
   # sysid_session_id stays
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.13.0"
+  schema_version: "0.14.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

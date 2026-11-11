@@ -103,8 +103,11 @@ _TEMPLATE: dict[str, Any] = {
         # corridor's outer front corner sweep), then 0.11.0 -> 0.11.1 (lane pass, value-only),
         # then 0.11.1 -> 0.12.0 when the required limits.outer_corner_horizon_m was added (the
         # arc corridor's outer-corner band horizon), then 0.12.0 -> 0.13.0 when the required
-        # actuation.stop_latency_s / stop_deceleration_mps2 were added (the body-distance gate).
-        "schema_version": "0.13.0",
+        # actuation.stop_latency_s / stop_deceleration_mps2 were added (the body-distance gate),
+        # then 0.13.0 -> 0.14.0 on 2026-11-10 (the first real calibration: measured overhangs,
+        # tyre radius, per-side steering table and limits, derived gear ratio and throttle scale,
+        # re-tuned TTC thresholds; value-only, no field added).
+        "schema_version": "0.14.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

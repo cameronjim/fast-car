@@ -154,6 +154,7 @@ def measure_brake(
     scan_times: Sequence[float],
     mount: Mount,
     body: Body,
+    ignore: frozenset[tuple[int, int]] | None = None,
 ) -> None:
     """Fills end clearance, travel and approach speed from the scans (motion.py)."""
     i0 = _last_before(scan_times, row.t_s)
@@ -161,7 +162,7 @@ def measure_brake(
         return
     lo, hi = END_WINDOW_S
     ends = [
-        box_clearance(scan_points(scans[i], mount), body)
+        box_clearance(scan_points(scans[i], mount, ignore=ignore), body)
         for i in range(i0 + 1, len(scans))
         if row.t_s + lo < scan_times[i] < row.t_s + hi
     ]
@@ -172,14 +173,14 @@ def measure_brake(
         if scan_times[i] > row.t_s + TRAVEL_WINDOW_S:
             break
         try:
-            x, y, _, _ = car_motion(scans[i0], scans[i], mount)
+            x, y, _, _ = car_motion(scans[i0], scans[i], mount, ignore=ignore)
         except ValueError:
             continue
         farthest = max(farthest, math.hypot(x, y))
     row.travel_m = farthest
     if i0 >= 2:
         try:
-            x, y, _, _ = car_motion(scans[i0 - 2], scans[i0], mount)
+            x, y, _, _ = car_motion(scans[i0 - 2], scans[i0], mount, ignore=ignore)
             row.approach_speed_mps = math.hypot(x, y) / max(
                 scan_times[i0] - scan_times[i0 - 2], 1e-6
             )
@@ -216,9 +217,11 @@ def analyse(
     body: Body,
     measurements: dict[float, tuple[float, float, float]] | None = None,
     trip_distance_m: Callable[[float], float] | None = None,
+    ignore: frozenset[tuple[int, int]] | None = None,
 ) -> Report:
     """`measurements`, when given, caches the bag-only measurements (end clearance, travel,
-    approach speed) per brake time across calls: they do not depend on the rules."""
+    approach speed) per brake time across calls: they do not depend on the rules. `ignore` is
+    the car's own static returns (motion.static_self_returns), left out of every measurement."""
     report = Report()
     if trip_distance_m is None:
         trip_distance_m = _no_threshold
@@ -254,7 +257,7 @@ def analyse(
         if measurements is not None and t in measurements:
             row.end_clearance_m, row.travel_m, row.approach_speed_mps = measurements[t]
         else:
-            measure_brake(row, scans, scan_times, mount, body)
+            measure_brake(row, scans, scan_times, mount, body, ignore)
             if measurements is not None:
                 measurements[t] = (row.end_clearance_m, row.travel_m, row.approach_speed_mps)
         matches = [r for r in before_trips if abs(r["t"] - t) <= MATCH_WINDOW_S]
@@ -276,7 +279,7 @@ def analyse(
             i_rec = _last_before(scan_times, t)
             if 0 <= i_after < i_rec:
                 try:
-                    x, y, _, _ = car_motion(scans[i_after], scans[i_rec], mount)
+                    x, y, _, _ = car_motion(scans[i_after], scans[i_rec], mount, ignore=ignore)
                     row.gain_m = math.hypot(x, y)
                 except ValueError:
                     row.gain_m = 0.0

@@ -30,6 +30,6 @@ def test_wires_steering_and_speed_ranges_from_the_real_params_file(
         ood_threshold=3.0,
     )
 
-    assert config.steering_range == (-0.4189, 0.4189)
+    assert config.steering_range == (-0.449, 0.449)
     assert config.speed_range == (-5.0, 20.0)
     assert config.residual_fraction_speed == 0.15

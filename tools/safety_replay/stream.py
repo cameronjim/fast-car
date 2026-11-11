@@ -33,6 +33,17 @@ LEGACY_RULE: dict[str, float | bool] = {
 }
 
 
+# The rule the 2026-11-10 bags were driven with (vehicle_params 0.13.0 as committed 2026-11-03):
+# the body distance, TTC 0.34 s, release 0.45 s, floor 0.05 m, the decaying speed bound.
+RULE_0_13_0: dict[str, float | bool] = {
+    "distance_from_body": True,
+    "ttc_brake_s": 0.34,
+    "ttc_warning_s": 0.45,
+    "min_forward_clearance_m": 0.05,
+    "speed_bound_deceleration_mps2": 1.0,
+}
+
+
 class ReplayError(RuntimeError):
     """A problem the user can fix (missing CLI, bad parameter); printed without a trace."""
 

@@ -357,33 +357,40 @@ RUN bash -c 'source /opt/ros/humble/setup.bash \
     && ros2 interface show vision_msgs/msg/Detection2DArray > /dev/null'
 
 # --- Jetson torch: OPTIONAL for the control-stack phase ---------------------------------
-# NVIDIA publishes JetPack-version-matched torch wheels at
-# https://developer.download.nvidia.com/compute/redist/jp/ (one subdirectory per JetPack
-# minor version) and documents the current install command at
-# https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html
-# -- THAT page, not this comment, is the source of truth for the exact wheel filename/URL,
-# because it changes with every JetPack/torch release and cannot be verified without the
-# actual Jetson.
+# WHERE THE WHEELS COME FROM (decided and built 2026-11-11, docs/notes/spiderbot-2026-11-11.md).
+# The base image is JetPack 6.1 (L4T r36.4.0, CUDA 12.6, Python 3.10), so the wheel must be a
+# cp310 linux_aarch64 build against CUDA 12.6. Two sources exist:
+#   * NVIDIA's own redistributable tree (developer.download.nvidia.com/compute/redist/jp/v61/
+#     pytorch/) holds ONE torch wheel for JetPack 6.1 (2.5.0a0+nv24.08) and no matching
+#     torchvision wheel at all (NVIDIA tells you to build torchvision from source).
+#   * The Jetson AI Lab pip index (pypi.jetson-ai-lab.io/jp6/cu126/, run by NVIDIA's Jetson
+#     team) carries torch AND a matching torchvision built for the same CUDA 12.6 userspace.
+# This image uses the second, because a matching pair is the whole point. The wheels are pinned
+# by URL AND sha256 below and checked after download: the host is community-run, so the hash
+# is what makes a build reproducible and a swapped file a hard failure. Both wheels are small
+# (226 MB and 1.5 MB) because they load CUDA from the base image instead of bundling it.
+# torch's own dependencies are pinned in torch-requirements.txt and installed with --no-deps,
+# so pip never resolves (and never replaces) the Jetson wheel.
 #
-# WHY THIS IS NOW OPTIONAL (changed 2026-09-13, roadmap task 1.4 / milestone "car first
-# boot"). Torch exists in this image for ONE consumer: racer_policy's on-vehicle inference,
-# which is roadmap phase 5.x. The phase actually in front of us is the classical control
-# stack -- safety_node, pwm_output_node, teleop -- which imports no torch at all. Refusing
-# the whole build until someone hand-resolves a JetPack-matched torch wheel therefore blocked
-# a first boot on a dependency that first boot does not use.
+# To change the wheel: set BOTH TORCH_WHEEL_URL and TORCH_WHEEL_SHA256 (and the torchvision
+# pair in the perception layer below). An empty value, or a hash that does not match the file,
+# fails the build (CLAUDE.md invariant 3: refuse on mismatch, never a warning).
+#
+# WHY THIS IS OPTIONAL (changed 2026-09-13, roadmap task 1.4 / milestone "car first boot").
+# The control stack -- safety_node, pwm_output_node, teleop -- imports no torch at all, so the
+# default stays skip and a skip build is exactly what it was before.
 #
 #   INSTALL_TORCH=skip      (DEFAULT) build without torch. Loud notice in the build log, an
 #                           /etc/racer/torch-absent marker, and RACER_TORCH=absent exported
 #                           into every login shell, so nothing can silently assume torch.
-#   INSTALL_TORCH=required  install it, and REFUSE the build unless TORCH_WHEEL_URL is set to
-#                           a real URL -- the original "never guess a wheel URL" behaviour,
-#                           unchanged (CLAUDE.md invariant 3: refuse on mismatch, never a
-#                           warning). This is what the policy phase builds with.
+#   INSTALL_TORCH=required  install the pinned wheel and its pinned pure-Python dependencies,
+#                           then import torch (a CUDA build) or fail the build.
 #
-# Any other value is a hard error rather than a silent fallthrough. Switching the default
-# back to `required` is a one-word change here when phase 5 starts.
+# Any other value is a hard error rather than a silent fallthrough.
 ARG INSTALL_TORCH=skip
-ARG TORCH_WHEEL_URL=""
+ARG TORCH_WHEEL_URL=https://pypi.jetson-ai-lab.io/jp6/cu126/+f/62a/1beee9f2f1470/torch-2.8.0-cp310-cp310-linux_aarch64.whl
+ARG TORCH_WHEEL_SHA256=62a1beee9f2f147076a974d2942c90060c12771c94740830327cae705b2595fc
+COPY torch-requirements.txt /tmp/torch-requirements.txt
 # The single-quoted lines at the end of the RUN below are the TEXT of the /etc/profile.d
 # script being generated; their `$RACER_TORCH` must reach that file UNEXPANDED, so
 # shellcheck's SC2016 ("expressions don't expand in single quotes") is exactly the behaviour
@@ -393,23 +400,34 @@ RUN set -eu; \
     mkdir -p /etc/racer; \
     case "$INSTALL_TORCH" in \
       required) \
-        if [ -z "$TORCH_WHEEL_URL" ]; then \
-            echo "ERROR: INSTALL_TORCH=required but --build-arg TORCH_WHEEL_URL=<url> was not supplied." >&2; \
-            echo "Look up the JetPack-matched torch wheel URL per docker/car/build_on_jetson.md" >&2; \
-            echo "and pass it explicitly. Refusing to guess a wheel URL for a mismatch this build" >&2; \
-            echo "cannot verify (CLAUDE.md invariant 3: 'refuses on mismatch', never a warning)." >&2; \
+        if [ -z "$TORCH_WHEEL_URL" ] || [ -z "$TORCH_WHEEL_SHA256" ]; then \
+            echo "ERROR: INSTALL_TORCH=required needs both TORCH_WHEEL_URL and TORCH_WHEEL_SHA256." >&2; \
+            echo "Refusing to install a wheel this build cannot verify (CLAUDE.md invariant 3)." >&2; \
             exit 1; \
         fi; \
-        pip3 install --no-cache-dir "$TORCH_WHEEL_URL"; \
+        mkdir -p /tmp/wheels; \
+        wheel="/tmp/wheels/${TORCH_WHEEL_URL##*/}"; \
+        curl -fsSL --retry 3 -o "$wheel" "$TORCH_WHEEL_URL"; \
+        printf '%s  %s\n' "$TORCH_WHEEL_SHA256" "$wheel" > /tmp/wheel.sha256; \
+        sha256sum -c /tmp/wheel.sha256; \
+        rm -f /tmp/wheel.sha256; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends python3-pip libopenblas0; \
+        rm -rf /var/lib/apt/lists/*; \
+        pip3 install --no-cache-dir --no-deps -r /tmp/torch-requirements.txt; \
+        pip3 install --no-cache-dir --no-deps "$wheel"; \
+        rm -rf /tmp/wheels; \
+        python3 -c "import torch; print('torch', torch.__version__, 'cuda build', torch.version.cuda); assert torch.version.cuda, 'torch has no CUDA build'"; \
         echo present > /etc/racer/torch-status; \
         ;; \
       skip) \
         echo "################################################################" >&2; \
         echo "# NOTICE: BUILDING WITHOUT TORCH (INSTALL_TORCH=skip).          #" >&2; \
-        echo "# This image CANNOT run racer_policy inference. It is the       #" >&2; \
-        echo "# control-stack image: safety_node, pwm_output_node, teleop.    #" >&2; \
-        echo "# Rebuild with --build-arg INSTALL_TORCH=required and a real    #" >&2; \
-        echo "# TORCH_WHEEL_URL before roadmap phase 5.x.                     #" >&2; \
+        echo "# This image CANNOT run racer_policy inference or the YOLO      #" >&2; \
+        echo "# detector. It is the control-stack image: safety_node,         #" >&2; \
+        echo "# pwm_output_node, teleop. Rebuild with --build-arg             #" >&2; \
+        echo "# INSTALL_TORCH=required (and INSTALL_PERCEPTION=required) for  #" >&2; \
+        echo "# roadmap phase 5.x.                                            #" >&2; \
         echo "################################################################" >&2; \
         echo absent > /etc/racer/torch-status; \
         touch /etc/racer/torch-absent; \
@@ -419,6 +437,7 @@ RUN set -eu; \
         exit 1; \
         ;; \
     esac; \
+    rm -f /tmp/torch-requirements.txt; \
     { \
       echo '# Generated by docker/car/Dockerfile. Says whether this image has torch.'; \
       echo 'RACER_TORCH="$(cat /etc/racer/torch-status 2>/dev/null || echo unknown)"'; \
@@ -432,29 +451,34 @@ RUN set -eu; \
 
 # --- Perception: ultralytics (YOLO) for racer_perception's detector_node (roadmap 5.1) ----
 # OPTIONAL, default skip. ultralytics needs PyTorch and torchvision, so INSTALL_PERCEPTION=
-# required REQUIRES INSTALL_TORCH=required (the JetPack-matched torch wheel above) and a
-# JetPack-matched torchvision wheel in TORCHVISION_WHEEL_URL (same NVIDIA/pytorch.org wheel
-# source and the same "refuse rather than guess" rule as TORCH_WHEEL_URL; docker/car/
-# build_on_jetson.md). Anything else fails the build.
+# required REQUIRES INSTALL_TORCH=required (the pinned Jetson torch wheel above) and installs
+# the matching pinned torchvision wheel (TORCHVISION_WHEEL_URL + TORCHVISION_WHEEL_SHA256,
+# same source, same verify-or-fail rule). Anything else fails the build.
 #
 # WHY NOT THE UV LOCKFILE. ultralytics lists torch and torchvision as dependencies; resolving
-# it through `uv lock` would pull PyPI's generic aarch64 torch and shadow the Jetson CUDA wheel
-# (NVIDIA's wheel is not on any index uv can see, see pyproject.toml's note). So the pinned
-# packages in perception-requirements.txt are installed with `pip3 --no-deps`: pip cannot
-# replace torch because it never resolves it. Every dependency ultralytics needs besides torch
-# and torchvision is listed there with an exact pin. numpy is held below 2 (ROS 2 Humble's
-# compiled Python packages are built against numpy 1.x).
+# it through `uv lock` would pull PyPI's generic aarch64 torch and shadow the Jetson CUDA wheel.
+# So the pinned packages in perception-requirements.txt are installed with `pip3 --no-deps`:
+# pip cannot replace torch because it never resolves it. The list is a complete resolution
+# (`uv pip compile --python-platform aarch64-unknown-linux-gnu --python-version 3.10`, 2026-11-11)
+# minus torch, torchvision, numpy and torch's own dependencies (torch-requirements.txt) and pyyaml
+# (ROS apt provides it; the image has no python3-requests, so requests is pinned too). numpy is held below 2 (ROS 2 Humble's compiled Python
+# packages are built against numpy 1.x).
+#
+# WEIGHTS. PERCEPTION_WEIGHTS=bake (default) downloads the pinned YOLO weights listed in
+# perception-weights.txt into /opt/racer_weights and checks every sha256 (a mismatch fails the
+# build), so the car needs no internet at run time. PERCEPTION_WEIGHTS=skip leaves them out and
+# detector_node fetches the same pinned files into its cache on first run (it checks the same
+# hashes). The weights are never committed to the repository. NOTE: Ultralytics' code and
+# weights are AGPL-3.0; the repository has no licence declared yet, see the spiderbot note.
 #
 # The final import check is the refusal: torch (with a CUDA build), torchvision, cv2 and
-# ultralytics must all import, or the image does not build. Model WEIGHTS are not baked in:
-# detector_node downloads yolov8n.pt into its model_cache_dir on first run.
-#
-# UNVERIFIED: this layer has not been built anywhere (no torch wheel has ever been supplied,
-# see README "What is and isn't verified"). The pins were checked to exist on PyPI on
-# 2026-10-23, nothing more.
+# ultralytics must all import, or the image does not build. It cannot prove CUDA works: that
+# needs a Jetson (`torch.cuda.is_available()` is the first on-device check).
 ARG INSTALL_PERCEPTION=skip
-ARG TORCHVISION_WHEEL_URL=""
-COPY perception-requirements.txt /tmp/perception-requirements.txt
+ARG PERCEPTION_WEIGHTS=bake
+ARG TORCHVISION_WHEEL_URL=https://pypi.jetson-ai-lab.io/jp6/cu126/+f/907/c4c1933789645/torchvision-0.23.0-cp310-cp310-linux_aarch64.whl
+ARG TORCHVISION_WHEEL_SHA256=907c4c1933789645ebb20dd9181d40f8647978e6bd30086ae7b01febb937d2d1
+COPY perception-requirements.txt perception-weights.txt /tmp/
 RUN set -eu; \
     case "$INSTALL_PERCEPTION" in \
       required) \
@@ -462,14 +486,35 @@ RUN set -eu; \
             echo "ERROR: INSTALL_PERCEPTION=required needs INSTALL_TORCH=required (ultralytics runs on torch)." >&2; \
             exit 1; \
         fi; \
-        if [ -z "$TORCHVISION_WHEEL_URL" ]; then \
-            echo "ERROR: INSTALL_PERCEPTION=required but --build-arg TORCHVISION_WHEEL_URL=<url> was not supplied." >&2; \
+        if [ -z "$TORCHVISION_WHEEL_URL" ] || [ -z "$TORCHVISION_WHEEL_SHA256" ]; then \
+            echo "ERROR: INSTALL_PERCEPTION=required needs both TORCHVISION_WHEEL_URL and TORCHVISION_WHEEL_SHA256." >&2; \
             echo "Refusing to guess a torchvision wheel that matches the torch wheel (CLAUDE.md invariant 3)." >&2; \
             exit 1; \
         fi; \
-        pip3 install --no-cache-dir "$TORCHVISION_WHEEL_URL"; \
+        mkdir -p /tmp/wheels; \
+        wheel="/tmp/wheels/${TORCHVISION_WHEEL_URL##*/}"; \
+        curl -fsSL --retry 3 -o "$wheel" "$TORCHVISION_WHEEL_URL"; \
+        printf '%s  %s\n' "$TORCHVISION_WHEEL_SHA256" "$wheel" > /tmp/wheel.sha256; \
+        sha256sum -c /tmp/wheel.sha256; \
+        rm -f /tmp/wheel.sha256; \
+        pip3 install --no-cache-dir --no-deps "$wheel"; \
+        rm -rf /tmp/wheels; \
         pip3 install --no-cache-dir --no-deps -r /tmp/perception-requirements.txt; \
-        python3 -c "import torch, torchvision, cv2, ultralytics; assert torch.version.cuda, 'torch has no CUDA build'"; \
+        python3 -c "import torch, torchvision, cv2, ultralytics; assert torch.version.cuda, 'torch has no CUDA build'; print('ultralytics', ultralytics.__version__, 'torchvision', torchvision.__version__)"; \
+        case "$PERCEPTION_WEIGHTS" in \
+          bake) \
+            mkdir -p /opt/racer_weights; \
+            while read -r name sha url; do \
+                case "$name" in ""|"#"*) continue ;; esac; \
+                curl -fsSL --retry 3 -o "/opt/racer_weights/$name" "$url"; \
+                printf '%s  %s\n' "$sha" "/opt/racer_weights/$name" > /tmp/weight.sha256; \
+                sha256sum -c /tmp/weight.sha256; \
+                rm -f /tmp/weight.sha256; \
+            done < /tmp/perception-weights.txt; \
+            ;; \
+          skip) echo "# NOTICE: PERCEPTION_WEIGHTS=skip: detector_node downloads the pinned weights on first run." >&2 ;; \
+          *) echo "ERROR: PERCEPTION_WEIGHTS must be 'bake' or 'skip', got '$PERCEPTION_WEIGHTS'." >&2; exit 1 ;; \
+        esac; \
         echo present > /etc/racer/perception-status; \
         ;; \
       skip) \
@@ -481,7 +526,8 @@ RUN set -eu; \
         exit 1; \
         ;; \
     esac; \
-    rm -f /tmp/perception-requirements.txt
+    rm -f /tmp/perception-requirements.txt /tmp/perception-weights.txt
+ENV RACER_WEIGHTS_DIR=/opt/racer_weights
 
 # --- Racer runtime Python deps (uv lockfile, linux/aarch64) -----------------------------
 # Pin the uv binary itself, matching every other image (docker/sim-cpu, docker/train-cuda,

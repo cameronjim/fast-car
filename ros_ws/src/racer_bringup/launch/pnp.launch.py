@@ -49,7 +49,7 @@ RECORDER_REFUSAL = "refusing to drive: no rosbag recorder in the graph (every ru
 
 # Parameter names the two nodes declare for their bundle directories.
 PERCEPTION_BUNDLE_PARAM = "bundle_dir"
-DYNAMICS_BUNDLE_PARAM = "dynamics_bundle_dir"
+DYNAMICS_BUNDLE_PARAM = "dynamics_bundle"
 
 
 def recorder_in_graph(timeout_s: float = RECORDER_WAIT_S) -> bool:

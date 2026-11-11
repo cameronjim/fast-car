@@ -16,11 +16,13 @@ V0_CONFIG = REPO_ROOT / "training" / "configs" / "v0" / "sac_residual_v0_0.1.0.y
 
 
 def test_overrides_apply_to_a_copy(real_vehicle_params):
+    committed_max = real_vehicle_params.steering.max_angle_rad
+    assert committed_max not in (0.504, -0.449)  # the override must actually differ
     out = apply_vehicle_overrides(
         real_vehicle_params, {"steering": {"max_angle_rad": 0.504, "min_angle_rad": -0.449}}
     )
     assert out.steering.max_angle_rad == 0.504 and out.steering.min_angle_rad == -0.449
-    assert real_vehicle_params.steering.max_angle_rad == 0.4189  # original untouched
+    assert real_vehicle_params.steering.max_angle_rad == committed_max  # original untouched
     assert out.chassis.wheelbase_m == real_vehicle_params.chassis.wheelbase_m
 
 

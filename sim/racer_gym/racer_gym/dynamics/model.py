@@ -158,6 +158,39 @@ def racer_dynamics_st(x: np.ndarray, u: np.ndarray, dyn_params: DynParams) -> np
     )
 
 
+# Substepping policy for the (stiff at low speed) tyre dynamics. See `stiffness_rate_per_s`.
+# RK4's real-axis stability limit is |dt * lambda| < 2.78; aim well inside it so the result is
+# also ACCURATE (not merely bounded). Numerical-method settings, not vehicle parameters.
+_STABLE_DT_LAMBDA = 1.0
+_MAX_SUBSTEPS = 64
+
+
+def stiffness_rate_per_s(x: np.ndarray, dyn_params: DynParams) -> float:
+    """Conservative bound (1/s) on the fastest linearised tyre mode at state `x`.
+
+    With linear tyre slopes C_f, C_r (the Pacejka small-slip slopes B*C*D) the slip-angle
+    dynamics relax at about (C_f + C_r) / (m * V) (lateral) and (C_f*lf^2 + C_r*lr^2) /
+    (Iz * V) (yaw). Both grow as 1/V, so at crawl speeds the ODE is stiff: at V = 0.3 m/s the
+    placeholder tyres give about 550 1/s, and fixed-step RK4 at dt = 0.01 s (dt*lambda = 5.5,
+    stability limit 2.78) is UNSTABLE there. It does not blow up (the tyre force saturates) but
+    it settles into a spurious state, e.g. a 0.57 m instead of 0.60 m rear-axle radius at full
+    lock, and 1.07 m instead of 0.60 m at 0.1 m/s. Stock f1tenth_gym avoids this by switching
+    to a kinematic model below 0.5 m/s; racer_gym keeps one smooth model and integrates it
+    stably instead. The sum of the two rates over-estimates the largest eigenvalue, which is
+    the safe direction.
+    """
+    v_safe = max(abs(float(x[3])), _MIN_SPEED_FOR_DYNAMICS_MPS)
+    front = dyn_params.pacejka_front
+    rear = dyn_params.pacejka_rear
+    c_f = front.b_stiffness * front.c_shape * front.d_peak_n
+    c_r = rear.b_stiffness * rear.c_shape * rear.d_peak_n
+    lf = dyn_params.cg_to_front_axle_m
+    lr = dyn_params.cg_to_rear_axle_m
+    lateral = (c_f + c_r) / (dyn_params.mass_kg * v_safe)
+    yaw = (c_f * lf * lf + c_r * lr * lr) / (dyn_params.yaw_inertia_kg_m2 * v_safe)
+    return lateral + yaw
+
+
 class RacerSingleTrackModel:
     """Duck-typed replacement for `f1tenth_gym.envs.dynamic_models.DynamicModel.ST`."""
 
@@ -176,13 +209,16 @@ class RacerSingleTrackModel:
         def _f(x, u, _params_dict_unused):
             return racer_dynamics_st(x, u, dyn_params)
 
+        # Read by RacerRK4Integrator to pick a stable number of substeps.
+        _f.stiffness_rate_per_s = lambda x: stiffness_rate_per_s(x, dyn_params)  # type: ignore[attr-defined]
         return _f
 
 
 class RacerRK4Integrator:
     """Duck-typed replacement for `f1tenth_gym.envs.integrator.RK4Integrator`.
 
-    Same RK4 update as upstream; the only difference is that `f` is called as `f(x, u,
+    Same RK4 update as upstream, taken in stiffness-aware substeps (see
+    `stiffness_rate_per_s`); the other difference is that `f` is called as `f(x, u,
     params)` with `params` passed straight through (rather than unpacked into upstream's
     fixed 17-argument list), so `model.f_dynamics` above can close over a `DynParams` object
     with the richer field set (Pacejka, load transfer geometry, ...) upstream's fixed
@@ -193,6 +229,26 @@ class RacerRK4Integrator:
         self.type = "rk4"
 
     def integrate(self, f, x, u, dt, params):
+        n_sub = self._substeps(f, x, dt)
+        h = dt / n_sub
+        for _ in range(n_sub):
+            x = self._rk4_step(f, x, u, h, params)
+        return x
+
+    @staticmethod
+    def _substeps(f, x, dt) -> int:
+        """Number of equal RK4 substeps so that dt/n * (fastest tyre rate) stays inside the
+        stable, accurate range. 1 (a plain RK4 step, as upstream) whenever `f` carries no
+        stiffness estimate or the system is not stiff (speeds above about 1.7 m/s with the
+        placeholder tyres). The command `u` is held constant over the step, as upstream."""
+        rate_fn = getattr(f, "stiffness_rate_per_s", None)
+        if rate_fn is None:
+            return 1
+        n = math.ceil(dt * rate_fn(x) / _STABLE_DT_LAMBDA)
+        return min(max(n, 1), _MAX_SUBSTEPS)
+
+    @staticmethod
+    def _rk4_step(f, x, u, dt, params):
         k1 = f(x, u, params)
         k2 = f(x + dt * (k1 / 2), u, params)
         k3 = f(x + dt * (k2 / 2), u, params)

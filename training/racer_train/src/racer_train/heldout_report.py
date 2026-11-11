@@ -106,38 +106,64 @@ def conditions(config: ExperimentConfig) -> dict[str, ExperimentConfig]:
     }
 
 
+def _run_condition(
+    args: tuple[str, Any, str, int, str],
+) -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """One condition end to end (its own env, its own contract load): (name, summary,
+    per-episode rows, contract provenance). A module-level function so conditions can run in
+    separate processes; the result for a condition does not depend on which process ran it."""
+    name, cfg, policy_dir, episodes, repo_root = args
+    env = ResidualRacerEnv(cfg, repo_root=Path(repo_root))
+    try:
+        policy, contract = load_contract_policy(Path(policy_dir), env)
+        base, learned = evaluate_paired(env, policy, episodes, HELDOUT_EPISODE_SEED_BASE, laps=2.0)
+    finally:
+        env.close()
+    summary = summarize_pair(base, learned, seed=1)
+    summary["by_direction"] = _by_direction(base, learned)
+    rows = {
+        "tracker": [r.as_dict() for r in base],
+        "tracker_plus_residual": [r.as_dict() for r in learned],
+    }
+    provenance = {
+        "contract_version": contract.contract_version,
+        "config_hash": contract.training.config_hash,
+        "git_sha": contract.training.git_sha,
+    }
+    return name, summary, rows, provenance
+
+
 def run_report(
     policy_dir: Path,
     config: ExperimentConfig,
     out_dir: Path,
     episodes: int = 120,
     repo_root: Path = REPO_ROOT,
+    workers: int = 1,
 ) -> dict[str, Any]:
+    """`workers` > 1 runs the four conditions in separate processes; every episode is seeded
+    by its own index, so the numbers are identical to the serial run."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {"policy_dir": str(policy_dir), "episodes_per_condition": episodes}
     per_episode: dict[str, Any] = {}
     t0 = time.time()
-    for name, cfg in conditions(config).items():
-        env = ResidualRacerEnv(cfg, repo_root=repo_root)
-        try:
-            policy, contract = load_contract_policy(policy_dir, env)
-            base, learned = evaluate_paired(
-                env, policy, episodes, HELDOUT_EPISODE_SEED_BASE, laps=2.0
-            )
-        finally:
-            env.close()
-        report[name] = summarize_pair(base, learned, seed=1)
-        per_episode[name] = {
-            "tracker": [r.as_dict() for r in base],
-            "tracker_plus_residual": [r.as_dict() for r in learned],
-        }
-        report[name]["by_direction"] = _by_direction(base, learned)
-    report["contract"] = {
-        "contract_version": contract.contract_version,
-        "config_hash": contract.training.config_hash,
-        "git_sha": contract.training.git_sha,
-    }
+    tasks = [
+        (name, cfg, str(policy_dir), episodes, str(repo_root))
+        for name, cfg in conditions(config).items()
+    ]
+    if workers > 1:
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(max_workers=min(workers, len(tasks))) as pool:
+            results = list(pool.map(_run_condition, tasks))
+    else:
+        results = [_run_condition(t) for t in tasks]
+    provenance: dict[str, Any] = {}
+    for name, summary, rows, provenance in results:
+        report[name] = summary
+        per_episode[name] = rows
+    report["contract"] = provenance
     report["wall_clock_s"] = time.time() - t0
     (out_dir / "eval_summary.json").write_text(json.dumps(report, indent=2, default=float))
     (out_dir / "eval_episodes.json").write_text(json.dumps(per_episode, default=float))
@@ -221,8 +247,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--episodes", type=int, default=120)
+    parser.add_argument("--workers", type=int, default=1, help="conditions run in parallel")
     args = parser.parse_args(argv)
-    report = run_report(args.policy_dir, load_config(args.config), args.out_dir, args.episodes)
+    report = run_report(
+        args.policy_dir,
+        load_config(args.config),
+        args.out_dir,
+        args.episodes,
+        workers=args.workers,
+    )
     md = format_markdown(report)
     (args.out_dir / "eval_tables.md").write_text(md)
     print(md)

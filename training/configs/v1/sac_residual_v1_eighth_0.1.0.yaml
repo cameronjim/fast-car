@@ -1,0 +1,122 @@
+# SAC residual, v1 (2026-11-11). Corrected sim, committed calibration. NOT YET THE THESIS RESULT.
+#
+# Differences from configs/v0/sac_residual_v0_quarter_0.1.0.yaml, and why:
+#   * No `vehicle_overrides`. vehicle_params 0.14.0 (PR 118) commits the 2026-11-10 calibration
+#     (overhangs 0.11 / 0.14 m, throttle_full_scale_mps 2.08, steering table, tyre radius,
+#     gear ratio), so everything is read from the generated binding (CLAUDE.md invariant 2).
+#     Two v0 overrides were NOT calibration and are gone with the rest: max_acceleration_mps2
+#     3.0 (an assumption, the committed 9.51 now sets the envelope's speed rate limit, which
+#     therefore almost never binds; the sim's own acceleration limit is still randomised
+#     1.5 to 5.0) and stop_latency_s 0.13 (the committed 0.20 is not used by the env).
+#     The committed steering range is symmetric +-0.449 rad (the right-hand lock), so the
+#     base controller caps at 0.449 where v0's override let it use 0.504 to the left; the sim's
+#     actual left/right limits are still drawn per episode below.
+#   * Cornering stiffness front 50 to 200 N/rad (docs/notes/sim-tyre-fix-2026-11-11.md): the
+#     tyre units bug is fixed in the sim, the placeholder is 94 N/rad, rear ratio unchanged.
+#   * Track family: inner (island end) radius 0.2 to 0.8 m instead of 0 to 0.8. Thin islands
+#     are infeasible for the tracker (docs/notes/track-session-2026-11-11.md), so training on
+#     them taught nothing a car could use.
+#   * Base controller re-tuned on this sim (see docs/notes/residual-v1-2026-11-11.md).
+#   * Residual authority is the v0 "quarter" setting, the best of v0's pilots: fraction 0.025
+#     of the steering range (0.898 rad now, so +-0.0224 rad) and 0.004 of the speed range
+#     (+-0.10 m/s).
+#
+# THIS FILE: the same as sac_residual_v1 except the residual authority is halved again
+# (fractions 0.0125 / 0.002, +-0.0112 rad and +-0.05 m/s), a dose-response check on the one
+# knob v0 found to matter.
+#
+# Never edit this file after it has produced a committed result; copy it and bump the semver.
+name: sac_residual_v1_eighth
+
+policy_version: v1
+label: v1, sim-trained in the corrected simulator (tyre units fixed, vehicle_params 0.14.0).
+  The placeholder tyre, actuator lags and delays are still not fitted (roadmap Phase 3 sysid has
+  not run) and nothing was measured on the car with this policy. Zero-shot, not the thesis
+  result, no claim about the real car.
+
+seed: 0
+
+env:
+  lidar_downsample_factor: 30 # 1080 raw beams over 270 deg -> 36 beams of 7.5 deg, min-pooled
+  timestep_s: 0.02 # 50 Hz, claude-docs/08-learning.md "Inference target: 50 Hz"
+  max_episode_steps: 1500 # 30 s per training episode
+  observation_profile: v0
+  # Raw action in [-1, 1] maps to the residual the envelope allows, no more: a scale above
+  # the envelope bound would make most random actions "violations" before learning starts.
+  # steering: 0.025 of the committed 0.898 rad range (+-0.449) = 0.0224 rad; speed: 0.004 of the
+  # 25 m/s range (-5 .. 20, the committed limits the deploy node will also derive) = 0.10 m/s.
+  # Quarter authority, from v0's pilots (full authority did worse than the tracker). Scales sit
+  # about 1% under the bound so float rounding never flags a full-scale action as clipped.
+  action:
+    steering_scale_rad: 0.0111
+    speed_scale_mps: 0.0495
+  episode:
+    start: rolling
+    start_lateral_m: 0.08
+    start_heading_rad: 0.12
+  tracks:
+    train_pool_size: 80
+    train_seed_base: 1000
+    family:
+      lane_width_m: 1.0
+      shapes: [stadium, rounded_rect]
+      shape_weights: [0.5, 0.5]
+      inner_radius_m: [0.2, 0.8]
+      stadium_straight_m: [1.0, 4.0]
+      rect_side_m: [1.8, 4.5]
+      max_offset_m: 0.25
+      v_max_mps: 2.0
+      a_lat_max_mps2: 4.0
+      a_long_max_mps2: 1.5
+
+# Re-tuned on the corrected sim (racer_train.tune_base, two grid passes, 10,368 + 3,840
+# two-lap episodes under the full randomisation, 0.47 CPU hours; docs/notes/residual-v1-2026-11-11.md).
+# Chosen: lookahead 1.0 to 1.2 m, curvature reference 1.0 1/m, raceline a_lat 4.0 m/s2, top
+# speed 2.0 m/s (99% completion, 1.88 m/s mean on completed laps on the tuning pool; 3.5 m/s2
+# completed 100% at 1% less speed, inside the noise). The tracker's own
+# defaults (0.4 / 1.5 / 0.4) are for racing speeds and corner-cut or oscillate at 2 m/s in a
+# 1 m lane with 0.1 s of steering lag. These are SIM-tuned values; the real tracker is tuned
+# on hardware in roadmap Phase 4, and a deployed run must launch the tracker with the same
+# values or the residual rides on a different base than it trained on.
+pure_pursuit:
+  lookahead_min_m: 1.0
+  lookahead_max_m: 1.2
+  lookahead_curvature_ref_1pm: 1.0
+
+envelope:
+  residual_fraction_steering: 0.0125
+  residual_fraction_speed: 0.002
+  # Identical for the tracker-only and tracker+residual arms (09-evaluation.md: identical
+  # speed caps). Just under the real 2.08 m/s top speed.
+  speed_cap_mps: 2.0
+  ood_threshold: 3.0
+  # First five observation fields: velocity, yaw rate, slip proxy, lateral error, heading err.
+  ood_reference_state: [1.8, 0.0, 0.0, 0.0, 0.0]
+  ood_reference_scale: [0.8, 2.5, 0.3, 0.2, 0.4]
+
+reward:
+  progress_weight: 1.0
+  crash_penalty: 50.0
+  envelope_violation_penalty: 0.1
+
+randomization:
+  enabled: true
+  # Everything else is the RandomizationConfig default, which is v0's table unchanged.
+  cornering_stiffness_front_n_per_rad: [50.0, 200.0]
+  cornering_stiffness_rear_ratio: [0.8, 1.3]
+
+sac:
+  total_timesteps: 1500000
+  learning_rate: 0.0003
+  buffer_size: 1000000
+  batch_size: 256
+  learning_starts: 10000
+  train_freq: 1
+  gradient_steps: 1
+  net_arch: [128, 128]
+  gamma: 0.99
+  tau: 0.005
+  checkpoint_every_steps: 125000
+  eval_every_steps: 125000
+  eval_episodes: 16
+  normalization_steps: 40000

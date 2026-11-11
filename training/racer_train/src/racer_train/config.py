@@ -115,6 +115,9 @@ class ExperimentConfig:
     # calibration lands on its own branch); they are part of the hashed config, so a contract
     # always records exactly what was assumed. Never written back to vehicle_params.yaml.
     vehicle_overrides: dict[str, Any] = field(default_factory=dict)
+    # Written into policy_meta.yaml. Empty `label` keeps the v0 export label.
+    label: str = ""
+    policy_version: str = "v0"
 
 
 def _pure_pursuit_from_dict(raw: dict[str, Any]) -> PurePursuitSettings:
@@ -184,6 +187,8 @@ def config_from_dict(raw: dict[str, Any]) -> ExperimentConfig:
         sac=_sac_from_dict(raw.get("sac", {})),
         randomization=_randomization_from_dict(raw.get("randomization", {})),
         vehicle_overrides=dict(raw.get("vehicle_overrides", {})),
+        label=str(raw.get("label", "")),
+        policy_version=str(raw.get("policy_version", "v0")),
     )
 
 

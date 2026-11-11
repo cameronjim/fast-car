@@ -237,6 +237,15 @@ class GapFollowNode : public rclcpp::Node {
                 c.centering_sector_half_angle_rad, c.centering_max_range_m, c.lane_lookahead_m,
                 c.lane_default_half_width_m, speed_command_.config().max_speed_mps,
                 speed_command_.config().speed_time_constant_s, target_range_median_.window());
+    RCLCPP_INFO(this->get_logger(),
+                "gap_follow_node race features: speed law %s (a_lat_max %.2f m/s^2, standoff %.3f "
+                "m, free path horizon %.2f m, side cap %.2f m), racing line (entry %.2f m, apex "
+                "%.2f m, track-out %.2f m), commands %s, /gap_follow/status %.1f s",
+                physics_speed_ ? "PHYSICS" : "range", race_config_.a_lat_max_mps2,
+                race_config_.standoff_m, c.free_path_horizon_m, race_config_.side_cap_distance_m,
+                c.outside_entry_offset_m, c.apex_offset_m, c.track_out_offset_m,
+                compute_on_scan_ ? "on the timer AND on scan arrival" : "on the timer",
+                status_period_s_);
     if (escape_) {
       const ReverseEscapeConfig& e = escape_->config();
       RCLCPP_WARN(this->get_logger(),
@@ -901,6 +910,12 @@ class GapFollowNode : public rclcpp::Node {
   }
 
   void on_status_timer() {
+    // last_target_ belongs to the command half (timer or, with compute_on_scan, the scan thread).
+    RaceSpeedTarget target;
+    {
+      const std::lock_guard<std::mutex> lock(command_mutex_);
+      target = last_target_;
+    }
     std::size_t scans = 0;
     {
       const std::lock_guard<std::mutex> lock(shared_mutex_);
@@ -930,9 +945,8 @@ class GapFollowNode : public rclcpp::Node {
     std::snprintf(tail, sizeof(tail),
                   ",\"speed_terms_mps\":{\"lateral\":%.3f,\"stopping\":%.3f,\"side\":%.3f,"
                   "\"target\":%.3f}}",
-                  std::min(last_target_.lateral_mps, 99.0),
-                  std::min(last_target_.stopping_mps, 99.0), std::min(last_target_.side_mps, 99.0),
-                  last_target_.target_mps);
+                  std::min(target.lateral_mps, 99.0), std::min(target.stopping_mps, 99.0),
+                  std::min(target.side_mps, 99.0), target.target_mps);
     text += tail;
     std_msgs::msg::String msg;
     msg.data = text;
@@ -948,7 +962,7 @@ class GapFollowNode : public rclcpp::Node {
   // Race profile: the physics speed law, event-driven commands and the status stream.
   bool physics_speed_{false};
   RaceSpeedConfig race_config_;
-  RaceSpeedTarget last_target_;  // command thread only (read by the status timer, same group)
+  RaceSpeedTarget last_target_;  // behind command_mutex_
   bool compute_on_scan_{false};
   double status_period_s_{1.0};
   std::mutex command_mutex_;  // the command half's state: filters, limiter, escape, last publish

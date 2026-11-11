@@ -448,8 +448,19 @@ def test_analyse_flags_each_kind_of_failure():
         replay_check.analyse(jumpy, stamps, GEOMETRY, params), base
     )["no_steering_jumps"]
 
+    # A jump the baseline makes too (the real bags where the car left the lane) is not the race
+    # profile's fault; a bigger one is.
+    jumpy_base = replay_check.analyse(jumpy, stamps, GEOMETRY, params)
+    assert replay_check.hard_checks(jumpy_base, jumpy_base)["no_steering_jumps"]
+    worse = [dict(r) for r in jumpy]
+    worse[7]["filtered_steering_rad"] = 0.449
+    worse[8]["filtered_steering_rad"] = -0.2  # a 0.65 rad step in one scan
+    assert not replay_check.hard_checks(
+        replay_check.analyse(worse, stamps, GEOMETRY, params), jumpy_base
+    )["no_steering_jumps"]
+
     surging = [dict(r) for r in clean]
-    surging[10]["speed_mps"] = 0.95  # +0.45 m/s in 0.1 s = 4.5 m/s^2 against a 0.951 bound
+    surging[10]["speed_mps"] = 0.95  # +0.45 m/s in 0.1 s against 5 ticks of a 0.951 bound (0.095)
     assert not replay_check.hard_checks(
         replay_check.analyse(surging, stamps, GEOMETRY, params), base
     )["acceleration_within_limiter"]
@@ -464,6 +475,27 @@ def test_analyse_flags_each_kind_of_failure():
     assert not replay_check.hard_checks(
         replay_check.analyse(twitchy, stamps, GEOMETRY, params), base
     )["not_twitchier_than_baseline"]
+
+
+def test_a_speed_ramp_exactly_at_the_limiter_passes_whatever_the_scan_spacing():
+    # 0.951 m/s^2 is 0.01902 per 50 Hz tick. Scans 0.1 s apart get 5 ticks (0.0951), scans 0.03 s
+    # apart get 2 ticks (the CLI steps at least one, rounds to the nearest): both are exactly at
+    # the limiter's bound, so a check against accel * scan interval alone would call them
+    # violations, and the real violation below (twice the bound) still fails.
+    params = {"max_speed_mps": 1.0, "min_speed_mps": 0.0, "speed_rate_limit_margin_fraction": 0.1}
+    step = 0.951 / 50.0
+    gaps = [0.1, 0.1, 0.03, 0.03, 0.1, 0.045, 0.1]
+    stamps = [0.0]
+    speeds = [0.0]
+    for gap in gaps:
+        stamps.append(stamps[-1] + gap)
+        speeds.append(speeds[-1] + step * max(1, round(gap * 50)))
+    rows = [_row(0.0, v) for v in speeds]
+    result = replay_check.analyse(rows, stamps, GEOMETRY, params)
+    assert replay_check.hard_checks(result, result)["acceleration_within_limiter"]
+    rows[-1] = _row(0.0, speeds[-2] + 2.0 * step * 5)
+    result = replay_check.analyse(rows, stamps, GEOMETRY, params)
+    assert not replay_check.hard_checks(result, result)["acceleration_within_limiter"]
 
 
 def test_the_stopping_check_is_skipped_for_the_range_law():
@@ -547,7 +579,7 @@ def test_replay_profile_loader_resolves_splatted_base_profiles():
         if key not in race:
             raise AssertionError(key)
     assert race["physics_speed"] is True
-    assert race["lane_lookahead_m"] == 0.8 and race["outside_entry_offset_m"] == 0.25
+    assert race["lane_lookahead_m"] == 0.6 and race["outside_entry_offset_m"] == 0.25
 
 
 def test_race_profile_only_adds_what_it_says_over_the_lane_profile():

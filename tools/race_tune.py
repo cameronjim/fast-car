@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -141,13 +142,16 @@ def select_cmd(args: argparse.Namespace) -> int:
 
 def evaluate(args: argparse.Namespace) -> int:
     out = Path(args.out)
-    held_out = tracks.held_out_tracks(args.tracks)
+    held_out = tracks.tuning_tracks() if args.tuning_tracks else tracks.held_out_tracks(args.tracks)
     variants: dict[str, dict[str, Any]] = {
         BASELINE_NAME: {"params": space.BASELINE, "profile": runs.DEFAULT_PROFILE}
     }
     for text in args.variant:
         name, _, spec = text.partition("=")
         variants[name] = json.loads(spec)
+    for name in list(variants):
+        for repeat in range(2, args.repeats + 1):
+            variants[f"{name}_r{repeat}"] = variants[name]
     specs: dict[str, list[runs.RunSpec]] = {
         name: runs.make_specs(
             name,
@@ -162,8 +166,13 @@ def evaluate(args: argparse.Namespace) -> int:
         [s for ss in specs.values() for s in ss], out, args.jobs, args.domain_base, _progress
     )
     records = {name: _records(out, ss) for name, ss in specs.items()}
+    first_repeat = {n: r for n, r in records.items() if not re.search(r"_r\d+$", n)}
+    if args.repeats > 1:
+        records = report.pool(records)
     text = (
-        report.comparison_table(records, BASELINE_NAME) + "\n\n" + report.per_track_table(records)
+        report.comparison_table(records, BASELINE_NAME)
+        + "\n\n(per track: the first repeat)\n\n"
+        + report.per_track_table(first_repeat)
     )
     (out / "report.md").write_text(text + "\n")
     print(text)
@@ -206,6 +215,18 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--seed", type=int, default=1)
         else:
             p.add_argument("--tracks", type=int, default=None, help="how many held-out tracks")
+            p.add_argument(
+                "--repeats",
+                type=int,
+                default=1,
+                help="run every variant (and the baseline) this many times and pool the runs: "
+                "brake counts are not repeatable to the run",
+            )
+            p.add_argument(
+                "--tuning-tracks",
+                action="store_true",
+                help="run the TUNING tracks instead (for the tuning-set column of a report)",
+            )
             p.add_argument(
                 "--variant",
                 action="append",

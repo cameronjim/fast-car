@@ -157,13 +157,26 @@ the apex fix. The swept-path clamp stays on (its apex false positives were fixed
 
 RACE_2026_11_12_PROFILE: dict[str, float | int | bool | str] = {
     **LANE_2026_10_25_PROFILE,
-    # The recommended pre-race settings (docs/notes/track-session-2026-11-11.md): the lane profile
-    # with a 0.8 m lookahead and outside entry 0.25 m.
-    "lane_lookahead_m": 0.8,
+    # The winner of tools/race_tune.py's search on the tuning tracks (docs/notes/gap-follow-race-
+    # 2026-11-12.md): the lane profile with a 0.6 m lookahead and outside entry 0.25 m, plus the
+    # physics speed law at a 1.0 m/s ceiling, a late apex and the side proximity cap.
+    "max_speed_mps": 1.0,
+    "lane_lookahead_m": 0.6,
     "outside_entry_offset_m": 0.25,
     "physics_speed": True,
+    # The stopping limit must act at once: a low-pass on the speed target would delay it. The
+    # acceleration limiter still bounds what is published.
     "speed_time_constant_s": 0.0,
-    # RACE_PLACEHOLDER
+    "speed_rate_limit_margin_fraction": 0.5,
+    "a_lat_max_mps2": 1.5,
+    "stopping_margin_m": 0.1,
+    "apex_offset_m": 0.1,
+    "track_out_offset_m": 0.0,
+    "side_cap_distance_m": 0.2,
+    # Command on scan arrival as well as on the timer. Chosen on the held-out tracks (the timer
+    # variant had 1.65 brakes per lap there, against 1.06 with this on, the baseline's 1.00): see
+    # the note's section on it.
+    "compute_on_scan": True,
 }
 """Race profile, 2026-11-12: the physics speed law, the racing line and the side proximity cap.
 

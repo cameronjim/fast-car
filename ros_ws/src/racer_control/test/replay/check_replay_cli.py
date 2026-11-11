@@ -450,6 +450,76 @@ def main():
                 clearance = min(clearance, math.hypot(x - aim[0], y - aim[1]))
             assert clearance >= 0.6 * r["lane_half_width_m"], (r["stamp_s"], clearance)
 
+    # The race profile on REAL scans (the two floor excerpts above, 11 scans of the car's own
+    # LiDAR in foam-board corners): lane_centre with outside entry, late apex and track-out, the
+    # physics speed law with the side cap. Nothing may be crazy: every steering and speed finite and
+    # inside the limits, the target speed never above what stops inside the free path (the law's
+    # own invariant, re-derived here from --describe numbers), the speed never above the ceiling
+    # and never rising faster than the limiter allows. This is the L4 check; tools/race_tune.py
+    # replay runs the same checks on whole bags.
+    race_set = [
+        "target_mode=lane_centre",
+        "range_max_m=16",
+        "lane_lookahead_m=0.8",
+        "outside_entry_offset_m=0.25",
+        "apex_offset_m=0.15",
+        "track_out_offset_m=0.15",
+        "physics_speed=true",
+        "max_speed_mps=1.0",
+        "min_speed_mps=0.36",
+        "a_lat_max_mps2=2",
+        "side_cap_distance_m=0.15",
+        "speed_rate_limit_margin_fraction=0.1",
+    ]
+    race_desc = json.loads(
+        run(
+            cli,
+            ["--params", str(params), "--describe"] + [a for kv in race_set for a in ("--set", kv)],
+        ).stdout
+    )
+    for excerpt in (args.floor_excerpt, args.apex_excerpt):
+        if not excerpt:
+            continue
+        # The excerpts' scans are seconds apart in the bag: restamp them 0.1 s apart (the LiDAR's
+        # rate) so none counts as a stale gap and the speed chain runs through all of them.
+        restamped = []
+        for line in excerpt.read_text(encoding="utf-8").splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            restamped.append(f"{0.1 * len(restamped):.3f} " + line.split(maxsplit=1)[1])
+        with tempfile.TemporaryDirectory() as tmp_excerpt:
+            scans_file = Path(tmp_excerpt) / "scans.txt"
+            scans_file.write_text("\n".join(restamped) + "\n", encoding="utf-8")
+            race_rows = rows(
+                run(
+                    cli,
+                    ["--params", str(params), "--scans", str(scans_file), "--speed"]
+                    + [a for kv in race_set for a in ("--set", kv)],
+                )
+            )
+        assert race_rows
+        standoff = race_desc["min_forward_clearance_m"] + 0.05
+        previous = 0.0
+        stamps = [r["stamp_s"] for r in race_rows]
+        for k, r in enumerate(race_rows):
+            assert r["valid"]
+            for key in ("steering_rad", "filtered_steering_rad", "speed_mps", "free_path_m"):
+                assert r[key] is not None and math.isfinite(r[key]), (excerpt.name, k, key)
+            assert abs(r["filtered_steering_rad"]) <= MAX_STEERING_RAD + 1e-9
+            assert 0.0 <= r["speed_mps"] <= 1.0 + 1e-9
+            # The target never exceeds max(floor, speed that stops inside the free path).
+            room = r["free_path_m"] - standoff
+            a, t = race_desc["stop_deceleration_mps2"], race_desc["stop_latency_s"]
+            stop = a * (math.sqrt(t * t + 2.0 * room / a) - t) if room > 0 else 0.0
+            assert r["target_speed_mps"] <= max(0.36, stop) + 1e-6, (excerpt.name, k, r)
+            # The racing line never moves the aim more than the largest offset it was given.
+            assert abs(r["racing_shift_m"]) <= 0.25 + 1e-9
+            if k > 0:
+                ticks = max(1, round((stamps[k] - stamps[k - 1]) * 50.0))
+                limit = race_desc["max_acceleration_mps2"] * 0.1 * ticks / 50.0
+                assert r["speed_mps"] - previous <= limit + 1e-9, (excerpt.name, k)
+            previous = r["speed_mps"]
+
     assert math.isfinite(out[0]["filtered_steering_rad"])
     print("gap_follow_replay_cli checks passed")
     return 0

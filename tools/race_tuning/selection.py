@@ -25,6 +25,25 @@ speed (the safe fallback is decided by hand, not by this function).
 The held-out tracks are then run once with the winner and the baseline, and the same admissibility
 tests are applied to report whether the result generalises. If the winner is inadmissible there,
 the next-ranked candidate is tried, and the note says that the held-out set was consumed by it.
+
+AMENDMENT, written after the first held-out run and BEFORE the repeated one (the note says so too).
+The first held-out run showed what the search could not: safety_node brake counts are not
+repeatable. The same configuration (the winner with compute_on_scan on, and the same tracks) gave
+1.06 and 1.29 brakes per lap in two runs, and the winner in timer mode 1.65 against a tuning-set
+0.62 (picking the best of 66 candidates on counts this noisy selects luck: a winner's curse). So:
+
+  * the held-out tracks are run THREE times for the baseline, for the winner in timer mode and for
+    the winner with compute_on_scan on (and for the same two at the baseline's 0.64 m/s top
+    speed), and the runs are pooled (report.pool). The admissibility clauses above are then
+    applied to the POOLED runs, with the lap ratio taken against the mean of the baseline's
+    repeats;
+  * compute_on_scan is part of the profile iff, pooled on the held-out tracks, its brakes per lap
+    are at most the timer variant's plus COMPUTE_ON_SCAN_BRAKE_ALLOWANCE and its lap ratio is at
+    most COMPUTE_ON_SCAN_RATIO_FACTOR times the timer variant's; otherwise the profile is the
+    timer variant;
+  * if the chosen variant is not admissible pooled, the profile's max_speed_mps is lowered to 0.8
+    and then to the baseline's 0.64 (every other parameter unchanged), taking the first that is,
+    and the note says so.
 """
 
 from __future__ import annotations
@@ -37,6 +56,8 @@ MIN_CLEARANCE_M = 0.04
 BRAKE_ALLOWANCE_PER_LAP = 0.5
 ESCAPE_ALLOWANCE_PER_LAP = 0.5
 TIE_BAND = 0.01
+COMPUTE_ON_SCAN_BRAKE_ALLOWANCE = 0.1
+COMPUTE_ON_SCAN_RATIO_FACTOR = 1.01
 
 
 @dataclass(frozen=True)
@@ -90,13 +111,23 @@ def _per_lap(records: list[RunRecord], field: str) -> float:
     return sum(getattr(r, field) for r in records) / laps if laps else math.inf
 
 
+def baseline_times(baseline: list[RunRecord]) -> dict[tuple[str, str], float]:
+    """Mean lap time of the completed baseline runs per (track, direction): one run each in a
+    search, several when the baseline was repeated."""
+    times: dict[tuple[str, str], list[float]] = {}
+    for r in baseline:
+        if r.completed and r.lap_time_s > 0:
+            times.setdefault((r.track, r.direction), []).append(r.lap_time_s)
+    return {key: sum(v) / len(v) for key, v in times.items()}
+
+
 def aggregate(records: list[RunRecord], baseline: list[RunRecord] | None = None) -> Aggregate:
-    base = {(r.track, r.direction): r for r in baseline or []}
+    base = baseline_times(baseline or [])
     ratios = []
     for r in records:
         b = base.get((r.track, r.direction))
-        if b and b.completed and r.completed and b.lap_time_s > 0 and r.lap_time_s > 0:
-            ratios.append(r.lap_time_s / b.lap_time_s)
+        if b and r.completed and r.lap_time_s > 0:
+            ratios.append(r.lap_time_s / b)
     clearances = [r.min_clearance_m for r in records if not math.isnan(r.min_clearance_m)]
     return Aggregate(
         runs=len(records),

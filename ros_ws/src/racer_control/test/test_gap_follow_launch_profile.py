@@ -247,20 +247,36 @@ def test_old_profiles_carry_no_race_parameter_so_their_behaviour_is_unchanged():
     assert "outside_entry_offset_m" not in lane
 
 
-def test_race_profile_is_the_lane_profile_with_the_recommended_settings_and_the_race_features():
+# The selected race parameters, typed out again on purpose: an edit to the profile in the launch
+# file must also edit this test and the table in docs/notes/gap-follow-race-2026-11-12.md (these
+# are the winner of tools/race_tune.py's search under tools/race_tuning/selection.py).
+_RACE_2026_11_12_OVER_LANE = {
+    "max_speed_mps": 1.0,
+    "lane_lookahead_m": 0.6,
+    "outside_entry_offset_m": 0.25,
+    "physics_speed": True,
+    "speed_time_constant_s": 0.0,
+    "speed_rate_limit_margin_fraction": 0.5,
+    "a_lat_max_mps2": 1.5,
+    "stopping_margin_m": 0.1,
+    "apex_offset_m": 0.1,
+    "track_out_offset_m": 0.0,
+    "side_cap_distance_m": 0.2,
+    "compute_on_scan": True,
+}
+
+
+def test_race_profile_is_the_lane_profile_plus_the_selected_race_parameters():
     module = _load_launch_module()
     race = module.RACE_2026_11_12_PROFILE
     lane = module.LANE_2026_10_25_PROFILE
     assert module.PROFILES["race-2026-11-12"] is race
-    for key, value in lane.items():
-        if key not in ("lane_lookahead_m",):
-            assert race[key] == value or key in race, key
+    assert race == {**lane, **_RACE_2026_11_12_OVER_LANE}
     assert race["target_mode"] == "lane_centre"
-    assert race["lane_lookahead_m"] == 0.8  # the recommended settings, now inside the profile
-    assert race["outside_entry_offset_m"] == 0.25
-    assert race["physics_speed"] is True
     assert race["speed_time_constant_s"] == 0.0  # a low-pass would delay the stopping limit
     assert race["swept_path_clamp"] is True and race["reverse_escape"] is True
+    # The selection rule capped the search at 1 m/s: the profile never asks for more.
+    assert race["max_speed_mps"] <= 1.0
 
 
 def test_race_profile_reaches_the_node_with_the_right_types():

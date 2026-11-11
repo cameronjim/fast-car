@@ -41,3 +41,9 @@ dev = [
     "pytest-cov>=5.0",
     "hypothesis>=6.100",
 ]
+
+# tools/racer_app is its own uv project (agent/pyproject.toml, with fastapi and friends that
+# this environment does not install) and is tested by its own CI step, so the tools run must not
+# collect it. Listed with pytest's default exclusions, which setting this key replaces.
+[tool.pytest.ini_options]
+norecursedirs = ["racer_app", ".*", "build", "dist", "venv", "*.egg", "node_modules"]

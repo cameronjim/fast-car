@@ -60,3 +60,8 @@ CLAUDE.md
 firmware/safety_mux/build/
 firmware/safety_mux/build-diag/
 firmware/safety_mux/build-artifacts/
+
+# racer app (tools/racer_app): npm packages and the built web UI. CI builds dist/ from source
+# and install.sh builds it on the Jetson; only the source is committed.
+tools/racer_app/web/node_modules/
+tools/racer_app/web/dist/

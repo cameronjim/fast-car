@@ -1,0 +1,28 @@
+[Unit]
+Description=Racer app agent: web UI, pre-drive checks, stack and camera control
+Documentation=file://@REPO@/docs/notes/racer-app-2026-11-11.md
+After=network-online.target docker.service avahi-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+# Talks to the docker daemon with the same commands the runbook uses. No other privilege.
+SupplementaryGroups=docker
+Environment=RACER_APP_CONFIG=@ETC@/racer-app/config.json
+Environment=RACER_APP_STATE_DIR=@STATE_DIR@
+Environment=RACER_REPO_DIR=@REPO@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/tools/racer_app/agent/.venv/bin/racer-agent serve
+Restart=always
+RestartSec=3
+# Never compete with the control stack for CPU.
+Nice=5
+# NoNewPrivileges is deliberately NOT set: Reboot and Shut down call `sudo -n systemctl`, which
+# the sudoers drop-in allows for exactly those two commands.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

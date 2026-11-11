@@ -1,0 +1,28 @@
+[Unit]
+Description=Start the racer stack at boot (LiDAR and VESC, no cameras, disk permitting)
+Documentation=file://@REPO@/docs/notes/racer-app-2026-11-11.md
+After=docker.service racer-agent.service
+Wants=docker.service
+# The opt-in setting. The web UI's "Start the stack at boot" box creates and removes this file.
+ConditionPathExists=@STATE_DIR@/autostart.enabled
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=@USER@
+Group=@GROUP@
+SupplementaryGroups=docker
+Environment=RACER_APP_CONFIG=@ETC@/racer-app/config.json
+Environment=RACER_APP_STATE_DIR=@STATE_DIR@
+Environment=RACER_REPO_DIR=@REPO@
+WorkingDirectory=@REPO@
+# Waits up to 45 s for the LiDAR and VESC devices, refuses on a nearly full disk (the agent's
+# disk check), starts car-stack with the recorder, and returns. It does not touch the cameras and
+# it does not start any driving launch: arming still needs the RC kill knob.
+ExecStart=@REPO@/tools/racer_app/agent/.venv/bin/racer-agent autostart
+TimeoutStartSec=240
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

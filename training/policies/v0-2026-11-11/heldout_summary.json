@@ -1,0 +1,270 @@
+{
+  "policy_dir": "/Users/cameronjim/code/car-data/policies/v0-2026-11-11",
+  "episodes_per_condition": 120,
+  "heldout_family": {
+    "tracker": {
+      "episodes": 120,
+      "completed": 115,
+      "completion_rate": 0.9583333333333334,
+      "completion_wilson_95": [
+        0.9061591471148217,
+        0.9820732832333764
+      ],
+      "crashes": 5,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.07711221367074524,
+      "ttc_engagements_per_episode": 11.433333333333334,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.1081997484924835,
+      "ood_fraction": 0.0024023962414717955,
+      "mean_speed_mps": 1.7948704270872626,
+      "lap_time_mean_s": 6.179832884891203
+    },
+    "tracker_plus_residual": {
+      "episodes": 120,
+      "completed": 113,
+      "completion_rate": 0.9416666666666667,
+      "completion_wilson_95": [
+        0.8844740790888672,
+        0.97145899015576
+      ],
+      "crashes": 7,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.08577202091791429,
+      "ttc_engagements_per_episode": 11.191666666666666,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.11257845612325082,
+      "ood_fraction": 0.0023525980669740773,
+      "mean_speed_mps": 1.8122281208046185,
+      "lap_time_mean_s": 6.103665460334845
+    },
+    "paired": {
+      "n_both_completed": 113,
+      "lap_time_diff_mean_s": -0.08565583486923362,
+      "lap_time_diff_ci95_s": [
+        -0.09343981445268049,
+        -0.07770998750697951
+      ],
+      "lap_time_diff_mean_pct": -1.430444065457573,
+      "lap_time_diff_ci95_pct": [
+        -1.5667567861836689,
+        -1.2928585883388128
+      ]
+    },
+    "by_direction": {
+      "ccw": {
+        "episodes": 66,
+        "completion_tracker": 0.9696969696969697,
+        "completion_residual": 0.9545454545454546,
+        "lap_time_diff_mean_pct": -1.330807105668147
+      },
+      "cw": {
+        "episodes": 54,
+        "completion_tracker": 0.9444444444444444,
+        "completion_residual": 0.9259259259259259,
+        "lap_time_diff_mean_pct": -1.5559866347922497
+      }
+    }
+  },
+  "heldout_shapes": {
+    "tracker": {
+      "episodes": 120,
+      "completed": 120,
+      "completion_rate": 1.0,
+      "completion_wilson_95": [
+        0.9689808331071251,
+        0.9999999999999999
+      ],
+      "crashes": 0,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.06651312038867868,
+      "ttc_engagements_per_episode": 14.191666666666666,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.04735852247546942,
+      "ood_fraction": 0.0001358956640819348,
+      "mean_speed_mps": 1.8931431225657789,
+      "lap_time_mean_s": 9.096185491500442
+    },
+    "tracker_plus_residual": {
+      "episodes": 120,
+      "completed": 120,
+      "completion_rate": 1.0,
+      "completion_wilson_95": [
+        0.9689808331071251,
+        0.9999999999999999
+      ],
+      "crashes": 0,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.07901279764998917,
+      "ttc_engagements_per_episode": 12.108333333333333,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.05194628792099307,
+      "ood_fraction": 0.0001754147234859583,
+      "mean_speed_mps": 1.8935433357807492,
+      "lap_time_mean_s": 9.047176193835522
+    },
+    "paired": {
+      "n_both_completed": 120,
+      "lap_time_diff_mean_s": -0.04900929766491914,
+      "lap_time_diff_ci95_s": [
+        -0.05483079053858515,
+        -0.043260098707181775
+      ],
+      "lap_time_diff_mean_pct": -0.6059686091304111,
+      "lap_time_diff_ci95_pct": [
+        -0.6864827850698452,
+        -0.5278977003749866
+      ]
+    },
+    "by_direction": {
+      "ccw": {
+        "episodes": 70,
+        "completion_tracker": 1.0,
+        "completion_residual": 1.0,
+        "lap_time_diff_mean_pct": -0.8338087077662917
+      },
+      "cw": {
+        "episodes": 50,
+        "completion_tracker": 1.0,
+        "completion_residual": 1.0,
+        "lap_time_diff_mean_pct": -0.28699247104017794
+      }
+    }
+  },
+  "stress_x1.5": {
+    "tracker": {
+      "episodes": 120,
+      "completed": 100,
+      "completion_rate": 0.8333333333333334,
+      "completion_wilson_95": [
+        0.7565471853891594,
+        0.8894400366822575
+      ],
+      "crashes": 20,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.08411360536414847,
+      "ttc_engagements_per_episode": 9.1,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.12365945785511653,
+      "ood_fraction": 0.0017989722195677735,
+      "mean_speed_mps": 1.7240100134215468,
+      "lap_time_mean_s": 6.389208460481203
+    },
+    "tracker_plus_residual": {
+      "episodes": 120,
+      "completed": 91,
+      "completion_rate": 0.7583333333333333,
+      "completion_wilson_95": [
+        0.6744985088172029,
+        0.8261415882881451
+      ],
+      "crashes": 29,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.08747515120184796,
+      "ttc_engagements_per_episode": 8.316666666666666,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.14208916234542818,
+      "ood_fraction": 0.0024530822129537524,
+      "mean_speed_mps": 1.7154690886606763,
+      "lap_time_mean_s": 6.310837480273087
+    },
+    "paired": {
+      "n_both_completed": 90,
+      "lap_time_diff_mean_s": -0.07561064249474092,
+      "lap_time_diff_ci95_s": [
+        -0.08448817361598172,
+        -0.06684660331936544
+      ],
+      "lap_time_diff_mean_pct": -1.2143393958479065,
+      "lap_time_diff_ci95_pct": [
+        -1.3555777270280647,
+        -1.0758663357811697
+      ]
+    },
+    "by_direction": {
+      "ccw": {
+        "episodes": 66,
+        "completion_tracker": 0.8181818181818182,
+        "completion_residual": 0.7878787878787878,
+        "lap_time_diff_mean_pct": -1.1242548657921962
+      },
+      "cw": {
+        "episodes": 54,
+        "completion_tracker": 0.8518518518518519,
+        "completion_residual": 0.7222222222222222,
+        "lap_time_diff_mean_pct": -1.3321422428438352
+      }
+    }
+  },
+  "nominal": {
+    "tracker": {
+      "episodes": 120,
+      "completed": 120,
+      "completion_rate": 1.0,
+      "completion_wilson_95": [
+        0.9689808331071251,
+        0.9999999999999999
+      ],
+      "crashes": 0,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.06882660580614976,
+      "ttc_engagements_per_episode": 13.6,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.10648641925490665,
+      "ood_fraction": 0.001270436326164897,
+      "mean_speed_mps": 1.8230603184698808,
+      "lap_time_mean_s": 6.0693237299906535
+    },
+    "tracker_plus_residual": {
+      "episodes": 120,
+      "completed": 120,
+      "completion_rate": 1.0,
+      "completion_wilson_95": [
+        0.9689808331071251,
+        0.9999999999999999
+      ],
+      "crashes": 0,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.08272533092934282,
+      "ttc_engagements_per_episode": 11.3,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.09749390605420585,
+      "ood_fraction": 0.0012525279499983404,
+      "mean_speed_mps": 1.8460040589843532,
+      "lap_time_mean_s": 5.971512882308604
+    },
+    "paired": {
+      "n_both_completed": 120,
+      "lap_time_diff_mean_s": -0.09781084768204833,
+      "lap_time_diff_ci95_s": [
+        -0.10666252957221319,
+        -0.08866334165034637
+      ],
+      "lap_time_diff_mean_pct": -1.6385116437126144,
+      "lap_time_diff_ci95_pct": [
+        -1.7883838031018338,
+        -1.4845503863554756
+      ]
+    },
+    "by_direction": {
+      "ccw": {
+        "episodes": 66,
+        "completion_tracker": 1.0,
+        "completion_residual": 1.0,
+        "lap_time_diff_mean_pct": -1.8321325455590833
+      },
+      "cw": {
+        "episodes": 54,
+        "completion_tracker": 1.0,
+        "completion_residual": 1.0,
+        "lap_time_diff_mean_pct": -1.401863874789152
+      }
+    }
+  },
+  "contract": {
+    "contract_version": "1.0.0",
+    "config_hash": "10d8ac1f2e7f5f280da91b9d99460cd54ea2a57208816fdbd4cb0e3057e1416b",
+    "git_sha": "f396aef151829bd29bed88dd48aa4c2b64ed6b33"
+  },
+  "wall_clock_s": 76.85346508026123
+}

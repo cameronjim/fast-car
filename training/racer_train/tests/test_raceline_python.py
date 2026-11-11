@@ -9,6 +9,7 @@ test_base_controller_divergence.py.
 from __future__ import annotations
 
 import math
+import random
 
 import pytest
 from racer_train.raceline import (
@@ -190,3 +191,46 @@ def test_advance_to_lookahead_wraps_around():
     # From the last index, walking forward wraps back to index 0.
     idx = raceline.advance_to_lookahead(len(raceline) - 1, 20.0, 0.0, 5.0)
     assert idx == 0
+
+
+def test_vectorised_nearest_index_matches_the_scalar_reference_with_first_min_tiebreak():
+    """`nearest_index` was vectorised for the v0 env's speed; it must return exactly what the
+    scalar loop it replaced returned (same arithmetic, first minimum wins on ties)."""
+    rng = random.Random(0)
+    points = tuple(
+        RacelinePoint(
+            s_m=float(i),
+            x_m=math.cos(i / 7.0) * 3.0,
+            y_m=math.sin(i / 7.0) * 3.0,
+            heading_rad=0.0,
+            curvature_1pm=0.0,
+            target_speed_mps=1.0,
+        )
+        for i in range(44)
+    )
+    line = Raceline(points)
+    for _ in range(300):
+        x, y = rng.uniform(-4.0, 4.0), rng.uniform(-4.0, 4.0)
+        best, best_d2 = 0, math.inf
+        for i, p in enumerate(points):
+            d2 = (p.x_m - x) ** 2 + (p.y_m - y) ** 2
+            if d2 < best_d2:
+                best, best_d2 = i, d2
+        assert line.nearest_index(x, y) == best
+    # Exact tie (a point equidistant from both) resolves to the first index.
+    tie = Raceline(
+        (
+            RacelinePoint(0.0, -1.0, 0.0, 0.0, 0.0, 1.0),
+            RacelinePoint(1.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        )
+    )
+    assert tie.nearest_index(0.0, 0.0) == 0
+
+
+def test_index_ahead_advances_by_arc_length_and_wraps():
+    points = tuple(RacelinePoint(0.1 * i, 0.1 * i, 0.0, 0.0, 0.0, 1.0) for i in range(100))
+    line = Raceline(points)
+    # length_m includes the closing segment; mean spacing is length / n.
+    spacing = line.length_m / len(points)
+    assert line.index_ahead(10, 0.5) == 10 + round(0.5 / spacing)
+    assert line.index_ahead(98, 0.5) == (98 + round(0.5 / spacing)) % 100

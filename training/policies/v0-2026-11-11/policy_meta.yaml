@@ -1,0 +1,235 @@
+label: v0, PRE-SYSID. Trained in a simulator that has not been identified against
+  the car (roadmap Phase 3 not run). This is NOT the thesis result and makes no claim
+  about the real car; roadmap 5.1 retrains in the calibrated sim and supersedes it.
+created: '2026-11-11'
+policy_version: v0
+seed: 2
+config_name: sac_residual_v0_quarter
+config_sha256: 10d8ac1f2e7f5f280da91b9d99460cd54ea2a57208816fdbd4cb0e3057e1416b
+git_sha: f396aef151829bd29bed88dd48aa4c2b64ed6b33
+git_tree_dirty_at_export: false
+observation_normalization:
+  applied_inside_policy_pt: true
+  contract_normalization_block: identity by design; do not apply any other normalization
+  clip_sigma: 10.0
+  lidar_clip_m: 5.0
+  low_dim_count: 11
+  mean:
+  - 1.8674741715040524
+  - 0.17494803104830572
+  - 0.006947612432684025
+  - -0.012375999919870748
+  - 0.014661265388715355
+  - 0.03396699945855787
+  - 1.9212004212915896
+  - 0.09333460508817666
+  - 0.08945903596838956
+  - 0.03509510341122059
+  - 1.9081777782447635
+  - 0.8202139607727528
+  - 0.6858804752923549
+  - 0.6243288977965713
+  - 0.6098488778345287
+  - 0.5928817738801241
+  - 0.5883755749739706
+  - 0.5994964064400643
+  - 0.6270605481669307
+  - 0.6747562123969197
+  - 0.7745491918668151
+  - 0.860742049279809
+  - 0.9518260096736252
+  - 1.0380818246118724
+  - 1.1031173711195588
+  - 1.1882126872733236
+  - 1.2784532401800155
+  - 1.4095072077289224
+  - 1.562789674001187
+  - 1.6413750958941877
+  - 1.6050545550823212
+  - 1.5235838838636875
+  - 1.3957229324378073
+  - 1.2839259842276574
+  - 1.1689719050861895
+  - 1.0195521362528206
+  - 0.8451106490060687
+  - 0.7322776669695973
+  - 0.6666636589769274
+  - 0.5959118929840624
+  - 0.5765196203246713
+  - 0.564986633887887
+  - 0.5593337033774703
+  - 0.5753804783023894
+  - 0.5938375841233879
+  - 0.6691824576966464
+  - 0.7854830225035548
+  std:
+  - 0.18947788881056282
+  - 1.346737437144306
+  - 0.10223805885518086
+  - 0.09381189505843468
+  - 0.18106612652559223
+  - 0.25247903653500026
+  - 0.14363516177769972
+  - 0.7506720364884962
+  - 0.7635707858986952
+  - 0.2501788582061294
+  - 0.16134315805723612
+  - 0.6547399930121551
+  - 0.5527690174653863
+  - 0.5102011588906826
+  - 0.5594556515293809
+  - 0.5514426770666286
+  - 0.5539293969555069
+  - 0.560315333056058
+  - 0.5842718080402185
+  - 0.6330210866068168
+  - 0.721567954174957
+  - 0.7560734713357692
+  - 0.769644047069318
+  - 0.7828665539054861
+  - 0.7284693752395403
+  - 0.7151580519980562
+  - 0.6734805326833784
+  - 0.7130635888313828
+  - 0.8270630354381614
+  - 0.8721579265758934
+  - 0.8109323075802498
+  - 0.7930945188680604
+  - 0.789624245952124
+  - 0.8379119529973045
+  - 0.8729659949006463
+  - 0.8608499575811183
+  - 0.7690295524194417
+  - 0.7006544847912292
+  - 0.6679297651342744
+  - 0.5654484345746491
+  - 0.5697726443296469
+  - 0.548092210064588
+  - 0.5286273679638672
+  - 0.5529206257095338
+  - 0.49920141915933847
+  - 0.5890078236977344
+  - 0.6682437762621054
+must_match_at_deploy:
+  envelope:
+    residual_fraction_steering: 0.025
+    residual_fraction_speed: 0.004
+    speed_cap_mps: 2.0
+    ood_threshold: 3.0
+    ood_reference_state:
+    - 1.8
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    ood_reference_scale:
+    - 0.8
+    - 2.5
+    - 0.3
+    - 0.2
+    - 0.4
+    control_rate_hz: 50.0
+  action_scale:
+    steering_rad_per_unit: 0.0236
+    speed_mps_per_unit: 0.099
+  base_controller:
+    lookahead_min_m: 1.0
+    lookahead_max_m: 1.3
+    lookahead_curvature_ref_1pm: 1.0
+    raceline_a_lat_max_mps2: 3.5
+    raceline_v_max_mps: 2.0
+  observation:
+    profile: v0
+    lidar_beam_count: 36
+    lidar_fov_rad: 4.7
+    lidar_downsample_factor: 30
+    lidar_min_pool: true
+    lidar_rate_hz_trained_against:
+    - 8.333333333333334
+    - 12.5
+vehicle_overrides_assumed:
+  steering:
+    min_angle_rad: -0.449
+    max_angle_rad: 0.504
+  chassis:
+    front_overhang_m: 0.11
+    rear_overhang_m: 0.14
+  actuation:
+    throttle_full_scale_mps: 2.077
+    stop_latency_s: 0.13
+    max_acceleration_mps2: 3.0
+randomization:
+  enabled: true
+  friction_mu:
+  - 0.55
+  - 1.1
+  cornering_stiffness_front_n_per_rad:
+  - 80.0
+  - 400.0
+  cornering_stiffness_rear_ratio:
+  - 0.8
+  - 1.3
+  mass_scale:
+  - 0.85
+  - 1.2
+  steering_limit_left_rad:
+  - 0.46
+  - 0.52
+  steering_limit_right_rad:
+  - 0.41
+  - 0.47
+  steering_gain:
+  - 0.92
+  - 1.08
+  steering_bias_rad:
+  - -0.03
+  - 0.03
+  speed_scale:
+  - 0.9
+  - 1.1
+  top_speed_mps:
+  - 1.95
+  - 2.2
+  max_accel_mps2:
+  - 1.5
+  - 5.0
+  steering_tau_s:
+  - 0.02
+  - 0.1
+  throttle_tau_s:
+  - 0.05
+  - 0.3
+  command_delay_s:
+  - 0.03
+  - 0.13
+  velocity_noise_std_mps:
+  - 0.02
+  - 0.08
+  velocity_bias_mps:
+  - -0.05
+  - 0.05
+  yaw_rate_noise_std_rad_s:
+  - 0.01
+  - 0.05
+  yaw_rate_bias_rad_s:
+  - -0.03
+  - 0.03
+  pose_noise_std_m:
+  - 0.005
+  - 0.03
+  pose_yaw_noise_std_rad:
+  - 0.005
+  - 0.04
+  lidar_noise_std_m:
+  - 0.003
+  - 0.02
+  lidar_dropout_prob:
+  - 0.0
+  - 0.03
+  lidar_period_steps:
+  - 4
+  - 6
+  obs_latency_s:
+  - 0.0
+  - 0.06
+checkpoint: checkpoint_1000000.zip

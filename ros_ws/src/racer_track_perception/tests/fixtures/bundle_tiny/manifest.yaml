@@ -1,0 +1,39 @@
+bundle_schema_version: 1.0.0
+kind: track_perception
+model_id: trackperc-v0-2026-11-12-tiny
+created_utc: '2026-11-12T03:00:00Z'
+git_sha: 0123456789abcdef0123456789abcdef01234567
+training_config_sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+vehicle_params:
+  schema_version: 0.14.0
+  sysid_session_id: none-preliminary
+payload:
+- file: weights.npz
+  sha256: 23f66d183854acf24b411b3bb39750225b45506d345afb997ade6439bc794b20
+io:
+  input:
+    tensor:
+    - 1
+    - 2
+    - 360
+    n_bins: 360
+    range_clip_m: 6.0
+    origin: lidar
+    pooling: min
+    body_filter_margin_m: 0.02
+  output:
+    tensor:
+    - 16
+    - 5
+    stations: 16
+    station_spacing_m: 0.2
+    frame: base_link
+  lidar_mount:
+    x_m: 0.285
+    y_m: 0.0
+    yaw_rad: 3.141593
+  arch:
+    type: circ_conv1d_v0
+data:
+- test fixture, random weights
+metrics: {}

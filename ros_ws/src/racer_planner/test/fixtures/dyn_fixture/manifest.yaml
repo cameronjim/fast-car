@@ -1,0 +1,41 @@
+bundle_schema_version: "1.0.0"
+kind: dynamics
+model_id: "dyn-fixture-v0-2026-11-12"
+created_utc: "2026-11-12T00:00:00Z"
+git_sha: "0000000000000000000000000000000000000000"
+training_config_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+vehicle_params:
+  schema_version: "0.14.0"
+  sysid_session_id: "none-preliminary"
+payload:
+  - {file: "residual_mlp.f32", sha256: "e61c67bf424539c1d93b82a4e7b8e40a7317d713f8d77564f773d1e4ed8505c3"}
+  - {file: "golden_rollouts.csv", sha256: "bdf2b029b446940bfb53ed5fc9f3f1e28c2f5208488ba1e0ef89d09d1d79d467"}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal:
+    speed_gain: 0.95
+    speed_tau_s: 0.25
+    accel_max_mps2: 2.0
+    decel_max_mps2: 1.5
+    steer_gain_left: 1.1
+    steer_gain_right: 0.9
+    steer_offset_rad: 0.01
+    steer_tau_s: 0.1
+    command_delay_s: 0.08
+    understeer_s2_per_m2: 0.05
+  residual:
+    enabled: true
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers: [[4, 32], [32, 32], [32, 2]]
+    activation: tanh
+    input_mean: [0.3, 0.0, 0.3, 0.0]
+    input_std: [0.3, 0.2, 0.3, 0.2]
+    output_scale: [0.2, 0.03]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 0.9}
+  golden: golden_rollouts.csv
+data: ["racer_planner test fixture, synthetic, seed 1, not fitted"]
+metrics: {}

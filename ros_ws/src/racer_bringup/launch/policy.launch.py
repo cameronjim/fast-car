@@ -66,43 +66,49 @@ def base_controller_settings(policy_dir: Path) -> dict[str, float]:
         ) from exc
 
 
-def nodes_for(
+def parameters_for(
     policy_dir: str, raceline: str, pose_frame: str, odom_topic: str
-) -> tuple[Node, Node]:
+) -> tuple[dict, dict]:
+    """(tracker parameters, policy_node parameters): plain dicts, so they can be checked."""
     if not policy_dir:
         raise RuntimeError("policy.launch.py: policy_dir:=<policy directory> is required")
     if not raceline:
         raise RuntimeError("policy.launch.py: raceline:=<raceline csv> is required")
     lookahead = base_controller_settings(Path(policy_dir))
+    tracker = {
+        **lookahead,
+        "raceline_path": raceline,
+        "pose_frame": pose_frame,
+        "odom_topic": odom_topic,
+        "drive_topic": TRACKER_HANDOFF_TOPIC,
+    }
+    policy = {
+        "policy_dir": policy_dir,
+        "raceline_path": raceline,
+        "pose_frame": pose_frame,
+        "odom_topic": odom_topic,
+        "tracker_command_topic": TRACKER_HANDOFF_TOPIC,
+    }
+    return tracker, policy
+
+
+def nodes_for(
+    policy_dir: str, raceline: str, pose_frame: str, odom_topic: str
+) -> tuple[Node, Node]:
+    tracker_params, policy_params = parameters_for(policy_dir, raceline, pose_frame, odom_topic)
     tracker = Node(
         package="racer_control",
         executable="tracker_node",
         name="tracker_node",
         output="screen",
-        parameters=[
-            {
-                **lookahead,
-                "raceline_path": raceline,
-                "pose_frame": pose_frame,
-                "odom_topic": odom_topic,
-                "drive_topic": TRACKER_HANDOFF_TOPIC,
-            }
-        ],
+        parameters=[tracker_params],
     )
     policy = Node(
         package="racer_policy",
         executable="policy_node",
         name="policy_node",
         output="screen",
-        parameters=[
-            {
-                "policy_dir": policy_dir,
-                "raceline_path": raceline,
-                "pose_frame": pose_frame,
-                "odom_topic": odom_topic,
-                "tracker_command_topic": TRACKER_HANDOFF_TOPIC,
-            }
-        ],
+        parameters=[policy_params],
     )
     return tracker, policy
 

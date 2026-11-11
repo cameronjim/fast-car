@@ -282,6 +282,19 @@ class GapFollowNode : public rclcpp::Node {
         "other side is open, until a lane width has been measured beside the car (then half "
         "the last measured width); twice it is how far the trace looks for each side's nearest "
         "return, a side with none being open (m).");
+    c.outside_entry_offset_m = declare_ranged_double(
+        *this, "outside_entry_offset_m", 0.0, 0.0, 1.0,
+        "target_mode lane_centre: run to the OUTSIDE of a coming turn by up to this much (m) and "
+        "turn in late (gap_follow.hpp OUTSIDE ENTRY). 0 (default) = off.");
+    c.outside_entry_horizon_m = declare_ranged_double(
+        *this, "outside_entry_horizon_m", 1.6, 0.2, 5.0,
+        "Outside entry: how far along the lane the trace looks for a turn (m); at least the lane "
+        "lookahead.");
+    c.outside_entry_turn_rad = declare_ranged_double(
+        *this, "outside_entry_turn_rad", 0.35, 0.05, 3.0,
+        "Outside entry: heading change beyond the lookahead (rad) that counts as a turn coming "
+        "(full effect at twice this), and the heading change inside the lookahead that ends it "
+        "(turn in).");
     c.forward_preference = declare_ranged_double(
         *this, "forward_preference", 0.0, 0.0, 1.0,
         "Weights gap selection toward the vehicle's forward direction: each gap scores "

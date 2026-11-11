@@ -285,6 +285,26 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_localization_test.sh"
 
+  l5-track-family:
+    name: L5 track family canary (raceline tracker on a stadium and a rounded rectangle, both directions, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # 2026-11-11 (docs/notes/track-session-2026-11-11.md): the raceline made from the track's own
+    # map by tools/track_session, tracker_node on it through safety_node with the car as measured
+    # (per-side steering locks), a 1 m lane stadium and rounded rectangle, both directions: laps,
+    # no wall contact, no safety brake. Same workspace-combination pattern as l5-localization
+    # (see .github/scripts/l5_track_family_test.sh); a sibling job so the canaries fail
+    # independently.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 track family workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_track_family_test.sh"
+
   e2e-sim-safety:
     name: Milestone 1 e2e (bridge_node + safety_node, real command path, ros-dev + gym)
     runs-on: ubuntu-latest

@@ -1858,6 +1858,71 @@ Foxglove's "Publish pose estimate" on `/initialpose` (map frame).
 Driving the raceline tracker on this pose (tracker_node `pose_frame:=map`) needs a raceline
 written in this map's frame, which is a later step.
 
+## New track session (UNVERIFIED on the car, written 2026-11-11; proven only in the sim)
+
+The owner rebuilds the track every session, so nothing here is tuned to one layout: a mapping
+run becomes a map, the map a raceline for the car's real turning limits, and the raceline a
+tracker launch. One command per step, all in `tools/track_session/track_session.py` (run the
+offline steps with `uv run --project tools python tools/track_session/track_session.py ...`).
+Results and the reasoning are in `docs/notes/track-session-2026-11-11.md`. Read its "What to
+expect" first: on a lane around 0.8 m wide or an island end this tight the tracker can stall
+against safety_node's corridor, and `gap_follow` with reverse escape (optionally with outside
+entry) is the driver that gets round.
+
+Until the calibration PR (branch `calib/2026-11-10`) puts the measured steering and speed scale in
+`config/vehicle_params.yaml`, the tools take them from `tools/track_session/real_car_2026-11-10.yaml`
+(left lock 0.504 rad, right lock 0.449 rad, commands read 1.401 times the true speed) and
+`track_follow.launch.py` has the `calib-2026-11-10` profile. After it lands: delete both and run
+`profile:=none`.
+
+### T1. Map (one slow lap, Jetson teleop, as in M3) and save
+
+Live on the car, with `mapping:=true` as in "First mapping session" M3, then
+
+    uv run --project tools python tools/track_session/track_session.py save-map \
+        --out /data/maps/<track>/<track>
+
+or offline from the teleop bag (in the ros-dev image on the laptop; it replays the bag through the
+car's own EKF and slam_toolbox with the scan motion corrected, which matters on a lane this narrow,
+see the note):
+
+    tools/track_session/track_session.py map /data/bags/<bag> --name <track>
+
+Look at `<track>.pgm`: crisp single walls, the island a closed outline. Drive the first lap
+counter-clockwise and slowly; a map from clockwise driving alone came out doubled in the sim of
+the real bags.
+
+### T2. Look at the lane
+
+    uv run --project tools python tools/track_session/track_session.py analyze /data/maps/<track>/<track>.yaml
+
+Prints the lane width along the centreline, the island's size, the radius of each end's outer
+wall and the centreline radius at each end. A centreline end radius under the car's 0.60 m (left)
+or 0.69 m (right) turning radius means the middle of the lane is not drivable at full lock and the
+line has to run wide.
+
+### T3. Raceline
+
+    uv run --project tools python tools/track_session/track_session.py raceline \
+        /data/maps/<track>/<track>.yaml --v-max 0.64 --commands-read-high 1.401
+
+Writes `<track>_ccw.csv` and `<track>_cw.csv` (tracker_node's format), a JSON report and a PNG
+each. The line is the minimum-curvature path inside the lane with the whole body outline kept off
+the walls (the widest of 0.15 to 0.05 m the lane allows) and the curvature held under the car's
+steering on each side (85 percent of tan(lock) / wheelbase). It exits 2 and says NOT FEASIBLE when
+the lane does not allow it: believe it, and use `gap_follow` there. `--v-max` is the top TRUE
+speed; start at 0.5.
+
+### T4. Run it
+
+    uv run --project tools python tools/track_session/track_session.py tracker \
+        /data/maps/<track>/<track>_ccw.csv /data/maps/<track>/<track>.yaml
+
+prints the two commands and the checklist: `car_teleop.launch.py ... localization:=true map:=...`
+in one terminal and `ros2 launch racer_control track_follow.launch.py raceline:=...` in another.
+Kill switch held, lane clear, car on the mapping start spot facing the same way. Every run is in
+the bag.
+
 ## Afterwards
 
 - Everything measured in steps 5, 10, 11, 12, 13 and 15 goes into `config/vehicle_params.yaml` or a

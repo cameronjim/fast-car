@@ -209,7 +209,16 @@ def carve_pocket(
 # side of ``lane_open_side``) and there is real free floor behind it. Every geometry is a pure
 # function of its parameters; ``build_synthetic_track`` is the single entry point.
 
-SYNTHETIC_TRACK_NAMES = ("lane_square", "lane_round", "lane_open_side", "chicane", "open_room")
+SYNTHETIC_TRACK_NAMES = (
+    "lane_square",
+    "lane_round",
+    "lane_open_side",
+    "chicane",
+    "open_room",
+    "stadium",
+    "rounded_rect",
+    "map",
+)
 
 # The loop the lane tracks run on: a rectangle, centreline dimensions (m). The same 5.5 x 4.0 for
 # every lane track, so the infield behind lane_open_side's boxes is 4.4 x 2.9 m of open floor.
@@ -251,6 +260,12 @@ class SyntheticTrack:
     walls: np.ndarray
     loop: bool
     lane_width_m: float
+    # An imported map (``map_track``): the occupancy grid itself (255 free, 0 wall, row 0 at min
+    # y), its origin and resolution, replacing the rasterised ``walls``.
+    occupancy: np.ndarray | None = None
+    occupancy_origin: tuple[float, float, float] | None = None
+    occupancy_resolution_m: float = 0.05
+    wall_thickness_m: float = WALL_THICKNESS_M
 
     def bounds(self) -> tuple[float, float, float, float]:
         """(x_min, y_min, x_max, y_max) of the walls."""
@@ -267,6 +282,10 @@ class SyntheticTrack:
             self.walls,
             self.loop,
             self.lane_width_m,
+            self.occupancy,
+            self.occupancy_origin,
+            self.occupancy_resolution_m,
+            self.wall_thickness_m,
         )
 
 
@@ -275,6 +294,8 @@ def _line_points(
 ) -> list[tuple[float, float]]:
     """Points from ``start`` towards ``end``, about ds_m apart, ``end`` itself not included."""
     (x0, y0), (x1, y1) = start, end
+    if math.hypot(x1 - x0, y1 - y0) < 1e-9:
+        return []  # a zero-length straight (a stadium's end arcs meet): no duplicate point
     n = max(1, round(math.hypot(x1 - x0, y1 - y0) / ds_m))
     return [(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n) for i in range(n)]
 
@@ -414,8 +435,17 @@ def build_synthetic_track(
     jog_offset_m: float = DEFAULT_JOG_OFFSET_M,
     jog_length_m: float = DEFAULT_JOG_LENGTH_M,
     room_size_m: float = DEFAULT_ROOM_SIZE_M,
+    straight_length_m: float = 2.0,
+    island_width_m: float = 1.5,
+    island_radius_m: float = 0.4,
+    map_yaml: str = "",
+    map_centreline_csv: str = "",
 ) -> SyntheticTrack:
     """One of ``SYNTHETIC_TRACK_NAMES`` as a ``SyntheticTrack`` (the reactive bench's tracks).
+
+    The family tracks ``stadium``, ``rounded_rect`` and ``map`` (see ``island_track`` and
+    ``map_track``) take ``lane_width_m``, ``straight_length_m``, ``island_width_m``,
+    ``island_radius_m`` and, for ``map``, ``map_yaml`` and ``map_centreline_csv``.
 
     The four lane tracks share a counter-clockwise rectangular loop (``LOOP_WIDTH_M`` x
     ``LOOP_HEIGHT_M`` centreline) and a lane ``lane_width_m`` wide; the car starts mid bottom
@@ -442,6 +472,14 @@ def build_synthetic_track(
         raise ValueError(f"synthetic track must be one of {SYNTHETIC_TRACK_NAMES}, got {name!r}")
     if name == "open_room":
         return _open_room(room_size_m)
+    if name in ("stadium", "rounded_rect"):
+        return build_family_track(
+            name, lane_width_m, straight_length_m, island_width_m, island_radius_m
+        )
+    if name == "map":
+        if not map_yaml or not map_centreline_csv:
+            raise ValueError("the map track needs map_yaml and map_centreline_csv")
+        return map_track(map_yaml, map_centreline_csv)
     half = lane_width_m / 2.0
     w, h = LOOP_WIDTH_M, LOOP_HEIGHT_M
     if lane_width_m <= 0.0 or lane_width_m >= min(w, h):
@@ -521,3 +559,176 @@ def rasterize_walls(
         window = occupancy[r_lo : r_hi + 1, c_lo : c_hi + 1]
         window[d <= thickness_m / 2.0] = 0.0
     return occupancy, (x0, y0, 0.0)
+
+
+# -- Track family: islands and imported maps (track session, 2026-11-11) ---------------------------
+#
+# The living-room track is a lane of constant width W round an ISLAND (the foam-board loop's
+# infield). ``island_track`` builds the two walls as the island's outline and its offset by W,
+# and the centreline as the offset by W / 2, from rounded rectangles:
+#
+#   * stadium: an island ``straight_length_m`` long between two round ends of radius
+#     ``island_radius_m`` (0 = a thin wall, a line). The lane's outer ends have radius r + W.
+#   * rounded_rect: an island ``straight_length_m`` x ``island_width_m`` with corners of radius
+#     ``island_radius_m`` (0 = square corners).
+#
+# Both start the car mid bottom straight facing +x (counter-clockwise); ``reversed`` drives them
+# clockwise. ``map_track`` imports a saved occupancy map (slam_toolbox's pgm + yaml) as the
+# world, with a centreline CSV from tools/raceline/map_track.py for the start pose and laps.
+
+FAMILY_TRACK_NAMES = ("stadium", "rounded_rect", "map")
+
+
+def island_track(
+    name: str,
+    lane_width_m: float,
+    island_length_m: float,
+    island_height_m: float,
+    island_radius_m: float,
+) -> SyntheticTrack:
+    """A counter-clockwise lane of ``lane_width_m`` round a rounded-rectangle island (x from
+    0 to ``island_length_m``, y from 0 to ``island_height_m``, corner radius
+    ``island_radius_m``). The walls are the island's outline and its offset by the lane width;
+    the centreline is the offset by half of it (corner radii r + W / 2 and r + W)."""
+    if lane_width_m <= 0.0 or island_length_m < 0.0 or island_height_m < 0.0:
+        raise ValueError("lane width must be positive, island sizes not negative")
+    r = island_radius_m
+    if r < 0.0 or 2.0 * r > min(island_length_m, island_height_m) + 1e-9:
+        raise ValueError(
+            f"island radius {r} m does not fit a {island_length_m} x {island_height_m} m island"
+        )
+    d = lane_width_m
+    h = d / 2.0
+    inner = rounded_rect_points(0.0, 0.0, island_length_m, island_height_m, r)
+    centre = rounded_rect_points(-h, -h, island_length_m + h, island_height_m + h, r + h)
+    outer = rounded_rect_points(-d, -d, island_length_m + d, island_height_m + d, r + d)
+    # Start mid bottom straight, whatever its length: the straight's point nearest mid length.
+    n_bottom = max(len(_line_points((r, -h), (island_length_m - r, -h))), 1)
+    mid_x = island_length_m / 2.0
+    start = int(np.argmin([abs(x - mid_x) for x, _ in centre[:n_bottom]]))
+    centre = centre[start:] + centre[:start]
+    cx, cy = (np.asarray(v, dtype=float) for v in zip(*centre, strict=True))
+    walls = np.vstack([_segments(outer, closed=True), _segments(inner, closed=True)])
+    return SyntheticTrack(name, cx, cy, walls, True, lane_width_m)
+
+
+def build_family_track(
+    name: str,
+    lane_width_m: float = 1.0,
+    straight_length_m: float = 2.0,
+    island_width_m: float = 1.5,
+    island_radius_m: float = 0.4,
+) -> SyntheticTrack:
+    """``stadium`` or ``rounded_rect`` (see above). For a stadium the island is
+    ``straight_length_m`` of straight plus a round end of ``island_radius_m`` at each end, and
+    ``island_width_m`` is ignored (2 x the radius)."""
+    if name == "stadium":
+        r = island_radius_m
+        return island_track(name, lane_width_m, straight_length_m + 2.0 * r, 2.0 * r, r)
+    if name == "rounded_rect":
+        return island_track(name, lane_width_m, straight_length_m, island_width_m, island_radius_m)
+    raise ValueError(f"not a family track: {name!r}")
+
+
+def read_pgm(path: str | Path) -> np.ndarray:
+    """A binary (P5) pgm as a uint8 array, row 0 at the top of the image."""
+    data = Path(path).read_bytes()
+    tokens: list[bytes] = []
+    pos = 0
+    while len(tokens) < 4:
+        while data[pos : pos + 1].isspace():
+            pos += 1
+        if data[pos : pos + 1] == b"#":
+            while data[pos : pos + 1] != b"\n":
+                pos += 1
+            continue
+        start = pos
+        while not data[pos : pos + 1].isspace():
+            pos += 1
+        tokens.append(data[start:pos])
+    magic, width, height = tokens[0], int(tokens[1]), int(tokens[2])
+    if magic != b"P5":
+        raise ValueError(f"{path}: only binary pgm (P5) is supported, got {magic!r}")
+    pixels = np.frombuffer(data, dtype=np.uint8, count=width * height, offset=pos + 1)
+    return pixels.reshape(height, width)
+
+
+@dataclass(frozen=True)
+class MapYaml:
+    """A map_server yaml: the image, resolution (m), origin (x, y) of the lower-left corner,
+    and the thresholds that turn a pixel into occupied or free."""
+
+    image: Path
+    resolution_m: float
+    origin_xy: tuple[float, float]
+    negate: bool
+    occupied_thresh: float
+    free_thresh: float
+
+
+def read_map_yaml(path: str | Path) -> MapYaml:
+    """A map_server yaml. The format is flat (``key: value``, origin a ``[x, y, yaw]`` list), read
+    here without a yaml library so this module stays numpy only."""
+    path = Path(path)
+    meta: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if ":" in line:
+            key, value = line.split(":", 1)
+            meta[key.strip()] = value.strip().strip("'\"")
+    origin = [float(v) for v in meta["origin"].strip("[]").split(",")]
+    return MapYaml(
+        image=path.parent / meta["image"],
+        resolution_m=float(meta["resolution"]),
+        origin_xy=(origin[0], origin[1]),
+        negate=bool(int(float(meta.get("negate", "0")))),
+        occupied_thresh=float(meta.get("occupied_thresh", "0.65")),
+        free_thresh=float(meta.get("free_thresh", "0.25")),
+    )
+
+
+def map_cells(path: str | Path) -> tuple[np.ndarray, np.ndarray, MapYaml]:
+    """(occupied, free, meta) boolean grids of a map_server map, ROW 0 AT MIN Y (the layout of
+    f1tenth_gym's occupancy map), by map_server's trinary rule: occupancy = (255 - pixel) / 255
+    (pixel / 255 with ``negate``); above ``occupied_thresh`` occupied, below ``free_thresh``
+    free, else unknown."""
+    meta = read_map_yaml(path)
+    pixels = np.flipud(read_pgm(meta.image)).astype(float)
+    occupancy = pixels / 255.0 if meta.negate else (255.0 - pixels) / 255.0
+    return occupancy > meta.occupied_thresh, occupancy < meta.free_thresh, meta
+
+
+def map_track(
+    map_yaml: str | Path, centreline_csv: str | Path, grow_cells: int = 0
+) -> SyntheticTrack:
+    """A saved map as the world. Occupied cells are walls (optionally grown by ``grow_cells`` cells; a ray
+    cannot slip between two diagonal cells), everything else is free floor. The centreline CSV
+    (tools/raceline/map_track.py) gives the start pose, the laps and the lane width. ``walls`` are
+    one zero-length segment per occupied cell centre, for the clearance metric."""
+    occupied, _free, meta = map_cells(map_yaml)
+    grown = occupied.copy()
+    for _ in range(grow_cells):
+        step = grown.copy()
+        step[1:, :] |= grown[:-1, :]
+        step[:-1, :] |= grown[1:, :]
+        step[:, 1:] |= grown[:, :-1]
+        step[:, :-1] |= grown[:, 1:]
+        grown = step
+    rows, cols = np.nonzero(occupied)
+    cx = meta.origin_xy[0] + (cols + 0.5) * meta.resolution_m
+    cy = meta.origin_xy[1] + (rows + 0.5) * meta.resolution_m
+    walls = np.column_stack([cx, cy, cx, cy])
+    x, y, _ = load_raceline_xy_speed(centreline_csv)
+    occupancy = np.where(grown, 0.0, 255.0).astype(np.float32)
+    return SyntheticTrack(
+        "map",
+        x,
+        y,
+        walls,
+        True,
+        0.0,
+        occupancy=occupancy,
+        occupancy_origin=(meta.origin_xy[0], meta.origin_xy[1], 0.0),
+        occupancy_resolution_m=meta.resolution_m,
+        wall_thickness_m=meta.resolution_m,
+    )

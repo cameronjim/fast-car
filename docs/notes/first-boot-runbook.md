@@ -1885,6 +1885,25 @@ From the Mac: `python3 tools/racer_app/find_car.py` (mDNS, then a scan of the lo
 `http://racer-car.local:8080/` on a phone or laptop on the same Wi-Fi. Paste the token once; the
 browser remembers it. The page is only reachable from private addresses.
 
+**The desktop app (Racer).** Same UI, as an app that finds the car by itself. Get the installer
+from the "Racer desktop" workflow run on GitHub (Actions, the run for the branch, Artifacts) and
+unzip it. The builds are unsigned, so the first launch shows a warning:
+
+- **Mac:** open the `.dmg`, drag Racer to Applications. First time, right-click Racer, choose
+  Open, then Open again in the dialog (a double click only offers Move to Bin). If macOS says the
+  app is damaged, run `xattr -dr com.apple.quarantine /Applications/Racer.app` once.
+- **Windows:** run the `.msi` (or the `-setup.exe`). SmartScreen says "Windows protected your
+  PC": click More info, then Run anyway.
+- **Linux:** `chmod +x Racer*.AppImage && ./Racer*.AppImage`, or install the `.deb`.
+
+On launch it looks for the car on the Wi-Fi (mDNS first, then it scans the local subnet) and
+connects when it finds one; with several cars it lists them. It remembers the last car, goes
+looking again by itself when the Jetson reboots, and follows it if it comes back on a different
+address. If it finds nothing, type the address (for example `192.168.1.50`) in the box. The first
+time it asks for the access token that install printed: paste it once and it is kept in the Mac
+Keychain, Windows Credential Manager or the Linux Secret Service. Like the web page it never drives
+the car, STOP ALL is still a software stop, and the knob is still the stop that works.
+
 ### A3. A session
 
 1. **Power the car.** With autostart on (the default after install) the stack comes up by itself

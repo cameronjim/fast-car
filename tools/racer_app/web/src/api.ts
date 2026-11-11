@@ -1,4 +1,5 @@
-// Client for the racer agent's HTTP API (same origin as the page).
+// Client for the racer agent's HTTP API. In a browser the page is served by the agent, so paths
+// are same-origin; in the desktop app the platform layer passes the car's http://host:port base.
 
 export interface Check {
   id: string;
@@ -102,7 +103,7 @@ export function browserTokenStore(): TokenStore {
   };
 }
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export class Api {
   onUnauthorized: () => void = () => undefined;
@@ -110,6 +111,7 @@ export class Api {
   constructor(
     private tokens: TokenStore,
     private fetchImpl: FetchLike = (i, init) => fetch(i, init),
+    private base = "",
   ) {}
 
   hasToken(): boolean {
@@ -127,7 +129,7 @@ export class Api {
     if (body !== undefined) headers["Content-Type"] = "application/json";
     let res: Response;
     try {
-      res = await this.fetchImpl(path, {
+      res = await this.fetchImpl(this.base + path, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),

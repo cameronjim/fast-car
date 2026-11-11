@@ -1,15 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { Api, ApiError, browserTokenStore, type BagInfo, type LogEntry, type Options, type Status } from "./api";
+import {
+  Api,
+  ApiError,
+  type BagInfo,
+  type FetchLike,
+  type LogEntry,
+  type Options,
+  type Status,
+  type TokenStore,
+} from "./api";
 import { Controls, run, type Notify } from "./Controls";
 import { Cameras, Checks, EventsFeed, Gauges, LidarView, MapView } from "./Dashboard";
 import { emptyLive, startLive } from "./live";
 import type { VehicleInfo } from "./model";
+import type { Target } from "./platform";
 import { RosLink, type LinkStatus } from "./ros";
 
-const FOXGLOVE_PORT = 8765;
+export interface AppProps {
+  target: Target;
+  tokens: TokenStore;
+  fetchImpl?: FetchLike;
+}
 
-export function App() {
-  const api = useMemo(() => new Api(browserTokenStore()), []);
+export function App({ target, tokens, fetchImpl }: AppProps) {
+  const api = useMemo(() => new Api(tokens, fetchImpl, target.apiBase), [target.apiBase]);
   const live = useRef(emptyLive()).current;
   const [, setTick] = useState(0);
   const [needLogin, setNeedLogin] = useState(!api.hasToken());
@@ -67,7 +81,7 @@ export function App() {
   }, [needLogin]);
 
   useEffect(() => {
-    const ros = new RosLink(`ws://${location.hostname}:${FOXGLOVE_PORT}`);
+    const ros = new RosLink(target.rosUrl);
     const off = ros.onStatus(setLink);
     const stop = startLive(ros, live, () => !document.hidden);
     ros.connect();
@@ -78,7 +92,7 @@ export function App() {
       off();
       ros.close();
     };
-  }, []);
+  }, [target.rosUrl]);
 
   const stopAll = () => void run(() => api.stopAll(), notify, refreshAll);
 

@@ -55,3 +55,73 @@ describe("the UI never publishes", () => {
     for (const r of routes) expect(r).not.toMatch(/exec|shell|cmd|run/);
   });
 });
+
+// The desktop build (tools/racer_app/desktop) bundles this same UI, so the same rules cover it:
+// the shared files above include platform.ts and Shell.tsx, and the checks below cover the
+// native half and the permissions it is granted.
+const DESKTOP = join(SRC, "..", "..", "desktop", "src-tauri");
+
+function rust(file: string): string {
+  return readFileSync(join(DESKTOP, "src", file), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+const rustFiles = readdirSync(join(DESKTOP, "src")).filter((f) => f.endsWith(".rs"));
+
+describe("the desktop build never publishes either", () => {
+  it("includes the platform layer in the checks above", () => {
+    expect(files).toContain("platform.ts");
+    expect(files).toContain("Shell.tsx");
+    expect(rustFiles).toEqual(expect.arrayContaining(["discovery.rs", "net.rs", "lib.rs"]));
+  });
+
+  it.each(rustFiles)("%s names no command topic and makes no write request", (file) => {
+    const src = rust(file);
+    expect(src).not.toMatch(/drive_raw|teleop|cmd_vel|\/drive\b/);
+    expect(src).not.toMatch(
+      /\.(post|put|patch|delete)\(|send_json|send_form|Method::(POST|PUT|PATCH|DELETE)/,
+    );
+    expect(src).not.toContain("/api/");
+  });
+
+  it("the native side only ever requests /health", () => {
+    const urls = [...rust("net.rs").matchAll(/:\{port\}\/([a-z]+)/g)].map((m) => m[1]);
+    expect(urls).toEqual(["health"]);
+  });
+
+  it("only platform.ts reaches the Tauri bridge, and only for known commands", () => {
+    const users = files.filter((f) => code(f).includes("__TAURI__"));
+    expect(users).toEqual(["platform.ts"]);
+    const commands = [...code("platform.ts").matchAll(/invoke(?:<[^>]*>)?\(\s*"([a-z_]+)"/g)].map(
+      (m) => m[1],
+    );
+    expect(new Set(commands)).toEqual(
+      new Set([
+        "token_get",
+        "token_set",
+        "token_clear",
+        "discovery_state",
+        "select_car",
+        "add_manual",
+        "rescan",
+      ]),
+    );
+  });
+
+  it("the window is granted no file, shell, process or opener access", () => {
+    const cap = JSON.parse(
+      readFileSync(join(DESKTOP, "capabilities", "default.json"), "utf8"),
+    ) as { permissions: Array<string | { identifier: string }> };
+    const ids = cap.permissions.map((p) => (typeof p === "string" ? p : p.identifier));
+    expect(ids.sort()).toEqual(["core:default", "http:default"]);
+  });
+
+  it("keeps a content security policy", () => {
+    const conf = JSON.parse(readFileSync(join(DESKTOP, "tauri.conf.json"), "utf8")) as {
+      app: { security: { csp: string } };
+    };
+    expect(conf.app.security.csp).toContain("default-src 'self'");
+    expect(conf.app.security.csp).not.toContain("unsafe-eval");
+  });
+});

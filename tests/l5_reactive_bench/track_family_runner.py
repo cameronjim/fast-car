@@ -12,18 +12,16 @@ world), with the car as measured and three drivers:
   tracker_loc   the same raceline, following the LOCALISED pose: the car's odometry (wheel
                 speed, modelled steering, EKF) and AMCL on the track's map, sensor errors on
 
-The car (--car): `gym` is the simulator's own 0.4189 rad symmetric steering; `today` is the car
-measured on 2026-11-10 (tools/track_session/real_car_2026-11-10.yaml): left lock 0.504 rad, right
-lock 0.449 rad, and a full command (0.4189) turning the wheels that far, so /drive's steering is
-1.203 (left) and 1.072 (right) times too small for the angle it names. Speeds are TRUE speeds
-unless --speed-scale says otherwise (today's commands read 1.401 times the truth: 0.714).
+The car (--car): `params` (default) gives the simulator's steering the limits of vehicle_params
+(0.449 rad each way, schema 0.14.0: commands are true angles and true speeds); `gym` is the
+simulator's own 0.4189 rad. The LiDAR is cast from the real mount.
 
 Run with the workspace sourced (racer_gym_bridge, racer_safety, racer_control, racer_state,
 racer_bringup, racer_tools built), e.g. in the ros-dev container:
 
     python3 tests/l5_reactive_bench/track_family_runner.py --track stadium \\
         --track-params-json '{"lane_width_m": 1.0, "straight_length_m": 2.0, "island_radius_m": 0.0}' \\
-        --driver tracker --car today --stop-after-laps 3 --out result.json
+        --driver tracker --stop-after-laps 3 --out result.json
 
 Exit status: 0 with a result, 3 when a node died (the JSON carries "error").
 """
@@ -60,7 +58,7 @@ TRACKS = (
     "map",
 )
 DRIVERS = ("gap_follow", "tracker", "tracker_loc")
-CARS = ("gym", "today")
+CARS = ("gym", "params")
 LOCALISATION_LAUNCH = REPO_ROOT / "ros_ws" / "src" / "racer_bringup" / "launch"
 # The sensor errors the localisation canaries use (sim_autopilot.launch.py SIM_SENSOR_NOISE).
 LANE_TRACKER_DEFAULTS = {
@@ -80,39 +78,15 @@ _FLOAT_TRACK_KEYS = {
 }
 
 
-def car_parameters(car: str, speed_scale: float) -> dict:
-    """Bridge parameters for the car model."""
-    from pipeline import load_real_car
+def car_parameters(car: str) -> dict:
+    """Bridge parameters for the car model: `params` gives the gym the steering limits of
+    vehicle_params (0.449 rad each way), `gym` leaves its own 0.4189."""
+    from pipeline import steering_limits
 
-    params: dict = {}
-    if car == "today":
-        real = load_real_car()
-        params.update(
-            {
-                "steering_limit_left_rad": real.left_lock_rad,
-                "steering_limit_right_rad": real.right_lock_rad,
-                "steering_cmd_scale_left": real.left_lock_rad / real.command_full_lock_rad,
-                "steering_cmd_scale_right": real.right_lock_rad / real.command_full_lock_rad,
-            }
-        )
-    if speed_scale != 1.0:
-        params["speed_cmd_scale"] = speed_scale
-    return params
-
-
-def tracker_car_parameters(car: str) -> dict:
-    """tracker_node's side of the same car: true-angle limits and command per radian."""
-    from pipeline import load_real_car
-
-    if car != "today":
+    if car != "params":
         return {}
-    real = load_real_car()
-    return {
-        "max_steering_left_rad": real.left_lock_rad,
-        "max_steering_right_rad": real.right_lock_rad,
-        "steering_command_per_rad_left": real.command_per_rad_left,
-        "steering_command_per_rad_right": real.command_per_rad_right,
-    }
+    left, right = steering_limits()
+    return {"steering_limit_left_rad": left, "steering_limit_right_rad": right}
 
 
 def bridge_track_parameters(track: str, track_params: dict, seed: int, reverse: bool) -> dict:
@@ -200,7 +174,6 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         "reverse": args.reverse,
         "driver": args.driver,
         "car": args.car,
-        "speed_scale": args.speed_scale,
         "seed": args.seed,
         "lidar": args.lidar,
     }
@@ -216,7 +189,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
 
     localised = args.driver == "tracker_loc"
     bridge = bridge_track_parameters(args.track, track_params, args.seed, args.reverse)
-    bridge.update(car_parameters(args.car, args.speed_scale))
+    bridge.update(car_parameters(args.car))
     mounted = args.lidar == "mounted" or localised
     if mounted:
         from racer_tools.vehicle_params_loader import load_vehicle_params
@@ -257,7 +230,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         result.update({"profile": args.profile, "overrides": overrides, "gap_follow_params": gap})
     else:
         raceline_csv, report = make_raceline(args, walls_synthetic, map_yaml, work)
-        tracker = {**LANE_TRACKER_DEFAULTS, **tracker_car_parameters(args.car)}
+        tracker = dict(LANE_TRACKER_DEFAULTS)
         tracker.update(tracker_overrides)
         tracker["raceline_path"] = str(raceline_csv)
         if localised:
@@ -558,8 +531,7 @@ def main(argv: list[str] | None = None) -> int:
         default="{}",
         help="tools/track_session pipeline.raceline_from_map options (margin, v_max_mps, ...)",
     )
-    parser.add_argument("--car", default="today", choices=CARS)
-    parser.add_argument("--speed-scale", type=float, default=1.0, help="true speed per commanded")
+    parser.add_argument("--car", default="params", choices=CARS)
     parser.add_argument("--lidar", default="mounted", choices=("mounted", "aligned"))
     parser.add_argument("--noise", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--duration", type=float, default=150.0, help="run time cap (s)")

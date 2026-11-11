@@ -18,8 +18,7 @@
 
 `map` and the live `save-map` need the ROS side (docker and ros-dev, or ros2 on the car); the rest
 needs only the tools venv (`uv run --project tools python tools/track_session/track_session.py ...`).
-Physical constants come from vehicle_params; the measured steering (left lock 0.504, right 0.449
-rad) from real_car_2026-11-10.yaml until the calibration lands. See docs/notes/first-boot-runbook.md,
+Physical constants, steering limits and speed scale included, come from vehicle_params. See docs/notes/first-boot-runbook.md,
 "New track session".
 """
 
@@ -53,14 +52,17 @@ def cmd_map(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    real = pipeline.load_real_car()
     out_dir.mkdir(parents=True, exist_ok=True)
     command = [
         str(HERE / "map_from_bag.sh"),
         str(Path(args.input).expanduser().resolve()),
         container_prefix,
         "--speed-divisor",
-        str(args.speed_divisor or real.speed_reading_over_true),
+        str(args.speed_divisor),
+        "--steer-scale-left",
+        str(args.steer_scale_left),
+        "--steer-scale-right",
+        str(args.steer_scale_right),
         "--deskew",
         args.deskew,
         "--twist-source",
@@ -141,7 +143,6 @@ def cmd_raceline(args: argparse.Namespace) -> int:
             v_max_mps=args.v_max,
             a_lat_mps2=args.a_lat,
             a_long_mps2=args.a_long,
-            commands_read_high=args.commands_read_high,
             front_overhang_m=args.front_overhang,
             rear_overhang_m=args.rear_overhang,
             centre_only=args.centre_only,
@@ -226,7 +227,7 @@ Terminal 1 (car container), the sensors, the safety layer, the recorder and AMCL
   ros2 launch racer_bringup car_teleop.launch.py lidar:=true vesc:=true \\
       localization:=true map:={map_yaml}
 
-Terminal 2, the tracker (the steering as measured; profile:=none once vehicle_params has it):
+Terminal 2, the tracker:
   ros2 launch racer_control track_follow.launch.py raceline:={raceline}
 
 Stop: the RC kill switch, then Ctrl-C both. Every run is in the bag Terminal 1 records.""")
@@ -244,7 +245,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--name", required=True, help="track id: maps/<name>/<name>.yaml")
     p.add_argument("--data", default="~/code/car-data", help="data tree, mounted at /data")
     p.add_argument("--out-dir", help="default <data>/maps/<name>")
-    p.add_argument("--speed-divisor", type=float, default=0.0, help="default: real_car file")
+    p.add_argument(
+        "--speed-divisor",
+        type=float,
+        default=1.0,
+        help="divide the bag's /odom/wheel speeds by this: 1.0 for a bag from the calibrated car "
+        "(vehicle_params 0.14.0 on); 1.401 for the 2026-11-10 bags",
+    )
+    p.add_argument(
+        "--steer-scale-left",
+        type=float,
+        default=1.0,
+        help="true wheel angle per radian of left command in the bag: 1.0 calibrated, 1.203 for "
+        "the 2026-11-10 bags",
+    )
+    p.add_argument(
+        "--steer-scale-right", type=float, default=1.0, help="as left; 1.072 for 2026-11-10"
+    )
     p.add_argument(
         "--deskew",
         default="end_rev",
@@ -288,7 +305,6 @@ def main(argv: list[str] | None = None) -> int:
         help="body outline to wall, m; default: the widest of 0.15 0.12 0.10 0.08 0.06 0.05 the "
         "track allows",
     )
-    p.add_argument("--commands-read-high", type=float, default=1.0, help="1.401 until calibrated")
     p.add_argument("--front-overhang", type=float, default=None)
     p.add_argument("--rear-overhang", type=float, default=None)
     p.add_argument("--centre-only", action="store_true", help="the centreline itself, no offset")

@@ -6,8 +6,9 @@ error) and /drive, plus the static base_link -> laser transform from vehicle_par
 LiDAR mount, 0.285 m ahead of the rear axle, yaw pi), so `offline_map.launch.py` (slam_toolbox
 and the EKF, use_sim_time) sees what it sees on the car. With --twist-source feeder it also
 publishes /odom/wheel_twist itself, from the same kinematics as racer_state/wheel_twist_node but
-with the MEASURED steering (per-side effective lock, real_car_2026-11-10.yaml): the node clamps
-to vehicle_params' symmetric 0.4189 rad, which the left lock (0.504 rad) exceeds.
+with the true wheel angle per command radian given by --steer-scale-left/right (1.0 for a bag
+from the calibrated car; 1.203 / 1.072 for the 2026-11-10 bags, whose commands were uncalibrated:
+the stock node cannot represent that, its servo model clamps at the symmetric limit).
 
 Idle stretches (no wheel speed, no speed command) are cut out and the clock closed up, so a
 recording with minutes of parked car maps in the time it takes to drive. When the replay ends the
@@ -38,7 +39,6 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import LaserScan
 from tf2_ros import StaticTransformBroadcaster
 
-REAL_CAR_YAML = Path(__file__).resolve().parent / "real_car_2026-11-10.yaml"
 VEHICLE_PARAMS = Path(__file__).resolve().parents[2] / "config" / "vehicle_params.yaml"
 
 # Same defaults as racer_state's WheelTwistConfig (wheel_twist.hpp).
@@ -173,10 +173,8 @@ class Feeder(Node):
         meta = data["scan_meta"]
         self.angle_min, self.angle_inc, self.range_min, self.range_max = (float(x) for x in meta)
         self.n_beams = data["scan_ranges"].shape[1]
-        real = yaml.safe_load(REAL_CAR_YAML.read_text())["real_car"]
-        full = float(real["command_full_lock_rad"])
-        self.left_scale = float(real["effective_left_lock_rad"]) / full
-        self.right_scale = float(real["effective_right_lock_rad"]) / full
+        self.left_scale = args.steer_scale_left
+        self.right_scale = args.steer_scale_right
         vehicle = yaml.safe_load(VEHICLE_PARAMS.read_text())
         self.wheelbase = float(vehicle["chassis"]["wheelbase_m"])
         lidar = vehicle["sensors"]["lidar"]
@@ -401,6 +399,8 @@ def main(argv: list[str] | None = None) -> int:
         default=1.0,
         help="divide /odom/wheel speeds by this (reading over true)",
     )
+    parser.add_argument("--steer-scale-left", type=float, default=1.0)
+    parser.add_argument("--steer-scale-right", type=float, default=1.0)
     parser.add_argument("--twist-source", choices=("feeder", "node"), default="feeder")
     parser.add_argument("--rate", type=float, default=1.0, help="playback speed")
     parser.add_argument(

@@ -36,12 +36,6 @@ struct PurePursuitConfig {
   // symmetrically -- see tracker_node.cpp for where this is populated from the generated
   // binding, never hand-typed).
   double max_steering_angle_rad;
-  // Optional per-side limits on the TRUE road-wheel angle (rad, both positive), for a car whose
-  // left and right locks differ (measured 2026-11-10: 0.504 left, 0.449 right). Zero or negative
-  // (the default) means "use max_steering_angle_rad on that side", which is the old symmetric
-  // behaviour. The command the car is sent is derived from the true angle in tracker_node.
-  double max_steering_left_rad = 0.0;
-  double max_steering_right_rad = 0.0;
 };
 
 struct PurePursuitCommand {

@@ -469,7 +469,7 @@ class BridgeNode(Node):
         return response
 
     def _on_timer(self) -> None:
-        longitudinal = self._latest_speed * self._speed_cmd_scale
+        longitudinal = self._latest_speed
         if self._mirror_reverse_speed_control:
             params = self.env.unwrapped.params
             longitudinal = mirrored_speed_to_accel(
@@ -481,12 +481,7 @@ class BridgeNode(Node):
             )
         # steering_offset_rad (default 0): an uncalibrated servo trim. The wheels point this far
         # off what /drive asked for, and nothing downstream is told.
-        steering = self._latest_steering_angle
-        if self._steering_cmd_scale_left != 1.0 or self._steering_cmd_scale_right != 1.0:
-            steering *= (
-                self._steering_cmd_scale_left if steering >= 0.0 else self._steering_cmd_scale_right
-            )
-        steering += self._steering_offset_rad
+        steering = self._latest_steering_angle + self._steering_offset_rad
         if self._steering_limit_left_rad > 0.0:
             steering = min(steering, self._steering_limit_left_rad)
         if self._steering_limit_right_rad > 0.0:
@@ -831,8 +826,9 @@ class BridgeNode(Node):
         )
 
     def _declare_vehicle_model(self) -> dict | None:
-        """The car's steering as measured, not the gym's symmetric 0.4189 rad (2026-11-11). Every
-        default keeps the old behaviour. Returns the gym ``params`` overrides (or None)."""
+        """The car's steering limits instead of the gym's symmetric 0.4189 rad (the caller passes
+        vehicle_params' steering.max_angle_rad and -min_angle_rad). Every default keeps the old
+        behaviour. Returns the gym ``params`` overrides (or None)."""
 
         def described(description: str, low: float, high: float) -> ParameterDescriptor:
             return ParameterDescriptor(
@@ -846,8 +842,8 @@ class BridgeNode(Node):
                 0.0,
                 described(
                     "Physical road-wheel angle at left full lock (rad, positive). 0.0 (default) "
-                    "keeps the gym's 0.4189. The car's measured left lock is 0.504 (rear-axle "
-                    "radius 0.60 m).",
+                    "keeps the gym's 0.4189. vehicle_params' steering.max_angle_rad is 0.449 (rear-axle "
+                    "radius 0.69 m).",
                     0.0,
                     1.2,
                 ),
@@ -859,46 +855,9 @@ class BridgeNode(Node):
                 0.0,
                 described(
                     "Physical road-wheel angle at right full lock (rad, positive). 0.0 (default) "
-                    "keeps the gym's 0.4189. The car's measured right lock is 0.449 (0.69 m).",
+                    "keeps the gym's 0.4189. vehicle_params' -steering.min_angle_rad is 0.449 (0.69 m).",
                     0.0,
                     1.2,
-                ),
-            ).value
-        )
-        self._steering_cmd_scale_left = float(
-            self.declare_parameter(
-                "steering_cmd_scale_left",
-                1.0,
-                described(
-                    "Road-wheel angle per radian commanded to the left: 1.0 (default) = /drive is "
-                    "the true angle. The car today turns 0.504 / 0.4189 = 1.203 times what a left "
-                    "command says (uncalibrated servo gain).",
-                    0.2,
-                    3.0,
-                ),
-            ).value
-        )
-        self._steering_cmd_scale_right = float(
-            self.declare_parameter(
-                "steering_cmd_scale_right",
-                1.0,
-                described(
-                    "As steering_cmd_scale_left, to the right (today 0.449 / 0.4189 = 1.072).",
-                    0.2,
-                    3.0,
-                ),
-            ).value
-        )
-        self._speed_cmd_scale = float(
-            self.declare_parameter(
-                "speed_cmd_scale",
-                1.0,
-                described(
-                    "True ground speed per m/s commanded: 1.0 (default) = /drive speed is the "
-                    "true speed. The car today moves at 1 / 1.401 = 0.714 of the commanded speed "
-                    "(tyre radius and gear ratio not calibrated).",
-                    0.2,
-                    3.0,
                 ),
             ).value
         )

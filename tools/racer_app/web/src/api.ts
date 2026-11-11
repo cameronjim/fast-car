@@ -9,6 +9,12 @@ export interface Check {
   required: boolean;
 }
 
+/** A feature that can be disabled on this car, with the reason shown next to its button. */
+export interface Capability {
+  available: boolean;
+  reason: string;
+}
+
 export interface Status {
   time: number;
   checks: { overall: "green" | "amber" | "red"; ready: boolean; checks: Check[] };
@@ -21,6 +27,8 @@ export interface Status {
   ros_connected: boolean;
   autostart: boolean;
   policy: { available: boolean; reason: string; valid: string[] };
+  perception: Capability & { running: boolean };
+  spiderbot: Capability;
   thresholds: { disk_red_gb: number; cameras_min_free_gb: number; battery_cells: number };
 }
 
@@ -31,6 +39,14 @@ export interface Options {
   racelines: string[];
   drive_modes: string[];
   policy: { available: boolean; reason: string; valid: string[] };
+  patrols?: string[];
+  spiderbot_rules?: string[];
+  spiderbot_speed_range?: [number, number];
+  spiderbot_default_speed?: number;
+  perception_modes?: string[];
+  perception_devices?: string[];
+  perception?: Capability & { running: boolean };
+  spiderbot?: Capability;
 }
 
 export interface BagInfo {
@@ -173,7 +189,13 @@ export class Api {
     raceline?: string;
     override?: boolean;
     override_reason?: string;
+    patrol?: string;
+    rule?: string;
+    speed_mps?: number;
   }) => this.call<ActionReply>("POST", "/api/drive/start", b);
+  startPerception = (b: { mode: string; device: string }) =>
+    this.call<ActionReply>("POST", "/api/perception/start", b);
+  stopPerception = () => this.call<ActionReply>("POST", "/api/perception/stop");
   park = (name: string, override = false, override_reason = "") =>
     this.call<ActionReply>("POST", `/api/park/${encodeURIComponent(name)}`, { override, override_reason });
   saveMap = (name: string) => this.call<ActionReply>("POST", "/api/map/save", { name });

@@ -1,0 +1,44 @@
+# Example manifest for a dynamics bundle. Dummy hashes, no payload files.
+bundle_schema_version: "1.0.0"
+kind: dynamics
+model_id: "dyn-v0-2026-11-12-example"
+created_utc: "2026-11-12T03:00:00Z"
+git_sha: "0123456789abcdef0123456789abcdef01234567"
+training_config_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+vehicle_params:
+  schema_version: "0.14.0"
+  sysid_session_id: "none-preliminary"
+payload:
+  - {file: "residual_mlp.f32", sha256: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"}
+  - {file: "golden_rollouts.csv", sha256: "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal:
+    speed_gain: 1.0
+    speed_tau_s: 0.25
+    accel_max_mps2: 2.0
+    decel_max_mps2: 1.5
+    steer_gain_left: 1.0
+    steer_gain_right: 1.0
+    steer_offset_rad: 0.0
+    steer_tau_s: 0.10
+    command_delay_s: 0.08
+    understeer_s2_per_m2: 0.0
+  residual:
+    enabled: false
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers: [[4, 32], [32, 32], [32, 2]]
+    activation: tanh
+    input_mean: [0.0, 0.0, 0.0, 0.0]
+    input_std: [1.0, 1.0, 1.0, 1.0]
+    output_scale: [1.0, 1.0]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 0.9}
+  golden: golden_rollouts.csv
+data:
+  - "example manifest, no real provenance"
+metrics:
+  nominal_rmse_v_mps: 0.05

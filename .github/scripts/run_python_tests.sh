@@ -32,6 +32,11 @@ run "training/envelope" branch100
 run "ros_ws/src/racer_policy" line90
 run "sysid/fitting" line90
 run "evaluation/analysis" line90
+# Plug-and-Play (claude-docs/13-plug-and-play.md): the bundle schema, and the per-part training
+# packages. A directory that does not exist yet passes with a notice.
+run "config/pnp" line90
+run "training/racer_pnp_perception" report
+run "training/racer_pnp_dynamics" line90
 
 # Normal packages: reported, not gated.
 run "training/racer_train" report

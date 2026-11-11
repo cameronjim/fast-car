@@ -88,12 +88,12 @@ TRACK_SETS: dict[str, dict[str, tuple[str, dict]]] = {
                 "island_radius_m": 0.4,
             },
         ),
-        "rr_w1.2_2x1.5_r0.8": (
+        "rr_w1.2_2x1.6_r0.8": (
             "rounded_rect",
             {
                 "lane_width_m": 1.2,
                 "straight_length_m": 2.0,
-                "island_width_m": 1.5,
+                "island_width_m": 1.6,
                 "island_radius_m": 0.8,
             },
         ),

@@ -50,23 +50,38 @@ MAX_TEST_WALL_S = 150.0
 # cell with no SLAM cell this close as not covered: two map cells plus the 2 cm scan noise.
 TOLERANCE_M = 0.12
 
-# Pass thresholds. MEASURED with racer_state's slam_toolbox.yaml, noise on, 1.0 m/s, two laps,
-# nine runs (seeds 21 to 26 and three more of 21), locally in the ros-dev image
-# (docs/notes/localization-2026-11-03.md):
-#   wall error mean      0.030 to 0.042 m
-#   wall error p95       0.058 to 0.119 m
-#   spurious fraction    0.000 to 0.006
-#   coverage             1.000 in all nine
-#   slam_toolbox pose p95 against ground truth   0.167 to 0.253 m
-# Limits about 1.5 times the worst measured value. A broken map is not a few centimetres worse:
-# with slam_toolbox's default loop closure settings 3 of 17 runs closed the loop at the wrong
-# place (wall error mean 0.14 to 0.23 m, spurious 0.36 to 0.52, coverage 0.77 to 0.83), which
-# these limits catch. The pose limit is the loosest because the pose is checked between
-# scan-matcher updates, where it is odometry; the map is the deliverable.
-MAX_WALL_ERR_MEAN_M = 0.06
+# Pass thresholds. Two sets of measurements, both in the ros-dev image, racer_state's
+# slam_toolbox.yaml, noise on, 1.0 m/s, two laps (docs/notes/localization-2026-11-03.md for the
+# first, docs/notes/track-session-2026-11-11.md for the second):
+#
+#   9 runs, 2026-11-03 (an idle machine):   wall error mean 0.030 to 0.042 m
+#   25 runs, 2026-11-11, 2 CPUs per run with other jobs on the machine:
+#     SAME seed 21, 11 runs:  mean 0.0227 to 0.0454 (median 0.037, sd 0.006), p95 0.072 to 0.119,
+#                             spurious 0.000 to 0.040, coverage 1.00. The sim is NOT deterministic:
+#                             bridge_node, the EKF, slam_toolbox and the tracker run on wall-clock
+#                             timers and the scheduler decides which scan meets which odometry
+#                             sample, so one seed gives a spread, and a slower or busier machine
+#                             shifts it up.
+#     varied seeds, 14 runs:  13 healthy ones in the same range (mean 0.028 to 0.040), and ONE
+#                             broken map (seed 301): mean 0.114, p95 0.31, spurious 0.39, coverage
+#                             0.76: the loop closed at the wrong place, the failure of the first
+#                             pass of the stricter loop closure settings. 1 broken map in 25 runs.
+#   CI: PR 116 failed this check with a mean of 0.0613 on a loaded runner.
+#
+# The old mean limit, 0.06, was 1.5 times the idle-machine maximum and sat 4 sd above the
+# loaded-machine mean; 0.0613 is a healthy map on a slow runner, not a bad one. The limits now sit
+# between the healthy tail and the broken map with room either side: mean 0.075 (healthy 0.045 at
+# worst locally, 0.061 seen in CI; broken 0.114), p95 0.16 (healthy 0.119, broken 0.31), spurious
+# 0.15 (healthy 0.040, broken 0.39), coverage 0.95 (healthy 1.00, broken 0.76). What the test is for,
+# a map whose walls are in the wrong place, is still caught by every one of them. What it cannot
+# fix is that about 1 run in 25 BUILDS a wrong map (the plain, featureless lane track): a real
+# stack failure, reported as one; a rerun is the right answer and the note has the numbers.
+MAX_WALL_ERR_MEAN_M = 0.075
 MAX_WALL_ERR_P95_M = 0.16
-MAX_SPURIOUS_FRACTION = 0.06
+MAX_SPURIOUS_FRACTION = 0.15
 MIN_COVERAGE = 0.95
+# The pose limit is the loosest because the pose is checked between scan-matcher updates, where it
+# is odometry; the map is the deliverable.
 MAX_SLAM_POS_P95_M = 0.40
 
 

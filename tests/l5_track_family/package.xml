@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>l5_track_family</name>
+  <version>0.1.0</version>
+  <description>
+    L5 canary for the raceline tracker on the track family (tests/l5_track_family): the real
+    command path (racer_gym_bridge, racer_safety safety_node, racer_control tracker_node) on a
+    stadium and a rounded-rectangle lane of 1 m, both directions, with the car as measured on
+    2026-11-10 (per-side steering locks) and the raceline made from the track's own map by
+    tools/track_session. Uses tests/l5_reactive_bench/track_family_runner.py.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>racer_gym_bridge</exec_depend>
+  <exec_depend>racer_control</exec_depend>
+  <exec_depend>racer_safety</exec_depend>
+  <exec_depend>racer_msgs</exec_depend>
+  <exec_depend>racer_tools</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

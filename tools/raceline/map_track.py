@@ -633,7 +633,7 @@ def _solve_offsets(
     cost = float(np.sum(_terms(centre, normal, a, klim_left, klim_right, rho, body)[0]))
     alpha = 1e-3
     stalled = 0
-    for _ in range(iterations):
+    for step in range(iterations):
         grad = _gradient(centre, normal, a, klim_left, klim_right, rho, body)
         direction = np.real(np.fft.ifft(np.fft.fft(grad) * smoother))
         improved = False
@@ -648,7 +648,7 @@ def _solve_offsets(
             alpha *= 0.5
         if not improved:
             break
-        stalled = stalled + 1 if cost - trial_cost < 1e-10 * max(cost, 1e-9) else 0
+        stalled = stalled + 1 if cost - trial_cost < 1e-9 * max(cost, 1e-9) and step > 100 else 0
         a, cost = trial, trial_cost
         alpha *= 1.5
         if stalled >= 20:
@@ -724,6 +724,10 @@ def racing_line(
     """
     field = DistanceField(grid)
     cx, cy = resample_closed_uniform(centre_x, centre_y, step_m)
+    # The traced centreline jitters by a cell; offsets along jittery normals would carry it into
+    # the line as curvature noise. Smooth over about half a metre first.
+    for _ in range(2):
+        cx, cy = smooth_closed(cx, cy, 5)
     n = len(cx)
     heading = heading_from_points_closed(cx, cy)
     centre = np.column_stack([cx, cy])
@@ -731,31 +735,56 @@ def racing_line(
     base = car.width_m / 2.0 + body_clearance_m
     upper = _free_reach(field, cx, cy, normal, base, +1.0)  # left
     lower = -_free_reach(field, cx, cy, normal, base, -1.0)  # right
-    a = np.zeros(n)
     kmax_l, kmax_r = max_left_curvature_1pm, max_right_curvature_1pm
-    outline = _Body(field, car.perimeter(per_edge=5), body_clearance_m, body_weight)
-    rho = 30.0
-    best: tuple[int, np.ndarray, int, int] | None = None
-    rounds = 0
-    for rounds in range(1, max_rounds + 1):
-        a = _solve_offsets(centre, normal, lower, upper, kmax_l, kmax_r, a, outline, rho)
-        px, py = cx + a * normal[:, 0], cy + a * normal[:, 1]
-        kappa = _curvature(px, py)
-        curvature_bad = int(((kappa > kmax_l * 1.05) | (kappa < -kmax_r * 1.05)).sum())
-        clear, _, _ = _body_clearance(field, px, py, car)
-        clearance_bad = int((clear < body_clearance_m - 0.01).sum())
-        score = 10 * clearance_bad + curvature_bad
-        if best is None or score < best[0]:
-            best = (score, a.copy(), curvature_bad, clearance_bad)
-        if score == 0:
+
+    def attempt(start: np.ndarray) -> tuple[int, np.ndarray, int, int, int]:
+        """Solve from ``start``, escalating the penalties while a limit is broken; the best round
+        as (score, offsets, curvature_bad, clearance_bad, rounds)."""
+        a = start.copy()
+        outline = _Body(field, car.perimeter(per_edge=5), body_clearance_m, body_weight)
+        rho = 30.0
+        best: tuple[int, np.ndarray, int, int, int] | None = None
+        for rounds in range(1, max_rounds + 1):
+            a = _solve_offsets(centre, normal, lower, upper, kmax_l, kmax_r, a, outline, rho)
+            px, py = cx + a * normal[:, 0], cy + a * normal[:, 1]
+            kappa = _curvature(px, py)
+            curvature_bad = int(((kappa > kmax_l * 1.05) | (kappa < -kmax_r * 1.05)).sum())
+            clear, _, _ = _body_clearance(field, px, py, car)
+            clearance_bad = int((clear < body_clearance_m - 0.01).sum())
+            score = 10 * clearance_bad + curvature_bad
+            if best is None or score < best[0]:
+                best = (score, a.copy(), curvature_bad, clearance_bad, rounds)
+            if score == 0:
+                break
+            # Not clean yet: push harder on whichever limit is broken, and go on from here.
+            if clearance_bad:
+                outline = _Body(field, outline.per, outline.required_m, outline.weight * 3.0)
+            if curvature_bad:
+                rho *= 3.0
+        assert best is not None
+        return best
+
+    # Starts: the centreline, then the line pushed to the OUTSIDE of the loop (right of a
+    # counter-clockwise one) and to the inside. The energy has local minima (a pinched "peanut"
+    # that hugs a thin island's tips); a thin island's U-turn is only drivable from the outside, and
+    # the outside start finds it. Tried in turn, stopping at the first clean one.
+    area = 0.5 * float(np.sum(cx * np.roll(cy, -1) - np.roll(cx, -1) * cy))
+    # How far to push the whole loop outward so its tightest bend meets the steering limit on the
+    # side the loop turns (an offset curve of curvature k, pushed out by d, has k / (1 + k d)).
+    limit = kmax_l if area > 0.0 else kmax_r
+    tightest = float(np.max(np.abs(_curvature(cx, cy))))
+    push = max(0.0, 1.0 / limit - 1.0 / max(tightest, 1e-6)) if limit > 0.0 else 0.0
+    outside = np.clip(-push if area > 0.0 else push, lower, upper) * np.ones(n)
+    inside = 0.8 * (upper if area > 0.0 else lower)
+    best = None
+    for start in (np.zeros(n), outside, inside):
+        result = attempt(start)
+        if best is None or result[0] < best[0]:
+            best = result
+        if best[0] == 0:
             break
-        # Not clean yet: push harder on whichever limit is broken, and go on from here.
-        if clearance_bad:
-            outline = _Body(field, outline.per, outline.required_m, outline.weight * 3.0)
-        if curvature_bad:
-            rho *= 3.0
     assert best is not None
-    _, a, curvature_bad, clearance_bad = best
+    _, a, curvature_bad, clearance_bad, rounds = best
     px, py = cx + a * normal[:, 0], cy + a * normal[:, 1]
     kappa = _curvature(px, py)
     clear, _, _ = _body_clearance(field, px, py, car)

@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cameronjim/fast-car/config/pnp/bundle.schema.json",
+  "title": "Plug-and-Play model bundle manifest",
+  "description": "Schema for manifest.yaml of a Plug-and-Play model bundle (claude-docs/13-plug-and-play.md section 4.4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "bundle_schema_version",
+    "kind",
+    "model_id",
+    "created_utc",
+    "git_sha",
+    "training_config_sha256",
+    "vehicle_params",
+    "payload",
+    "io",
+    "data",
+    "metrics"
+  ],
+  "properties": {
+    "bundle_schema_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "kind": {
+      "enum": ["track_perception", "dynamics", "adaptation", "lap_memory"]
+    },
+    "model_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+    },
+    "created_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "git_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "training_config_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vehicle_params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "sysid_session_id"],
+      "properties": {
+        "schema_version": {"type": "string", "minLength": 1},
+        "sysid_session_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "payload": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "sha256"],
+        "properties": {
+          "file": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "io": {"type": "object"},
+    "data": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "metrics": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"kind": {"const": "track_perception"}},
+        "required": ["kind"]
+      },
+      "then": {"properties": {"io": {"$ref": "#/$defs/io_track_perception"}}}
+    },
+    {
+      "if": {
+        "properties": {"kind": {"const": "dynamics"}},
+        "required": ["kind"]
+      },
+      "then": {"properties": {"io": {"$ref": "#/$defs/io_dynamics"}}}
+    }
+  ],
+  "$defs": {
+    "number_list": {
+      "type": "array",
+      "items": {"type": "number"}
+    },
+    "string_list": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "io_track_perception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output", "lidar_mount", "arch"],
+      "properties": {
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tensor",
+            "n_bins",
+            "range_clip_m",
+            "origin",
+            "pooling",
+            "body_filter_margin_m"
+          ],
+          "properties": {
+            "tensor": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 1},
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "n_bins": {"type": "integer", "minimum": 1},
+            "range_clip_m": {"type": "number", "exclusiveMinimum": 0},
+            "origin": {"enum": ["lidar"]},
+            "pooling": {"enum": ["min"]},
+            "body_filter_margin_m": {"type": "number", "minimum": 0}
+          }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tensor", "stations", "station_spacing_m", "frame"],
+          "properties": {
+            "tensor": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 1},
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "stations": {"type": "integer", "minimum": 1},
+            "station_spacing_m": {"type": "number", "exclusiveMinimum": 0},
+            "frame": {"enum": ["base_link"]}
+          }
+        },
+        "lidar_mount": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x_m", "y_m", "yaw_rad"],
+          "properties": {
+            "x_m": {"type": "number"},
+            "y_m": {"type": "number"},
+            "yaw_rad": {"type": "number"}
+          }
+        },
+        "arch": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "io_dynamics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "control",
+        "dt_s",
+        "nominal",
+        "residual",
+        "validity",
+        "golden"
+      ],
+      "properties": {
+        "state": {"$ref": "#/$defs/string_list"},
+        "control": {"$ref": "#/$defs/string_list"},
+        "dt_s": {"type": "number", "exclusiveMinimum": 0},
+        "nominal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "speed_gain",
+            "speed_tau_s",
+            "accel_max_mps2",
+            "decel_max_mps2",
+            "steer_gain_left",
+            "steer_gain_right",
+            "steer_offset_rad",
+            "steer_tau_s",
+            "command_delay_s",
+            "understeer_s2_per_m2"
+          ],
+          "properties": {
+            "speed_gain": {"type": "number"},
+            "speed_tau_s": {"type": "number", "exclusiveMinimum": 0},
+            "accel_max_mps2": {"type": "number", "exclusiveMinimum": 0},
+            "decel_max_mps2": {"type": "number", "exclusiveMinimum": 0},
+            "steer_gain_left": {"type": "number"},
+            "steer_gain_right": {"type": "number"},
+            "steer_offset_rad": {"type": "number"},
+            "steer_tau_s": {"type": "number", "exclusiveMinimum": 0},
+            "command_delay_s": {"type": "number", "minimum": 0},
+            "understeer_s2_per_m2": {"type": "number"}
+          }
+        },
+        "residual": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "inputs",
+            "outputs",
+            "layers",
+            "activation",
+            "input_mean",
+            "input_std",
+            "output_scale",
+            "file"
+          ],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "inputs": {"$ref": "#/$defs/string_list"},
+            "outputs": {"$ref": "#/$defs/string_list"},
+            "layers": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 1},
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "activation": {"type": "string", "minLength": 1},
+            "input_mean": {"$ref": "#/$defs/number_list"},
+            "input_std": {"$ref": "#/$defs/number_list"},
+            "output_scale": {"$ref": "#/$defs/number_list"},
+            "file": {"type": "string", "minLength": 1}
+          }
+        },
+        "validity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["v_min_mps", "v_max_mps"],
+          "properties": {
+            "v_min_mps": {"type": "number", "minimum": 0},
+            "v_max_mps": {"type": "number", "exclusiveMinimum": 0}
+          }
+        },
+        "golden": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

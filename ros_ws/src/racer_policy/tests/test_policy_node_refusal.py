@@ -17,10 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-pytest.importorskip("rclpy")
-pytest.importorskip("racer_tools.vehicle_params_loader")
-
 from policy_fixture import build_policy_dir
 
 LINE_CSV = "s_m,x_m,y_m,heading_rad,curvature_1pm,target_speed_mps\n0,0,0,0,0,1\n1,1,0,0,0,1\n2,1,1,1.5,1,1\n"

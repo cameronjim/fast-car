@@ -25,11 +25,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-pytest.importorskip("rclpy")
-pytest.importorskip("torch")
-pytest.importorskip("racer_tools.vehicle_params_loader")
-
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import TransformStamped

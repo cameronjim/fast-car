@@ -30,9 +30,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import numpy.typing as npt
 
-Array = npt.NDArray[Any]
+# np.ndarray. Spelled Any because numpy 2.3+'s stubs use python 3.12 syntax, which mypy cannot read
+# with this package's python 3.10 target (pyproject.toml); the arrays are float32 or float64 vectors.
+Array = Any
 
 PROFILE = "v0"
 
@@ -203,7 +204,7 @@ def pool_scan(
     # exactly there).
     idx = np.where((idx == beam_count) & (bearing <= fov_rad / 2.0 + 1e-9), beam_count - 1, idx)
     inside = (idx >= 0) & (idx < beam_count)
-    out = np.full(beam_count, clip_m, dtype=np.float64)
+    out: Array = np.full(beam_count, clip_m, dtype=np.float64)
     np.minimum.at(out, idx[inside], r[inside])
     return out.astype(np.float32)
 

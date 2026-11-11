@@ -806,7 +806,7 @@ dev = [
 requires-dist = [
     { name = "envelope", directory = "../../../training/envelope" },
     { name = "jsonschema", specifier = ">=4.20" },
-    { name = "numpy", specifier = "<2.3" },
+    { name = "numpy" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 

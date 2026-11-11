@@ -16,7 +16,7 @@ requires-python = ">=3.10"
 dependencies = [
     "pyyaml>=6.0",
     "jsonschema>=4.20",
-    "numpy<2.3",
+    "numpy",
     "envelope",
 ]
 
@@ -56,6 +56,15 @@ files = ["src"]
 module = ["envelope.*", "rclpy.*", "ackermann_msgs.*", "nav_msgs.*", "sensor_msgs.*", "std_msgs.*", "tf2_ros.*", "racer_tools.*"]
 ignore_missing_imports = true
 
+# numpy 2.3+ ships stubs written for python 3.12 syntax, which mypy cannot read with the 3.10
+# target above (the car image's python), and pinning numpy below 2.3 would make CI compile it
+# from source on newer pythons. The code uses numpy through the NDArray alias only, so mypy does
+# not follow into its stubs.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
 # torch is deliberately NOT a dependency of this package (see src/racer_policy/model.py's
 # docstring: it is a deploy-time-only dependency, imported lazily so the L1 CI job never
 # needs it installed). mypy therefore cannot see its stubs either; this override is scoped
@@ -64,9 +73,17 @@ ignore_missing_imports = true
 module = "torch.*"
 ignore_missing_imports = true
 
-# policy_node.py is rclpy plumbing (subscriptions, timers, publishers); its decisions live in
-# policy_core / startup / live_observation / deploy, which are covered here, and the node itself
-# is covered by the L3 launch tests under colcon (tests/test_policy_node_*.py). setup.py is the
-# ament_python packaging shim.
+# What is NOT measured here, and why. policy_node.py is rclpy plumbing (subscriptions, timers,
+# publishers); its decisions live in policy_core / startup / live_observation / deploy, which are
+# measured. The node itself, the node-startup refusal tests and the live-graph tests need rclpy
+# (and, for the last, torch): they skip under this bare `uv run pytest` and run under colcon in
+# the ros-dev image and in the l5-policy CI job, so their files would only add skipped lines to the
+# total. setup.py is the ament_python packaging shim; policy_fixture.py is a test helper whose
+# torch half only runs where torch is installed.
 [tool.coverage.run]
-omit = ["setup.py", "*/policy_node.py"]
+omit = [
+    "setup.py",
+    "*/policy_node.py",
+    "tests/test_policy_node_*.py",
+    "tests/policy_fixture.py",
+]

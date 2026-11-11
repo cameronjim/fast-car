@@ -262,6 +262,7 @@ def load_deployment(policy_dir: Path | str, vehicle_params: Any) -> Deployment:
 def build_envelope_config(deployment: Deployment, vehicle_params: Any) -> Any:
     """The `envelope.EnvelopeConfig` the node enforces: same arguments, same library as
     `racer_train.envelope_config.build_envelope_config` (a parity test compares the two)."""
+    ensure_envelope_importable()
     from envelope import DistanceOODScorer, EnvelopeConfig
 
     dt = 1.0 / deployment.envelope.control_rate_hz

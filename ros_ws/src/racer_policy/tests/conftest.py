@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,28 @@ import pytest
 import yaml
 from racer_policy.contract import ObservationField
 from racer_policy.environment import LiveEnvironment, LiveObservationSchema
+
+# hypothesis is a dev dependency of this package (uv run pytest, the line90 gate). `colcon test`
+# also runs this directory, under the ros-dev image's system python3 where it is absent; there the
+# property test is not collected instead of failing the whole directory's collection (a
+# module-level importorskip does not help: pytest 6.2, the ROS Humble one, then collects nothing).
+collect_ignore = [] if importlib.util.find_spec("hypothesis") else ["test_manifest_property.py"]
+
+
+def _have(*modules: str) -> bool:
+    try:
+        return all(importlib.util.find_spec(m) is not None for m in modules)
+    except ModuleNotFoundError:  # find_spec("a.b") raises when "a" is missing
+        return False
+
+
+# The L3 node tests need rclpy and the colcon-built racer_tools (the generated vehicle_params
+# binding); the live-graph file also needs torch. Not collected where they are absent (same
+# reason as above: the bare `uv run pytest` run, and the CI image without torch).
+if not _have("rclpy", "racer_tools.vehicle_params_loader"):
+    collect_ignore.append("test_policy_node_refusal.py")
+if not _have("rclpy", "racer_tools.vehicle_params_loader", "torch"):
+    collect_ignore.append("test_policy_node_ros.py")
 
 # tests/conftest.py -> tests/ -> racer_policy/ -> src/ -> ros_ws/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[4]

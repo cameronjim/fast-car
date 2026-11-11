@@ -1,0 +1,223 @@
+bundle_schema_version: 1.0.0
+kind: track_perception
+model_id: trackperc-v0-2026-11-11
+created_utc: '2026-11-11T23:38:02Z'
+git_sha: 44e8c05e68f2720f847ff96af265b59526e87e13
+training_config_sha256: e86a8d154d30ae1f0763e37a5bce19e61d0512e6d2b74d8d13f9e6f906c8fa66
+vehicle_params:
+  schema_version: 0.14.0
+  sysid_session_id: none-preliminary
+payload:
+- file: weights.npz
+  sha256: 8ca894c0c2427ddc97419f4e0726d0957c59f742528e2c0d48e227043da6f8e2
+io:
+  input:
+    tensor:
+    - 1
+    - 2
+    - 360
+    n_bins: 360
+    range_clip_m: 6.0
+    origin: lidar
+    pooling: min
+    body_filter_margin_m: 0.02
+  output:
+    tensor:
+    - 16
+    - 5
+    stations: 16
+    station_spacing_m: 0.2
+    frame: base_link
+  lidar_mount:
+    x_m: 0.285
+    y_m: 0.0
+    yaw_rad: 3.141593
+  arch:
+    type: circ_conv1d_v0
+data:
+- 'simulated lanes: island tracks and Fourier loops, 300k train / 20k val, seed 0, nuisances per racer_pnp_perception.nuisance'
+- never trained on real bags; held-out island tracks excluded by tracks.is_held_out
+metrics:
+  verdict: net fails, use backend:=geometric tonight
+  sim_held_out:
+    stadium_l1.0_s2.0_r0.4:
+      net_raw:
+        centreline_err_median_stations_0_7_m: 0.009506968781352043
+        centreline_err_median_stations_8_15_m: 0.03889671713113785
+        centreline_err_p90_stations_0_7_m: 0.02617965266108513
+        centreline_err_p90_stations_8_15_m: 0.143598273396492
+        half_width_err_median_m: 0.009861789643764496
+        valid_share: 1.0
+      geometric_valid:
+        centreline_err_median_stations_0_7_m: 0.031215477734804153
+        centreline_err_median_stations_8_15_m: 0.05603715032339096
+        centreline_err_p90_stations_0_7_m: 0.09634851664304733
+        centreline_err_p90_stations_8_15_m: 0.16904357373714457
+        half_width_err_median_m: 0.02192288637161255
+        valid_share: 0.965
+    rounded_rect_l1.0_3.0x2.0_r0.4:
+      net_raw:
+        centreline_err_median_stations_0_7_m: 0.009195316582918167
+        centreline_err_median_stations_8_15_m: 0.032847728580236435
+        centreline_err_p90_stations_0_7_m: 0.025397665798664093
+        centreline_err_p90_stations_8_15_m: 0.10113167762756348
+        half_width_err_median_m: 0.009169921278953552
+        valid_share: 1.0
+      geometric_valid:
+        centreline_err_median_stations_0_7_m: 0.023204399272799492
+        centreline_err_median_stations_8_15_m: 0.042147787287831306
+        centreline_err_p90_stations_0_7_m: 0.0853743575513363
+        centreline_err_p90_stations_8_15_m: 0.12616854459047316
+        half_width_err_median_m: 0.020479261875152588
+        valid_share: 0.9766666666666667
+    rounded_rect_l1.2_2.0x1.6_r0.8:
+      net_raw:
+        centreline_err_median_stations_0_7_m: 0.00787324458360672
+        centreline_err_median_stations_8_15_m: 0.01804184541106224
+        centreline_err_p90_stations_0_7_m: 0.020429883152246475
+        centreline_err_p90_stations_8_15_m: 0.04883628338575363
+        half_width_err_median_m: 0.008516639471054077
+        valid_share: 1.0
+      geometric_valid:
+        centreline_err_median_stations_0_7_m: 0.03906248137354851
+        centreline_err_median_stations_8_15_m: 0.04513249173760414
+        centreline_err_p90_stations_0_7_m: 0.08704597055912026
+        centreline_err_p90_stations_8_15_m: 0.09545332491397857
+        half_width_err_median_m: 0.02076643705368042
+        valid_share: 0.9967291666666667
+  sim_held_out_acceptance:
+    stadium_l1.0_s2.0_r0.4:
+      centreline_0_7_ok: true
+      centreline_8_15_ok: true
+      half_width_ok: true
+    rounded_rect_l1.0_3.0x2.0_r0.4:
+      centreline_0_7_ok: true
+      centreline_8_15_ok: true
+      half_width_ok: true
+    rounded_rect_l1.2_2.0x1.6_r0.8:
+      centreline_0_7_ok: true
+      centreline_8_15_ok: true
+      half_width_ok: true
+    all_ok: true
+  sim_in_distribution:
+    net_raw:
+      centreline_err_median_stations_0_7_m: 0.008955547586083412
+      centreline_err_median_stations_8_15_m: 0.029997967183589935
+      centreline_err_p90_stations_0_7_m: 0.02799050509929657
+      centreline_err_p90_stations_8_15_m: 0.10861267149448395
+      half_width_err_median_m: 0.00962841510772705
+      valid_share: 1.0
+    geometric_valid:
+      centreline_err_median_stations_0_7_m: 0.027490798383951187
+      centreline_err_median_stations_8_15_m: 0.03945891372859478
+      centreline_err_p90_stations_0_7_m: 0.09339702725410459
+      centreline_err_p90_stations_8_15_m: 0.13005439192056656
+      half_width_err_median_m: 0.021892279386520386
+      valid_share: 0.9568541666666667
+  real_bags_gate_pooled:
+    geometric:
+      moving_scans: 4262
+      residual_scans: 4262
+      boundary_residual_median_m: 0.05741575444013012
+      boundary_residual_p90_m: 0.15990823455035155
+      intrusion_fraction_mean: 0.09221447212150527
+      valid_count_mean: 14.235804786485218
+      share_valid_count_under_6: 0.006100422336931018
+      latency_ms:
+        p50: 0.5488544702529907
+        p99: 1.0063017439097177
+        max: 16.731582989450544
+      verdict: net fails, use backend:=geometric tonight
+      checks:
+        median_boundary_residual: true
+        mean_intrusion_fraction: false
+        share_valid_count_under_6: true
+    net:
+      moving_scans: 4262
+      residual_scans: 4262
+      boundary_residual_median_m: 0.10676462621425246
+      boundary_residual_p90_m: 0.1666428446432941
+      intrusion_fraction_mean: 0.20454453493463162
+      valid_count_mean: 15.23181604880338
+      share_valid_count_under_6: 0.0
+      latency_ms:
+        p50: 0.23912504548206925
+        p99: 0.5240536358905957
+        max: 0.689874985255301
+      verdict: net fails, use backend:=geometric tonight
+      checks:
+        median_boundary_residual: false
+        mean_intrusion_fraction: false
+        share_valid_count_under_6: true
+  real_bags:
+    2026-11-11T03-54-11_car_teleop:
+      scans: 4067
+      moving_scans: 1833
+      moving_source: /odom/wheel
+      truncated: true
+      backends:
+        geometric:
+          moving_scans: 1833
+          residual_scans: 1833
+          boundary_residual_median_m: 0.055875899358529796
+          boundary_residual_p90_m: 0.16027447200651135
+          intrusion_fraction_mean: 0.0941685320899847
+          valid_count_mean: 14.479541734860884
+          share_valid_count_under_6: 0.0
+          latency_ms:
+            p50: 0.5521249840967357
+            p99: 1.0108151216991248
+            max: 16.731582989450544
+        net:
+          moving_scans: 1833
+          residual_scans: 1833
+          boundary_residual_median_m: 0.10661972616349427
+          boundary_residual_p90_m: 0.16861923572969775
+          intrusion_fraction_mean: 0.19889412314982194
+          valid_count_mean: 15.182760501909438
+          share_valid_count_under_6: 0.0
+          latency_ms:
+            p50: 0.2400419907644391
+            p99: 0.5426409770734609
+            max: 0.689874985255301
+      centreline_distance_stations_0_7_mean_m: 0.08665829944590527
+      centreline_distance_scans: 1782
+    2026-11-11T03-54-11_car_teleop_cw:
+      scans: 8998
+      moving_scans: 2429
+      moving_source: /odom/wheel
+      truncated: true
+      backends:
+        geometric:
+          moving_scans: 2429
+          residual_scans: 2429
+          boundary_residual_median_m: 0.05832181145093855
+          boundary_residual_p90_m: 0.1592004654316227
+          intrusion_fraction_mean: 0.09073987684681493
+          valid_count_mean: 14.051873198847263
+          share_valid_count_under_6: 0.01070399341292713
+          latency_ms:
+            p50: 0.5446249851956964
+            p99: 0.9946162509731945
+            max: 3.213167015928775
+        net:
+          moving_scans: 2429
+          residual_scans: 2429
+          boundary_residual_median_m: 0.10687223246822244
+          boundary_residual_p90_m: 0.1656835810112939
+          intrusion_fraction_mean: 0.20880851385663912
+          valid_count_mean: 15.26883491148621
+          share_valid_count_under_6: 0.0
+          latency_ms:
+            p50: 0.23862498346716166
+            p99: 0.5000984738580879
+            max: 0.6624169764108956
+      centreline_distance_stations_0_7_mean_m: 0.08637106182663415
+      centreline_distance_scans: 2227
+  final_val:
+    epoch: 14
+    train_loss: -7.09956620026612
+    val_loss: -7.07295560836792
+    val_xy_median_m: 0.016306113451719284
+    val_width_median_m: 0.009655177593231201
+    seconds: 1343.4239082336426

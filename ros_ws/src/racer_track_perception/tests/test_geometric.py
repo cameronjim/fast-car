@@ -143,6 +143,35 @@ def test_one_wall_keeps_the_last_known_half_width(live: LiveVehicle) -> None:
     assert np.allclose(t.half_width_left_m, 0.4, atol=0.03)
 
 
+def test_an_implausibly_wide_pairing_uses_the_nearer_wall_only(live: LiveVehicle) -> None:
+    centre = centreline_points("straight")
+    near_right = walls(centre, 0.5, 0.5, left=False)  # a wall at y = -0.5
+    far_left = walls(centre, 1.4, 1.4, right=False)  # an unrelated wall at y = +1.4
+    pts = np.vstack([near_right, far_left])
+    gated = run(pts, live)  # default plausible half width range: the midpoint 0.95 is refused
+    assert gated.valid_count == 16
+    assert np.abs(gated.y_m).max() < 0.03 and np.allclose(gated.sigma_m, geo.SIGMA_ONE_WALL_M)
+    assert np.allclose(gated.half_width_left_m, 0.5, atol=0.03)
+    ungated = run(pts, live, hw_max_m=math.inf)
+    assert abs(np.median(ungated.y_m) - 0.45) < 0.03  # the plain midpoint of the two walls
+    # And the nearer wall on the left works the same way.
+    flipped = run(
+        np.vstack([walls(centre, 0.5, 0.5, right=False), walls(centre, 1.4, 1.4, left=False)]), live
+    )
+    assert np.abs(flipped.y_m).max() < 0.03
+
+
+def test_an_implausibly_narrow_pairing_is_refused_too(live: LiveVehicle) -> None:
+    centre = centreline_points("straight")
+    slot = walls(centre, 0.25, 0.25)  # a 0.5 m slot: half width 0.25 is under the 0.3 floor
+    plain = run(slot, live, hw_min_m=0.0)
+    assert plain.valid_count == 16 and np.abs(plain.y_m).max() < 0.03
+    gated = run(slot, live)
+    # One wall alone puts the centre a default half width (0.5 m) from it, which is through the
+    # opposite wall: the body check then ends the trace at once.
+    assert gated.valid_count < plain.valid_count and gated.arrays_ok()
+
+
 def test_no_track_cases(live: LiveVehicle) -> None:
     assert run(np.zeros((0, 2)), live).valid_count == 0
     assert run(np.array([[np.nan, np.nan], [np.inf, 1.0]]), live).valid_count == 0

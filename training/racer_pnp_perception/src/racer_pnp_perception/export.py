@@ -101,25 +101,87 @@ def write_manifest(bundle_dir: Path, manifest: dict[str, Any]) -> None:
     (bundle_dir / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False, width=100))
 
 
+def compose_metrics(
+    sim: dict[str, Any], bags: dict[str, Any], train_history: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """The numbers stored in the manifest, the pointer and the README: the held-out simulation
+    summary, the real-bag gate (pooled and per bag, both backends) and the verdict."""
+    held = {
+        name: {k: res[k] for k in ("net_raw", "geometric_valid") if k in res}
+        for name, res in sim["held_out"].items()
+    }
+    out: dict[str, Any] = {
+        "verdict": bags.get("verdict", "no real-bag verdict"),
+        "sim_held_out": held,
+        "sim_held_out_acceptance": sim.get("held_out_acceptance"),
+        "sim_in_distribution": {
+            k: sim["in_distribution"][k]
+            for k in ("net_raw", "geometric_valid")
+            if k in sim["in_distribution"]
+        },
+        "real_bags_gate_pooled": bags.get("gate_pooled"),
+        "real_bags": bags.get("bags"),
+    }
+    if train_history:
+        out["final_val"] = train_history[-1]
+    return out
+
+
 def readme_text(model_id: str, metrics: dict[str, Any]) -> str:
     verdict = metrics.get("verdict", "no real-bag verdict yet")
     lines = [
         f"# {model_id}",
         "",
-        "Track perception net (`circ_conv1d_v0`), trained in simulation only (labels from the",
-        "track geometry; never on the real bags). The weights are not committed: the bundle is in",
-        "`/Users/cameronjim/code/car-data/pnp/models/` on the dev machine and copied to the car.",
+        "Track perception net (`circ_conv1d_v0`), trained in simulation only: labels come from the",
+        "track geometry and the real bags were never trained on. The weights are not committed;",
+        "the bundle lives in `/Users/cameronjim/code/car-data/pnp/models/` on the dev machine and",
+        "is copied to the car.",
         "",
         f"Real-bag gate verdict: **{verdict}**.",
         "",
-        "Numbers (also in `metrics.json`):",
-        "",
-        "```json",
-        json.dumps(metrics, indent=2, allow_nan=False, default=_json_default),
-        "```",
-        "",
     ]
-    return "\n".join(lines)
+    pooled = metrics.get("real_bags_gate_pooled") or {}
+    if pooled:
+        lines += [
+            "Real-bag gate (both 2026-11-11T03-54-11 bags together, moving scans). The net may drive",
+            "only if the median boundary residual is at most 0.10 m, the mean intrusion fraction at",
+            "most 0.02 and at most 5 percent of scans have valid_count under 6. The thresholds were",
+            "not tuned.",
+            "",
+            "| backend | median residual (m) | p90 residual (m) | mean intrusion | share valid < 6 |",
+            "|---|---|---|---|---|",
+        ]
+        for name, row in pooled.items():
+            lines.append(
+                f"| {name} | {_fmt(row['boundary_residual_median_m'])} "
+                f"| {_fmt(row['boundary_residual_p90_m'])} "
+                f"| {_fmt(row['intrusion_fraction_mean'])} "
+                f"| {_fmt(row['share_valid_count_under_6'])} |"
+            )
+        lines.append("")
+    held = metrics.get("sim_held_out") or {}
+    if held:
+        lines += [
+            "Simulation, held-out family tracks (net, median error over stations): centreline",
+            "0 to 7 / 8 to 15 and half width, in metres.",
+            "",
+            "| track | centreline 0-7 | centreline 8-15 | half width |",
+            "|---|---|---|---|",
+        ]
+        for name, res in held.items():
+            n = res["net_raw"]
+            lines.append(
+                f"| {name} | {_fmt(n['centreline_err_median_stations_0_7_m'])} "
+                f"| {_fmt(n['centreline_err_median_stations_8_15_m'])} "
+                f"| {_fmt(n['half_width_err_median_m'])} |"
+            )
+        lines.append("")
+    lines += ["Everything, as stored in the bundle manifest (`metrics.json` is the same):", ""]
+    return "\n".join(lines) + "\n"
+
+
+def _fmt(value: Any) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
 
 
 def _json_default(value: Any) -> Any:
@@ -217,13 +279,26 @@ def export(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, required=True)
+    parser.add_argument("--finalize", type=Path, default=None, help="bundle dir to finalize")
+    parser.add_argument("--sim-json", type=Path, default=None)
+    parser.add_argument("--bags-json", type=Path, default=None)
+    parser.add_argument("--run", type=Path, default=None)
     parser.add_argument("--model-id", default=default_model_id())
     parser.add_argument("--metrics", type=Path, default=None, help="json file of numbers")
     parser.add_argument("--data", action="append", default=[])
     parser.add_argument("--no-copy", action="store_true")
     args = parser.parse_args(argv)
     repo = find_repo_root()
+    if args.finalize is not None:
+        sim = json.loads(args.sim_json.read_text())
+        bags = json.loads(args.bags_json.read_text())
+        history_path = args.run / "history.json" if args.run else None
+        history = json.loads(history_path.read_text()) if history_path else None
+        finalize(args.finalize, compose_metrics(sim, bags, history), repo)
+        print(f"finalized {args.finalize}")
+        return 0
+    if args.run is None:
+        parser.error("--run is required unless --finalize is given")
     metrics = json.loads(args.metrics.read_text()) if args.metrics else {}
     out = export(args.run, args.model_id, metrics, args.data, repo)
     if not args.no_copy:

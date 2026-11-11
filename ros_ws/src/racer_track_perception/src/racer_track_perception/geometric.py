@@ -41,6 +41,15 @@ SIGMA_ONE_WALL_M = 0.15
 # Path length to march: every step is at least STEP_M long, so 15 steps give the 3.0 m the 16
 # stations need.
 N_STEPS = tr.K_STATIONS - 1
+# Plausible half widths of a lane. On the 2026-11-11 bags (lane 0.8 to 1.3 m) the unguarded tracer
+# paired a near wall with a far, unrelated one (the island's stub, the room) in one scan in three,
+# and the centreline then spiralled off the lane; with this test the mean distance to the net's
+# centreline fell from 0.28 to 0.09 m, the share of scans over 0.3 m apart from 36 to 0 percent
+# and the median boundary residual from 0.107 to 0.059 m, with no loss in simulation. The upper
+# value is half the widest lane the simulator trains on (1.6 m): a wider lane is traced by its
+# nearer wall alone.
+DEFAULT_HW_MIN_M = 0.3
+DEFAULT_HW_MAX_M = 0.8
 # Points further than this from the car cannot take part in a 3 m march with a 2 m feeler.
 MAX_POINT_RANGE_M = 6.0
 
@@ -50,6 +59,11 @@ class GeometricConfig:
     default_half_width_m: float = 0.5
     two_pass: bool = True
     heading_blend: float = 1.0  # 1.0: the plain direction of the last step; lower smooths it
+    max_turn_rad: float = MAX_TURN_RAD
+    # A two-wall midpoint whose half width is outside [hw_min_m, hw_max_m] is not trusted (the far
+    # "wall" is another part of the track): the nearer wall alone is used. inf disables the test.
+    hw_min_m: float = DEFAULT_HW_MIN_M
+    hw_max_m: float = DEFAULT_HW_MAX_M
 
 
 @dataclass
@@ -89,6 +103,12 @@ def _march(
             break
         dl = float(lat[left].min()) if has_left else 0.0
         dr = float(-lat[right].max()) if has_right else 0.0
+        if has_left and has_right and not (cfg.hw_min_m <= 0.5 * (dl + dr) <= cfg.hw_max_m):
+            # Implausible width: keep only the nearer wall.
+            if dl <= dr:
+                has_right = False
+            else:
+                has_left = False
         if has_left and has_right:
             shift = 0.5 * (dl - dr)
             hw = 0.5 * (dl + dr)
@@ -110,7 +130,7 @@ def _march(
             measured = math.atan2(new_y - raw.y[-1], new_x - raw.x[-1])
             turn = (measured - heading + math.pi) % (2.0 * math.pi) - math.pi
             turn *= cfg.heading_blend
-            turn = max(-MAX_TURN_RAD, min(MAX_TURN_RAD, turn))
+            turn = max(-cfg.max_turn_rad, min(cfg.max_turn_rad, turn))
             heading += turn
         cx, cy = new_x, new_y
         raw.x.append(cx)

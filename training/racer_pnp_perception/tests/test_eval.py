@@ -116,6 +116,18 @@ def tiny_arrays() -> dict[str, np.ndarray]:
     return arrays
 
 
+def test_plot_overlay_writes_a_picture(tmp_path, live: LiveVehicle) -> None:
+    import pytest
+
+    pytest.importorskip("matplotlib")
+    scan = corridor_scan(live)
+    geo = core.TrackPerceiver(core.BACKEND_GEOMETRIC, live)
+    t = geo.process(scan.ranges, scan.angle_min, scan.angle_increment, 0.05, 12.0)
+    out = tmp_path / "o.png"
+    eb.plot_overlay(out, scan, {core.BACKEND_GEOMETRIC: t, "net": make_track(1)}, geo, "title")
+    assert out.stat().st_size > 1000
+
+
 def test_error_summary_masks() -> None:
     pos = np.zeros((2, 16))
     pos[:, :8] = 0.02

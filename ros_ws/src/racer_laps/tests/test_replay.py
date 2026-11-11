@@ -121,6 +121,7 @@ def test_replay_reports_missing_pose_and_no_lap_through_a_dropout() -> None:
 
 
 def test_read_messages_errors_on_a_bad_path(tmp_path: Path) -> None:
+    pytest.importorskip("mcap")
     with pytest.raises(FileNotFoundError):
         list(read_messages(tmp_path / "nope"))
     with pytest.raises(FileNotFoundError):

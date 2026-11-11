@@ -75,6 +75,53 @@ export function steeringFromDrive(msg: DriveLike): { angleRad: number; speedMps:
   return { angleRad: msg.drive.steering_angle, speedMps: msg.drive.speed };
 }
 
+// -- lap counter ------------------------------------------------------------------------------
+
+/** The lap counter's 1 Hz /lap/status JSON (racer_perception lap_counter_node), checked. */
+export interface LapStatus {
+  state: string;
+  similarity: number | null;
+  laps: number;
+  lastLapS: number | null;
+  bestLapS: number | null;
+}
+
+function numberOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** Parse the String payload of /lap/status; null for anything that is not a lap status. */
+export function parseLapStatus(text: string): LapStatus | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null) return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.state !== "string") return null;
+  const laps = numberOrNull(o.laps);
+  if (laps === null || !Number.isInteger(laps) || laps < 0) return null;
+  return {
+    state: o.state,
+    similarity: numberOrNull(o.similarity),
+    laps,
+    lastLapS: numberOrNull(o.last_lap_s),
+    bestLapS: numberOrNull(o.best_lap_s),
+  };
+}
+
+/** One line under the lap count: what the counter is doing, or the last and best lap. */
+export function lapSubline(lap: LapStatus): string {
+  if (lap.state !== "running") return "waiting for the car to move (reference not taken yet)";
+  const times =
+    lap.lastLapS === null || lap.bestLapS === null
+      ? "no lap yet"
+      : `last ${lap.lastLapS.toFixed(2)} s, best ${lap.bestLapS.toFixed(2)} s`;
+  return lap.similarity === null ? times : `${times}, view match ${lap.similarity.toFixed(2)}`;
+}
+
 // -- battery ---------------------------------------------------------------------------------
 
 export type Level = "green" | "amber" | "red";

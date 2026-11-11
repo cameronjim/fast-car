@@ -5,11 +5,13 @@ import {
   bytesToBlobUrl,
   eventLine,
   pushEvent,
+  parseLapStatus,
   poseOf,
   speedFromOdom,
   steeringFromDrive,
   type DriveLike,
   type EventLine,
+  type LapStatus,
   type LaserScanLike,
   type OccupancyGridLike,
   type OdometryLike,
@@ -30,6 +32,7 @@ export interface Live {
   tempFet: Stamped<number> | null;
   tempMotor: Stamped<number> | null;
   fault: Stamped<string> | null;
+  lap: Stamped<LapStatus> | null;
   scan: Stamped<LaserScanLike> | null;
   map: OccupancyGridLike | null;
   pose: Stamped<{ x: number; y: number; yaw: number }> | null;
@@ -47,6 +50,7 @@ export function emptyLive(): Live {
     tempFet: null,
     tempMotor: null,
     fault: null,
+    lap: null,
     scan: null,
     map: null,
     pose: null,
@@ -92,6 +96,10 @@ export function startLive(ros: RosLink, live: Live, showCameras: () => boolean):
     num("/telemetry/vesc/temp_motor_degc", "tempMotor"),
     ros.subscribe<StringMsg>("/telemetry/vesc/fault", (m) => {
       live.fault = { value: m.data, at: now() };
+    }),
+    ros.subscribe<StringMsg>("/lap/status", (m) => {
+      const lap = parseLapStatus(m.data);
+      if (lap) live.lap = { value: lap, at: now() };
     }),
     ros.subscribe<LaserScanLike>("/scan", (m) => {
       live.scan = { value: m, at: now() };

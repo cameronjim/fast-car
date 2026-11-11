@@ -22,6 +22,12 @@ bare `width:=1920` would reach BOTH child files (the AR0234's 1920x1200 is not a
 mode); forwarding sets each child's value right before that child runs. The defaults equal
 the child files' own defaults (the L1 test pins that).
 
+LAP COUNTER (`lap_counter:=true`, default false, so nothing changes for existing runs): also runs
+racer_perception's lap_counter_node on one camera's compressed topic (`lap_image_topic`, default
+the USB camera), publishing /lap/event and /lap/status. The run's recorder takes both. Its
+thresholds are forwarded as lap_* arguments; every other parameter keeps the node's default (see
+racer_perception/launch/lap_counter.launch.py and docs/notes/lap-counter-2026-11-12.md).
+
 Recording is NOT started here: the run's bag belongs to car_teleop.launch.py's recorder,
 whose regex takes /camera/.*/compressed and leaves the raw images out. To collect camera data
 without the drive stack, record by hand (docs/notes/first-boot-runbook.md "Cameras first
@@ -39,6 +45,8 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 _LAUNCH_DIR = os.path.dirname(os.path.abspath(__file__))
 #: Found next to this file (source tree and installed share alike), as car_teleop.launch.py
@@ -65,6 +73,37 @@ CSI_FORWARDED = {
     "csi_height": ("height", "720", "CSI camera 0 capture height, pixels."),
     "csi_fps": ("fps", "60", "CSI camera 0 frame rate, frames per second."),
     "csi_flip_method": ("flip_method", "0", "CSI camera 0 nvvidconv flip-method, 0..7."),
+}
+
+
+#: This file's argument -> (lap_counter_node parameter, default, description, type). The
+#: defaults equal lap_counter_node's own (racer_perception's test pins that).
+LAP_FORWARDED = {
+    "lap_image_topic": (
+        "image_topic",
+        "/camera/usb/image_raw/compressed",
+        "CompressedImage topic the lap counter watches.",
+        str,
+    ),
+    "lap_similarity_threshold": (
+        "similarity_threshold",
+        "0.8",
+        "Lap counter: count a lap at a similarity peak at or above this.",
+        float,
+    ),
+    "lap_rearm_threshold": (
+        "rearm_threshold",
+        "0.55",
+        "Lap counter: similarity must drop below this before the next lap can count.",
+        float,
+    ),
+    "lap_min_lap_time_s": ("min_lap_time_s", "6.0", "Lap counter: shortest lap, seconds.", float),
+    "lap_min_lap_distance_m": (
+        "min_lap_distance_m",
+        "3.0",
+        "Lap counter: shortest lap, metres of odometry.",
+        float,
+    ),
 }
 
 
@@ -103,13 +142,38 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments=[("sensor_id", "0"), *_forward(CSI_FORWARDED)],
         condition=IfCondition(LaunchConfiguration("csi")),
     )
+    lap_arg = DeclareLaunchArgument(
+        "lap_counter",
+        default_value="false",
+        description="Also start lap_counter_node (camera lap counter, /lap/event, /lap/status).",
+    )
+    lap_args = [
+        DeclareLaunchArgument(name, default_value=default, description=description)
+        for name, (_param, default, description, _type) in LAP_FORWARDED.items()
+    ]
+    lap_counter = Node(
+        package="racer_perception",
+        executable="lap_counter_node",
+        name="lap_counter_node",
+        output="screen",
+        parameters=[
+            {
+                param: ParameterValue(LaunchConfiguration(name), value_type=value_type)
+                for name, (param, _default, _description, value_type) in LAP_FORWARDED.items()
+            }
+        ],
+        condition=IfCondition(LaunchConfiguration("lap_counter")),
+    )
     return LaunchDescription(
         [
             usb_arg,
             csi_arg,
+            lap_arg,
             *_declare(USB_FORWARDED),
             *_declare(CSI_FORWARDED),
+            *lap_args,
             usb_camera,
             csi_camera,
+            lap_counter,
         ]
     )

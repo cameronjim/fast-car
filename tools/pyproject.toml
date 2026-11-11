@@ -17,6 +17,10 @@ Also covers tools/replay_follower.py and tools/follower_replay/: bag replay for 
 follower (docs/notes/replay-follower.md). It reads mcap with mcap + mcap-ros2-support; the PNG
 plots need matplotlib, which is the optional `plots` extra so the codegen environment the
 colcon build syncs stays small (`uv sync --extra plots`; CI uses --all-extras).
+
+Also covers tools/lap_replay.py: replays a bag (or a folder of images) through the camera lap
+counter in ros_ws/src/racer_perception to tune its thresholds (docs/notes/lap-counter-2026-11-12.md).
+Decoding the JPEG frames needs OpenCV, the optional `vision` extra (`uv sync --extra vision`).
 """
 requires-python = ">=3.11"
 dependencies = [
@@ -30,6 +34,9 @@ dependencies = [
 [project.optional-dependencies]
 plots = [
     "matplotlib>=3.11.2",
+]
+vision = [
+    "opencv-python-headless>=4.9",
 ]
 
 [tool.uv]

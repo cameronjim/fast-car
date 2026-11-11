@@ -6,7 +6,9 @@ import {
   eventLine,
   fmt,
   fmtDuration,
+  lapSubline,
   occupancyToImage,
+  parseLapStatus,
   poseOf,
   pushEvent,
   quatToYaw,
@@ -21,6 +23,65 @@ import {
 // The mount used in these tests is the shape of vehicle_params' sensors.lidar. The UI itself
 // has no copy of these numbers: they arrive from /api/vehicle.
 const MOUNT: LidarMount = { mount_x_m: 0.285, mount_y_m: 0, mount_yaw_rad: Math.PI };
+
+describe("lap status", () => {
+  const status = {
+    state: "running",
+    similarity: 0.4321,
+    laps: 3,
+    last_lap_s: 17.64,
+    best_lap_s: 17.5,
+    armed: true,
+    speed_mps: 1.2,
+    distance_m: 2.0,
+    heading_turns: null,
+    odom_seen: true,
+  };
+  it("parses the 1 Hz JSON the lap counter publishes", () => {
+    expect(parseLapStatus(JSON.stringify(status))).toEqual({
+      state: "running",
+      similarity: 0.4321,
+      laps: 3,
+      lastLapS: 17.64,
+      bestLapS: 17.5,
+    });
+  });
+  it("keeps nulls before the first lap and before the start", () => {
+    const early = { state: "waiting", similarity: null, laps: 0, last_lap_s: null, best_lap_s: null };
+    expect(parseLapStatus(JSON.stringify(early))).toEqual({
+      state: "waiting",
+      similarity: null,
+      laps: 0,
+      lastLapS: null,
+      bestLapS: null,
+    });
+  });
+  it.each([
+    "not json",
+    "null",
+    "[]",
+    "3",
+    JSON.stringify({ laps: 1 }),
+    JSON.stringify({ state: "running" }),
+    JSON.stringify({ state: "running", laps: -1 }),
+    JSON.stringify({ state: "running", laps: 1.5 }),
+    JSON.stringify({ state: "running", laps: "2" }),
+  ])("rejects %s", (text) => {
+    expect(parseLapStatus(text)).toBeNull();
+  });
+  it("ignores non-finite or non-numeric times instead of showing them", () => {
+    const lap = parseLapStatus(
+      JSON.stringify({ state: "running", laps: 1, similarity: "high", last_lap_s: null, best_lap_s: "x" }),
+    );
+    expect(lap).toEqual({ state: "running", similarity: null, laps: 1, lastLapS: null, bestLapS: null });
+  });
+  it("describes the counter in one line", () => {
+    const run = parseLapStatus(JSON.stringify(status))!;
+    expect(lapSubline(run)).toBe("last 17.64 s, best 17.50 s, view match 0.43");
+    expect(lapSubline({ ...run, lastLapS: null, bestLapS: null, similarity: null })).toBe("no lap yet");
+    expect(lapSubline({ ...run, state: "waiting" })).toContain("waiting for the car to move");
+  });
+});
 
 describe("speed and steering", () => {
   it("reads wheel speed from the odometry twist", () => {

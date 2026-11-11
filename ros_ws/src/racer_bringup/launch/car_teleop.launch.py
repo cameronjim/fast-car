@@ -229,6 +229,9 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:                     what the detector saw (people, keypoints, bearing and range) and what the
 #:                     spiderbot decided and why it stopped (2026-11-11, roadmap 5.1 and 5.3), when
 #:                     the perception container and the spiderbot launch run. Not the debug image.
+#:   /lap/(event|status)
+#:                     lap_counter_node's lap events and 1 Hz state (2026-11-12), when it runs
+#:                     (cameras.launch.py lap_counter:=true). Small JSON Strings.
 #:   /map              slam_toolbox's map as it grew (mapping:=true), or map_server's latched
 #:                     copy (localization:=true); about 1 Hz, a few hundred kB each
 _RECORDED_TOPIC_REGEX = (
@@ -237,7 +240,8 @@ _RECORDED_TOPIC_REGEX = (
     r"|/tracker/command|/policy/status|/policy/events"
     r"|/camera/.*/compressed|/rosout|/parameter_events"
     r"|/odom|/odom/wheel_twist|/pose|/tf|/tf_static|/map"
-    r"|/perception/(objects|target|poses|detections)|/spiderbot/(alert|state|patrol_cmd))$"
+    r"|/perception/(objects|target|poses|detections)|/spiderbot/(alert|state|patrol_cmd)"
+    r"|/lap/(event|status))$"
 )
 
 

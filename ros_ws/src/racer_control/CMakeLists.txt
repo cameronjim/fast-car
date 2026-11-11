@@ -255,6 +255,12 @@ if(BUILD_TESTING)
     TARGET test_tracker_node_pose_frame_launch
     TIMEOUT 120
   )
+  # drive_topic (2026-11-11): the handoff to racer_policy's policy_node publishes
+  # /tracker/command instead of /drive_raw; the default is unchanged.
+  add_launch_test(test/test_tracker_node_drive_topic_launch.py
+    TARGET test_tracker_node_drive_topic_launch
+    TIMEOUT 120
+  )
 
   # -- S.3 cross-language base-controller divergence test ------------------------------
   # Runs the committed fixture (training/racer_train/tests/fixtures/divergence_states.csv +

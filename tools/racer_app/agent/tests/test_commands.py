@@ -136,6 +136,36 @@ def test_anything_off_the_lists_is_refused(mode, profile):
         cmd.ros_cmd_for(mode, profile)
 
 
+def test_ml_policy_command_launches_policy_launch_with_checked_paths():
+    out = cmd.ros_cmd_for(
+        "ml_policy",
+        raceline_container_path="/workspace/data/maps/a/raceline.csv",
+        policy_container_path="/workspace/data/policies/v1-2026-11-11",
+    )
+    assert out == (
+        "ros2 launch racer_bringup policy.launch.py "
+        "policy_dir:=/workspace/data/policies/v1-2026-11-11 "
+        "raceline:=/workspace/data/maps/a/raceline.csv pose_frame:=map"
+    )
+
+
+@pytest.mark.parametrize(
+    "policy,raceline",
+    [
+        ("/etc/policies/x", "/workspace/data/a.csv"),
+        ("/workspace/data/policies/../../etc", "/workspace/data/a.csv"),
+        ("/workspace/data/policies/x", "/home/me/a.csv"),
+        ("/workspace/data/policies/x", "/workspace/../a.csv"),
+        ("/workspace/data/policies/x; reboot", "/workspace/data/a.csv"),
+        ("", "/workspace/data/a.csv"),
+        ("/workspace/data/policies/x", ""),
+    ],
+)
+def test_ml_policy_command_refuses_paths_off_the_repo_or_with_shell_syntax(policy, raceline):
+    with pytest.raises(cmd.CommandError):
+        cmd.ros_cmd_for("ml_policy", raceline_container_path=raceline, policy_container_path=policy)
+
+
 def test_tracker_command_runs_the_node_with_pose_frame_map():
     out = cmd.ros_cmd_for(
         "tracker", raceline_container_path="/workspace/config/tracks/a/raceline.csv"

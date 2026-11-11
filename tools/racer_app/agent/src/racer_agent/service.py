@@ -57,6 +57,7 @@ class DriveBody(Body):
     mode: str
     profile: str = ""
     raceline: str = ""
+    policy: str = ""
     override: bool = False
     override_reason: str = ""
     patrol: str = ""

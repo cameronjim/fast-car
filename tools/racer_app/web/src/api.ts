@@ -187,6 +187,7 @@ export class Api {
     mode: string;
     profile?: string;
     raceline?: string;
+    policy?: string;
     override?: boolean;
     override_reason?: string;
     patrol?: string;

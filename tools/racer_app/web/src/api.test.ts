@@ -58,6 +58,15 @@ describe("Api", () => {
     expect(err.body.overridable).toBe(true);
   });
 
+  it("starts the ML policy with the policy and raceline it was given, as a normal drive start", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(reply(200, { ok: true, message: "ml_policy:v1 started" }));
+    await new Api(memoryTokens("t"), fetchImpl).startDrive({ mode: "ml_policy", raceline: "data:lane1", policy: "v1-2026-11-11" });
+    const [path, init] = fetchImpl.mock.calls[0];
+    expect(path).toBe("/api/drive/start");
+    expect(JSON.parse(init.body)).toEqual({ mode: "ml_policy", raceline: "data:lane1", policy: "v1-2026-11-11" });
+    expect(init.headers.Authorization).toBe("Bearer t");
+  });
+
   it("perception and spiderbot go through the fixed routes with their fields", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(reply(200, { ok: true }));
     const api = new Api(memoryTokens("t"), fetchImpl);

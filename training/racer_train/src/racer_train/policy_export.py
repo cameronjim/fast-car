@@ -122,9 +122,9 @@ def export_policy_dir(
 
     env_cfg = config.envelope
     meta: dict[str, Any] = {
-        "label": LABEL,
+        "label": config.label or LABEL,
         "created": datetime.now(UTC).date().isoformat(),
-        "policy_version": "v0",
+        "policy_version": config.policy_version,
         "seed": config.seed,
         "config_name": config.name,
         "config_sha256": config_sha256(config_path),

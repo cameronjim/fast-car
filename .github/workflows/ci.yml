@@ -364,6 +364,26 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_track_family_test.sh"
 
+  l5-policy:
+    name: L5 policy canary (tracker handoff + policy_node + safety_node on a stadium vs the tracker alone, ros-dev + gym + torch)
+    runs-on: ubuntu-latest
+    # 2026-11-11 (docs/notes/residual-v1-2026-11-11.md): racer_policy's policy_node on a live ROS
+    # graph and a full lap through the real command path with a fixture TorchScript network, both
+    # directions, compared with the tracker alone. The ros-dev image has no torch by design, so
+    # the script installs the CPU wheel (see .github/scripts/l5_policy_test.sh). Same
+    # workspace-combination pattern as l5-track-family; a sibling job so the canaries fail
+    # independently.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + test the policy canary workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_policy_test.sh"
+
   e2e-sim-safety:
     name: Milestone 1 e2e (bridge_node + safety_node, real command path, ros-dev + gym)
     runs-on: ubuntu-latest

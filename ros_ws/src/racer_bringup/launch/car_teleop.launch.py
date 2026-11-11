@@ -213,6 +213,10 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:                     JPEG frames of every camera (optional, cameras:=true or the
 #:                     car-camera container). Only the compressed sub-topic: raw rgb8
 #:                     image_raw is about 166 MB/s per camera at 720p60 and is NOT recorded.
+#:   /tracker/command, /policy/status, /policy/events
+#:                     with a learned policy running (policy.launch.py): the tracker's own command
+#:                     (what the policy added its residual to), and policy_node's 1 Hz state,
+#:                     counters and jitter histograms plus its fallback engage/release records
 #:   /rosout           every node's log stream, in the same file as the data it explains
 #:   /parameter_events which parameters the run actually ran with
 #:   /odom, /odom/wheel_twist
@@ -230,6 +234,7 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 _RECORDED_TOPIC_REGEX = (
     r"^(/drive_raw|/drive|/safety/events|/teleop/cmd_vel|/telemetry/.*|/scan"
     r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core|/park_node/status"
+    r"|/tracker/command|/policy/status|/policy/events"
     r"|/camera/.*/compressed|/rosout|/parameter_events"
     r"|/odom|/odom/wheel_twist|/pose|/tf|/tf_static|/map"
     r"|/perception/(objects|target|poses|detections)|/spiderbot/(alert|state|patrol_cmd))$"

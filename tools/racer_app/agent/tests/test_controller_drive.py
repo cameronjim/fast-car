@@ -175,6 +175,8 @@ def test_ml_policy_stays_off_when_the_contract_refuses(car):
     )
     status = car.controller.policy_status()
     assert not status["available"] and "refused every policy" in status["reason"]
+    with pytest.raises(ActionError, match="ML policy is disabled"):
+        car.controller.start_drive("ml_policy", raceline="track:gym_oval")
 
 
 def test_ml_policy_off_without_a_launch_file_even_if_the_contract_passes(car):
@@ -185,25 +187,104 @@ def test_ml_policy_off_without_a_launch_file_even_if_the_contract_passes(car):
     assert "policy.launch.py" in status["reason"]
 
 
-def test_ml_policy_loader_runs_in_the_container_with_the_real_contract_loader(car):
+def test_ml_policy_check_runs_the_nodes_own_deploy_checks_in_the_container(car):
     make_policy_dir(car)
     car.runner.responders.insert(0, lambda argv: (0, "OK\n") if "--rm" in argv else None)
     car.controller.policy_status()
     (call,) = car.runner.calls_matching("docker", "run", "--rm")
-    assert "racer_policy.contract import load_contract" in call[-2]
+    assert tuple(call[-3:-1]) == ("-m", "racer_policy.check")
     assert call[-1] == "/workspace/data/policies/p1"
+    env = call[call.index("-e") + 1]
+    # The checker needs the loader, the vehicle_params binding's loader and the envelope library.
+    assert "ros_ws/src/racer_policy/src" in env and "ros_ws/src/racer_tools" in env
+    assert "training/envelope/src" in env
 
 
-def test_ml_policy_available_when_valid_and_wired(car):
-    make_policy_dir(car)
+def wire_ml_policy(car, names=("p1",)):
+    for name in names:
+        make_policy_dir(car, name)
     launch = car.repo / "ros_ws/src/racer_bringup/launch"
     launch.mkdir(parents=True)
     (launch / "policy.launch.py").write_text("")
     car.runner.responders.insert(0, lambda argv: (0, "OK\n") if "--rm" in argv else None)
+
+
+def localised_with_pose(car):
+    car.world.start_stack(
+        "lidar:=true vesc:=true localization:=true map:=/workspace/data/maps/a.yaml"
+    )
+    for _ in range(40):
+        car.ros.count("/pose")
+
+
+def test_ml_policy_available_when_valid_and_wired(car):
+    wire_ml_policy(car)
     assert car.controller.policy_status()["available"] is True
-    result = car.controller.start_drive("ml_policy")
+    localised_with_pose(car)
+    result = car.controller.start_drive("ml_policy", raceline="track:gym_oval")
     assert result["mode"] == "ml_policy:p1"
-    assert "policy_dir:=/workspace/data/policies/p1" in detached_execs(car)[0][-1]
+    command = detached_execs(car)[0][-1]
+    assert "ros2 launch racer_bringup policy.launch.py" in command
+    assert "policy_dir:=/workspace/data/policies/p1" in command
+    assert "raceline:=/workspace/config/tracks/gym_oval/raceline.csv" in command
+    assert "pose_frame:=map" in command
+
+
+def test_ml_policy_needs_a_raceline_the_app_knows(car):
+    wire_ml_policy(car)
+    localised_with_pose(car)
+    with pytest.raises(ActionError, match="unknown raceline"):
+        car.controller.start_drive("ml_policy", raceline="")
+    with pytest.raises(ActionError, match="unknown raceline"):
+        car.controller.start_drive("ml_policy", raceline="../../etc/passwd")
+    assert not detached_execs(car)
+
+
+def test_ml_policy_needs_localisation_and_a_live_pose_like_the_tracker(car):
+    wire_ml_policy(car)
+    with pytest.raises(ActionError, match="needs the stack running with localisation"):
+        car.controller.start_drive("ml_policy", raceline="track:gym_oval")
+    assert not detached_execs(car)
+
+
+def test_ml_policy_with_two_valid_policies_must_be_told_which(car):
+    wire_ml_policy(car, ("p1", "p2"))
+    localised_with_pose(car)
+    with pytest.raises(ActionError, match="choose a policy"):
+        car.controller.start_drive("ml_policy", raceline="track:gym_oval")
+    with pytest.raises(ActionError, match="not one the deploy checks accept"):
+        car.controller.start_drive("ml_policy", raceline="track:gym_oval", policy="p3")
+    car.controller.start_drive("ml_policy", raceline="track:gym_oval", policy="p2")
+    assert "policy_dir:=/workspace/data/policies/p2" in detached_execs(car)[0][-1]
+
+
+def test_ml_policy_only_names_directories_that_passed_the_check(car):
+    """A directory the checker refused is not selectable even by name."""
+    wire_ml_policy(car, ("good", "bad"))
+    car.runner.responders.insert(
+        0,
+        lambda argv: (
+            (1, "REFUSED VehicleParamsVersionMismatchError")
+            if argv[-1].endswith("/bad") and "--rm" in argv
+            else None
+        ),
+    )
+    status = car.controller.policy_status()
+    assert status["valid"] == ["good"] and status["available"]
+    localised_with_pose(car)
+    with pytest.raises(ActionError, match="not one the deploy checks accept"):
+        car.controller.start_drive("ml_policy", raceline="track:gym_oval", policy="bad")
+
+
+def test_ml_policy_keeps_the_pre_drive_rules(car):
+    """It goes through the same gate as every other driving mode: no recorder, no drive."""
+    wire_ml_policy(car)
+    localised_with_pose(car)
+    car.world.recorder = False
+    with pytest.raises(ActionError) as exc:
+        car.controller.start_drive("ml_policy", raceline="track:gym_oval")
+    assert exc.value.data == {"failing": ["recorder"], "overridable": False}
+    assert not detached_execs(car)
 
 
 # -- STOP ALL -------------------------------------------------------------------------------

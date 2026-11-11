@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>l5_policy</name>
+  <version>0.1.0</version>
+  <description>
+    L5 canary for the learned-residual path (tests/l5_policy): racer_control tracker_node in
+    handoff mode, racer_policy policy_node and racer_safety safety_node on the real command
+    path, on a family stadium, both directions, ground-truth pose, compared with the tracker
+    alone. Uses tests/l5_reactive_bench/track_family_runner.py (driver tracker_policy) and a
+    small fixture TorchScript network, so it needs torch (skipped without it).
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>racer_gym_bridge</exec_depend>
+  <exec_depend>racer_control</exec_depend>
+  <exec_depend>racer_safety</exec_depend>
+  <exec_depend>racer_msgs</exec_depend>
+  <exec_depend>racer_tools</exec_depend>
+  <exec_depend>racer_policy</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

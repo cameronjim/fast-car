@@ -1,0 +1,270 @@
+{
+  "policy_dir": "/Users/cameronjim/code/car-data/training/v1/export/eighth_s2/contract",
+  "episodes_per_condition": 120,
+  "heldout_family": {
+    "tracker": {
+      "episodes": 120,
+      "completed": 115,
+      "completion_rate": 0.9583333333333334,
+      "completion_wilson_95": [
+        0.9061591471148217,
+        0.9820732832333764
+      ],
+      "crashes": 5,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.06359975681972899,
+      "ttc_engagements_per_episode": 7.558333333333334,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.01744529663804694,
+      "ood_fraction": 0.0,
+      "mean_speed_mps": 1.875046620054992,
+      "lap_time_mean_s": 6.241050430688967
+    },
+    "tracker_plus_residual": {
+      "episodes": 120,
+      "completed": 115,
+      "completion_rate": 0.9583333333333334,
+      "completion_wilson_95": [
+        0.9061591471148217,
+        0.9820732832333764
+      ],
+      "crashes": 5,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.06301497157285363,
+      "ttc_engagements_per_episode": 7.85,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.017297586845126948,
+      "ood_fraction": 0.0,
+      "mean_speed_mps": 1.8731418543865597,
+      "lap_time_mean_s": 6.2600702377661905
+    },
+    "paired": {
+      "n_both_completed": 115,
+      "lap_time_diff_mean_s": 0.019019807077224178,
+      "lap_time_diff_ci95_s": [
+        0.015547323473894863,
+        0.022665183944855432
+      ],
+      "lap_time_diff_mean_pct": 0.3072778740701058,
+      "lap_time_diff_ci95_pct": [
+        0.25153672633545954,
+        0.3649100078136696
+      ]
+    },
+    "by_direction": {
+      "ccw": {
+        "episodes": 66,
+        "completion_tracker": 0.9696969696969697,
+        "completion_residual": 0.9696969696969697,
+        "lap_time_diff_mean_pct": 0.2937020811126605
+      },
+      "cw": {
+        "episodes": 54,
+        "completion_tracker": 0.9444444444444444,
+        "completion_residual": 0.9444444444444444,
+        "lap_time_diff_mean_pct": 0.32431416327160595
+      }
+    }
+  },
+  "heldout_shapes": {
+    "tracker": {
+      "episodes": 120,
+      "completed": 119,
+      "completion_rate": 0.9916666666666667,
+      "completion_wilson_95": [
+        0.9543037082724115,
+        0.9985274442829282
+      ],
+      "crashes": 1,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.05636929930626096,
+      "ttc_engagements_per_episode": 9.958333333333334,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.012809007932766977,
+      "ood_fraction": 0.0,
+      "mean_speed_mps": 1.911110863517051,
+      "lap_time_mean_s": 9.1160564811588
+    },
+    "tracker_plus_residual": {
+      "episodes": 120,
+      "completed": 119,
+      "completion_rate": 0.9916666666666667,
+      "completion_wilson_95": [
+        0.9543037082724115,
+        0.9985274442829282
+      ],
+      "crashes": 1,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.054985896276308045,
+      "ttc_engagements_per_episode": 9.741666666666667,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.012762660302331696,
+      "ood_fraction": 0.0,
+      "mean_speed_mps": 1.9061852787215188,
+      "lap_time_mean_s": 9.15391688384497
+    },
+    "paired": {
+      "n_both_completed": 119,
+      "lap_time_diff_mean_s": 0.037860402686168595,
+      "lap_time_diff_ci95_s": [
+        0.032071203062587296,
+        0.04399940508023351
+      ],
+      "lap_time_diff_mean_pct": 0.3985152823512365,
+      "lap_time_diff_ci95_pct": [
+        0.34485357347414886,
+        0.45360357039630966
+      ]
+    },
+    "by_direction": {
+      "ccw": {
+        "episodes": 70,
+        "completion_tracker": 1.0,
+        "completion_residual": 1.0,
+        "lap_time_diff_mean_pct": 0.30438519702015565
+      },
+      "cw": {
+        "episodes": 50,
+        "completion_tracker": 0.98,
+        "completion_residual": 0.98,
+        "lap_time_diff_mean_pct": 0.5329868328242093
+      }
+    }
+  },
+  "stress_x1.5": {
+    "tracker": {
+      "episodes": 120,
+      "completed": 97,
+      "completion_rate": 0.8083333333333333,
+      "completion_wilson_95": [
+        0.7287884392669061,
+        0.8687497411491546
+      ],
+      "crashes": 23,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.07655772589806939,
+      "ttc_engagements_per_episode": 6.6,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.024887458385751335,
+      "ood_fraction": 0.0,
+      "mean_speed_mps": 1.7959123080312405,
+      "lap_time_mean_s": 6.40453114340103
+    },
+    "tracker_plus_residual": {
+      "episodes": 120,
+      "completed": 95,
+      "completion_rate": 0.7916666666666666,
+      "completion_wilson_95": [
+        0.7105232149721635,
+        0.854715604340326
+      ],
+      "crashes": 25,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.07487883903423916,
+      "ttc_engagements_per_episode": 6.541666666666667,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.026577682065025865,
+      "ood_fraction": 0.0,
+      "mean_speed_mps": 1.7849471122618756,
+      "lap_time_mean_s": 6.460513400632249
+    },
+    "paired": {
+      "n_both_completed": 94,
+      "lap_time_diff_mean_s": 0.01859334508457199,
+      "lap_time_diff_ci95_s": [
+        0.014351053047479918,
+        0.022733745591509643
+      ],
+      "lap_time_diff_mean_pct": 0.2922385341214059,
+      "lap_time_diff_ci95_pct": [
+        0.22490678842019315,
+        0.36010929495996247
+      ]
+    },
+    "by_direction": {
+      "ccw": {
+        "episodes": 66,
+        "completion_tracker": 0.8181818181818182,
+        "completion_residual": 0.7878787878787878,
+        "lap_time_diff_mean_pct": 0.2118456368299777
+      },
+      "cw": {
+        "episodes": 54,
+        "completion_tracker": 0.7962962962962963,
+        "completion_residual": 0.7962962962962963,
+        "lap_time_diff_mean_pct": 0.3875882495135649
+      }
+    }
+  },
+  "nominal": {
+    "tracker": {
+      "episodes": 120,
+      "completed": 120,
+      "completion_rate": 1.0,
+      "completion_wilson_95": [
+        0.9689808331071251,
+        0.9999999999999999
+      ],
+      "crashes": 0,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.04682047403371062,
+      "ttc_engagements_per_episode": 8.3,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.016721469278833667,
+      "ood_fraction": 0.0,
+      "mean_speed_mps": 1.9074376714569656,
+      "lap_time_mean_s": 6.112017167483306
+    },
+    "tracker_plus_residual": {
+      "episodes": 120,
+      "completed": 120,
+      "completion_rate": 1.0,
+      "completion_wilson_95": [
+        0.9689808331071251,
+        0.9999999999999999
+      ],
+      "crashes": 0,
+      "timeouts": 0,
+      "mean_abs_cte_m": 0.046210064823895176,
+      "ttc_engagements_per_episode": 8.3,
+      "clipped_fraction": 0.0,
+      "rate_limited_fraction": 0.016682897580612196,
+      "ood_fraction": 0.0,
+      "mean_speed_mps": 1.9058063646102068,
+      "lap_time_mean_s": 6.125993694477302
+    },
+    "paired": {
+      "n_both_completed": 120,
+      "lap_time_diff_mean_s": 0.013976526993995209,
+      "lap_time_diff_ci95_s": [
+        0.01132251383125773,
+        0.016723010216932822
+      ],
+      "lap_time_diff_mean_pct": 0.23115443611967035,
+      "lap_time_diff_ci95_pct": [
+        0.18501304192116275,
+        0.2809657521710821
+      ]
+    },
+    "by_direction": {
+      "ccw": {
+        "episodes": 66,
+        "completion_tracker": 1.0,
+        "completion_residual": 1.0,
+        "lap_time_diff_mean_pct": 0.25880595810787815
+      },
+      "cw": {
+        "episodes": 54,
+        "completion_tracker": 1.0,
+        "completion_residual": 1.0,
+        "lap_time_diff_mean_pct": 0.1973581314674164
+      }
+    }
+  },
+  "contract": {
+    "contract_version": "1.0.0",
+    "config_hash": "d195eefd915ace90034909ddab7e52fd8e9f4c3d5fa514f6c068473284dd77ce",
+    "git_sha": "144fa9b4f6f3734a9a00037c7c6a925226e361a6"
+  },
+  "wall_clock_s": 41.51571989059448
+}

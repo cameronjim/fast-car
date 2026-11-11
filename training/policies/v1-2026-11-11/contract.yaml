@@ -1,0 +1,164 @@
+contract_version: 1.0.0
+policy:
+  filename: policy.pt
+  checksum_sha256: f0b4a5ed313279216b151955e77e06fc2bff4b52a5d330f5b6a94171503ec792
+observation_schema:
+  fields:
+  - name: velocity_mps
+    dtype: float32
+    units: m/s
+  - name: yaw_rate_rad_s
+    dtype: float32
+    units: rad/s
+  - name: slip_proxy
+    dtype: float32
+    units: dimensionless
+  - name: raceline_lateral_error_m
+    dtype: float32
+    units: m
+  - name: raceline_heading_error_rad
+    dtype: float32
+    units: rad
+  - name: base_steering_rad
+    dtype: float32
+    units: rad
+  - name: base_speed_mps
+    dtype: float32
+    units: m/s
+  - name: raceline_curvature_near_1pm
+    dtype: float32
+    units: 1/m
+  - name: raceline_curvature_far_1pm
+    dtype: float32
+    units: 1/m
+  - name: prev_steering_cmd_rad
+    dtype: float32
+    units: rad
+  - name: prev_speed_cmd_mps
+    dtype: float32
+    units: m/s
+  lidar:
+    beam_count: 36
+    fov_rad: 4.7
+    downsample_factor: 30
+normalization:
+  mean:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  std:
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+action_space:
+  fields:
+  - name: steering_residual_rad
+    low: -0.0111
+    high: 0.0111
+    units: rad
+  - name: speed_residual_mps
+    low: -0.0495
+    high: 0.0495
+    units: m/s
+  scaling: linear
+  residual_limits:
+    steering_fraction: 0.0125
+    speed_fraction: 0.002
+actuator_assumptions:
+  rate_limit_steering_rad_s: 3.2
+  rate_limit_speed_mps_s: 9.51
+  command_delay_s: 0.08
+vehicle_params:
+  schema_version: 0.14.0
+  sysid_session_id: none-preliminary
+training:
+  config_hash: d195eefd915ace90034909ddab7e52fd8e9f4c3d5fa514f6c068473284dd77ce
+  git_sha: 144fa9b4f6f3734a9a00037c7c6a925226e361a6

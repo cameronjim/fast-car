@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 import os
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -136,8 +137,11 @@ class SafeSet:
             self._v_ref = np.zeros(0)
             self._ctg = np.zeros(0)
         else:
-            self._v_ref = np.nanmax(v, axis=0)
-            self._ctg = np.nanmin(c, axis=0)
+            with warnings.catch_warnings():
+                # a station with no finite speed (no wheel odometry was recorded) is NaN
+                warnings.simplefilter("ignore", RuntimeWarning)
+                self._v_ref = np.nanmax(v, axis=0)
+                self._ctg = np.nanmin(c, axis=0)
 
     def _query(self, table: FloatArray, s_m: float) -> float:
         if table.shape[0] == 0 or not (0.0 <= s_m <= self.length_m + 1e-9):

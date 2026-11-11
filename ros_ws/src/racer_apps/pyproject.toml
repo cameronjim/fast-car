@@ -1,0 +1,24 @@
+[project]
+name = "racer-apps-tests"
+version = "0.1.0"
+description = """
+Standalone L1 test manifest for ros_ws/src/racer_apps (roadmap 5.3), same pattern as
+racer_perception/pyproject.toml: NOT the colcon packaging (package.xml/setup.py), only so a bare
+`uv run pytest` runs the pure, ROS-free logic (pose rules, state machine, patrol geometry,
+command shaping, event log) with no ROS. The node, launch and sim tests are
+pytest.importorskip-guarded: skipped here, run for real under `colcon test` in the ros-dev image
+(and, for the sim patrol, tests/l5_spiderbot).
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "pytest",
+    "pytest-cov",
+    "pyyaml",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# racer_perception's pure modules (keypoints.py) are shared, not copied.
+pythonpath = [".", "../racer_perception"]

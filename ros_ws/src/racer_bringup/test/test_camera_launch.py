@@ -385,6 +385,14 @@ _RECORDED = [
     "/camera/usb/image_raw/compressed",
     "/camera/csi0/image_raw/compressed",
     "/camera/csi1/image_raw/compressed",
+    # What the detector saw and what the spiderbot decided (roadmap 5.1, 5.3).
+    "/perception/objects",
+    "/perception/target",
+    "/perception/poses",
+    "/perception/detections",
+    "/spiderbot/alert",
+    "/spiderbot/state",
+    "/spiderbot/patrol_cmd",
     # Everything recorded before the cameras still is.
     "/drive_raw",
     "/drive",
@@ -397,6 +405,8 @@ _RECORDED = [
 ]
 
 _NOT_RECORDED = [
+    "/perception/debug_image/compressed",
+    "/perception/objects/extra",
     "/camera/usb/image_raw",
     "/camera/csi0/image_raw",
     "/camera/usb/camera_info",

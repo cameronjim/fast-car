@@ -1,0 +1,23 @@
+# EXAMPLE patrol file, not a real route. Copy it to data/patrols/<name>.yaml (the racer app lists
+# that folder) and replace the waypoints with points taken from YOUR map.
+#
+# Waypoints are metres in the AMCL map frame: read them off Foxglove's 3D panel on the saved
+# slam_toolbox map (click the floor with the publish-point tool), or drive the loop slowly with the
+# car localised and note /pose every few metres. The route is a CLOSED loop (the last waypoint
+# joins the first). Keep corners wider than the car's turning circle: spiderbot.launch.py refuses a
+# route that turns tighter than vehicle_params allows, and names the waypoint.
+#
+# These eight points are a circle of 2 m radius around the map origin (curvature 0.5 1/m).
+name: example-circle
+frame: map
+loop: true
+speed_mps: 0.5
+waypoints:
+  - [2.0, 0.0]
+  - [1.414, 1.414]
+  - [0.0, 2.0]
+  - [-1.414, 1.414]
+  - [-2.0, 0.0]
+  - [-1.414, -1.414]
+  - [0.0, -2.0]
+  - [1.414, -1.414]

@@ -222,8 +222,18 @@ def drive_launch_script(mode: str, ros_cmd: str) -> str:
     )
 
 
+def _inside_repo(path: str, what: str) -> str:
+    if not path.startswith("/workspace/") or ".." in path:
+        raise CommandError(f"{what} must be a file inside the repo")
+    return path
+
+
 def ros_cmd_for(
-    mode: str, profile: str = "", raceline_container_path: str = "", pose_frame: str = "map"
+    mode: str,
+    profile: str = "",
+    raceline_container_path: str = "",
+    pose_frame: str = "map",
+    policy_container_path: str = "",
 ) -> str:
     """The ros2 command for a driving mode. Raises CommandError for anything off the lists."""
     if mode == "gap_follow":
@@ -245,6 +255,16 @@ def ros_cmd_for(
             "ros2 run racer_control tracker_node --ros-args "
             f"-p raceline_path:={_quoted_ok(raceline_container_path)} "
             f"-p pose_frame:={_quoted_ok(pose_frame)}"
+        )
+    if mode == "ml_policy":
+        # policy.launch.py starts the tracker in handoff mode and policy_node, which refuses to
+        # start on any contract mismatch; this only builds the command from checked paths.
+        policy = _inside_repo(policy_container_path, "policy directory")
+        line = _inside_repo(raceline_container_path, "raceline")
+        return (
+            "ros2 launch racer_bringup policy.launch.py "
+            f"policy_dir:={_quoted_ok(policy)} raceline:={_quoted_ok(line)} "
+            f"pose_frame:={_quoted_ok(pose_frame)}"
         )
     raise CommandError(f"unknown driving mode {mode!r}")
 

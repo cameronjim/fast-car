@@ -458,8 +458,7 @@ class Controller:
         if not valid:
             return {
                 "available": False,
-                "reason": "the deploy contract refused every policy directory: "
-                + "; ".join(errors),
+                "reason": "the deploy checks refused every policy directory: " + "; ".join(errors),
                 "valid": [],
             }
         launch = (
@@ -468,18 +467,17 @@ class Controller:
         if not launch.exists():
             return {
                 "available": False,
-                "reason": f"policy {valid[0]} passes the contract, but racer_bringup has no "
-                "policy.launch.py yet (policy_node is roadmap 5.2)",
+                "reason": f"policy {valid[0]} passes the deploy checks, but racer_bringup has no "
+                "policy.launch.py",
                 "valid": valid,
             }
         return {"available": True, "reason": "", "valid": valid}
 
     def _run_loader(self, directory: Path) -> CmdResult:
-        snippet = (
-            "import sys; from pathlib import Path; "
-            "from racer_policy.contract import load_contract; "
-            "load_contract(Path(sys.argv[1])); print('OK')"
-        )
+        """Run `python3 -m racer_policy.check`, the same load_deployment the node runs at
+        startup (contract checksum and version, live vehicle_params version, observation
+        schema, sidecar settings), so the button is only offered for a directory the node
+        will not refuse. It prints OK and exits 0, or the specific refusal and exits 1."""
         host_dir = cmd.container_path(self.s.repo_dir, directory)
         return self.runner.run(
             [
@@ -489,14 +487,19 @@ class Controller:
                 "--user",
                 f"{self.host.uid}:{self.host.gid}",
                 "-e",
-                "PYTHONPATH=/workspace/ros_ws/src/racer_policy/src",
+                (
+                    "PYTHONPATH=/workspace/ros_ws/src/racer_policy/src:"
+                    "/workspace/ros_ws/src/racer_tools:/workspace/training/envelope/src"
+                ),
                 "-v",
                 f"{self.s.repo_dir}:/workspace",
+                "-w",
+                "/workspace",
                 "--entrypoint",
                 "python3",
                 self.s.image,
-                "-c",
-                snippet,
+                "-m",
+                "racer_policy.check",
                 host_dir,
             ],
             timeout=60,
@@ -538,9 +541,12 @@ class Controller:
         override: bool = False,
         override_reason: str = "",
         actor: str = "",
+        policy: str = "",
     ) -> dict[str, Any]:
         action = f"drive.start.{mode}"
         params: dict[str, Any] = {"mode": mode, "profile": profile, "raceline": raceline}
+        if mode == "ml_policy":
+            params["policy"] = policy
         if mode not in cmd.DRIVE_MODES:
             raise ActionError(f"unknown driving mode {mode!r}", 400)
         with self._drive_lock:
@@ -548,11 +554,11 @@ class Controller:
                 generation = self._stop_generation
             used_override = False
             try:
-                ros_cmd, label = self._prepare_drive(mode, profile, raceline)
+                ros_cmd, label = self._prepare_drive(mode, profile, raceline, policy)
                 used_override = self._gate_drive(override, override_reason)
                 if self.drive_mode() is not None:
                     raise ActionError("a driving launch is already running: stop it first", 409)
-                if mode == "tracker":
+                if mode in ("tracker", "ml_policy"):
                     self._tracker_precondition(self.snapshot(fresh=True))
                 self.runner.run(
                     [
@@ -596,17 +602,39 @@ class Controller:
             )
             return {"message": f"{running} started", "mode": running, "override": used_override}
 
-    def _prepare_drive(self, mode: str, profile: str, raceline: str) -> tuple[str, str]:
+    def _prepare_drive(
+        self, mode: str, profile: str, raceline: str, policy: str = ""
+    ) -> tuple[str, str]:
         """Validate a driving request against the whitelist: (ros2 command, mode label)."""
         if mode == "ml_policy":
             status = self.policy_status()
             if not status["available"]:
                 raise ActionError("ML policy is disabled: " + status["reason"], 409)
-            policy_dir = self.s.policies_dir / status["valid"][0]
+            valid: list[str] = status["valid"]
+            if not policy:
+                if len(valid) != 1:
+                    raise ActionError(
+                        f"choose a policy: {', '.join(valid)} all pass the deploy checks", 400
+                    )
+                policy = valid[0]
+            if policy not in valid:
+                raise ActionError(
+                    f"policy {policy!r} is not one the deploy checks accept "
+                    f"(accepted: {', '.join(valid)})",
+                    400,
+                )
+            match = [r for r in self.racelines() if r.id == raceline]
+            if not match:
+                raise ActionError(f"unknown raceline {raceline!r}", 400)
             return (
-                "ros2 launch racer_bringup policy.launch.py policy_dir:="
-                + cmd.container_path(self.s.repo_dir, policy_dir),
-                f"ml_policy:{status['valid'][0]}",
+                cmd.ros_cmd_for(
+                    "ml_policy",
+                    raceline_container_path=cmd.container_path(self.s.repo_dir, match[0].path),
+                    policy_container_path=cmd.container_path(
+                        self.s.repo_dir, self.s.policies_dir / policy
+                    ),
+                ),
+                f"ml_policy:{policy}",
             )
         if mode == "tracker":
             match = [r for r in self.racelines() if r.id == raceline]

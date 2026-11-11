@@ -47,6 +47,7 @@ export function Controls(p: Props) {
   const [gapProfile, setGapProfile] = useState("lane-2026-10-25");
   const [parkProfile, setParkProfile] = useState("floor-2026-10-07");
   const [raceline, setRaceline] = useState("");
+  const [policyName, setPolicyName] = useState("");
   const [override, setOverride] = useState(false);
   const [reason, setReason] = useState("");
   const [needsOverride, setNeedsOverride] = useState<string | null>(null);
@@ -54,7 +55,7 @@ export function Controls(p: Props) {
 
   const act = (fn: () => Promise<ActionReply>) => run(fn, notify, refresh);
 
-  const drive = async (body: { mode: string; profile?: string; raceline?: string }) => {
+  const drive = async (body: { mode: string; profile?: string; raceline?: string; policy?: string }) => {
     const err = await act(() =>
       api.startDrive({ ...body, override, override_reason: override ? reason : "" }),
     );
@@ -144,12 +145,22 @@ export function Controls(p: Props) {
           <button disabled={!driving?.startsWith("park")} onClick={() => act(() => api.park("abort"))}>Abort</button>
         </div>
         <div class="row">
-          <button disabled title={policy?.reason} aria-describedby="ml-reason">ML policy</button>
-          <span id="ml-reason" class="sub">{policy?.available ? "" : `disabled: ${policy?.reason ?? "unknown"}`}</span>
+          <select value={policyName} onChange={(e) => setPolicyName(e.currentTarget.value)} aria-label="ML policy" disabled={!policy?.available}>
+            <option value="">{policy?.available ? "policy" : "no usable policy"}</option>
+            {policy?.valid.map((x) => <option key={x}>{x}</option>)}
+          </select>
+          <button
+            disabled={!policy?.available || !stackUp || !!driving || !raceline || ((policy?.valid.length ?? 0) > 1 && !policyName)}
+            title={policy?.available ? "Tracker plus the learned residual, on the raceline chosen above" : policy?.reason}
+            aria-describedby="ml-reason"
+            onClick={() => drive({ mode: "ml_policy", raceline, policy: policyName })}
+          >ML policy</button>
         </div>
-        {policy?.available && (
-          <div class="row"><button disabled={!stackUp || !!driving} onClick={() => drive({ mode: "ml_policy" })}>Start ML policy</button></div>
-        )}
+        <div id="ml-reason" class="sub">
+          {policy?.available
+            ? "Tracker plus a bounded learned residual, on the raceline chosen above. Same localisation needs as the tracker. The policy node refuses to start on any mismatch with this car's parameters. First trials: wheels off the ground, hand on the knob."
+            : `disabled: ${policy?.reason ?? "unknown"}`}
+        </div>
         {needsOverride && (
           <div class="override">
             <div>{needsOverride}</div>

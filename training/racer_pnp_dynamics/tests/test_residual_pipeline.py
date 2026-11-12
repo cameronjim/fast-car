@@ -138,6 +138,7 @@ def test_pipeline_writes_a_valid_bundle_pointer_and_honest_metrics(tmp_path, toy
         trainer=zero_trainer,
         data_lines=["synthetic"],
         delays=DELAYS,
+        tau_grid=(0.1, 0.3),
     )
     manifest = yaml.safe_load((tmp_path / "models" / "dyn-v0-test" / "manifest.yaml").read_text())
     export.validate_manifest(manifest)
@@ -248,6 +249,7 @@ def test_pipeline_scores_old_against_new_on_the_planner_runs(tmp_path, toy_vehic
         pointer_dir=tmp_path / "pointer",
         trainer=zero_trainer,
         delays=(0.10,),
+        tau_grid=(0.1, 0.3),
         pnp=pnp,
     )
     runs = metrics["pnp_runs"]

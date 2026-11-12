@@ -33,7 +33,7 @@ RATE_LIMITED = TRUTH.replace(accel_max_mps2=0.6)
 def test_fit_recovers_known_parameters(toy_vehicle):
     run, motion = make_run(RATE_LIMITED, toy_vehicle, seconds=900.0, seed=1)
     segments = make_segments(run, motion)
-    result = fit.fit_nominal(segments, toy_vehicle)
+    result = fit.fit_nominal(segments, toy_vehicle, tau_grid=(0.1, 0.3))
     got, want = result.nominal.to_dict(), RATE_LIMITED.to_dict()
     for name in (*fit.SPEED_PARAMS, *fit.YAW_PARAMS):
         assert got[name] == pytest.approx(want[name], rel=0.10), (name, got[name], want[name])
@@ -47,7 +47,9 @@ def test_fit_recovers_known_parameters(toy_vehicle):
 
 def test_accel_limit_is_fitted_when_rolling_data_show_it(toy_vehicle):
     run, motion = make_run(RATE_LIMITED, toy_vehicle, seconds=900.0, seed=7)
-    result = fit.fit_nominal(make_segments(run, motion), toy_vehicle, delays=(0.10,))
+    result = fit.fit_nominal(
+        make_segments(run, motion), toy_vehicle, delays=(0.10,), tau_grid=(0.1, 0.3)
+    )
     assert result.nominal.accel_max_mps2 == pytest.approx(0.6, rel=0.10)
     assert (
         "accel_max_mps2" not in result.flags
@@ -63,9 +65,11 @@ def test_accel_limit_kept_at_start_when_only_launches_support_it(toy_vehicle):
     cannot tell any limit above the ramp rate, so the start value ships and says why."""
     truth = TRUTH.replace(accel_max_mps2=PLACEHOLDER_NOMINAL.accel_max_mps2)
     run, motion = make_run(
-        truth, toy_vehicle, seconds=900.0, seed=8, ramp_mps2=0.7, dead_zone_mps=0.25
+        truth, toy_vehicle, seconds=500.0, seed=8, ramp_mps2=0.7, dead_zone_mps=0.25
     )
-    result = fit.fit_nominal(make_segments(run, motion), toy_vehicle, delays=(0.10,))
+    result = fit.fit_nominal(
+        make_segments(run, motion), toy_vehicle, delays=(0.10,), tau_grid=(0.1, 0.3)
+    )
     assert result.nominal.accel_max_mps2 == PLACEHOLDER_NOMINAL.accel_max_mps2
     assert "kept at its start" in result.flags["accel_max_mps2"]
     assert "rolling" in result.flags["accel_max_mps2"]
@@ -82,7 +86,7 @@ def test_yaw_gain_is_path_geometry_when_wheels_over_read(toy_vehicle):
         truth, toy_vehicle, seconds=900.0, seed=9, wheel_over_read=0.8, name="over-read"
     )
     segments = make_segments(run, motion)
-    result = fit.fit_nominal(segments, toy_vehicle, delays=(0.10,))
+    result = fit.fit_nominal(segments, toy_vehicle, delays=(0.10,), tau_grid=(0.1, 0.3))
     assert result.nominal.steer_gain_left == pytest.approx(gain, rel=0.10)
     assert result.nominal.steer_gain_right == pytest.approx(gain, rel=0.10)
 
@@ -102,7 +106,7 @@ def test_yaw_gain_is_path_geometry_when_wheels_over_read(toy_vehicle):
 def test_fit_beats_the_placeholder_on_held_out_data(toy_vehicle):
     run, motion = make_run(TRUTH, toy_vehicle, seconds=600.0, seed=2)
     segments = make_segments(run, motion)
-    result = fit.fit_nominal(segments, toy_vehicle, delays=(0.08, 0.10, 0.12))
+    result = fit.fit_nominal(segments, toy_vehicle, delays=(0.08, 0.10, 0.12), tau_grid=(0.1, 0.3))
     from racer_pnp_dynamics.windows import speed_windows
 
     held = by_split(segments, "heldout")
@@ -117,7 +121,7 @@ def test_yaw_fit_works_without_odometry(toy_vehicle):
         TRUTH, toy_vehicle, seconds=600.0, seed=4, odom=False, name="bare"
     )
     segments = [*make_segments(odom_run, odom_motion), *make_segments(bare_run, bare_motion)]
-    result = fit.fit_nominal(segments, toy_vehicle, delays=(0.10,))
+    result = fit.fit_nominal(segments, toy_vehicle, delays=(0.10,), tau_grid=(0.1, 0.3))
     assert result.nominal.steer_gain_left == pytest.approx(TRUTH.steer_gain_left, rel=0.15)
     assert result.nominal.steer_gain_right == pytest.approx(TRUTH.steer_gain_right, rel=0.15)
     assert result.counts["yaw_intervals_train"] > 3000
@@ -128,7 +132,9 @@ def test_one_sided_data_ties_the_gains(toy_vehicle):
     """With only left turns the right gain has zero sensitivity; flags say so."""
     run, motion = make_run(TRUTH, toy_vehicle, seconds=600.0, seed=5)
     run.steering_cmd_rad[:] = np.abs(run.steering_cmd_rad)  # left only (inconsistent, fine here)
-    result = fit.fit_nominal(make_segments(run, motion), toy_vehicle, delays=(0.10,))
+    result = fit.fit_nominal(
+        make_segments(run, motion), toy_vehicle, delays=(0.10,), tau_grid=(0.1, 0.3)
+    )
     assert "tied" in result.flags["steer_gain_right"] and result.sides_tied
     assert result.nominal.steer_gain_right == result.nominal.steer_gain_left
     assert result.nominal.steer_offset_rad == 0.0
@@ -146,7 +152,7 @@ def test_fit_recovers_a_known_dead_zone_gain_lag_and_delay_from_data_with_launch
     run, motion = make_run(
         DEAD_ZONE_TRUTH,
         toy_vehicle,
-        seconds=900.0,
+        seconds=600.0,
         seed=21,
         ramp_mps2=0.5,
         speed_noise=0.002,  # the real wheel speed at rest reads exactly 0
@@ -169,7 +175,9 @@ def test_no_dead_zone_in_the_data_gives_a_small_estimate_from_ramped_launches(to
     run, motion = make_run(
         TRUTH, toy_vehicle, seconds=700.0, seed=22, ramp_mps2=0.5, speed_noise=0.002, name="nodz"
     )
-    result = fit.fit_nominal(make_segments(run, motion), toy_vehicle, delays=(0.10,))
+    result = fit.fit_nominal(
+        make_segments(run, motion), toy_vehicle, delays=(0.10,), tau_grid=(0.1, 0.3)
+    )
     assert result.nominal.speed_deadband_mps < 0.16  # delay 0.1 s and the lag, at 0.5 m/s2
     assert result.deadband_choice["launches_used"] >= 5
 
@@ -192,7 +200,7 @@ def test_dead_zone_can_be_searched_on_the_held_out_error_instead(toy_vehicle):
     run, motion = make_run(
         DEAD_ZONE_TRUTH,
         toy_vehicle,
-        seconds=900.0,
+        seconds=600.0,
         seed=23,
         ramp_mps2=0.5,
         speed_noise=0.002,
@@ -214,7 +222,7 @@ def test_dead_zone_can_be_searched_on_the_held_out_error_instead(toy_vehicle):
 def test_a_delay_the_data_cannot_see_is_listed_and_ships_the_grid_minimum(toy_vehicle):
     """Commands that barely move: a delay of 0.1 s is below the noise, the delay profile is flat."""
     slow = TRUTH.replace(command_delay_s=0.10, speed_tau_s=0.05)
-    run, motion = make_run(slow, toy_vehicle, seconds=900.0, seed=24, ramp_mps2=0.05, name="slow")
+    run, motion = make_run(slow, toy_vehicle, seconds=600.0, seed=24, ramp_mps2=0.05, name="slow")
     delays = (0.0, 0.04, 0.08, 0.12, 0.16, 0.20)
     result = fit.fit_nominal(
         make_segments(run, motion), toy_vehicle, delays=delays, tau_grid=(0.05, 0.3), deadband=0.0

@@ -174,10 +174,13 @@ def run_fit_and_export(
     delays: Sequence[float] | None = None,
     pnp: PnpRuns | None = None,
     profile_png: bool = False,
+    tau_grid: Sequence[float] | None = None,
 ) -> dict[str, Any]:
     """Everything after the segments exist. Returns the metrics dict that was exported."""
     fvehicle = fit_vehicle_of(vehicle)
-    kwargs = {} if delays is None else {"delays": delays}
+    kwargs: dict[str, Any] = {} if delays is None else {"delays": delays}
+    if tau_grid is not None:
+        kwargs["tau_grid"] = tau_grid
     result: FitResult = fit_nominal(segments, fvehicle, **kwargs)
     nominal = result.nominal
     train, val = by_split(segments, "train"), by_split(segments, "val")

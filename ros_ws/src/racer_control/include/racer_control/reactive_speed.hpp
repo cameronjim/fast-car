@@ -81,6 +81,9 @@ class ReactiveSpeedCommand {
   // target_range_m: range along the target bearing (already median filtered, if enabled).
   // dt_s: the configured control period, or 0 on the first cycle after a reset.
   double update(double target_range_m, double steering_rad, double dt_s);
+  // The physics law's tail (race_speed.hpp): `target_speed_mps` is already the wanted speed, so
+  // only the optional low-pass and the acceleration limiter run. Same limiter state as update().
+  double update_target(double target_speed_mps, double dt_s);
   // Back to rest: filter output and limiter state 0 (safety_node braked the car meanwhile).
   void reset();
   const ReactiveSpeedConfig& config() const { return config_; }

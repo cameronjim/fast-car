@@ -12,7 +12,10 @@ speed_time_constant_s (range [0, 5] s) with 6, and target_range_median_scans (in
 [1, 15]) with 0, which also covers the launch file forwarding it as an integer. Lane centring's
 centering_gain (range [0, 5] rad) gets it with -0.1, and the reverse escape's
 escape_probe_distance_m (range [0.02, 3] m) with 0. The lane-centre target's lane_lookahead_m
-(range [0.1, 3] m) and lane_default_half_width_m (range [0.1, 2] m) get it with 0 and 5.
+(range [0.1, 3] m) and lane_default_half_width_m (range [0.1, 2] m) get it with 0 and 5. The
+race parameters (2026-11-12) get it too: a_lat_max_mps2 (range [0.1, 20]) with 0, apex_offset_m
+and track_out_offset_m (range [0, 1] m) with 2 and -1, stopping_margin_m (range [0, 1] m) with 3,
+side_cap_distance_m (range [0, 1] m) with 5 and status_rate_hz (range [0, 10] Hz) with 50.
 
 Each node runs in its own scoped group so the includes' launch arguments do not leak into
 each other. They share the node name; neither gets far enough to matter.
@@ -72,6 +75,12 @@ def generate_test_description():
             _include(escape_probe_distance_m="0"),
             _include(lane_lookahead_m="0"),
             _include(lane_default_half_width_m="5"),
+            _include(a_lat_max_mps2="0"),
+            _include(apex_offset_m="2"),
+            _include(track_out_offset_m="-1"),
+            _include(stopping_margin_m="3"),
+            _include(side_cap_distance_m="5"),
+            _include(status_rate_hz="50"),
             launch_testing.actions.ReadyToTest(),
         ]
     )
@@ -89,10 +98,19 @@ class TestGapFollowNodeParameterRanges(unittest.TestCase):
         proc_output.assertWaitFor("escape_probe_distance_m", timeout=30, stream="stderr")
         proc_output.assertWaitFor("lane_lookahead_m", timeout=30, stream="stderr")
         proc_output.assertWaitFor("lane_default_half_width_m", timeout=30, stream="stderr")
+        for name in (
+            "a_lat_max_mps2",
+            "apex_offset_m",
+            "track_out_offset_m",
+            "stopping_margin_m",
+            "side_cap_distance_m",
+            "status_rate_hz",
+        ):
+            proc_output.assertWaitFor(name, timeout=30, stream="stderr")
         # Let every process exit on their own before this test returns; otherwise launch
         # shuts them down with SIGINT and the exit code check below sees -2, not 1.
         processes = proc_info.processes()
-        self.assertEqual(len(processes), 9)
+        self.assertEqual(len(processes), 15)
         for process in processes:
             proc_info.assertWaitForShutdown(process=process, timeout=30)
 

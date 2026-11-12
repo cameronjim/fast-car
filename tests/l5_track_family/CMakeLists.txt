@@ -16,6 +16,12 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gap_follow_family_canary test_gap_follow_family_canary.py
     TIMEOUT 900
   )
+  # The race profile (race-2026-11-12: physics speed law, racing line, side cap) on a thin-island
+  # stadium and a round-ended one, both directions: laps, no wall contact, faster than the
+  # recommended pre-race profile. Four runs of about half a minute each.
+  ament_add_pytest_test(test_gap_follow_race_canary test_gap_follow_race_canary.py
+    TIMEOUT 900
+  )
   # The tracker on the LOCALISED pose (AMCL + EKF, sensor errors on): the configuration of the
   # real car, both directions on two 1 m lane tracks.
   ament_add_pytest_test(test_tracker_localised_canary test_tracker_localised_canary.py

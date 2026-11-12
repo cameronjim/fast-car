@@ -25,7 +25,9 @@ from .hostinfo import HostInfo
 
 #: Profile names of ros_ws/src/racer_control/launch/gap_follow.launch.py and park.launch.py.
 #: tests/test_whitelist.py checks these against the launch files so they cannot drift.
-GAP_FOLLOW_PROFILES = ("none", "floor-2026-10-06", "lane-2026-10-25")
+#: race-2026-11-12 (2026-11-12) has a 1.0 m/s ceiling and has never been driven: the app launches a
+#: profile with no speed argument, so choosing it here runs the car at that ceiling.
+GAP_FOLLOW_PROFILES = ("none", "floor-2026-10-06", "lane-2026-10-25", "race-2026-11-12")
 PARK_PROFILES = ("none", "floor-2026-10-07")
 
 DRIVE_MODES = ("gap_follow", "wall_follow", "tracker", "park", "ml_policy", "spiderbot", "pnp")

@@ -202,6 +202,15 @@ def test_car_teleop_records_the_localisation_topics(topic):
     assert re.search(regex, topic), topic
 
 
+def test_car_teleop_records_gap_follow_status():
+    """/gap_follow/status (scan-to-command latency, 2026-11-12) is in every bag, and only that
+    exact topic: a lookalike is not swept in."""
+    regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX
+    assert re.search(regex, "/gap_follow/status")
+    assert re.search(regex, "/gap_follow/status_extra") is None
+    assert re.search(regex, "/gap_follow") is None
+
+
 @pytest.mark.parametrize("topic", ["/particle_cloud", "/map_updates", "/odometry/filtered"])
 def test_car_teleop_leaves_out_bulky_or_unused_topics(topic):
     regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX

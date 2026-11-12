@@ -2723,5 +2723,365 @@ TEST(OutsideEntry, OffByDefaultTheFollowerIsUnchangedAndOnItStillAimsStraightDow
   EXPECT_NEAR(b.steering_rad, a.steering_rad, 1e-9);
 }
 
+// -- Racing line (2026-11-12, off by default) ---------------------------------------------------
+
+// A trace whose heading is straight to `turn_start_m`, then turns at kappa until `turn_end_m`
+// (heading constant after): a bend that ends. 0.05 m steps, `steps` points.
+std::vector<LanePoint> finite_bend_trace(double turn_start_m, double turn_end_m, double kappa,
+                                         std::size_t steps = 32) {
+  std::vector<LanePoint> trace;
+  double x = 0.0;
+  double y = 0.0;
+  double heading = 0.0;
+  trace.push_back({x, y});
+  for (std::size_t k = 1; k <= steps; ++k) {
+    const double s = 0.05 * static_cast<double>(k);
+    if (s > turn_start_m && s <= turn_end_m) {
+      heading += 0.05 * kappa;
+    }
+    x += 0.05 * std::cos(heading);
+    y += 0.05 * std::sin(heading);
+    trace.push_back({x, y});
+  }
+  return trace;
+}
+
+RacingLineParams racing_params(double entry, double apex, double track_out) {
+  RacingLineParams p;
+  p.entry_offset_m = entry;
+  p.apex_offset_m = apex;
+  p.track_out_offset_m = track_out;
+  p.turn_rad = kEntryTurn;
+  p.half_width_m = kEntryHalfWidth;
+  p.margin_m = kEntryMargin;
+  return p;
+}
+
+// Returns on two walls running parallel to the trace, `left` and `right` metres from it to either
+// side (every trace point, along its own normal): a lane that bends with the centreline, so the
+// room beside the aim point is the stated distance whatever the heading.
+LanePoints parallel_walls(const std::vector<LanePoint>& trace, double left, double right) {
+  LanePoints points;
+  std::size_t left_count = 0;
+  for (std::size_t k = 0; k + 1 < trace.size(); ++k) {
+    const double heading = std::atan2(trace[k + 1].y - trace[k].y, trace[k + 1].x - trace[k].x);
+    const double nx = -std::sin(heading);
+    const double ny = std::cos(heading);
+    points.x.push_back(trace[k].x + left * nx);
+    points.y.push_back(trace[k].y + left * ny);
+    points.chain.push_back(0);
+    ++left_count;
+  }
+  for (std::size_t k = 0; k + 1 < trace.size(); ++k) {
+    const double heading = std::atan2(trace[k + 1].y - trace[k].y, trace[k + 1].x - trace[k].x);
+    points.x.push_back(trace[k].x - right * (-std::sin(heading)));
+    points.y.push_back(trace[k].y - right * std::cos(heading));
+    points.chain.push_back(1);
+  }
+  points.chain_size = {left_count, left_count};
+  points.count = points.x.size();
+  return points;
+}
+
+RacingLine line_on(const std::vector<LanePoint>& trace, double left, double right,
+                   const RacingLineParams& params) {
+  return apply_racing_line(trace, kEntryAimIndex, parallel_walls(trace, left, right), params);
+}
+
+TEST(RacingLine, WithoutApexAndTrackOutItIsTheOutsideEntryToRounding) {
+  // Every shape the outside-entry tests use, left and right, with and without room.
+  const std::vector<std::vector<LanePoint>> traces = {
+      bend_trace(10.0, 0.0),       bend_trace(0.8, 1.0 / 0.6),  bend_trace(0.8, -1.0 / 0.6),
+      bend_trace(0.4, 1.0 / 0.6),  bend_trace(0.0, 1.0 / 0.6),  bend_trace(0.6, 1.0 / 0.9),
+      bend_trace(1.0, -1.0 / 0.5), bend_trace(0.3, -1.0 / 0.7),
+  };
+  for (const auto& trace : traces) {
+    for (const auto& walls :
+         {wall_returns(0.5, 0.5), wall_returns(0.8, 0.8), wall_returns(0.8, 0.3)}) {
+      const OutsideEntry old_way = apply_outside_entry(trace, kEntryAimIndex, walls, kEntryOffset,
+                                                       kEntryTurn, kEntryHalfWidth, kEntryMargin);
+      const RacingLine now =
+          apply_racing_line(trace, kEntryAimIndex, walls, racing_params(kEntryOffset, 0.0, 0.0));
+      EXPECT_NEAR(now.aim.x, old_way.aim.x, 1e-12);
+      EXPECT_NEAR(now.aim.y, old_way.aim.y, 1e-12);
+      EXPECT_NEAR(now.shift_m, old_way.shift_m, 1e-12);
+      EXPECT_NEAR(now.entry_weight, old_way.weight, 1e-12);
+      EXPECT_EQ(now.apex_weight, 0.0);
+      EXPECT_EQ(now.exit_weight, 0.0);
+    }
+  }
+}
+
+TEST(RacingLine, ALongTurnStillAheadHasNoEarlyApex) {
+  // A bend of radius 0.6 that has been going 0.3 m (0.5 rad inside the lookahead) and has 1.3 m
+  // more to go: far is past twice the threshold, so "coming" is 1 and the apex weight is 0.
+  const auto trace = finite_bend_trace(0.3, 3.0, 1.0 / 0.6);
+  const RacingLine r = line_on(trace, 0.5, 0.5, racing_params(0.0, 0.15, 0.0));
+  EXPECT_GT(r.near_rad, kEntryTurn);
+  EXPECT_GT(r.far_rad, 2.0 * kEntryTurn);
+  EXPECT_EQ(r.apex_weight, 0.0);
+  EXPECT_EQ(r.shift_m, 0.0);
+}
+
+TEST(RacingLine, TheLateApexMovesTheAimToTheInsideOfTheTurn) {
+  // Turning left; the bend ends 0.35 rad (the threshold) beyond the lookahead: the weight is at
+  // its peak, 1 * 1 * 1.
+  const double kappa = 1.0 / 0.6;
+  const double turn_end = 0.3 + (0.5 + kEntryTurn) / kappa + 0.0;  // 0.5 rad inside, 0.35 beyond
+  const auto trace = finite_bend_trace(0.3, turn_end, kappa);
+  const RacingLine r = line_on(trace, 0.5, 0.5, racing_params(0.0, 0.15, 0.0));
+  EXPECT_GT(r.near_rad, kEntryTurn);
+  EXPECT_NEAR(r.far_rad, kEntryTurn, 0.08);
+  EXPECT_GT(r.apex_weight, 0.8);
+  EXPECT_GT(r.shift_m, 0.12);  // left, toward the inside of a left turn
+  EXPECT_LE(r.shift_m, 0.15 + 1e-12);
+  EXPECT_EQ(r.entry_weight, 0.0);
+  // The aim moved along the left normal of the aim heading: y grew, x barely moved sideways.
+  EXPECT_GT(r.aim.y, trace[kEntryAimIndex].y);
+}
+
+TEST(RacingLine, TheApexIsTheMirrorImageForARightTurn) {
+  const double kappa = 1.0 / 0.6;
+  const double turn_end = 0.3 + (0.5 + kEntryTurn) / kappa;
+  const RacingLine left =
+      line_on(finite_bend_trace(0.3, turn_end, kappa), 0.5, 0.5, racing_params(0.0, 0.15, 0.0));
+  const RacingLine right =
+      line_on(finite_bend_trace(0.3, turn_end, -kappa), 0.5, 0.5, racing_params(0.0, 0.15, 0.0));
+  EXPECT_NEAR(right.shift_m, -left.shift_m, 1e-9);
+  EXPECT_NEAR(right.apex_weight, left.apex_weight, 1e-9);
+}
+
+TEST(RacingLine, TrackOutMovesTheAimToTheOutsideOfTheTurnJustDriven) {
+  // The bend ended inside the lookahead (nothing left beyond it): far 0, near large.
+  const auto trace = finite_bend_trace(0.0, 0.45, 1.0 / 0.6);
+  const RacingLine r = line_on(trace, 0.5, 0.5, racing_params(0.0, 0.0, 0.15));
+  EXPECT_GT(r.near_rad, kEntryTurn);
+  EXPECT_NEAR(r.far_rad, 0.0, 1e-9);
+  EXPECT_NEAR(r.exit_weight, 1.0, 1e-9);
+  EXPECT_NEAR(r.shift_m, -0.15, 1e-9);  // right, away from the left turn just driven
+  const RacingLine mirror =
+      line_on(finite_bend_trace(0.0, 0.45, -1.0 / 0.6), 0.5, 0.5, racing_params(0.0, 0.0, 0.15));
+  EXPECT_NEAR(mirror.shift_m, 0.15, 1e-9);
+}
+
+TEST(RacingLine, EachPartIsLimitedByTheRoomOnItsSide) {
+  // Walls 0.45 m either side of the aim point: room 0.45 - 0.155 - 0.1 - 0.05 = 0.145 m.
+  const auto trace = finite_bend_trace(0.0, 0.45, 1.0 / 0.6);
+  const RacingLine r = line_on(trace, 0.45, 0.45, racing_params(0.0, 0.0, 0.5));
+  // The returns are discrete and the wall curves with the bend, so the nearest one in the window
+  // is a little nearer than 0.45 m: the shift is the room there, close to 0.145 m and never more.
+  EXPECT_LT(r.shift_m, -0.10);
+  EXPECT_GE(r.shift_m, -0.145 - 1e-9);
+  EXPECT_LT(std::abs(r.shift_m), 0.5);  // not the 0.5 m asked for
+  // A wall right where the track-out wants to go leaves no room: no shift.
+  const RacingLine none = line_on(trace, 0.8, 0.3, racing_params(0.0, 0.0, 0.5));
+  EXPECT_EQ(none.shift_m, 0.0);
+}
+
+TEST(RacingLine, AStraightLaneMovesNothingAndTheWeightsAreZero) {
+  const auto trace = bend_trace(10.0, 0.0);
+  const RacingLine r = apply_racing_line(trace, kEntryAimIndex, wall_returns(0.5, 0.5),
+                                         racing_params(0.25, 0.2, 0.2));
+  EXPECT_EQ(r.shift_m, 0.0);
+  EXPECT_EQ(r.entry_weight + r.apex_weight + r.exit_weight, 0.0);
+  EXPECT_EQ(r.aim.x, trace[kEntryAimIndex].x);
+}
+
+TEST(RacingLine, AHandOverFromInsideToOutsideAsTheCornerEnds) {
+  // Sweep where the bend ends: while a turn of about the threshold is left the shift is toward
+  // the inside; once none is left it is toward the outside; it never exceeds the largest
+  // offset or the room, and changes smoothly (no step larger than 0.08 m per 5 cm of bend end).
+  const double kappa = 1.0 / 0.6;
+  double previous = 0.0;
+  bool seen_inside = false;
+  bool seen_outside = false;
+  for (double end = 0.35; end <= 1.6; end += 0.05) {
+    const RacingLine r =
+        line_on(finite_bend_trace(0.0, end, kappa), 0.5, 0.5, racing_params(0.15, 0.15, 0.15));
+    EXPECT_LE(std::abs(r.shift_m), 0.15 + 1e-12) << end;
+    if (end > 0.35) {
+      EXPECT_LT(std::abs(r.shift_m - previous), 0.08) << end;
+    }
+    seen_inside = seen_inside || r.shift_m > 0.05;
+    seen_outside = seen_outside || r.shift_m < -0.05;
+    previous = r.shift_m;
+  }
+  EXPECT_TRUE(seen_inside);
+  EXPECT_TRUE(seen_outside);
+}
+
+TEST(RacingLine, GuardsLeaveTheAimAlone) {
+  const auto trace = finite_bend_trace(0.3, 1.2, 1.0 / 0.6);
+  const LanePoints walls = parallel_walls(trace, 0.5, 0.5);
+  const LanePoint aim = trace[kEntryAimIndex];
+  const auto same = [&](const RacingLine& r) {
+    return r.aim.x == aim.x && r.aim.y == aim.y && r.shift_m == 0.0;
+  };
+  EXPECT_TRUE(same(apply_racing_line(trace, kEntryAimIndex, walls, racing_params(0.0, 0.0, 0.0))));
+  EXPECT_TRUE(same(apply_racing_line(trace, kEntryAimIndex, walls, racing_params(-0.1, 0.2, 0.2))));
+  EXPECT_TRUE(
+      same(apply_racing_line(trace, kEntryAimIndex, walls, racing_params(0.2, std::nan(""), 0.2))));
+  RacingLineParams bad_turn = racing_params(0.2, 0.2, 0.2);
+  bad_turn.turn_rad = 0.0;
+  EXPECT_TRUE(same(apply_racing_line(trace, kEntryAimIndex, walls, bad_turn)));
+  const std::vector<LanePoint> shorter(trace.begin(), trace.begin() + kEntryAimIndex + 4);
+  EXPECT_EQ(apply_racing_line(shorter, kEntryAimIndex, walls, racing_params(0.2, 0.2, 0.2)).shift_m,
+            0.0);
+  EXPECT_EQ(apply_racing_line({}, 0, walls, racing_params(0.2, 0.2, 0.2)).shift_m, 0.0);
+  EXPECT_EQ(apply_racing_line(trace, 1000, walls, racing_params(0.2, 0.2, 0.2)).aim.x,
+            trace.back().x);
+}
+
+TEST(RacingLine, OffByDefaultAndOnItStillAimsStraightDownAStraightLane) {
+  const GapFollowConfig off = lane_config();
+  EXPECT_EQ(off.apex_offset_m, 0.0);
+  EXPECT_EQ(off.track_out_offset_m, 0.0);
+  EXPECT_FALSE(off.compute_side_clearance);
+  EXPECT_EQ(off.free_path_horizon_m, 0.0);
+  GapFollowConfig on = lane_config();
+  on.outside_entry_offset_m = kEntryOffset;
+  on.apex_offset_m = 0.2;
+  on.track_out_offset_m = 0.2;
+  on.outside_entry_turn_rad = kEntryTurn;
+  const ScanInput scan = c1_scan_with(lane_walls(0.55, 0.55));
+  GapFollower plain(off);
+  GapFollower racing(on);
+  const GapFollowResult a = plain.process(scan);
+  const GapFollowResult b = racing.process(scan);
+  ASSERT_TRUE(a.valid && b.valid);
+  EXPECT_GE(racing.lane_trace().size(), 33u);
+  EXPECT_NEAR(b.outside_entry_shift_m, 0.0, 1e-12);
+  EXPECT_NEAR(b.steering_rad, a.steering_rad, 1e-9);
+  EXPECT_EQ(a.racing_apex_weight + a.racing_exit_weight + a.racing_entry_weight, 0.0);
+}
+
+TEST(RacingLine, OnlyApexOrTrackOutStillTakesTheRacingLinePath) {
+  GapFollowConfig apex_only = lane_config();
+  apex_only.apex_offset_m = 0.2;
+  GapFollower follower(apex_only);
+  const GapFollowResult r = follower.process(c1_scan_with(circular_lane(0.9)));
+  ASSERT_TRUE(r.valid && r.lane_valid);
+  EXPECT_GE(follower.lane_trace().size(), 33u);  // walked out to the horizon
+  EXPECT_EQ(r.racing_entry_weight, 0.0);         // entry is off
+}
+
+// -- Free travel along a steering arc and the side clearance ------------------------------------
+
+ArcProbeGeometry free_travel_geometry(double margin_m = 0.05) {
+  ArcProbeGeometry g;
+  g.wheelbase_m = kWheelbase;
+  g.half_width_m = 0.155;
+  g.margin_m = margin_m;
+  g.front_x_m = kWheelbase + 0.11;
+  g.rear_x_m = 0.14;
+  g.lidar_mount_x_m = kMountX;
+  g.lidar_mount_y_m = 0.0;
+  return g;
+}
+
+TEST(FreeArcTravel, AWallAcrossTheLaneAheadLimitsTheStraightTravelToTheBodyFront) {
+  // A wall across the lane 1.2 m ahead of the head: in the rear-axle frame it is at x = 1.2 +
+  // 0.285; the inflated body front reaches it after s = 1.485 - (0.4402 + 0.05) = 0.9948 m.
+  const ScanInput scan = c1_scan_with({{1.2, -1.5, 1.2, 1.5}});
+  std::vector<double> points;
+  const double travel = free_arc_travel(scan, kC1Yaw, 0.0, 3.0, free_travel_geometry(), points);
+  EXPECT_NEAR(travel, 0.9948, kArcProbeStepM + 1e-9);
+  EXPECT_LE(travel, 0.9948 + 1e-9);  // never past the contact
+}
+
+TEST(FreeArcTravel, ClearAheadReportsTheWholeHorizon) {
+  const ScanInput scan = c1_scan_with(lane_walls(0.55, 0.55));
+  std::vector<double> points;
+  EXPECT_DOUBLE_EQ(free_arc_travel(scan, kC1Yaw, 0.0, 1.5, free_travel_geometry(), points), 1.5);
+}
+
+TEST(FreeArcTravel, TurningTowardASideWallShortensTheTravelAndTheMirrorMatches) {
+  // A wall 0.5 m to the left, running ahead; a left arc runs into it, a right arc away from it.
+  const ScanInput scan = c1_scan_with({{-3.0, 0.5, 20.0, 0.5}});
+  std::vector<double> points;
+  const double left = free_arc_travel(scan, kC1Yaw, kFullLeft, 3.0, free_travel_geometry(), points);
+  const double straight = free_arc_travel(scan, kC1Yaw, 0.0, 3.0, free_travel_geometry(), points);
+  const double right =
+      free_arc_travel(scan, kC1Yaw, -kFullLeft, 3.0, free_travel_geometry(), points);
+  EXPECT_LT(left, 3.0);
+  EXPECT_DOUBLE_EQ(straight, 3.0);
+  EXPECT_DOUBLE_EQ(right, 3.0);
+  const ScanInput mirrored = c1_scan_with({{-3.0, -0.5, 20.0, -0.5}});
+  EXPECT_NEAR(free_arc_travel(mirrored, kC1Yaw, -kFullLeft, 3.0, free_travel_geometry(), points),
+              left, 1e-9);
+}
+
+TEST(FreeArcTravel, ASmallerMarginNeverShortensTheTravelAndAReturnInsideTheBodyIsIgnored) {
+  const ScanInput scan = c1_scan_with({{1.2, -1.5, 1.2, 1.5}});
+  std::vector<double> points;
+  const double tight = free_arc_travel(scan, kC1Yaw, 0.0, 3.0, free_travel_geometry(0.0), points);
+  const double wide = free_arc_travel(scan, kC1Yaw, 0.0, 3.0, free_travel_geometry(0.2), points);
+  EXPECT_GE(tight, wide);
+  // A return on the car itself (inside the inflated body at the start pose) does not block.
+  const ScanInput on_body = c1_scan_with({{-0.05, -0.05, -0.05, 0.05}});
+  EXPECT_DOUBLE_EQ(free_arc_travel(on_body, kC1Yaw, 0.0, 1.0, free_travel_geometry(), points), 1.0);
+}
+
+TEST(FreeArcTravel, UnusableInputReportsTheHorizon) {
+  const ScanInput scan = c1_scan_with({{1.2, -1.5, 1.2, 1.5}});
+  std::vector<double> points;
+  EXPECT_DOUBLE_EQ(free_arc_travel(scan, kC1Yaw, std::nan(""), 2.0, free_travel_geometry(), points),
+                   2.0);
+  EXPECT_DOUBLE_EQ(free_arc_travel(scan, kC1Yaw, 1.6, 2.0, free_travel_geometry(), points), 2.0);
+  EXPECT_DOUBLE_EQ(free_arc_travel(scan, kC1Yaw, 0.0, 0.0, free_travel_geometry(), points), 0.0);
+  ArcProbeGeometry bad = free_travel_geometry();
+  bad.wheelbase_m = 0.0;
+  EXPECT_DOUBLE_EQ(free_arc_travel(scan, kC1Yaw, 0.0, 2.0, bad, points), 2.0);
+  ScanInput empty;
+  EXPECT_DOUBLE_EQ(free_arc_travel(empty, kC1Yaw, 0.0, 2.0, free_travel_geometry(), points), 2.0);
+}
+
+TEST(FollowerRaceOutputs, FreePathAndSideClearanceAreReportedOnlyWhenAsked) {
+  GapFollowConfig off = lane_config();
+  GapFollower plain(off);
+  const ScanInput scan =
+      c1_scan_with({{-3.0, 0.5, 20.0, 0.5}, {-3.0, -0.5, 20.0, -0.5}, {1.0, -0.5, 1.0, 0.5}});
+  const GapFollowResult a = plain.process(scan);
+  ASSERT_TRUE(a.valid);
+  EXPECT_FALSE(a.free_path_m.has_value());
+  // lane_centre measures the lane anyway: a 1.0 m lane, 0.155 m body half width, 0.5 - 0.155
+  // from the centre, give about 0.345 m of clearance each side.
+  ASSERT_TRUE(a.side_clearance_m.has_value());
+  EXPECT_NEAR(*a.side_clearance_m, 0.5 - 0.155, 0.03);
+
+  GapFollowConfig on = lane_config();
+  on.free_path_horizon_m = 2.0;
+  on.free_path_margin_m = 0.05;
+  on.rear_overhang_m = 0.14;
+  on.compute_side_clearance = true;
+  GapFollower racing(on);
+  const GapFollowResult b = racing.process(scan);
+  ASSERT_TRUE(b.valid && b.free_path_m.has_value());
+  // The wall across the lane 1.0 m ahead of the head stops the body 0.8 m or so out.
+  EXPECT_GT(*b.free_path_m, 0.5);
+  EXPECT_LT(*b.free_path_m, 1.1);
+  EXPECT_NEAR(b.steering_rad, a.steering_rad, 1e-12);  // measuring it changes no steering
+}
+
+TEST(FollowerRaceOutputs, SideClearanceInTheGapModesNeedsTheSwitchAndNeverChangesSteering) {
+  GapFollowConfig config = default_config();
+  config.laser_yaw_offset_rad = kC1Yaw;
+  config.swept_path.lidar_mount_x_m = kMountX;
+  config.swept_path.body_front_x_m = kWheelbase + 0.11;
+  config.swept_path.wheelbase_m = kWheelbase;
+  config.lane_default_half_width_m = 0.55;
+  const ScanInput scan = c1_scan_with(lane_walls(0.5, 0.5));
+  GapFollower plain(config);
+  const GapFollowResult a = plain.process(scan);
+  ASSERT_TRUE(a.valid);
+  EXPECT_FALSE(a.side_clearance_m.has_value());
+  config.compute_side_clearance = true;
+  GapFollower measuring(config);
+  const GapFollowResult b = measuring.process(scan);
+  ASSERT_TRUE(b.valid && b.side_clearance_m.has_value());
+  EXPECT_NEAR(*b.side_clearance_m, 0.5 - config.half_width_m, 0.03);
+  EXPECT_EQ(b.steering_rad, a.steering_rad);
+}
+
 }  // namespace
 }  // namespace racer_control

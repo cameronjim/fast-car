@@ -767,6 +767,98 @@ OutsideEntry apply_outside_entry(const std::vector<LanePoint>& trace, std::size_
   return out;
 }
 
+RacingLine apply_racing_line(const std::vector<LanePoint>& trace, std::size_t aim_index,
+                             const LanePoints& points, const RacingLineParams& params) {
+  RacingLine out;
+  if (trace.empty()) {
+    return out;
+  }
+  aim_index = std::min(aim_index, trace.size() - 1);
+  out.aim = trace[aim_index];
+  const auto finite_non_negative = [](double v) { return std::isfinite(v) && v >= 0.0; };
+  if (!finite_non_negative(params.entry_offset_m) || !finite_non_negative(params.apex_offset_m) ||
+      !finite_non_negative(params.track_out_offset_m) || !std::isfinite(params.turn_rad) ||
+      !(params.turn_rad > 0.0) || !std::isfinite(params.half_width_m) ||
+      !std::isfinite(params.margin_m) || trace.size() < aim_index + 6) {
+    return out;
+  }
+  const double turn = params.turn_rad;
+  const double h_start = trace_heading(trace, 0);
+  const double h_aim = trace_heading(trace, aim_index);
+  const double h_end = trace_heading(trace, trace.size() - 1);
+  out.near_rad = wrap_angle(h_aim - h_start);
+  out.far_rad = wrap_angle(h_end - h_aim);
+  const double abs_near = std::abs(out.near_rad);
+  const double abs_far = std::abs(out.far_rad);
+  const bool turning_in = out.near_rad * out.far_rad > 0.0;
+  const double coming = std::min(std::max((abs_far - turn) / turn, 0.0), 1.0);
+  const double turning_now = std::min(abs_near / turn, 1.0);
+  const double remaining = std::min(abs_far / turn, 1.0);
+  if (params.entry_offset_m > 0.0 && coming > 0.0) {
+    const double arrival = turning_in ? std::max(1.0 - abs_near / turn, 0.0) : 1.0;
+    out.entry_weight = coming * arrival;
+  }
+  if (params.apex_offset_m > 0.0 && turning_in) {
+    out.apex_weight = turning_now * (1.0 - coming) * remaining;
+  }
+  if (params.track_out_offset_m > 0.0) {
+    out.exit_weight = turning_now * (1.0 - remaining);
+  }
+  if (out.entry_weight <= 0.0 && out.apex_weight <= 0.0 && out.exit_weight <= 0.0) {
+    return out;
+  }
+  const double nx = -std::sin(h_aim);  // left normal of the aim heading
+  const double ny = std::cos(h_aim);
+  const double tx = std::cos(h_aim);
+  const double ty = std::sin(h_aim);
+  // Room on each side of the aim point: the nearest return beside it, less the body, the margin
+  // and 5 cm. Infinite when nothing is there.
+  double nearest_left = std::numeric_limits<double>::infinity();
+  double nearest_right = std::numeric_limits<double>::infinity();
+  for (std::size_t k = 0; k < points.count; ++k) {
+    const double dx = points.x[k] - out.aim.x;
+    const double dy = points.y[k] - out.aim.y;
+    const double lateral = dx * nx + dy * ny;
+    const double along = dx * tx + dy * ty;
+    if (std::abs(along) < 0.4) {
+      if (lateral > 0.0) {
+        nearest_left = std::min(nearest_left, lateral);
+      } else if (lateral < 0.0) {
+        nearest_right = std::min(nearest_right, -lateral);
+      }
+    }
+  }
+  const auto room = [&](double nearest, double offset) {
+    return std::isfinite(nearest)
+               ? std::max(nearest - params.half_width_m - params.margin_m - 0.05, 0.0)
+               : offset;
+  };
+  const double room_left = room(nearest_left, std::numeric_limits<double>::infinity());
+  const double room_right = room(nearest_right, std::numeric_limits<double>::infinity());
+  const double turn_sign = out.far_rad > 0.0 ? 1.0 : -1.0;   // +1: the turn ahead is to the left
+  const double exit_sign = out.near_rad > 0.0 ? 1.0 : -1.0;  // +1: the turn just driven was left
+  const auto room_toward = [&](double dir) { return dir > 0.0 ? room_left : room_right; };
+  double shift = 0.0;  // left positive
+  if (out.entry_weight > 0.0) {
+    const double dir = -turn_sign;
+    shift += dir * out.entry_weight * std::min(params.entry_offset_m, room_toward(dir));
+  }
+  if (out.apex_weight > 0.0) {
+    const double dir = turn_sign;
+    shift += dir * out.apex_weight * std::min(params.apex_offset_m, room_toward(dir));
+  }
+  if (out.exit_weight > 0.0) {
+    const double dir = -exit_sign;
+    shift += dir * out.exit_weight * std::min(params.track_out_offset_m, room_toward(dir));
+  }
+  // The sum never goes further than the room on the side it moves toward.
+  shift = std::min(std::max(shift, -room_right), room_left);
+  out.aim.x += nx * shift;
+  out.aim.y += ny * shift;
+  out.shift_m = shift;
+  return out;
+}
+
 double pure_pursuit_steering(const LanePoint& aim, double wheelbase_m, double max_steering_rad) {
   if (!std::isfinite(aim.x) || !std::isfinite(aim.y) || !std::isfinite(wheelbase_m) ||
       !(wheelbase_m > 0.0) || !std::isfinite(max_steering_rad)) {
@@ -892,6 +984,52 @@ bool any_forward_arc_clear(const ScanInput& scan, double laser_yaw_offset_rad,
   return false;
 }
 
+namespace {
+
+// Distance travelled to the first pose at which the inflated body overlaps a point (the previous
+// clear sample is reported), travel_m when none does.
+double arc_first_contact(const std::vector<double>& points, std::size_t count, double steering_rad,
+                         double travel_m, const ArcProbeGeometry& g) {
+  const ProbeBody body = probe_body(g);
+  const double k = std::tan(steering_rad) / g.wheelbase_m;
+  const auto steps = static_cast<std::size_t>(std::ceil(travel_m / kArcProbeStepM));
+  double clear_s = 0.0;
+  for (std::size_t step = 1; step <= steps; ++step) {
+    const double s = std::min(static_cast<double>(step) * kArcProbeStepM, travel_m);
+    const double theta = k * s;
+    const double ct = std::cos(theta);
+    const double st = std::sin(theta);
+    double tx = s;
+    double ty = 0.0;
+    if (std::abs(k) > 1e-12) {
+      tx = st / k;
+      ty = (1.0 - ct) / k;
+    }
+    for (std::size_t p = 0; p < count; ++p) {
+      const double dx = points[2 * p] - tx;
+      const double dy = points[2 * p + 1] - ty;
+      if (body.contains(ct * dx + st * dy, -st * dx + ct * dy)) {
+        return clear_s;
+      }
+    }
+    clear_s = s;
+  }
+  return travel_m;
+}
+
+}  // namespace
+
+double free_arc_travel(const ScanInput& scan, double laser_yaw_offset_rad, double steering_rad,
+                       double travel_m, const ArcProbeGeometry& geometry,
+                       std::vector<double>& points) {
+  if (!probe_geometry_usable(scan, laser_yaw_offset_rad, travel_m, geometry) ||
+      !std::isfinite(steering_rad) || std::abs(steering_rad) >= M_PI_2) {
+    return travel_m;
+  }
+  const std::size_t count = load_probe_points(scan, laser_yaw_offset_rad, geometry, points);
+  return arc_first_contact(points, count, steering_rad, travel_m, geometry);
+}
+
 double FirstOrderLowPass::update(double input, double dt_s) {
   if (!std::isfinite(input) || !std::isfinite(dt_s) || dt_s <= 0.0) {
     return output_;
@@ -903,6 +1041,26 @@ double FirstOrderLowPass::update(double input, double dt_s) {
   output_ += dt_s / (time_constant_s_ + dt_s) * (input - output_);
   return output_;
 }
+
+namespace {
+
+// Body clearance to the nearer lane boundary beside the car: the nearest counted return's
+// distance from the car's centre, less the body half width, never below 0. Empty when both
+// sides are open.
+std::optional<double> side_clearance(const LaneBoundaries& boundaries, double half_width_m) {
+  std::optional<double> nearest;
+  for (const auto& d : {boundaries.left_m, boundaries.right_m}) {
+    if (d && (!nearest || *d < *nearest)) {
+      nearest = *d;
+    }
+  }
+  if (!nearest) {
+    return std::nullopt;
+  }
+  return std::max(*nearest - half_width_m, 0.0);
+}
+
+}  // namespace
 
 GapFollowResult GapFollower::process(const ScanInput& scan) {
   GapFollowResult result;
@@ -948,25 +1106,44 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
     const LaneBoundaries boundaries = find_lane_boundaries(
         lane_points_, geometry, kLaneMaxWidthFactor * config_.lane_default_half_width_m);
     result.lane_measured_width_m = boundaries.width_m;
+    result.side_clearance_m = side_clearance(boundaries, config_.half_width_m);
     if (boundaries.width_m) {
       lane_half_width_m_ = 0.5 * *boundaries.width_m;
     }
     result.lane_half_width_m = lane_half_width_m_.value_or(config_.lane_default_half_width_m);
     const bool outside_entry = config_.outside_entry_offset_m > 0.0;
-    const double horizon = outside_entry
+    const bool racing_line = config_.apex_offset_m > 0.0 || config_.track_out_offset_m > 0.0;
+    const double horizon = (outside_entry || racing_line)
                                ? std::max(config_.lane_lookahead_m, config_.outside_entry_horizon_m)
                                : config_.lane_lookahead_m;
     result.lane_aim =
         trace_lane_centre(lane_points_, horizon, result.lane_half_width_m,
                           kLaneWindowFactor * config_.lane_default_half_width_m, lane_trace_);
-    if (outside_entry) {
+    if (outside_entry || racing_line) {
       const auto aim_index =
           static_cast<std::size_t>(std::lround(config_.lane_lookahead_m / kLaneTraceStepM));
-      const OutsideEntry entry = apply_outside_entry(
-          lane_trace_, aim_index, lane_points_, config_.outside_entry_offset_m,
-          config_.outside_entry_turn_rad, config_.half_width_m, config_.safety_margin_m);
-      result.lane_aim = entry.aim;
-      result.outside_entry_shift_m = entry.shift_m;
+      if (racing_line) {
+        RacingLineParams line;
+        line.entry_offset_m = config_.outside_entry_offset_m;
+        line.apex_offset_m = config_.apex_offset_m;
+        line.track_out_offset_m = config_.track_out_offset_m;
+        line.turn_rad = config_.outside_entry_turn_rad;
+        line.half_width_m = config_.half_width_m;
+        line.margin_m = config_.safety_margin_m;
+        const RacingLine racing = apply_racing_line(lane_trace_, aim_index, lane_points_, line);
+        result.lane_aim = racing.aim;
+        result.outside_entry_shift_m = racing.shift_m;
+        result.racing_entry_weight = racing.entry_weight;
+        result.racing_apex_weight = racing.apex_weight;
+        result.racing_exit_weight = racing.exit_weight;
+      } else {
+        const OutsideEntry entry = apply_outside_entry(
+            lane_trace_, aim_index, lane_points_, config_.outside_entry_offset_m,
+            config_.outside_entry_turn_rad, config_.half_width_m, config_.safety_margin_m);
+        result.lane_aim = entry.aim;
+        result.outside_entry_shift_m = entry.shift_m;
+        result.racing_entry_weight = entry.weight;
+      }
     }
     result.lane_valid = true;
     result.steering_rad = pure_pursuit_steering(result.lane_aim, config_.swept_path.wheelbase_m,
@@ -1015,6 +1192,31 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
                      config_.laser_yaw_offset_rad);
   if (result.corner_blocked) {
     result.steering_rad = 0.0;
+  }
+  if (config_.compute_side_clearance && config_.target_mode != TargetMode::kLaneCentre) {
+    LaneGeometry geometry;
+    geometry.half_width_m = config_.half_width_m;
+    geometry.body_front_x_m = config_.swept_path.body_front_x_m;
+    geometry.lidar_mount_x_m = config_.swept_path.lidar_mount_x_m;
+    geometry.lidar_mount_y_m = config_.swept_path.lidar_mount_y_m;
+    load_lane_points(scan, config_.laser_yaw_offset_rad, config_.clip_max_range_m, geometry,
+                     lane_points_);
+    result.side_clearance_m = side_clearance(
+        find_lane_boundaries(lane_points_, geometry,
+                             kLaneMaxWidthFactor * config_.lane_default_half_width_m),
+        config_.half_width_m);
+  }
+  if (config_.free_path_horizon_m > 0.0) {
+    ArcProbeGeometry probe;
+    probe.wheelbase_m = config_.swept_path.wheelbase_m;
+    probe.half_width_m = config_.half_width_m;
+    probe.margin_m = config_.free_path_margin_m;
+    probe.front_x_m = config_.swept_path.body_front_x_m;
+    probe.rear_x_m = config_.rear_overhang_m;
+    probe.lidar_mount_x_m = config_.swept_path.lidar_mount_x_m;
+    probe.lidar_mount_y_m = config_.swept_path.lidar_mount_y_m;
+    result.free_path_m = free_arc_travel(scan, config_.laser_yaw_offset_rad, result.steering_rad,
+                                         config_.free_path_horizon_m, probe, free_path_points_);
   }
   return result;
 }

@@ -22,6 +22,16 @@
 // JSON); it and target_deepest_ray resolve through the node's resolve_target_mode, so true with
 // gap_centre warns on stderr and means gap_deepest, and true with lane_centre is refused.
 //
+// --speed (2026-11-12) adds the speed half to every output row: the node's speed chain is stepped
+// with the same control ticks as the steering low-pass (the physics law of race_speed.hpp when
+// physics_speed is true, else the range law with the target range median), and each row gains
+// speed_mps (the published speed at the end of the scan's interval), target_speed_mps (the
+// physics law's target, null for the range law), free_path_m, side_clearance_m, racing_shift_m
+// and the racing weights. Without --speed the output is exactly what it was. The speed keys
+// (max_speed_mps, min_speed_mps, k_speed_per_s, k_steer, speed_rate_limit_margin_fraction,
+// speed_time_constant_s, target_range_median_scans, a_lat_max_mps2, stopping_margin_m,
+// side_cap_distance_m, side_cap_min_speed_mps) are accepted with or without it.
+//
 // What runs per scan is GapFollower::process, which is the node's whole perception half:
 // sanitize, extend disparities, select the gap (forward preference, switch margin), steering
 // gain with lane centring or the lane-centre pure pursuit, swept-path clamp, corner override.
@@ -61,6 +71,8 @@
 
 #include "racer_control/gap_follow.hpp"
 #include "racer_control/laser_scan.hpp"
+#include "racer_control/race_speed.hpp"
+#include "racer_control/reactive_speed.hpp"
 
 namespace {
 
@@ -93,6 +105,11 @@ const ParamSpec kParams[] = {
     {"centering_max_range_m", 1.5, 0.05, 20.0, false},
     {"lane_lookahead_m", 0.6, 0.1, 3.0, false},
     {"lane_default_half_width_m", 0.55, 0.1, 2.0, false},
+    {"outside_entry_offset_m", 0.0, 0.0, 1.0, false},
+    {"outside_entry_horizon_m", 1.6, 0.2, 5.0, false},
+    {"outside_entry_turn_rad", 0.35, 0.05, 3.0, false},
+    {"apex_offset_m", 0.0, 0.0, 1.0, false},
+    {"track_out_offset_m", 0.0, 0.0, 1.0, false},
     {"corner_sector_inner_rad", kPi / 2.0, 0.0, kPi, false},
     {"corner_sector_outer_rad", 3.0 * kPi / 4.0, 0.0, kPi, false},
     {"corner_min_clearance_m", 0.2, 0.0, 10.0, false},
@@ -103,6 +120,15 @@ const ParamSpec kParams[] = {
     {"steering_time_constant_s", 0.1, 0.0, 10.0, false},
     {"control_rate_hz", 50.0, 1.0, 1000.0, false},
     {"scan_timeout_s", 0.3, 1e-3, 10.0, false},
+    // The speed half (only used with --speed; see the header).
+    {"physics_speed", 0.0, 0.0, 1.0, true},
+    {"a_lat_max_mps2", 2.0, 0.1, 20.0, false},
+    {"stopping_margin_m", 0.05, 0.0, 1.0, false},
+    {"side_cap_distance_m", 0.0, 0.0, 1.0, false},
+    {"k_speed_per_s", 0.71, 0.0, 100.0, false},
+    {"k_steer", 0.5, 0.0, 1.0, false},
+    {"speed_rate_limit_margin_fraction", 0.5, 0.01, 1.0, false},
+    {"speed_time_constant_s", 0.0, 0.0, 5.0, false},
     // CLI only:
     {"range_min_m", 0.05, 0.0, 1000.0, false},
     {"range_max_m", 12.0, 0.01, 1000.0, false},
@@ -112,14 +138,12 @@ const ParamSpec kParams[] = {
 // Node parameters that do not change the steering: accepted and ignored.
 bool is_ignored_key(const std::string& key) {
   static const char* const kIgnored[] = {
-      "min_speed_mps",
-      "max_speed_mps",
-      "k_steer",
-      "k_speed_per_s",
-      "speed_rate_limit_margin_fraction",
-      "speed_time_constant_s",
-      "target_range_median_scans",
       "reverse_escape",
+      // Race work (2026-11-12): command timing and the status stream, neither of which changes
+      // what the perception half or the speed chain computes.
+      "compute_on_scan",
+      "status_rate_hz",
+      "status_window_scans",
       "drive_feedback_timeout_s",
   };
   if (key.rfind("escape_", 0) == 0) {
@@ -166,6 +190,11 @@ std::optional<double> parse_number(const std::string& text) {
 
 // The node's one string parameter (gap_follow_node `target_mode`), default gap_centre.
 std::string g_target_mode = "gap_centre";
+// The speed parameters bounded by the vehicle's global speed cap (defaults as in the node), and
+// the integer target_range_median_scans.
+std::map<std::string, double> g_speed_limits = {
+    {"max_speed_mps", 1.43}, {"min_speed_mps", 0.36}, {"side_cap_min_speed_mps", 0.36}};
+std::size_t g_median_scans = 1;
 
 void set_param(ParamMap& params, const std::string& key, const std::string& value) {
   if (is_ignored_key(key)) {
@@ -182,6 +211,25 @@ void set_param(ParamMap& params, const std::string& key, const std::string& valu
                  "on this)");
     }
     g_target_mode = name;
+    return;
+  }
+  if (key == "max_speed_mps" || key == "min_speed_mps" || key == "side_cap_min_speed_mps") {
+    const auto number = parse_number(value);
+    if (!number || !std::isfinite(*number) || *number < 0.0 ||
+        *number > VEHICLE_PARAMS.limits.global_speed_cap_mps) {
+      die(2,
+          "parameter '" + key + "' = '" + value + "' is not in [0, limits.global_speed_cap_mps]");
+    }
+    g_speed_limits[key] = *number;
+    return;
+  }
+  if (key == "target_range_median_scans") {
+    const auto number = parse_number(value);
+    if (!number || *number < 1.0 || *number > 15.0 || *number != std::floor(*number)) {
+      die(2,
+          "parameter 'target_range_median_scans' = '" + value + "' is not an integer in [1, 15]");
+    }
+    g_median_scans = static_cast<std::size_t>(*number);
     return;
   }
   const auto spec = std::find_if(std::begin(kParams), std::end(kParams),
@@ -346,6 +394,7 @@ int main(int argc, char** argv) {
   std::string params_path;
   std::vector<std::pair<std::string, std::string>> overrides;
   bool describe = false;
+  bool with_speed = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     auto next = [&]() -> std::string {
@@ -360,6 +409,8 @@ int main(int argc, char** argv) {
       params_path = next();
     } else if (arg == "--describe") {
       describe = true;
+    } else if (arg == "--speed") {
+      with_speed = true;
     } else if (arg == "--set") {
       const std::string kv = next();
       const auto eq = kv.find('=');
@@ -368,9 +419,10 @@ int main(int argc, char** argv) {
       }
       overrides.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
     } else {
-      std::cerr << "usage: gap_follow_replay_cli [--params <file>] [--scans <file>] "
-                   "[--set key=value]...\nScans on stdin when --scans is omitted. See the "
-                   "header comment of src/gap_follow_replay_cli.cpp.\n";
+      std::cerr
+          << "usage: gap_follow_replay_cli [--params <file>] [--scans <file>] "
+             "[--set key=value]... [--speed]\nScans on stdin when --scans is omitted. See the "
+             "header comment of src/gap_follow_replay_cli.cpp.\n";
       return arg == "--help" ? 0 : 2;
     }
   }
@@ -413,6 +465,11 @@ int main(int argc, char** argv) {
   c.target_mode = mode->mode;
   c.lane_lookahead_m = get("lane_lookahead_m");
   c.lane_default_half_width_m = get("lane_default_half_width_m");
+  c.outside_entry_offset_m = get("outside_entry_offset_m");
+  c.outside_entry_horizon_m = get("outside_entry_horizon_m");
+  c.outside_entry_turn_rad = get("outside_entry_turn_rad");
+  c.apex_offset_m = get("apex_offset_m");
+  c.track_out_offset_m = get("track_out_offset_m");
   c.forward_preference = get("forward_preference");
   c.gap_switch_margin = get("gap_switch_margin");
   c.steering_gain = get("steering_gain");
@@ -443,21 +500,67 @@ int main(int argc, char** argv) {
   c.swept_path.body_front_x_m =
       VEHICLE_PARAMS.chassis.wheelbase_m + VEHICLE_PARAMS.chassis.front_overhang_m;
 
+  // The speed half, as gap_follow_node builds it (the physics law needs the free path and the
+  // side clearance from the perception half).
+  const bool physics_speed = get("physics_speed") != 0.0;
+  const double max_speed = g_speed_limits.at("max_speed_mps");
+  const double min_speed = g_speed_limits.at("min_speed_mps");
+  if (min_speed > max_speed) {
+    die(2, "min_speed_mps must not exceed max_speed_mps");
+  }
+  const double standoff = VEHICLE_PARAMS.limits.min_forward_clearance_m + get("stopping_margin_m");
+  if (physics_speed) {
+    c.free_path_margin_m = get("stopping_margin_m");
+    c.rear_overhang_m = VEHICLE_PARAMS.chassis.rear_overhang_m;
+    c.free_path_horizon_m =
+        racer_control::free_path_horizon(max_speed, VEHICLE_PARAMS.actuation.stop_deceleration_mps2,
+                                         VEHICLE_PARAMS.actuation.stop_latency_s, standoff);
+    c.compute_side_clearance = get("side_cap_distance_m") > 0.0;
+  }
+  racer_control::ReactiveSpeedConfig speed_config;
+  speed_config.k_speed_per_s = get("k_speed_per_s");
+  speed_config.min_speed_mps = min_speed;
+  speed_config.max_speed_mps = max_speed;
+  speed_config.k_steer = get("k_steer");
+  speed_config.max_steering_rad = VEHICLE_PARAMS.steering.max_angle_rad;
+  speed_config.speed_time_constant_s = get("speed_time_constant_s");
+  speed_config.max_acceleration_mps2 =
+      VEHICLE_PARAMS.actuation.max_acceleration_mps2 * get("speed_rate_limit_margin_fraction");
+  racer_control::RaceSpeedConfig race;
+  race.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
+  race.a_lat_max_mps2 = get("a_lat_max_mps2");
+  race.brake_decel_mps2 = VEHICLE_PARAMS.actuation.stop_deceleration_mps2;
+  race.stop_latency_s = VEHICLE_PARAMS.actuation.stop_latency_s;
+  race.standoff_m = standoff;
+  race.max_speed_mps = max_speed;
+  race.min_speed_mps = min_speed;
+  race.side_cap_distance_m = get("side_cap_distance_m");
+  race.side_cap_min_speed_mps = g_speed_limits.at("side_cap_min_speed_mps");
+
   if (describe) {
     // What tools/replay_follower.py needs to draw a scan in the vehicle frame, resolved the way
     // the run resolves it (so the plots never carry a hand-typed vehicle constant).
     std::printf(
         "{\"laser_yaw_rad\":%.9g,\"lidar_mount_x_m\":%.9g,\"lidar_mount_y_m\":%.9g,"
         "\"half_width_m\":%.9g,\"wheelbase_m\":%.9g,\"body_front_x_m\":%.9g,"
-        "\"max_steering_rad\":%.9g}\n",
+        "\"max_steering_rad\":%.9g,\"stop_deceleration_mps2\":%.9g,\"stop_latency_s\":%.9g,"
+        "\"min_forward_clearance_m\":%.9g,\"max_acceleration_mps2\":%.9g,"
+        "\"global_speed_cap_mps\":%.9g}\n",
         c.laser_yaw_offset_rad, c.swept_path.lidar_mount_x_m, c.swept_path.lidar_mount_y_m,
         c.half_width_m, c.swept_path.wheelbase_m, c.swept_path.body_front_x_m,
-        c.max_steering_angle_rad);
+        c.max_steering_angle_rad, VEHICLE_PARAMS.actuation.stop_deceleration_mps2,
+        VEHICLE_PARAMS.actuation.stop_latency_s, VEHICLE_PARAMS.limits.min_forward_clearance_m,
+        VEHICLE_PARAMS.actuation.max_acceleration_mps2, VEHICLE_PARAMS.limits.global_speed_cap_mps);
     return 0;
   }
 
   racer_control::GapFollower follower(c);
   racer_control::FirstOrderLowPass steering_filter(get("steering_time_constant_s"));
+  racer_control::ReactiveSpeedCommand speed_command(speed_config);
+  racer_control::RollingMedian target_range_median(g_median_scans);
+  double target_range_m = 0.0;
+  double speed_mps = 0.0;
+  std::optional<double> target_speed_mps;
   const double control_rate_hz = get("control_rate_hz");
   const double control_period_s = 1.0 / control_rate_hz;
   const double scan_timeout_s = get("scan_timeout_s");
@@ -489,6 +592,7 @@ int main(int argc, char** argv) {
       latest = result;
       has_scan = true;
       last_usable_stamp_s = scan.stamp_s;
+      target_range_m = target_range_median.push(result.target_range_m);
     }
     // The node's timer ticks that fall before the next scan (the last scan gets as many as the
     // one before it). Each tick is skipped while the latest usable scan is older than
@@ -505,11 +609,30 @@ int main(int argc, char** argv) {
       const double tick_stamp_s = scan.stamp_s + static_cast<double>(t) * control_period_s;
       if (!has_scan || tick_stamp_s - last_usable_stamp_s > scan_timeout_s) {
         has_last_command_time = false;
+        if (with_speed) {
+          speed_command.reset();  // the node does, on the stale tick (and so does the median)
+          target_range_median.reset();
+          speed_mps = 0.0;
+          target_speed_mps.reset();
+        }
         continue;
       }
       const double dt_s = has_last_command_time ? control_period_s : 0.0;
       has_last_command_time = true;
-      steering_filter.update(latest.steering_rad, dt_s);
+      const double steering = steering_filter.update(latest.steering_rad, dt_s);
+      if (with_speed) {
+        if (physics_speed) {
+          racer_control::RaceSpeedInputs inputs;
+          inputs.steering_rad = steering;
+          inputs.free_path_m = latest.free_path_m;
+          inputs.side_clearance_m = latest.side_clearance_m;
+          target_speed_mps = racer_control::race_target_speed(inputs, race).target_mps;
+          speed_mps = speed_command.update_target(*target_speed_mps, dt_s);
+        } else {
+          target_speed_mps.reset();
+          speed_mps = speed_command.update(target_range_m, steering, dt_s);
+        }
+      }
     }
 
     std::printf("{\"stamp_s\":%.9f,\"valid\":%s,\"gap_found\":%s", scan.stamp_s,
@@ -528,6 +651,19 @@ int main(int argc, char** argv) {
     print_number("lane_half_width_m", result.lane_half_width_m, lane);
     print_number("lane_width_m", result.lane_measured_width_m.value_or(0.0),
                  lane && result.lane_measured_width_m.has_value());
+    if (with_speed) {
+      print_number("speed_mps", speed_mps, true);
+      print_number("target_speed_mps", target_speed_mps.value_or(0.0),
+                   target_speed_mps.has_value());
+      print_number("free_path_m", result.free_path_m.value_or(0.0),
+                   result.valid && result.free_path_m.has_value());
+      print_number("side_clearance_m", result.side_clearance_m.value_or(0.0),
+                   result.valid && result.side_clearance_m.has_value());
+      print_number("racing_shift_m", result.outside_entry_shift_m, lane);
+      print_number("racing_entry_weight", result.racing_entry_weight, lane);
+      print_number("racing_apex_weight", result.racing_apex_weight, lane);
+      print_number("racing_exit_weight", result.racing_exit_weight, lane);
+    }
     std::printf(",\"lane_trace\":[");
     if (lane) {
       const auto& trace = follower.lane_trace();

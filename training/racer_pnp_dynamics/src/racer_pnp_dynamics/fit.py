@@ -4,8 +4,18 @@ Speed channel: from bags with /odom/wheel, simulate the speed part of the model 
 from the recorded (delayed) commands and minimise the multi-step wheel speed error. The command
 delay is chosen on a grid (0.00 to 0.30 s, steps of 0.02 s) by the validation error of that fit.
 Yaw channel: from the ICP yaw change per 0.1 s scan interval, integrate the model at 0.05 s
-over the interval from the recorded commands and the wheel speed and minimise the yaw change
-error. Bags with no odometry get their wheel speed from the fitted speed model.
+over the interval from the recorded commands and the ICP ground speed of the interval and
+minimise the yaw change error, so the steering gain is path curvature per steering command,
+which is what the planner needs against walls. (Driven by wheel speed the gain came out 0.77
+instead of 0.94, because the wheels over-read ground speed by up to 25 percent at full lock and
+the gain absorbed that ratio, which made the planner's minimum radius 0.91 m instead of 0.74 m.)
+The warm up of the steering lag still uses the wheel speed. Bags with no odometry get their
+wheel speed from the fitted speed model.
+
+Acceleration limit: the launch from rest has a dead zone the model does not have (the wheels do
+not turn below a command of about 0.2 m/s), which pulls the fitted limit down to a value that
+describes the dead zone, not the car. The fitted limit is kept only if it fits the rolling
+windows better than the start value (see `rolling`).
 
 Every parameter has physical bounds. A parameter within 0.5 percent of a bound, or one the data
 cannot move (a zero sensitivity), is flagged in the result.
@@ -69,6 +79,7 @@ class FitResult:
     sides_tied: bool = False
     alternative: Nominal | None = None  # the fit with the other tying choice, for the record
     yaw_cv_rmse_rad: dict[str, float] = field(default_factory=dict)
+    accel_rule: dict[str, object] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)
 
 
@@ -124,10 +135,21 @@ def speed_rmse(windows: SpeedWindows, p: Nominal, vehicle: Vehicle) -> float:
     return float(np.sqrt(np.mean(_speed_residual(windows, vehicle)(p) ** 2)))
 
 
-def yaw_rmse(data, p: Nominal, vehicle: Vehicle) -> float:
+def yaw_rmse(data, p: Nominal, vehicle: Vehicle, speed: str = "ground") -> float:
     if len(data) == 0:
         return float("nan")
-    return float(np.sqrt(np.mean((predict_yaw_change(p, vehicle, data) - data.dyaw_rad) ** 2)))
+    pred = predict_yaw_change(p, vehicle, data, speed=speed)
+    return float(np.sqrt(np.mean((pred - data.dyaw_rad) ** 2)))
+
+
+ROLLING_MPS = 0.15  # a window is rolling when the car and every command are at least this fast
+
+
+def rolling(windows: SpeedWindows) -> SpeedWindows:
+    """The windows that start moving and are commanded at least ROLLING_MPS throughout, so the
+    launch dead zone (wheels still while the command ramps from 0) is not in them."""
+    keep = (windows.v_mps[:, 0] >= ROLLING_MPS) & (windows.cmds[:, :, 0] >= ROLLING_MPS).all(axis=1)
+    return SpeedWindows(windows.v_mps[keep], windows.cmds[keep])
 
 
 MIN_VAL_WINDOWS = 150  # fewer validation windows than this and the delay is cross-validated
@@ -136,7 +158,7 @@ CV_FOLDS = 4
 
 def _fit_speed_at(
     windows: SpeedWindows, vehicle: Vehicle, start: Nominal, delay_s: float
-) -> tuple[Nominal, dict[str, str]]:
+) -> tuple[Nominal, dict[str, str], dict[str, object]]:
     # Starts for the rate limits: a clip that is not active has no gradient, so start with tight,
     # the placeholder and loose limits and keep the best.
     starts = [
@@ -151,7 +173,22 @@ def _fit_speed_at(
         flags,
         [s.replace(command_delay_s=delay_s) for s in starts],
     )
-    return p, flags
+    r = rolling(windows)
+    kept = p.replace(accel_max_mps2=start.accel_max_mps2)
+    rule: dict[str, object] = {
+        "rolling_windows": len(r),
+        "rmse_fitted": speed_rmse(r, p, vehicle),
+        "rmse_start": speed_rmse(r, kept, vehicle),
+        "kept_start": False,
+        "fitted_value": p.accel_max_mps2,
+    }
+    if len(r) >= MIN_VAL_WINDOWS and rule["rmse_start"] <= rule["rmse_fitted"]:
+        p = kept
+        rule["kept_start"] = True
+        flags["accel_max_mps2"] = (
+            "not supported while rolling (launch windows only), kept at its start"
+        )
+    return p, flags, rule
 
 
 def fit_speed(
@@ -160,13 +197,13 @@ def fit_speed(
     vehicle: Vehicle,
     start: Nominal = PLACEHOLDER_NOMINAL,
     delays: Sequence[float] = DELAY_GRID_S,
-) -> tuple[Nominal, dict[float, float], dict[str, str], str]:
+) -> tuple[Nominal, dict[float, float], dict[str, str], str, dict[str, object]]:
     """Speed parameters and the command delay, the best over the delay grid on validation.
 
     When the validation split holds fewer than MIN_VAL_WINDOWS speed windows (the 2026-11-11 bag
     has no driving in its validation tenth), the delay is chosen by blocked cross-validation over
     the training segments instead (segments dealt into CV_FOLDS groups). The fourth return value
-    says which was used."""
+    says which was used, the fifth is the accel rule record (see `rolling`)."""
     odom_train = [s for s in train if s.run.has_odom]
     use_val = len(speed_windows(val, delays[0])) >= MIN_VAL_WINDOWS
     k = min(CV_FOLDS, len(odom_train))
@@ -174,20 +211,20 @@ def fit_speed(
     curve: dict[float, float] = {}
     for d in delays:
         if use_val:
-            p, _ = _fit_speed_at(speed_windows(train, d), vehicle, start, d)
+            p, _, _ = _fit_speed_at(speed_windows(train, d), vehicle, start, d)
             curve[d] = speed_rmse(speed_windows(val, d), p, vehicle)
         elif folds:
             errors = []
             for j, held in enumerate(folds):
                 rest = [s for i, f in enumerate(folds) if i != j for s in f]
-                p, _ = _fit_speed_at(speed_windows(rest, d), vehicle, start, d)
+                p, _, _ = _fit_speed_at(speed_windows(rest, d), vehicle, start, d)
                 errors.append(speed_rmse(speed_windows(held, d), p, vehicle))
             curve[d] = float(np.mean(errors))
         else:  # nothing to validate on: the training error is all there is
-            p, _ = _fit_speed_at(speed_windows(train, d), vehicle, start, d)
+            p, _, _ = _fit_speed_at(speed_windows(train, d), vehicle, start, d)
             curve[d] = speed_rmse(speed_windows(train, d), p, vehicle)
     best_delay = min(delays, key=lambda d: np.inf if np.isnan(curve[d]) else curve[d])
-    p, flags = _fit_speed_at(speed_windows(train, best_delay), vehicle, start, best_delay)
+    p, flags, rule = _fit_speed_at(speed_windows(train, best_delay), vehicle, start, best_delay)
     how = (
         "validation split"
         if use_val
@@ -195,7 +232,7 @@ def fit_speed(
         if folds
         else "training error (no validation data)"
     )
-    return p, curve, flags, how
+    return p, curve, flags, how, rule
 
 
 MIN_SIDE_INTERVALS = 300  # fewer turning intervals than this on a side and the gains are tied
@@ -220,7 +257,7 @@ def fit_yaw(
 
     def fn(p: Nominal) -> np.ndarray:
         p = tie_sides(p) if tied else p
-        return predict_yaw_change(p, vehicle, data) - data.dyaw_rad
+        return predict_yaw_change(p, vehicle, data, speed="ground") - data.dyaw_rad
 
     if not tied:
         return _fit_params(YAW_PARAMS, nominal, fn, flags), flags
@@ -287,7 +324,7 @@ def fit_nominal(
     """The whole fit: speed channel and delay (odometry bags), then the yaw channel. `yaw_training`
     is "all", "odom_only" or "auto" (choose_yaw_training)."""
     train, val = by_split(segments, "train"), by_split(segments, "val")
-    speed_nominal, curve, flags, how = fit_speed(train, val, vehicle, start, delays)
+    speed_nominal, curve, flags, how, accel_rule = fit_speed(train, val, vehicle, start, delays)
     wheel = wheel_speeds_for([*train, *val], speed_nominal, vehicle)
     cv: dict[str, float] = {}
     mode = yaw_training
@@ -322,6 +359,7 @@ def fit_nominal(
         sides_tied=tied,
         alternative=alternative,
         yaw_cv_rmse_rad=cv,
+        accel_rule=accel_rule,
         counts={
             "speed_windows_train": len(speed_windows(train, delay)),
             "speed_windows_val": len(w_val),

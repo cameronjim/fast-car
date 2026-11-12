@@ -1,0 +1,414 @@
+{
+  "heldout_windows": 747,
+  "heldout_horizons_s": [
+    0.5,
+    1.0,
+    1.5
+  ],
+  "heldout_errors": {
+    "placeholder_nominal": {
+      "0.5": {
+        "speed_rmse_mps": 0.04506355814893984,
+        "yaw_rmse_rad": 0.06837383733187005,
+        "pos_rmse_m": 0.04708619695638186
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.04754389670477858,
+        "yaw_rmse_rad": 0.14503774624977225,
+        "pos_rmse_m": 0.10115772647817298
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.051875359368582535,
+        "yaw_rmse_rad": 0.22310410335097317,
+        "pos_rmse_m": 0.15727468643253653
+      }
+    },
+    "fitted_nominal": {
+      "0.5": {
+        "speed_rmse_mps": 0.028957467011746594,
+        "yaw_rmse_rad": 0.049416400275583486,
+        "pos_rmse_m": 0.038995317962603734
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.027139098806106293,
+        "yaw_rmse_rad": 0.09805554470316696,
+        "pos_rmse_m": 0.07789234626945495
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.03985284808010102,
+        "yaw_rmse_rad": 0.14601136247573307,
+        "pos_rmse_m": 0.11771175830888123
+      }
+    },
+    "fitted_nominal_other_side_tying": {
+      "0.5": {
+        "speed_rmse_mps": 0.028957467011746594,
+        "yaw_rmse_rad": 0.07085785709935877,
+        "pos_rmse_m": 0.03901982252726906
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.027139098806106293,
+        "yaw_rmse_rad": 0.1407141734048782,
+        "pos_rmse_m": 0.07890775647435587
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.03985284808010102,
+        "yaw_rmse_rad": 0.20910537091715836,
+        "pos_rmse_m": 0.12170184894457843
+      }
+    },
+    "fitted_plus_residual_seed0": {
+      "0.5": {
+        "speed_rmse_mps": 0.030402159654242655,
+        "yaw_rmse_rad": 0.07399951378616156,
+        "pos_rmse_m": 0.04154692279626832
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.02740463907261058,
+        "yaw_rmse_rad": 0.1471966872601251,
+        "pos_rmse_m": 0.08473656413887058
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.030925918023991004,
+        "yaw_rmse_rad": 0.21868613445174642,
+        "pos_rmse_m": 0.1313899749596845
+      }
+    },
+    "fitted_plus_residual_seed1": {
+      "0.5": {
+        "speed_rmse_mps": 0.04307296857553987,
+        "yaw_rmse_rad": 0.07129607638954427,
+        "pos_rmse_m": 0.049828166938414374
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.04233945653685,
+        "yaw_rmse_rad": 0.14276508332349966,
+        "pos_rmse_m": 0.10252542218640676
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.04664558242223959,
+        "yaw_rmse_rad": 0.2131280361972654,
+        "pos_rmse_m": 0.1575327725650632
+      }
+    },
+    "fitted_plus_residual_seed2": {
+      "0.5": {
+        "speed_rmse_mps": 0.029862975571072297,
+        "yaw_rmse_rad": 0.04824463599736459,
+        "pos_rmse_m": 0.036655951472643285
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.02596378816258517,
+        "yaw_rmse_rad": 0.09024205707655485,
+        "pos_rmse_m": 0.07254748145260781
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.030655695760336485,
+        "yaw_rmse_rad": 0.12736391814408704,
+        "pos_rmse_m": 0.10996790266685706
+      }
+    }
+  },
+  "heldout_errors_per_bag": {
+    "2026-11-11T03-54-11_car_teleop_cw": {
+      "placeholder_nominal": {
+        "0.5": {
+          "speed_rmse_mps": 0.043574517286682116,
+          "yaw_rmse_rad": 0.07069297346905815,
+          "pos_rmse_m": 0.04124605050144047
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.046531359788621225,
+          "yaw_rmse_rad": 0.14247896377782968,
+          "pos_rmse_m": 0.08766087866249757
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.04984645253377892,
+          "yaw_rmse_rad": 0.21251934539893017,
+          "pos_rmse_m": 0.13386882943908285
+        }
+      },
+      "fitted_nominal": {
+        "0.5": {
+          "speed_rmse_mps": 0.031804270190239355,
+          "yaw_rmse_rad": 0.04284344266629413,
+          "pos_rmse_m": 0.03296153580353103
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.034572719251473434,
+          "yaw_rmse_rad": 0.0820178197020155,
+          "pos_rmse_m": 0.06382248456383297
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.02836439738440648,
+          "yaw_rmse_rad": 0.12035664972154585,
+          "pos_rmse_m": 0.0939485651268267
+        }
+      },
+      "fitted_nominal_other_side_tying": {
+        "0.5": {
+          "speed_rmse_mps": 0.031804270190239355,
+          "yaw_rmse_rad": 0.05129006614817238,
+          "pos_rmse_m": 0.03300001541683147
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.034572719251473434,
+          "yaw_rmse_rad": 0.0998150229252287,
+          "pos_rmse_m": 0.06428372834853359
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.02836439738440648,
+          "yaw_rmse_rad": 0.14721324730884133,
+          "pos_rmse_m": 0.09563534982130609
+        }
+      }
+    },
+    "2026-11-11T04-20-19_car_teleop_v3": {
+      "placeholder_nominal": {
+        "0.5": {
+          "speed_rmse_mps": 0.04546097157742715,
+          "yaw_rmse_rad": 0.06772793352562982,
+          "pos_rmse_m": 0.048556387406266804
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.04781616785260824,
+          "yaw_rmse_rad": 0.14572740774654436,
+          "pos_rmse_m": 0.10453479991733054
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.05241476427391484,
+          "yaw_rmse_rad": 0.22590321769198532,
+          "pos_rmse_m": 0.1630728722887107
+        }
+      },
+      "fitted_nominal": {
+        "0.5": {
+          "speed_rmse_mps": 0.028131587572005963,
+          "yaw_rmse_rad": 0.05106147258204451,
+          "pos_rmse_m": 0.040484294765051033
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.02472832812371293,
+          "yaw_rmse_rad": 0.10199053865952624,
+          "pos_rmse_m": 0.08130622313116026
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.04244840801477708,
+          "yaw_rmse_rad": 0.15225625547775862,
+          "pos_rmse_m": 0.12339782133907044
+        }
+      },
+      "fitted_nominal_other_side_tying": {
+        "0.5": {
+          "speed_rmse_mps": 0.028131587572005963,
+          "yaw_rmse_rad": 0.07531486530205898,
+          "pos_rmse_m": 0.04050579091021282
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.02472832812371293,
+          "yaw_rmse_rad": 0.1499396318257158,
+          "pos_rmse_m": 0.08244519717038996
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.04244840801477708,
+          "yaw_rmse_rad": 0.2230161013279767,
+          "pos_rmse_m": 0.12788871190639528
+        }
+      }
+    }
+  },
+  "heldout_fitted_nominal_with_exported_limits": {
+    "0.5": {
+      "speed_rmse_mps": 0.028957467011746594,
+      "yaw_rmse_rad": 0.04819815173408199,
+      "pos_rmse_m": 0.038989766875662184
+    },
+    "1.0": {
+      "speed_rmse_mps": 0.027139098806106293,
+      "yaw_rmse_rad": 0.09566260282833697,
+      "pos_rmse_m": 0.07785221054863926
+    },
+    "1.5": {
+      "speed_rmse_mps": 0.03985284808010102,
+      "yaw_rmse_rad": 0.14248149040464017,
+      "pos_rmse_m": 0.11759118513129654
+    }
+  },
+  "heldout_zero_yaw_baseline_rad": {
+    "0.5": 0.16733880175288213,
+    "1.0": 0.3367296759550297,
+    "1.5": 0.5082051988395037
+  },
+  "heldout_yaw_rmse_per_interval_rad": {
+    "ground_driven": 0.004307808276627516,
+    "wheel_driven": 0.010195317026352702
+  },
+  "planner_min_radius_m": {
+    "left": 0.7370051357533802,
+    "right": 0.7370051357533802,
+    "kinematic_at_limit": 0.6853148709094529
+  },
+  "residual_improvement_1s_per_seed": {
+    "0": {
+      "speed": -0.00978441724986605,
+      "yaw": -0.5011561835255504
+    },
+    "1": {
+      "speed": -0.5600907325383858,
+      "yaw": -0.45596135084127154
+    },
+    "2": {
+      "speed": 0.043306914939146006,
+      "yaw": 0.07968430189506417
+    }
+  },
+  "residual_median_improvement_1s": {
+    "speed": -0.00978441724986605,
+    "yaw": -0.45596135084127154
+  },
+  "residual_enabled": false,
+  "residual_shipped_seed": 0,
+  "residual_samples": {
+    "train": 1398,
+    "early_stopping": 350,
+    "early_stopping_from": "last 20% of the training samples (validation split too small)"
+  },
+  "fit": {
+    "flags": {
+      "speed_tau_s": "on a bound",
+      "accel_max_mps2": "not supported while rolling (launch windows only), kept at its start",
+      "steer_tau_s": "on a bound",
+      "understeer_s2_per_m2": "on a bound",
+      "steer_gain_right": "tied to steer_gain_left: only 83 training intervals on one side (rule: fewer than 300)",
+      "steer_offset_rad": "fixed at 0 (one sided training data cannot separate it)",
+      "command_delay_s": "on the edge of the delay grid"
+    },
+    "speed_val_rmse_mps": null,
+    "yaw_val_rmse_rad": 0.006168269244542448,
+    "delay_selection": "4-fold cross-validation over training segments",
+    "yaw_target": "path_curvature_ground_speed",
+    "accel_rule": {
+      "rolling_windows": 650,
+      "rmse_fitted": 0.024388697512378734,
+      "rmse_start": 0.02371096689245611,
+      "kept_start": true,
+      "fitted_value": 0.29874750919977694
+    },
+    "yaw_training": "odom_only",
+    "sides_tied": true,
+    "yaw_cv_rmse_rad": {
+      "odom_only": 0.004039586184533278,
+      "all": 0.00418582128173799
+    },
+    "delay_curve_speed_val_rmse": {
+      "0.0": 0.04312866319918933,
+      "0.02": 0.04342474253291187,
+      "0.04": 0.04429196888582128,
+      "0.06": 0.04495861253348441,
+      "0.08": 0.04544077291181602,
+      "0.1": 0.04582894266414699,
+      "0.12": 0.04635702987243974,
+      "0.14": 0.04675168265166629,
+      "0.16": 0.04739926465574461,
+      "0.18": 0.04824824180454361,
+      "0.2": 0.04864101867637256,
+      "0.22": 0.05818899898800106,
+      "0.24": 0.05088846002344875,
+      "0.26": 0.051814818249088374,
+      "0.28": 0.05331443647799807,
+      "0.3": 0.0540771985419033
+    },
+    "counts": {
+      "speed_windows_train": 696,
+      "speed_windows_val": 0,
+      "yaw_intervals_train": 1748,
+      "yaw_intervals_val": 634,
+      "yaw_left_train": 1629,
+      "yaw_right_train": 83
+    }
+  },
+  "ground_speed_over_wheel_speed_by_steering": [
+    {
+      "steer_lo_rad": 0.0,
+      "steer_hi_rad": 0.05,
+      "n": 217,
+      "median_ratio": 0.9378156098912174,
+      "p25": 0.9153352822574129,
+      "p75": 0.9625552289013093
+    },
+    {
+      "steer_lo_rad": 0.05,
+      "steer_hi_rad": 0.1,
+      "n": 316,
+      "median_ratio": 0.9259369078083163,
+      "p25": 0.8959090089834211,
+      "p75": 0.9481583918171835
+    },
+    {
+      "steer_lo_rad": 0.1,
+      "steer_hi_rad": 0.2,
+      "n": 695,
+      "median_ratio": 0.9024924570633538,
+      "p25": 0.862366512011162,
+      "p75": 0.9382016141985081
+    },
+    {
+      "steer_lo_rad": 0.2,
+      "steer_hi_rad": 0.3,
+      "n": 398,
+      "median_ratio": 0.8723818698111263,
+      "p25": 0.8297310590351102,
+      "p75": 0.9173247645330657
+    },
+    {
+      "steer_lo_rad": 0.3,
+      "steer_hi_rad": 0.4,
+      "n": 388,
+      "median_ratio": 0.8380146095966675,
+      "p25": 0.7982674463780876,
+      "p75": 0.9002656636681166
+    },
+    {
+      "steer_lo_rad": 0.4,
+      "steer_hi_rad": 0.55,
+      "n": 2550,
+      "median_ratio": 0.799041101820745,
+      "p25": 0.7349864230530507,
+      "p75": 0.8559241680075111
+    }
+  ],
+  "seconds_by_bag": {
+    "2026-10-24T23-13-18_car_teleop": {
+      "train": 343.6,
+      "val": 62.9,
+      "heldout": 39.7
+    },
+    "2026-10-25T19-27-08_car_teleop": {
+      "train": 60.6,
+      "val": 3.3,
+      "heldout": 0.0
+    },
+    "2026-11-11T03-54-11_car_teleop_cw": {
+      "train": 189.3,
+      "val": 0.0,
+      "heldout": 60.0
+    },
+    "2026-11-11T04-20-19_car_teleop_v3": {
+      "train": 0.0,
+      "val": 0.0,
+      "heldout": 247.4
+    }
+  },
+  "driving_seconds": {
+    "train": 593.5394339561462,
+    "val": 66.2599368095398,
+    "heldout": 347.05966901779175
+  },
+  "held_out_bag": "2026-11-11T04-20-19_car_teleop_v3",
+  "train_segments": 44,
+  "dropped_nested_bags": [
+    "2026-11-11T03-54-11_car_teleop",
+    "2026-11-11T04-20-19_car_teleop",
+    "2026-11-11T04-20-19_car_teleop_latest"
+  ]
+}

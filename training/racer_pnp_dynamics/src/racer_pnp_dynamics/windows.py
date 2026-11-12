@@ -135,6 +135,7 @@ class YawData:
     v_mps: np.ndarray  # (I, WARM_N + INTERVAL_N) wheel speed at each step start
     v_end_mps: np.ndarray  # (I,) wheel speed at the interval end
     dyaw_rad: np.ndarray  # (I,) ICP yaw change
+    ground_mps: np.ndarray  # (I,) ICP ground speed of the interval
     t_s: np.ndarray  # (I,) scan stamp of the interval start
     scan_index: np.ndarray  # (I,) index of the interval in its motion series
     run_name: np.ndarray  # (I,) str
@@ -152,7 +153,7 @@ def yaw_data(
     """Good ICP intervals inside the segments (with warm up history available) while moving."""
     n = WARM_N + INTERVAL_N
     offsets = (np.arange(n) - WARM_N) * DT_S
-    cmds, vs, ve, dy, ts, si, names = [], [], [], [], [], [], []
+    cmds, vs, ve, dy, gs, ts, si, names = [], [], [], [], [], [], [], []
     for seg in segments:
         m = seg.motion
         if m is None:
@@ -176,19 +177,21 @@ def yaw_data(
         vs.append(v[ok])
         ve.append(v_end[ok])
         dy.append(m.dyaw_rad[pick])
+        gs.append(np.hypot(m.dx_m[pick], m.dy_m[pick]) / m.dt_s[pick])
         ts.append(m.t_s[pick])
         si.append(pick)
         names.extend([seg.run.name] * len(pick))
     if not cmds:
         return YawData(
             np.zeros((0, n, 2)), np.zeros((0, n)), np.zeros(0), np.zeros(0), np.zeros(0),
-            np.zeros(0, dtype=int), np.array([], dtype=str),
+            np.zeros(0), np.zeros(0, dtype=int), np.array([], dtype=str),
         )  # fmt: skip
     return YawData(
         np.concatenate(cmds),
         np.concatenate(vs),
         np.concatenate(ve),
         np.concatenate(dy),
+        np.concatenate(gs),
         np.concatenate(ts),
         np.concatenate(si),
         np.array(names),
@@ -219,10 +222,16 @@ def predict_yaw_change(
     vehicle: Vehicle,
     data: YawData,
     residual: Residual | None = None,
+    speed: str = "ground",
 ) -> np.ndarray:
-    """Model yaw change over each interval with the measured wheel speed driving the model."""
+    """Model yaw change over each interval. `speed` is the speed that drives the interval steps:
+    "ground" (the ICP ground speed of the interval, so the steering gain is path geometry) or
+    "wheel" (the measured wheel speed at each step, what the planner's model does at run time).
+    The warm up always uses the wheel speed."""
+    if speed not in ("ground", "wheel"):
+        raise ValueError(f"speed must be 'ground' or 'wheel', got {speed!r}")
     state = warm_state(params, vehicle, data.cmds, data.v_mps, residual)
     for k in range(WARM_N, WARM_N + INTERVAL_N):
-        state[:, 3] = data.v_mps[:, k]
+        state[:, 3] = data.ground_mps if speed == "ground" else data.v_mps[:, k]
         state = step(state, data.cmds[:, k, :], params, vehicle, residual)
     return state[:, 2]

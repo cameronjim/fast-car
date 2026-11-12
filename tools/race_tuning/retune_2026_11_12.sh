@@ -30,12 +30,14 @@ refs=(
   "ref16|1.6|"
   "ref208|2.08|"
 )
-declare -A extra=(
-  [A]=', "free_path_on_published_steering": true'
-  [B]=', "free_path_on_published_steering": true, "stopping_margin_m": 0.2'
-  [C]=', "free_path_on_published_steering": true, "stopping_margin_m": 0.2, "lane_lookahead_m": 0.8'
-  [D]=', "free_path_on_published_steering": true, "stopping_margin_m": 0.2, "a_lat_max_mps2": 1.0'
-)
+extra() { # candidate letter -> the extra params
+  case "$1" in
+    A) printf ', "free_path_on_published_steering": true' ;;
+    B) printf ', "free_path_on_published_steering": true, "stopping_margin_m": 0.2' ;;
+    C) printf ', "free_path_on_published_steering": true, "stopping_margin_m": 0.2, "lane_lookahead_m": 0.8' ;;
+    D) printf ', "free_path_on_published_steering": true, "stopping_margin_m": 0.2, "a_lat_max_mps2": 1.0' ;;
+  esac
+}
 
 args=()
 if [ "$MODE" = tuning ]; then
@@ -45,7 +47,7 @@ if [ "$MODE" = tuning ]; then
   done
   for k in A B C D; do
     for v in 1.0 1.3 1.6; do
-      args+=(--variant "$(variant "${k}_v${v}" "$v" "${extra[$k]}")")
+      args+=(--variant "$(variant "${k}_v${v}" "$v" "$(extra "$k")")")
     done
   done
   exec tools/race_tune_docker.sh evaluate --family wide --tuning-tracks --rule gate \
@@ -58,7 +60,7 @@ if [ "$MODE" = heldout ]; then
   v="${winner##*_v}"
   args+=(--variant "$(variant "ref10" 1.0 "")")
   args+=(--variant "$(variant "ref16" 1.6 "")")
-  args+=(--variant "$(variant "$winner" "$v" "${extra[$k]}")")
+  args+=(--variant "$(variant "$winner" "$v" "$(extra "$k")")")
   exec tools/race_tune_docker.sh evaluate --family wide --rule gate --repeats 3 \
     --out "$OUT_ROOT/heldout" --laps 3 --jobs "$JOBS" "${args[@]}"
 fi

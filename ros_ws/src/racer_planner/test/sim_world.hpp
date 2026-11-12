@@ -298,6 +298,7 @@ struct SimResult {
   int ticks_driving = 0, ticks_no_track = 0, ticks_blocked = 0, ticks_no_scan = 0, ticks_other = 0;
   int ticks_no_track_conf = 0;  // driving with track confidence 0
   int max_consecutive_blocked = 0;
+  int ticks_recovering = 0;
   double max_solve_s = 0.0;
 };
 
@@ -337,6 +338,8 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
   DynamicsParams plant_params = setup.planner_dynamics;
   plant_params.nominal.speed_tau_s *= setup.plant_speed_lag_factor;
   plant_params.nominal.steer_tau_s += setup.plant_extra_steer_tau_s;
+  plant_params.nominal.speed_deadband_mps =
+      std::max(plant_params.nominal.speed_deadband_mps, setup.plant_dead_zone_mps);
   const DynamicsModel plant(plant_params, g, tick);
   const int delay_ticks =
       static_cast<int>(std::lround(plant_params.nominal.command_delay_s / tick));
@@ -374,6 +377,7 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
   car.yaw = setup.start_yaw;
 
   SimResult run;
+  double last_cmd_speed = 0.0;
   int blocked_run = 0;
   double speed_sum = 0.0;
   int speed_n = 0;
@@ -445,10 +449,15 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
     in.wheel_speed_mps = car.v;
     in.has_scan = has_scan;
     in.scan_stamp_s = scan_stamp;
+    in.has_gated = true;  // the sim has no safety node: the gated /drive passes what was published
+    in.gated_stamp_s = t;
+    in.gated_speed_mps = last_cmd_speed;
     in.field = has_scan ? &field : nullptr;
     in.freespace = has_scan ? &freespace : nullptr;
     in.track = has_track ? &track : nullptr;
     const TickOutput out = planner.tick(in);
+    last_cmd_speed = out.cmd.speed_mps;
+    if (out.state == PlannerState::Recovering) ++run.ticks_recovering;
     run.max_solve_s = std::max(run.max_solve_s, out.solve_time_s);
     run.final_state = out.state;
     switch (out.state) {
@@ -479,9 +488,31 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
     fifo.push_back(Control{out.cmd.speed_mps, out.cmd.steering_rad});
     Control acting = delay_ticks > 0 ? fifo.front() : fifo.back();
     if (delay_ticks > 0) fifo.pop_front();
-    if (acting.speed_cmd < setup.plant_dead_zone_mps) acting.speed_cmd = 0.0;
     const State prev = car;
-    car = plant.step(car, acting);
+    if (car.v < 0.0 || acting.speed_cmd < 0.0) {
+      // Reverse: the model has no reverse, so a first order speed toward the command (the same
+      // dead zone and lag), steering from the model, rear axle kinematics.
+      const double dz = plant_params.nominal.speed_deadband_mps;
+      const double target = std::fabs(acting.speed_cmd) < dz
+                                ? 0.0
+                                : plant_params.nominal.speed_gain * acting.speed_cmd;
+      const double a_v = 1.0 - std::exp(-tick / plant_params.nominal.speed_tau_s);
+      State steer_only = car;
+      steer_only.v = 0.0;
+      steer_only = plant.step(steer_only, Control{0.0, acting.steering_cmd});
+      const double dv =
+          std::min(std::max(a_v * (target - car.v), -plant_params.nominal.decel_max_mps2 * tick),
+                   plant_params.nominal.accel_max_mps2 * tick);
+      const double v = std::min(car.v + dv, 0.0);
+      const double yaw_rate = v * std::tan(car.delta) / g.wheelbase_m;
+      car.x += v * std::cos(car.yaw) * tick;
+      car.y += v * std::sin(car.yaw) * tick;
+      car.yaw += yaw_rate * tick;
+      car.v = v;
+      car.delta = steer_only.delta;
+    } else {
+      car = plant.step(car, acting);
+    }
     run.distance_m += std::hypot(car.x - prev.x, car.y - prev.y);
 
     run.min_body_clearance_m =

@@ -152,14 +152,49 @@ class MppiPlannerNode : public rclcpp::Node {
     mp.w_du = declare_double("w_du", mp.w_du, 0.0, 1e4, "Speed command change weight.");
     mp.w_steer_rate = declare_double("w_steer_rate", mp.w_steer_rate, 0.0, 1e4,
                                      "Steering command rate weight (rad/s squared).");
+    mp.speed_floor_margin_mps =
+        declare_double("speed_floor_margin_mps", mp.speed_floor_margin_mps, 0.0, 0.5,
+                       "Margin above the bundle's speed dead zone: commands are 0 or at least "
+                       "dead zone + margin (m/s).");
     mp.corner_radius_m = declare_double("corner_radius_m", mp.corner_radius_m, 0.005, 0.2,
                                         "Radius of the footprint corner circles (m).");
     lg.steer_output_tau_s = declare_double("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5,
                                            "Steering output low-pass time constant (s), 0 is off.");
+    lg.steer_output_hysteresis_rad = declare_double(
+        "steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02,
+        "The steering output holds until the target is this far from it (rad), 0 is off.");
     lg.rate_limit_fraction =
         declare_double("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0,
                        "Share of the steering rate and acceleration limits the output may use.");
     mp.w_term = declare_double("w_term", mp.w_term, 0.0, 1e5, "Stop within sight weight.");
+    cfg.drivability.stall_hold_s = declare_double(
+        "stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0,
+        "Wheel speed under 0.03 m/s while a speed at least the floor is published for this long: "
+        "nothing drivable, reason 3 (s). Open loop replays set it high.");
+    cfg.drivability.gate_hold_s =
+        declare_double("gate_hold_s", cfg.drivability.gate_hold_s, 0.2, 600.0,
+                       "Gated /drive speed 0 for this long while a positive speed is published: "
+                       "nothing drivable, reason 4 (s).");
+    RecoveryParams& rc = cfg.recovery;
+    rc.recover_distance_m = declare_double("recover_distance_m", rc.recover_distance_m, 0.1, 1.0,
+                                           "Length of the planned reverse arc (m).");
+    rc.recover_speed_mps = declare_double("recover_speed_mps", rc.recover_speed_mps, 0.1, 0.6,
+                                          "Reverse speed (m/s), at least the speed floor.");
+    rc.recover_margin_m = declare_double("recover_margin_m", rc.recover_margin_m, 0.0, 0.3,
+                                         "Clearance added to d_hard_m for the reverse arc (m).");
+    rc.recover_max_s = declare_double("recover_max_s", rc.recover_max_s, 0.5, 10.0,
+                                      "A recovery ends after this long (s).");
+    rc.recover_retry_s =
+        declare_double("recover_retry_s", rc.recover_retry_s, 0.5, 30.0,
+                       "Wait before planning again after a failed plan or abort (s).");
+    rc.recover_gate_debounce_s =
+        declare_double("recover_gate_debounce_s", rc.recover_gate_debounce_s, 0.02, 1.0,
+                       "Gated /drive speed not negative for this long: abort (s).");
+    rc.recover_progress_m = declare_double("recover_progress_m", rc.recover_progress_m, 0.1, 5.0,
+                                           "Forward distance that resets the attempt count (m).");
+    rc.recover_max_attempts =
+        static_cast<int>(declare_int("recover_max_attempts", rc.recover_max_attempts, 1, 20,
+                                     "Recoveries before BLOCKED with reason 5."));
     cfg.budget.halve_over_s =
         declare_double("solve_halve_over_ms", 15.0, 1.0, 200.0,
                        "A solve slower than this halves the sample count (ms).") *
@@ -234,6 +269,11 @@ class MppiPlannerNode : public rclcpp::Node {
         std::bind(&MppiPlannerNode::on_track, this, std::placeholders::_1), command_opts);
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
         "/odom/wheel", scan_qos, std::bind(&MppiPlannerNode::on_odom, this, std::placeholders::_1),
+        command_opts);
+    // The gated command, read only (never published here: invariant 1), the QoS gap_follow_node
+    // uses for it. Recovery watches it to see whether the safety node's rear gate passes a reverse.
+    gated_sub_ = create_subscription<AckermannMsg>(
+        "/drive", reliable_10, std::bind(&MppiPlannerNode::on_gated, this, std::placeholders::_1),
         command_opts);
     guidance_sub_ = create_subscription<racer_pnp_msgs::msg::LapGuidance>(
         "/pnp/lap/guidance", reliable_1,
@@ -350,9 +390,28 @@ class MppiPlannerNode : public rclcpp::Node {
     has_guidance_ = true;
   }
 
+  void on_gated(const AckermannMsg::SharedPtr msg) {
+    if (!std::isfinite(msg->drive.speed)) return;
+    gated_speed_mps_ = msg->drive.speed;
+    gated_stamp_s_ = now().seconds();
+    has_gated_ = true;
+  }
+
   void on_timer() {
     TickInput in;
     in.now_s = now().seconds();
+    if (last_tick_s_ > 0.0 && in.now_s - last_tick_s_ > 0.040) ++tick_gaps_;
+    last_tick_s_ = in.now_s;
+    if (in.now_s - gap_log_s_ >= 10.0) {
+      if (gap_log_s_ > 0.0) {
+        RCLCPP_INFO(get_logger(), "tick gaps over 40 ms in the last 10 s: %u", tick_gaps_);
+      }
+      tick_gaps_ = 0;
+      gap_log_s_ = in.now_s;
+    }
+    in.has_gated = has_gated_;
+    in.gated_stamp_s = gated_stamp_s_;
+    in.gated_speed_mps = gated_speed_mps_;
     in.has_odom = has_odom_;
     in.odom_stamp_s = odom_stamp_s_;
     in.wheel_speed_mps = wheel_speed_mps_;
@@ -376,8 +435,11 @@ class MppiPlannerNode : public rclcpp::Node {
 
     AckermannMsg drive;
     drive.header.stamp = stamp;
-    drive.drive.speed =
-        float32_within(out.cmd.speed_mps, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps);
+    // Negative only while recovering, and then no further than the reverse speed.
+    const double reverse_limit =
+        out.state == PlannerState::Recovering ? planner_->reverse_speed_mps() : 0.0;
+    drive.drive.speed = float32_within(out.cmd.speed_mps, -reverse_limit,
+                                       VEHICLE_PARAMS.limits.global_speed_cap_mps);
     drive.drive.steering_angle = float32_within(out.cmd.steering_rad, geometry_.steering_min_rad,
                                                 geometry_.steering_max_rad);
     drive_pub_->publish(drive);
@@ -407,6 +469,7 @@ class MppiPlannerNode : public rclcpp::Node {
     status_.freespace_reach_m =
         out.has_freespace_goal ? static_cast<float>(out.freespace_reach_m) : nan;
     status_.block_reason = static_cast<uint8_t>(out.block_reason);
+    status_.recovery_attempts = static_cast<uint8_t>(std::min(out.recovery_attempts, 255));
     status_.perception_model_id = perception_model_id_;
     status_pub_->publish(status_);
 
@@ -465,6 +528,7 @@ class MppiPlannerNode : public rclcpp::Node {
   rclcpp::Subscription<racer_pnp_msgs::msg::LocalTrack>::SharedPtr track_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<racer_pnp_msgs::msg::LapGuidance>::SharedPtr guidance_sub_;
+  rclcpp::Subscription<AckermannMsg>::SharedPtr gated_sub_;
   rclcpp::Publisher<AckermannMsg>::SharedPtr drive_pub_;
   rclcpp::Publisher<PlannerStatusMsg>::SharedPtr status_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr plan_pub_;
@@ -489,6 +553,12 @@ class MppiPlannerNode : public rclcpp::Node {
   double guidance_v_cap_mps_ = 0.0;
   double guidance_stamp_s_ = 0.0;
   bool has_guidance_ = false;
+  double gated_speed_mps_ = 0.0;
+  double gated_stamp_s_ = 0.0;
+  bool has_gated_ = false;
+  double last_tick_s_ = 0.0;
+  double gap_log_s_ = 0.0;
+  uint32_t tick_gaps_ = 0;
   uint32_t cycle_ = 0;
   bool halved_logged_ = false;
   PlannerState last_state_ = PlannerState::Starting;

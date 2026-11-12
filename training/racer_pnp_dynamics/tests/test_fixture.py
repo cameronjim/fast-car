@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import yaml
 from racer_pnp_dynamics import export, make_nominal_fixture
-from racer_pnp_dynamics.model import PLACEHOLDER_NOMINAL
+from racer_pnp_dynamics.make_nominal_fixture import NOMINAL
 from racer_pnp_dynamics.vehicle import load_vehicle, repo_root
 
 FIXTURE = repo_root() / make_nominal_fixture.FIXTURE_RELATIVE
@@ -27,7 +27,8 @@ def test_fixture_is_a_valid_unfitted_bundle():
     m = bundle.manifest
     assert m["model_id"] == "dyn-nominal-v0" and m["kind"] == "dynamics"
     assert m["data"] == ["not fitted: nominal defaults for simulation and tests"]
-    assert bundle.nominal == PLACEHOLDER_NOMINAL
+    assert bundle.nominal == NOMINAL
+    assert bundle.nominal.speed_deadband_mps == 0.20
     assert not bundle.residual.enabled and bundle.v_max_mps == 1.0
     assert not bundle.residual.weights.w1.any()
 

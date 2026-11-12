@@ -13,7 +13,8 @@ Cases, each 3 laps at 0.6 m/s, car `params`, seed 11:
       (skipped, with the reason, when that fixture directory is absent)
 
 Pass criteria per case, never loosened to get green: 3 laps, 0 wall contacts, at most 3 safety
-brake engagements (/safety/events PHASE_ENGAGE with SEVERITY_BRAKE), the only publisher on
+brake engagements (/safety/events PHASE_ENGAGE with SEVERITY_BRAKE), no rate_limit event from
+safety_node (the planner's output rate limit stays inside it), the only publisher on
 /drive_raw is mppi_planner_node, the only publisher on /drive is safety_node, and no STATE_FAULT in
 /pnp/planner/status. Lap times and the brake count go to the test output. Skipped without a
 sourced ROS workspace.
@@ -119,13 +120,16 @@ def test_pnp_laps_the_track_through_the_real_command_path(
         print(
             f"\nl5_pnp {name} {'cw' if reverse else 'ccw'} {backend}: "
             f"laps {result['laps']} lap_times_s {result['lap_times_s']} "
-            f"safety_brakes {result['safety_brakes']} wall_contacts {result['wall_contacts']} "
+            f"safety_brakes {result['safety_brakes']} "
+            f"rate_limit_events {result['rate_limit_events']} "
+            f"wall_contacts {result['wall_contacts']} "
             f"min_clearance_m {result['min_body_clearance_m']} "
             f"planner_states {result['planner_states']}"
         )
     assert result["laps"] >= LAPS, result.get("stopped_because")
     assert result["wall_contacts"] == 0
     assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
+    assert result["rate_limit_events"] == 0, "safety_node rate-limited the planner's command"
     assert result["publisher_nodes"] == {
         "/drive_raw": ["mppi_planner_node"],
         "/drive": ["safety_node"],
@@ -138,7 +142,8 @@ def test_pnp_laps_the_track_through_the_real_command_path(
 # no steering lag. These run the same driver, perception and planner against a plant like the
 # car's: the dynamics bundle's actuation (gains, accel and decel limits), a 0.20 m/s speed dead
 # zone (a /drive speed under it leaves the car standing) and a 0.10 s steering lag. The planner's
-# model does not know about either of the last two, which is the situation on the car. Stadium
+# model knows the dead zone (the bundle's speed_deadband_mps, so its speed floor sits above it) and
+# not the steering lag, which is the situation on the car since planner v0.1. Stadium
 # with island radius 0.4 m and straight 2.0 m, lane 1.0 m and 1.3 m, both ways, geometric
 # backend, 0.5 m/s, and the scan-only fault case. Same pass criteria as above.
 #
@@ -149,7 +154,8 @@ def test_pnp_laps_the_track_through_the_real_command_path(
 #   lane 1.3 ccw  3 laps, 0 brakes, 0 contacts
 #   lane 1.3 cw   3 laps, 0 brakes, 0 contacts
 #   lane 1.3 ccw with --no-perception: 0 laps, planner_states NO_TRACK about 600 ticks (and NO_ODOM
-#                 at the start), stalled
+#                 at the start), stalled (v0). Since planner v0.1 the planner drives on the scan
+#                 alone and the case is an ordinary passing one.
 CAR_LIKE_V_MAX_MPS = 0.5
 CAR_LIKE_PLANT = [
     "--plant-bundle",
@@ -168,23 +174,12 @@ def stadium(lane_width_m: float) -> tuple[str, dict]:
     )
 
 
-V0_NO_PERCEPTION = (
-    "v0: without track_perception_node no track ever arrives, the planner stays in NO_TRACK and "
-    "the car never moves (measured: 0 laps, NO_TRACK about 600 ticks, stalled)"
-)
-
 CAR_LIKE_CASES = [
     pytest.param(stadium(1.0), False, True, id="car-like-stadium-lane1.0-ccw"),
     pytest.param(stadium(1.0), True, True, id="car-like-stadium-lane1.0-cw"),
     pytest.param(stadium(1.3), False, True, id="car-like-stadium-lane1.3-ccw"),
     pytest.param(stadium(1.3), True, True, id="car-like-stadium-lane1.3-cw"),
-    pytest.param(
-        stadium(1.3),
-        False,
-        False,
-        id="car-like-stadium-lane1.3-ccw-no-perception",
-        marks=pytest.mark.xfail(strict=True, reason=V0_NO_PERCEPTION),
-    ),
+    pytest.param(stadium(1.3), False, False, id="car-like-stadium-lane1.3-ccw-no-perception"),
 ]
 
 
@@ -239,13 +234,16 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
             f"\nl5_pnp car-like {name} lane {params['lane_width_m']} "
             f"{'cw' if reverse else 'ccw'}{'' if perception else ' no-perception'}: "
             f"laps {result['laps']} lap_times_s {result['lap_times_s']} "
-            f"safety_brakes {result['safety_brakes']} wall_contacts {result['wall_contacts']} "
+            f"safety_brakes {result['safety_brakes']} "
+            f"rate_limit_events {result['rate_limit_events']} "
+            f"wall_contacts {result['wall_contacts']} "
             f"min_clearance_m {result['min_body_clearance_m']} "
             f"planner_states {result['planner_states']}"
         )
     assert result["laps"] >= LAPS, result.get("stopped_because")
     assert result["wall_contacts"] == 0
     assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
+    assert result["rate_limit_events"] == 0, "safety_node rate-limited the planner's command"
     assert result["publisher_nodes"] == {
         "/drive_raw": ["mppi_planner_node"],
         "/drive": ["safety_node"],

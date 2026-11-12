@@ -14,6 +14,7 @@
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/mppi.hpp"
 #include "racer_planner/planner_logic.hpp"
+#include "racer_planner/recovery.hpp"
 #include "racer_planner/vehicle_geometry.hpp"
 
 namespace racer_planner {
@@ -22,6 +23,8 @@ struct PlannerConfig {
   LogicParams logic;
   MppiParams mppi;
   SampleBudgetParams budget;
+  RecoveryParams recovery;
+  DrivabilityParams drivability;
   int max_samples = 768;  // solver capacity, also the budget's upper bound
   double tick_s = 0.02;
 };
@@ -67,6 +70,7 @@ struct TickOutput {
   double freespace_goal_y_m = 0.0;
   double freespace_reach_m = 0.0;
   BlockReason block_reason = BlockReason::None;
+  int recovery_attempts = 0;
 };
 
 class Planner {
@@ -84,6 +88,8 @@ class Planner {
   bool plan_valid() const { return plan_valid_; }
   int horizon_steps() const { return horizon_; }
   int delay_ticks() const { return delay_ticks_; }
+  // The magnitude limit of a reverse command: max(recover_speed_mps, the speed floor).
+  double reverse_speed_mps() const { return recovery_.reverse_speed_mps(); }
   const PlannerConfig& config() const { return cfg_; }
   void set_v_max(double v_max_mps) { cfg_.logic.v_max_mps = v_max_mps; }
 
@@ -98,6 +104,8 @@ class Planner {
   MppiSolver solver_;
   SampleBudget budget_;
   DrivabilityMonitor drivability_;
+  Recovery recovery_;
+  bool recovery_was_active_ = false;
   TrackProjector projector_;
   double confidence_ = 0.0;
   int horizon_;

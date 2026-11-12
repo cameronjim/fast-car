@@ -95,6 +95,43 @@ def test_perception_metrics_with_nothing_are_nan_not_errors() -> None:
     assert math.isnan(m["clearance_deficit_p90_m"])
 
 
+def test_steering_change_stats_pair_mask_leaves_out_jumps_across_a_gap() -> None:
+    steer = np.array([0.0, 0.01, 0.02, 0.5, 0.51, 0.52])
+    keep = np.array([True, True, False, True, True])  # the 0.02 -> 0.5 jump crosses a gap
+    s = metrics.steering_change_stats(steer, 0.02, keep)
+    assert s["std_rad"] == pytest.approx(0.0, abs=1e-12)
+    assert s["p99_abs_rad"] == pytest.approx(0.01)
+    unmasked = metrics.steering_change_stats(steer, 0.02)
+    assert unmasked["p99_abs_rad"] > 0.4
+
+
+def test_planner_metrics_do_not_count_recovering_ticks_as_zero_or_slow() -> None:
+    n = 100
+    now = np.arange(n) * 0.02
+    state = np.ones(n, dtype=int)
+    state[40:60] = 7
+    speed = np.full(n, 0.3)
+    speed[40:60] = -0.3
+    speed[90:] = 0.0
+    zeros = np.zeros(n)
+    odom_t = np.arange(0.0, 3.0, 0.01)
+    m = metrics.planner_metrics(
+        now, state, speed, zeros, zeros, zeros, np.full(n, 0.1), odom_t,
+        track_confidence=np.where(np.arange(n) < 50, 0.0, 1.0),
+        block_reason=np.where(np.arange(n) >= 90, 2, 0),
+        freespace_goal_x_m=np.where(np.arange(n) < 80, 2.0, np.nan),
+    )  # fmt: skip
+    assert m["recovering_ticks"] == 20
+    assert m["speed_zero_share"] == pytest.approx(10 / 80)  # only the 80 forward-state ticks
+    assert m["speed_below_dead_zone_share"] == 0.0
+    assert m["speed_negative_outside_recovering"] == 0
+    assert m["block_reason_counts"] == {"BELOW_SPEED_FLOOR": 10}
+    assert m["track_confidence_mean"] == pytest.approx(0.5)
+    assert m["track_confidence_zero_share"] == pytest.approx(0.5)
+    assert m["freespace_goal_share"] == pytest.approx(0.8)
+    assert m["state_counts"]["RECOVERING"] == 20
+
+
 def test_steering_change_stats_count_known_flips() -> None:
     # changes +, -, +, -, +, -: every change after the first flips
     steer = np.concatenate([[0.0], np.cumsum([0.01, -0.01, 0.01, -0.01, 0.01, -0.01])])
@@ -530,48 +567,82 @@ def replay_cut(
     return rows, m
 
 
-def test_planner_replay_r0_goes_to_no_track_where_the_car_did(tmp_path: Path) -> None:
-    rows, m = replay_cut("R0", tmp_path, "recorded", {"max_intrusion_fraction": 0.10})
+# An open-loop replay: the recorded wheel does not follow the replayed commands, so the wheel stall
+# detector (reason 3) would fire whenever the recorded car stood still. It is set out of reach.
+OPEN_LOOP = {"stall_hold_s": 600.0}
+
+
+def test_planner_replay_r0_drives_on_the_scan_where_v0_went_to_no_track(tmp_path: Path) -> None:
+    rows, m = replay_cut("R0", tmp_path, "recorded", dict(OPEN_LOOP))
     assert len(rows["now_s"]) == pytest.approx((7.5 - 3.0) / 0.02, abs=2)
-    assert m["state_counts"]["DRIVING"] > 50 and m["state_counts"]["NO_TRACK"] > 50
-    assert m["agreement_with_recorded"]["share"] >= 0.95
-    assert m["speed_zero_share"] > 0.3
+    assert m["state_counts"].get("NO_TRACK", 0) == 0
+    assert m["state_counts"]["DRIVING"] >= 0.98 * m["eligible_ticks"]
+    assert m["speed_zero_share"] < 0.02  # v0: most of the run
+    assert m["speed_below_dead_zone_share"] == 0.0
+    assert m["speed_negative_outside_recovering"] == 0
+    assert m["freespace_goal_share"] > 0.95
 
 
-def test_planner_replay_r1_crawls_at_the_recorded_corner(tmp_path: Path) -> None:
-    _, m = replay_cut("R1", tmp_path, "recorded", {"max_intrusion_fraction": 0.20})
-    assert m["agreement_with_recorded"]["share"] >= 0.9
-    assert m["speed_below_dead_zone_share"] > 0.3  # commands under the plant's dead zone
-    assert m["collision_fraction_mean"] > 0.1
+def test_planner_replay_r1_moves_at_the_floor_or_backs_out_at_the_recorded_corner(
+    tmp_path: Path,
+) -> None:
+    rows, m = replay_cut("R1", tmp_path, "recorded", dict(OPEN_LOOP))
+    assert m["state_counts"].get("NO_TRACK", 0) == 0
+    assert m["speed_below_dead_zone_share"] == 0.0  # v0: crawled under the dead zone
+    # every tick is a move at or above the floor, a stop (BLOCKED with a reason), or a reverse
+    cmd = rows["cmd_speed_mps"]
+    state = rows["state"]
+    driving = state == 1
+    assert (cmd[driving & (cmd > 0.0)] >= 0.23 - 1e-6).all()
+    assert set(state.tolist()) <= {1, 5, 7}
+    assert (cmd[state == 7] <= 0.0).all()
+    assert (cmd[(state != 7) & (state != 1)] == 0.0).all()
 
 
-def test_planner_replay_r3_nose_in_has_no_free_forward_arc(tmp_path: Path) -> None:
-    _, m = replay_cut("R3", tmp_path, "recorded", {"max_intrusion_fraction": 0.20})
-    assert m["collision_fraction_mean"] > 0.4
-    assert m["speed_below_dead_zone_share"] > 0.9
-    assert m["agreement_with_recorded"]["share"] >= 0.9
+def test_planner_replay_r3_nose_in_backs_out(tmp_path: Path) -> None:
+    rows, m = replay_cut("R3", tmp_path, "recorded", dict(OPEN_LOOP))
+    assert m["state_counts"].get("NO_TRACK", 0) == 0
+    assert m["speed_below_dead_zone_share"] == 0.0
+    assert m["state_counts"].get("RECOVERING", 0) > 0  # no collision free forward arc: reverse
+    assert m["recovering_ticks"] == m["state_counts"]["RECOVERING"]
+    assert (rows["cmd_speed_mps"][rows["state"] == 7] <= 0.0).all()
+    assert m["speed_negative_outside_recovering"] == 0
 
 
-def test_planner_replay_without_tracks_never_drives_and_with_replayed_tracks_does(
+def test_planner_replay_without_tracks_drives_on_the_scan_and_with_replayed_tracks_too(
     tmp_path: Path, perceiver: perception.Perceiver
 ) -> None:
-    rows, m = replay_cut("L", tmp_path, "none", {})
-    assert set(rows["state_name"]) == {"NO_TRACK"}
-    assert m["speed_zero_share"] == 1.0
+    rows, m = replay_cut("L", tmp_path, "none", dict(OPEN_LOOP))
+    assert 2 not in set(rows["state"])  # NO_TRACK is never produced
+    assert m["state_counts"].get("DRIVING", 0) > 100
+    assert m["track_confidence_zero_share"] == 1.0
+    assert max(rows["cmd_speed_mps"]) > 0.0
     rec, a, b = cut_fixture.load_cut(FIXTURE, "L")
     scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
     tracks = perception.run_perceiver(perceiver, rec, scans)
-    rows, m = replay_cut("L", tmp_path, "replay", {}, tracks)
+    rows, m = replay_cut("L", tmp_path, "replay", dict(OPEN_LOOP), tracks)
     assert m["state_counts"].get("DRIVING", 0) > 100
     assert max(rows["cmd_speed_mps"]) > 0.0
     assert 6 not in set(rows["state"])  # no FAULT
+    assert m["track_confidence_mean"] > 0.0
 
 
 def test_planner_replay_is_repeatable(tmp_path: Path) -> None:
-    a, _ = replay_cut("R1", tmp_path, "recorded", {"max_intrusion_fraction": 0.20})
-    b, _ = replay_cut("R1", tmp_path, "recorded", {"max_intrusion_fraction": 0.20})
+    params = {**OPEN_LOOP, "conf_intrusion_zero": 0.20}
+    a, _ = replay_cut("R1", tmp_path, "recorded", params)
+    b, _ = replay_cut("R1", tmp_path, "recorded", params)
     assert a["cmd_steering_rad"].tolist() == b["cmd_steering_rad"].tolist()
     assert a["state"].tolist() == b["state"].tolist()
+
+
+def test_planner_replay_refuses_the_removed_self_check_parameters(tmp_path: Path) -> None:
+    cli = _cli_or_skip()
+    stream = tmp_path / "empty.stream"
+    stream.write_text("")
+    with pytest.raises(planner_stream.ReplayError, match="unknown parameter"):
+        planner_stream.run_cli(
+            cli, DYNAMICS_BUNDLE, 0.4, {"max_intrusion_fraction": 0.2}, stream, tmp_path / "o.csv"
+        )
 
 
 def test_planner_replay_refuses_a_bundle_that_fails_a_check(tmp_path: Path) -> None:

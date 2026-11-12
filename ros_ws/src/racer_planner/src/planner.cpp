@@ -8,13 +8,13 @@
 namespace racer_planner {
 
 namespace {
-// The solver's parameters with what only the planner knows filled in.
-MppiParams solver_params(const PlannerConfig& c) {
+// The solver's parameters with what only the planner knows filled in: the control tick for the
+// warm start and the speed floor, the bundle's speed dead zone plus a margin.
+MppiParams solver_params(const PlannerConfig& c, const DynamicsParams& dynamics) {
   MppiParams m = c.mppi;
   m.tick_s = c.tick_s;
-  // BRIEF 14 (one line): speed floor = dynamics.nominal.speed_deadband_mps + a margin. Until the
-  // bundle carries the dead zone the floor is whatever the config says (0.0 by default: off).
-  m.speed_floor_mps = std::max(0.0, c.mppi.speed_floor_mps);
+  m.speed_floor_mps = std::max(0.0, dynamics.nominal.speed_deadband_mps) +
+                      std::max(0.0, c.mppi.speed_floor_margin_mps);
   return m;
 }
 }  // namespace
@@ -25,19 +25,30 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
       geometry_(geometry),
       model_tick_(dynamics, geometry, config.tick_s),
       ego_(geometry.wheelbase_m, dynamics.nominal.understeer_s2_per_m2),
-      solver_(solver_params(config), DynamicsModel(dynamics, geometry, dynamics.dt_s), geometry,
-              std::max(config.max_samples, config.mppi.samples)),
+      solver_(solver_params(config, dynamics), DynamicsModel(dynamics, geometry, dynamics.dt_s),
+              geometry, std::max(config.max_samples, config.mppi.samples)),
       budget_([&] {
         SampleBudgetParams b = config.budget;
         b.max_samples = std::min(
             std::max(std::min(config.max_samples, config.mppi.samples), kMinSamples), kMaxSamples);
         return b;
       }()),
+      drivability_(config.drivability),
+      recovery_(
+          [&] {
+            RecoveryParams r = config.recovery;
+            r.hold_stall_s = config.drivability.stall_hold_s;
+            r.hold_gate_s = config.drivability.gate_hold_s;
+            r.d_hard_m = config.mppi.d_hard_m + r.recover_margin_m;
+            r.corner_radius_m = config.mppi.corner_radius_m;
+            return r;
+          }(),
+          geometry, solver_params(config, dynamics).speed_floor_mps),
       horizon_(std::max(2, config.mppi.horizon_steps)),
       delay_ticks_(std::min(
           25, std::max(0, static_cast<int>(
                               std::lround(dynamics.nominal.command_delay_s / config.tick_s))))) {
-  cfg_.mppi = solver_params(config);
+  cfg_.mppi = solver_params(config, dynamics);
   cfg_.max_samples = std::min(std::max(config.max_samples, kMinSamples), kMaxSamples);
   solver_.set_samples(std::min(cfg_.max_samples, cfg_.mppi.samples));
 }
@@ -53,6 +64,8 @@ TickOutput Planner::tick(const TickInput& in) {
     out.est_steering_rad = est_.delta;
     plan_valid_ = false;
     solver_.reset();
+    recovery_.reset();
+    recovery_was_active_ = false;
     try {
       finish_tick(out.cmd);
     } catch (...) {
@@ -79,7 +92,10 @@ void Planner::finish_tick(const Command& published) {
 TickOutput Planner::run(const TickInput& in) {
   TickOutput out;
   if (in.has_odom && std::isfinite(in.wheel_speed_mps)) est_.v = std::max(0.0, in.wheel_speed_mps);
-  ego_.push(in.now_s, est_.v, est_.delta);
+  // The dead reckoning takes the signed wheel speed (the car backs up while recovering).
+  ego_.push(in.now_s,
+            in.has_odom && std::isfinite(in.wheel_speed_mps) ? in.wheel_speed_mps : est_.v,
+            est_.delta);
 
   LogicInputs li;
   li.now_s = in.now_s;
@@ -116,6 +132,7 @@ TickOutput Planner::run(const TickInput& in) {
   BlockReason reason = BlockReason::None;
   plan_valid_ = false;
   const double floor_mps = cfg_.mppi.speed_floor_mps;
+  bool plan_moves = false;
   if (gate.may_solve) {
     // Track confidence: how far the track prior is trusted. A track that cannot be projected
     // counts as none.
@@ -185,14 +202,46 @@ TickOutput Planner::run(const TickInput& in) {
       plan_valid_ = true;
       di.all_collide = so.all_collide;
       di.plan_speed_mps = so.plan_speed_mps;
+      plan_moves = so.plan_speed_mps >= std::max(floor_mps, 1e-3);
       bool halved = false;
       solver_.set_samples(budget_.update(out.solve_time_s, &halved));
       out.samples_halved = halved;
     }
     reason = drivability_.update(di, in.now_s);
-    state = reason == BlockReason::None ? PlannerState::Driving : PlannerState::Blocked;
+    RecoveryInput ri;
+    ri.now_s = in.now_s;
+    ri.tick_s = cfg_.tick_s;
+    ri.reason = reason;
+    ri.reason_held_s = drivability_.held_s(reason);
+    ri.wheel_speed_mps = std::isfinite(in.wheel_speed_mps) ? in.wheel_speed_mps : 0.0;
+    ri.published_speed_mps = last_published_.speed_mps;
+    ri.gate_fresh = di.gate_fresh;
+    ri.gated_speed_mps = in.gated_speed_mps;
+    ri.field = in.field;
+    ri.freespace = has_free ? in.freespace : nullptr;
+    ri.ego = ego_pose_;
+    const RecoveryOutput ro = recovery_.update(ri);
+    out.recovery_attempts = ro.attempts;
+    if (ro.active) {
+      state = PlannerState::Recovering;
+      wanted = ro.cmd;
+      reason = BlockReason::None;
+      drivability_.reset();
+    } else if (ro.exhausted) {
+      state = PlannerState::Blocked;
+      reason = BlockReason::RecoveryExhausted;
+    } else {
+      state = reason == BlockReason::None ? PlannerState::Driving : PlannerState::Blocked;
+    }
+    if (recovery_was_active_ && !ro.active) {  // a recovery ended or was abandoned
+      solver_.reset();
+      drivability_.reset();
+    }
+    recovery_was_active_ = ro.active;
   } else {
     drivability_.reset();
+    recovery_.reset();
+    recovery_was_active_ = false;
     out.v_cap_mps = speed_cap(cfg_.logic, li, confidence_);
   }
   if (!plan_valid_) solver_.reset();
@@ -201,7 +250,8 @@ TickOutput Planner::run(const TickInput& in) {
   const double v_cap = out.v_cap_mps;
 
   Command c = command_for_state(state, wanted, last_published_.steering_rad, v_cap,
-                                geometry_.steering_min_rad, geometry_.steering_max_rad);
+                                geometry_.steering_min_rad, geometry_.steering_max_rad,
+                                std::max(cfg_.recovery.recover_speed_mps, floor_mps));
   if (state == PlannerState::Driving) {
     // Low-pass the steering (the state restarts from the last published value on entering
     // Driving) and keep the speed in {0} U [floor, cap].
@@ -210,15 +260,23 @@ TickOutput Planner::run(const TickInput& in) {
       steer_lp_valid_ = true;
     }
     steer_lp_ = lowpass_step(steer_lp_, c.steering_rad, cfg_.tick_s, cfg_.logic.steer_output_tau_s);
-    c.steering_rad = steer_lp_;
-    c.speed_mps = snap_speed(c.speed_mps, floor_mps, v_cap);
+    c.steering_rad =
+        std::fabs(steer_lp_ - last_published_.steering_rad) < cfg_.logic.steer_output_hysteresis_rad
+            ? last_published_.steering_rad
+            : steer_lp_;
+    // A plan that moves (its mean speed over the first 0.5 s is at least the floor) is commanded
+    // at least the floor from the first step, so Driving never publishes 0 for a moving plan.
+    const double moving_min = plan_moves ? std::max(floor_mps, 1e-3) : 0.0;
+    c.speed_mps = snap_speed(std::max(c.speed_mps, moving_min), floor_mps, v_cap);
   } else {
     steer_lp_valid_ = false;
   }
-  if (state == PlannerState::Driving || state == PlannerState::Blocked) {
+  if (state == PlannerState::Driving || state == PlannerState::Blocked ||
+      state == PlannerState::Recovering) {
     const double f = cfg_.logic.rate_limit_fraction;
     c = rate_limit(c, last_published_, f * geometry_.steering_max_rate_rad_per_s * cfg_.tick_s,
-                   f * geometry_.max_acceleration_mps2 * cfg_.tick_s, floor_mps);
+                   f * geometry_.max_acceleration_mps2 * cfg_.tick_s, floor_mps,
+                   geometry_.max_acceleration_mps2 * cfg_.tick_s);
   }
   out.state = state;
   out.cmd = c;

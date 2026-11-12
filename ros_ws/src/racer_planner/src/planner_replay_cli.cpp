@@ -6,7 +6,7 @@
 // usage: planner_replay_cli --bundle DIR [--v-max M_S] [--set name=value]... [--stream FILE]
 //                           [--out CSV] [--describe]
 //
-// --set takes the planner node's parameter names (v_max_mps, max_intrusion_fraction,
+// --set takes the planner node's parameter names (v_max_mps, conf_intrusion_zero,
 // scan_timeout_s, samples, seed, w_progress, ...) with the node's defaults and ranges; --describe
 // prints the effective configuration as JSON and exits. A bundle that fails any row of the
 // refusal table exits 2 with "<RefusalName>: <message>" on stderr, as the node does.
@@ -28,15 +28,18 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "binding_geometry.hpp"
 #include "racer_planner/bundle_loader.hpp"
 #include "racer_planner/distance_field.hpp"
+#include "racer_planner/freespace_field.hpp"
 #include "racer_planner/planner.hpp"
 
 using namespace racer_planner;
@@ -71,13 +74,36 @@ std::map<std::string, Param> default_params() {
   auto d = [&](const char* n, double v, double lo, double hi) { p[n] = {v, lo, hi, false}; };
   auto i = [&](const char* n, double v, double lo, double hi) { p[n] = {v, lo, hi, true}; };
   d("v_max_mps", 0.5, 0.1, VEHICLE_PARAMS.limits.global_speed_cap_mps);
-  d("track_timeout_s", lg.track_timeout_s, 0.05, 5.0);
   d("scan_timeout_s", lg.scan_timeout_s, 0.05, 5.0);
   d("odom_timeout_s", lg.odom_timeout_s, 0.02, 5.0);
-  i("min_valid_stations", lg.min_valid_stations, 2, 16);
-  d("max_boundary_residual_m", lg.max_boundary_residual_m, 0.0, 5.0);
-  d("max_intrusion_fraction", lg.max_intrusion_fraction, 0.0, 1.0);
-  d("selfcheck_hold_s", lg.selfcheck_hold_s, 0.0, 10.0);
+  d("conf_intrusion_full", lg.conf_intrusion_full, 0.0, 1.0);
+  d("conf_intrusion_zero", lg.conf_intrusion_zero, 0.0, 1.0);
+  d("conf_residual_full_m", lg.conf_residual_full_m, 0.0, 5.0);
+  d("conf_residual_zero_m", lg.conf_residual_zero_m, 0.0, 5.0);
+  d("conf_valid_zero", lg.conf_valid_zero, 0.0, 16.0);
+  d("conf_valid_full", lg.conf_valid_full, 0.0, 16.0);
+  d("conf_age_full_s", lg.conf_age_full_s, 0.0, 5.0);
+  d("conf_age_zero_s", lg.conf_age_zero_s, 0.0, 5.0);
+  d("conf_rise_per_s", lg.conf_rise_per_s, 0.01, 100.0);
+  d("freespace_speed_fraction", lg.freespace_speed_fraction, 0.3, 1.0);
+  d("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5);
+  d("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0);
+  d("steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02);
+  d("cost_scale_floor", mp.cost_scale_floor, 1e-3, 1e3);
+  d("w_steer_rate", mp.w_steer_rate, 0.0, 1e4);
+  d("corner_radius_m", mp.corner_radius_m, 0.005, 0.2);
+  d("speed_floor_margin_mps", mp.speed_floor_margin_mps, 0.0, 0.5);
+  i("max_samples", cfg.max_samples, kMinSamples, kMaxSamples);
+  d("stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0);
+  d("gate_hold_s", cfg.drivability.gate_hold_s, 0.2, 600.0);
+  d("recover_distance_m", cfg.recovery.recover_distance_m, 0.1, 1.0);
+  d("recover_speed_mps", cfg.recovery.recover_speed_mps, 0.1, 0.6);
+  d("recover_max_s", cfg.recovery.recover_max_s, 0.5, 10.0);
+  d("recover_retry_s", cfg.recovery.recover_retry_s, 0.5, 30.0);
+  d("recover_margin_m", cfg.recovery.recover_margin_m, 0.0, 0.3);
+  d("recover_gate_debounce_s", cfg.recovery.recover_gate_debounce_s, 0.02, 1.0);
+  d("recover_progress_m", cfg.recovery.recover_progress_m, 0.1, 5.0);
+  i("recover_max_attempts", cfg.recovery.recover_max_attempts, 1, 20);
   d("control_rate_hz", 50.0, 20.0, 100.0);
   i("horizon_steps", mp.horizon_steps, 5, 100);
   i("samples", mp.samples, kMinSamples, kMaxSamples);
@@ -142,20 +168,46 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   PlannerConfig cfg;
   LogicParams& lg = cfg.logic;
   lg.v_max_mps = v("v_max_mps");
-  lg.track_timeout_s = v("track_timeout_s");
   lg.scan_timeout_s = v("scan_timeout_s");
   lg.odom_timeout_s = v("odom_timeout_s");
-  lg.min_valid_stations = static_cast<int>(v("min_valid_stations"));
-  lg.max_boundary_residual_m = v("max_boundary_residual_m");
-  lg.max_intrusion_fraction = v("max_intrusion_fraction");
-  lg.selfcheck_hold_s = v("selfcheck_hold_s");
+  for (auto [name, ptr] : std::initializer_list<std::pair<const char*, double*>>{
+           {"conf_intrusion_full", &lg.conf_intrusion_full},
+           {"conf_intrusion_zero", &lg.conf_intrusion_zero},
+           {"conf_residual_full_m", &lg.conf_residual_full_m},
+           {"conf_residual_zero_m", &lg.conf_residual_zero_m},
+           {"conf_valid_zero", &lg.conf_valid_zero},
+           {"conf_valid_full", &lg.conf_valid_full},
+           {"conf_age_full_s", &lg.conf_age_full_s},
+           {"conf_age_zero_s", &lg.conf_age_zero_s},
+           {"conf_rise_per_s", &lg.conf_rise_per_s},
+           {"freespace_speed_fraction", &lg.freespace_speed_fraction},
+           {"steer_output_tau_s", &lg.steer_output_tau_s},
+           {"rate_limit_fraction", &lg.rate_limit_fraction},
+           {"steer_output_hysteresis_rad", &lg.steer_output_hysteresis_rad}}) {
+    *ptr = v(name);
+  }
   lg.use_lap_guidance = false;
   cfg.tick_s = 1.0 / v("control_rate_hz");
+  cfg.drivability.stall_hold_s = v("stall_hold_s");
+  cfg.drivability.gate_hold_s = v("gate_hold_s");
+  RecoveryParams& rc = cfg.recovery;
+  rc.recover_distance_m = v("recover_distance_m");
+  rc.recover_speed_mps = v("recover_speed_mps");
+  rc.recover_max_s = v("recover_max_s");
+  rc.recover_retry_s = v("recover_retry_s");
+  rc.recover_margin_m = v("recover_margin_m");
+  rc.recover_gate_debounce_s = v("recover_gate_debounce_s");
+  rc.recover_progress_m = v("recover_progress_m");
+  rc.recover_max_attempts = static_cast<int>(v("recover_max_attempts"));
   MppiParams& mp = cfg.mppi;
   mp.horizon_steps = static_cast<int>(v("horizon_steps"));
   const int samples = static_cast<int>(v("samples"));
   mp.samples = samples;
-  cfg.max_samples = samples;
+  cfg.max_samples = static_cast<int>(v("max_samples"));
+  mp.cost_scale_floor = v("cost_scale_floor");
+  mp.w_steer_rate = v("w_steer_rate");
+  mp.corner_radius_m = v("corner_radius_m");
+  mp.speed_floor_margin_mps = v("speed_floor_margin_mps");
   mp.sigma_speed_mps = v("sigma_speed_mps");
   mp.sigma_steering_rad = v("sigma_steering_rad");
   mp.beta = v("noise_beta");
@@ -210,6 +262,8 @@ const char* state_name(PlannerState s) {
       return "BLOCKED";
     case PlannerState::Fault:
       return "FAULT";
+    case PlannerState::Recovering:
+      return "RECOVERING";
   }
   return "UNKNOWN";
 }
@@ -317,10 +371,14 @@ int main(int argc, char** argv) {
   std::ostream& csv = out_path.empty() ? std::cout : csv_file;
   csv << "now_s,state,state_name,cmd_speed_mps,cmd_steering_rad,solve_time_s,est_speed_mps,"
          "est_steering_rad,v_cap_mps,best_cost,plan_progress_m,plan_min_clearance_m,"
-         "collision_fraction,track_age_s,scan_age_s,samples,samples_halved\n";
+         "collision_fraction,track_age_s,scan_age_s,samples,samples_halved,track_confidence,"
+         "freespace_goal_x_m,freespace_goal_y_m,freespace_reach_m,block_reason,recovery_attempts\n";
 
   std::vector<PointXY> points(kMaxScanPoints);
   DistanceField field;
+  FreespaceField freespace(*geometry);
+  bool have_prev_goal = false;
+  PointXY prev_goal{0.0, 0.0};
   bool has_scan = false;
   double scan_stamp_s = 0.0;
   LocalTrackData track;
@@ -329,6 +387,7 @@ int main(int argc, char** argv) {
   double odom_stamp_s = 0.0;
   double wheel_speed_mps = 0.0;
   std::vector<float> ranges;
+  double last_published_speed = 0.0;
 
   std::string line;
   long line_no = 0;
@@ -358,6 +417,9 @@ int main(int argc, char** argv) {
           scan_to_points(ranges.data(), ranges.size(), amin, ainc, rmin, rmax, laser_yaw_rad,
                          *geometry, kBodyMarginM, points.data(), points.size());
       field.build(points.data(), count);
+      freespace.build(field, points.data(), count, have_prev_goal ? &prev_goal : nullptr);
+      have_prev_goal = freespace.valid();
+      if (have_prev_goal) prev_goal = freespace.goal();
       has_scan = true;
       scan_stamp_s = stamp;
     } else if (kind == 'O') {
@@ -399,6 +461,11 @@ int main(int argc, char** argv) {
       ti.has_scan = has_scan;
       ti.scan_stamp_s = scan_stamp_s;
       ti.field = has_scan ? &field : nullptr;
+      ti.freespace = has_scan ? &freespace : nullptr;
+      // The replay has no safety node: the gated /drive is taken to pass what was published.
+      ti.has_gated = true;
+      ti.gated_stamp_s = now;
+      ti.gated_speed_mps = last_published_speed;
       ti.track = has_track ? &track : nullptr;
       const TickOutput o = planner.tick(ti);
       csv << csv_number(now) << ',' << static_cast<int>(o.state) << ',' << state_name(o.state)
@@ -408,7 +475,12 @@ int main(int argc, char** argv) {
           << csv_number(o.best_cost) << ',' << csv_number(o.plan_progress_m) << ','
           << csv_number(o.plan_min_clearance_m) << ',' << csv_number(o.collision_fraction) << ','
           << csv_number(o.track_age_s) << ',' << csv_number(o.scan_age_s) << ',' << o.samples << ','
-          << (o.samples_halved ? 1 : 0) << '\n';
+          << (o.samples_halved ? 1 : 0) << ',' << csv_number(o.track_confidence) << ','
+          << csv_number(o.has_freespace_goal ? o.freespace_goal_x_m : std::nan("")) << ','
+          << csv_number(o.has_freespace_goal ? o.freespace_goal_y_m : std::nan("")) << ','
+          << csv_number(o.has_freespace_goal ? o.freespace_reach_m : std::nan("")) << ','
+          << static_cast<int>(o.block_reason) << ',' << o.recovery_attempts << '\n';
+      last_published_speed = o.cmd.speed_mps;
     } else {
       die(2, "stream line " + std::to_string(line_no) + ": unknown event '" + std::string(1, kind) +
                  "'");

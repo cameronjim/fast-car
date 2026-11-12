@@ -15,9 +15,15 @@ using namespace racer_planner;
 
 namespace {
 
-PlannerConfig small_config(double v_max, double floor_mps = 0.0) {
+// The planner's speed floor is the bundle's dead zone plus mppi.speed_floor_margin_mps.
+DynamicsParams dynamics_with_floor(double floor_mps) {
+  DynamicsParams d = test::plain_dynamics();
+  d.nominal.speed_deadband_mps = std::max(0.0, floor_mps - MppiParams{}.speed_floor_margin_mps);
+  return d;
+}
+
+PlannerConfig small_config(double v_max) {
   PlannerConfig c;
-  c.mppi.speed_floor_mps = floor_mps;
   c.logic.v_max_mps = v_max;
   c.mppi.samples = 128;
   c.max_samples = 128;
@@ -80,8 +86,9 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
   for (int scenario = 0; scenario < 120; ++scenario) {
     PlannerConfig cfg = small_config(uni(0.1, 0.9));
     cfg.logic.use_lap_guidance = u01(rng) < 0.3;
-    cfg.mppi.speed_floor_mps = u01(rng) < 0.5 ? 0.2 : 0.0;
-    Planner planner(cfg, test::plain_dynamics(), g);
+    const double floor_mps = u01(rng) < 0.5 ? 0.23 : MppiParams{}.speed_floor_margin_mps;
+    Planner planner(cfg, dynamics_with_floor(floor_mps), g);
+    const double reverse_limit = std::max(cfg.recovery.recover_speed_mps, floor_mps);
     DistanceField field;
     FreespaceField freespace(g);
     {
@@ -93,7 +100,8 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
       if (u01(rng) < 0.7) freespace.build(field, pts.data(), pts.size(), nullptr);
     }
     double now = 1000.0;
-    for (int tick = 0; tick < 25; ++tick, now += 0.02) {
+    double prev_speed = 0.0;
+    for (int tick = 0; tick < 80; ++tick, now += 0.02) {
       LocalTrackData track = good_track(now - uni(0.0, 0.5));
       track.valid_count = static_cast<int>(uni(-1, 20));
       for (int k = 0; k < kTrackStations; ++k) {
@@ -124,20 +132,29 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
       const TickOutput out = planner.tick(in);
       ASSERT_TRUE(std::isfinite(out.cmd.speed_mps)) << scenario << "/" << tick;
       ASSERT_TRUE(std::isfinite(out.cmd.steering_rad)) << scenario << "/" << tick;
-      ASSERT_GE(out.cmd.speed_mps, 0.0);
-      ASSERT_TRUE(out.cmd.speed_mps == 0.0 || out.cmd.speed_mps >= cfg.mppi.speed_floor_mps - 1e-12)
-          << "speed " << out.cmd.speed_mps << " floor " << cfg.mppi.speed_floor_mps;
+      if (out.state == PlannerState::Recovering) {
+        ASSERT_GE(out.cmd.speed_mps, -reverse_limit - 1e-12);
+      } else {
+        ASSERT_GE(out.cmd.speed_mps, 0.0) << "state " << static_cast<int>(out.state);
+        // 0 or at least the floor, except the one ramp tick of a start from rest
+        const bool first_ramp_tick =
+            prev_speed == 0.0 && out.cmd.speed_mps <= 0.45 * g.max_acceleration_mps2 * 0.02 + 1e-12;
+        ASSERT_TRUE(out.cmd.speed_mps == 0.0 || out.cmd.speed_mps >= floor_mps - 1e-12 ||
+                    first_ramp_tick)
+            << "speed " << out.cmd.speed_mps << " floor " << floor_mps << " prev " << prev_speed;
+      }
       ASSERT_LE(out.cmd.speed_mps, std::max(0.0, out.v_cap_mps) + 1e-12);
       ASSERT_LE(out.v_cap_mps, cfg.logic.v_max_mps + 1e-12);
       ASSERT_GE(out.cmd.steering_rad, g.steering_min_rad);
       ASSERT_LE(out.cmd.steering_rad, g.steering_max_rad);
-      ASSERT_LE(static_cast<int>(out.state), static_cast<int>(PlannerState::Fault));
-      if (out.state != PlannerState::Driving) {
+      ASSERT_LE(static_cast<int>(out.state), static_cast<int>(PlannerState::Recovering));
+      if (out.state != PlannerState::Driving && out.state != PlannerState::Recovering) {
         ASSERT_EQ(out.cmd.speed_mps, 0.0) << "state " << static_cast<int>(out.state);
         ++other;
       } else {
         ++driving;
       }
+      prev_speed = out.cmd.speed_mps;
       ASSERT_TRUE(std::isfinite(out.est_speed_mps));
       ASSERT_TRUE(std::isfinite(out.est_steering_rad));
       ASSERT_TRUE(std::isfinite(out.solve_time_s));
@@ -159,8 +176,8 @@ struct Rig {
   double now = 50.0;
   double v = 0.3;
 
-  explicit Rig(double v_max = 0.5, double floor_mps = 0.0)
-      : planner(small_config(v_max, floor_mps), test::plain_dynamics(), g) {
+  explicit Rig(double v_max = 0.5, double floor_mps = 0.03)
+      : planner(small_config(v_max), dynamics_with_floor(floor_mps), g) {
     set_points(points);
   }
 
@@ -396,16 +413,30 @@ TEST(Planner, LeavingDrivingRestartsTheLowPassFromTheLastPublishedSteering) {
             0.45 * r.g.steering_max_rate_rad_per_s * 0.02 + 1e-12);
 }
 
-TEST(Planner, FromRestTheFirstDrivingCommandIsTheSpeedFloorNotAnInBetweenValue) {
+TEST(Planner, AStartFromRestHasExactlyOneTickInsideTheDeadZoneAndNeverOutrunsTheSafetyLimit) {
   Rig r(0.6, 0.23);
   r.v = 0.0;
-  TickOutput out;
   std::vector<double> speeds;
-  for (int i = 0; i < 40; ++i) {
+  TickOutput out;
+  for (int i = 0; i < 60; ++i) {
     out = r.tick();
     speeds.push_back(out.cmd.speed_mps);
   }
   EXPECT_EQ(out.state, PlannerState::Driving);
-  for (double v : speeds) EXPECT_TRUE(v == 0.0 || v >= 0.23 - 1e-12) << v;
+  int inside = 0;
+  double prev = 0.0;
+  const double safety_step = r.g.max_acceleration_mps2 * 0.02;
+  for (double v : speeds) {
+    if (v > 0.0 && v < 0.23 - 1e-12) ++inside;
+    EXPECT_LE(v - prev, safety_step + 1e-12);  // never more than safety_node's own limit
+    prev = v;
+  }
+  EXPECT_EQ(inside, 1);  // the only exception, the first ramp tick
   EXPECT_GE(speeds.back(), 0.23 - 1e-12);
+  // and it is the first tick above 0, at the planner's own (0.45) rate
+  std::size_t k = 0;
+  while (k < speeds.size() && speeds[k] == 0.0) ++k;
+  ASSERT_LT(k + 1, speeds.size());
+  EXPECT_LE(speeds[k], 0.45 * safety_step + 1e-12);
+  EXPECT_GE(speeds[k + 1], 0.23 - 1e-12);
 }

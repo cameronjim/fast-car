@@ -18,6 +18,7 @@ enum class PlannerState : std::uint8_t {
   NoOdom = 4,
   Blocked = 5,
   Fault = 6,
+  Recovering = 7,
 };
 
 struct LogicParams {
@@ -32,6 +33,9 @@ struct LogicParams {
   // own rate limit may use (safety_node limits at the full values, so the planner stays inside).
   double steer_output_tau_s = 0.04;
   double rate_limit_fraction = 0.45;
+  // The published steering holds its value until the low-passed target is this far from it (rad):
+  // microradian wiggles of a static scene are not commands (a servo cannot follow them anyway).
+  double steer_output_hysteresis_rad = 0.0015;
   // Track confidence (see track_confidence_raw): the ends of the four ramps and how fast it may
   // rise. It falls at once.
   double conf_intrusion_full = 0.03;
@@ -116,17 +120,23 @@ struct Command {
 
 // What goes on /drive_raw for a state. For Driving the solver command is sanitised (finite,
 // speed in [0, v_cap], steering in [steer_min, steer_max]); Blocked takes the given steering with
-// speed 0; Fault is 0, 0; the NO_* states are speed 0 with the last steering.
+// speed 0; Recovering takes the recovery command with the speed in [-reverse_limit, v_cap] (the
+// only state with a negative speed); Fault is 0, 0; the NO_* states are speed 0 with the last
+// steering.
 Command command_for_state(PlannerState state, const Command& solver_cmd, double last_steering_rad,
-                          double v_cap_mps, double steer_min_rad, double steer_max_rad);
+                          double v_cap_mps, double steer_min_rad, double steer_max_rad,
+                          double reverse_limit_mps = 0.0);
 
-// Output rate limits: steering by max_steer_step, speed upward by max_speed_up_step (slowing is
-// never limited). Both relative to the previous published command. With speed_floor_mps > 0 a
-// limited speed that would land in (0, floor) while the wanted speed is at least the floor goes
-// to the floor at once: the drivetrain ignores anything in between, so ramping through it only
-// delays the start.
+// Output rate limits: steering by max_steer_step, the speed's magnitude by max_speed_up_step when
+// it grows, forward or backward (slowing, braking to zero included, is never limited; a request
+// across zero goes to zero at once and grows from there). The dead zone: with speed_floor_mps > 0 a
+// forward speed that is still below the floor after a limited step goes to the floor on the next
+// tick when that step is no larger than max_speed_jump_mps (the vehicle's own acceleration limit,
+// the one safety_node applies), so a start from rest takes two ticks and exactly one of them, the
+// first, is inside the dead zone.
 Command rate_limit(const Command& wanted, const Command& previous, double max_steer_step_rad,
-                   double max_speed_up_step_mps, double speed_floor_mps = 0.0);
+                   double max_speed_up_step_mps, double speed_floor_mps = 0.0,
+                   double max_speed_jump_mps = 0.0);
 
 // One step of a first-order low-pass: previous + (wanted - previous) * (1 - exp(-tick / tau)).
 // tau <= 0 or a non finite input passes `wanted` (or `previous` when wanted is not finite).

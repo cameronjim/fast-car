@@ -669,23 +669,31 @@ TEST(Staleness, AgeAndStaleHelpers) {
   EXPECT_FALSE(is_stale(10.0, 10.1, 0.2));  // slightly ahead of now is clock skew, not stale
 }
 
-TEST(RateLimit, SpeedFloorJumpsOutOfTheDeadBandOnlyWhenTheWantedSpeedIsAtLeastTheFloor) {
-  const Command rest{0.0, 0.0};
-  // from rest toward 0.5 with a 0.086 step: would land at 0.086, inside (0, 0.23): jump
-  EXPECT_NEAR(rate_limit(Command{0.5, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.23, 1e-12);
-  // the wanted speed is exactly the floor: the same
-  EXPECT_NEAR(rate_limit(Command{0.23, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.23, 1e-12);
-  // an unsnapped wanted speed below the floor is not lifted, only limited as before
-  EXPECT_NEAR(rate_limit(Command{0.1, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.086, 1e-12);
-  EXPECT_NEAR(rate_limit(Command{0.05, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.05, 1e-12);
-  // above the floor the ordinary step applies
-  EXPECT_NEAR(rate_limit(Command{0.9, 0.0}, Command{0.3, 0.0}, 0.064, 0.086, 0.23).speed_mps, 0.386,
+TEST(RateLimit, StartFromRestTakesTwoTicksAndOnlyTheFirstIsInsideTheDeadZone) {
+  const double step = 0.086, jump = 0.19, floor = 0.23;
+  Command prev{0.0, 0.0};
+  const Command first = rate_limit(Command{0.5, 0.0}, prev, 0.064, step, floor, jump);
+  EXPECT_NEAR(first.speed_mps, step,
+              1e-12);  // the one tick inside the dead zone, at the planner rate
+  const Command second = rate_limit(Command{0.5, 0.0}, first, 0.064, step, floor, jump);
+  EXPECT_NEAR(second.speed_mps, floor, 1e-12);  // out of it, by less than safety_node's limit
+  EXPECT_LE(second.speed_mps - first.speed_mps, jump);
+  const Command third = rate_limit(Command{0.5, 0.0}, second, 0.064, step, floor, jump);
+  EXPECT_NEAR(third.speed_mps, floor + step, 1e-12);  // the ordinary step above the floor
+  // a floor too far above the first step for one vehicle step keeps ramping at the planner rate
+  const Command far = rate_limit(Command{0.5, 0.0}, first, 0.064, step, 0.35, jump);
+  EXPECT_NEAR(far.speed_mps, 2.0 * step, 1e-12);
+  // an unsnapped wanted speed below the floor is only limited, never lifted
+  EXPECT_NEAR(rate_limit(Command{0.1, 0.0}, prev, 0.064, step, floor, jump).speed_mps, 0.086,
               1e-12);
+  EXPECT_NEAR(rate_limit(Command{0.1, 0.0}, first, 0.064, step, floor, jump).speed_mps, 0.1, 1e-12);
   // slowing is never limited, and 0 stays 0
-  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, Command{0.4, 0.0}, 0.064, 0.086, 0.23).speed_mps, 0.0);
-  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.0);
-  // floor 0 is the old rule
-  EXPECT_NEAR(rate_limit(Command{0.5, 0.0}, rest, 0.064, 0.086, 0.0).speed_mps, 0.086, 1e-12);
+  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, Command{0.4, 0.0}, 0.064, step, floor, jump).speed_mps,
+            0.0);
+  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, prev, 0.064, step, floor, jump).speed_mps, 0.0);
+  // floor 0 is the plain rule
+  EXPECT_NEAR(rate_limit(Command{0.5, 0.0}, first, 0.064, step, 0.0, jump).speed_mps, 2 * step,
+              1e-12);
 }
 
 TEST(LowPass, FirstOrderStepAndEdgeCases) {

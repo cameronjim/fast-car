@@ -11,7 +11,7 @@ it drives a car.
 ## Two commands
 
     uv run --project tools python tools/pnp_replay.py <bag> --segment R1 --check-fidelity \
-        --dynamics-bundle <dynamics bundle> --v-max 0.4 --set max_intrusion_fraction=0.20 \
+        --dynamics-bundle <dynamics bundle> --v-max 0.4 --set conf_intrusion_zero=0.20 \
         --out data/pnp_replay/r1.json
     uv run --project tools python tools/pnp_replay.py <bag> --segment R0 R1 R2 R3 L \
         ... --compare tools/pnp_replay/baselines/v0-2026-11-12.json
@@ -39,3 +39,16 @@ because its solves are slower, so recorded steering chatter is a little higher (
 against 0.019); and the replayed `K` ticks are exactly 0.02 s apart, the car's were 0.017 to 0.023 s.
 Segment `L` was driven by another driver at 1 m/s, above the planner's cap, so `--clip-speed-to-cap`
 feeds `min(wheel speed, v_max)` for it, and says so in the output.
+
+## Planner v0.1 in the replay
+
+The replayed planner builds the free-space field of every scan, takes the track confidence from
+the replayed or recorded track, and may enter RECOVERING. Two things to know when reading the
+numbers. The wheel odometry is the recorded one and does not follow the replayed commands, so the
+wheel stall detector (block reason 3) would fire wherever the recorded car stood still while the
+replayed planner drives: run replays with `--set stall_hold_s=600`. The replay has no safety node,
+so the gated `/drive` is taken to pass what the planner published (recovery needs it to be fresh).
+The speed shares do not count RECOVERING ticks, and the steering change statistics use only the
+changes between two consecutive DRIVING ticks (a jump across a recovery or a stop is not a change
+of the command). Planner CSV columns appended: `track_confidence`, `freespace_goal_x_m`,
+`freespace_goal_y_m`, `freespace_reach_m`, `block_reason`, `recovery_attempts`.

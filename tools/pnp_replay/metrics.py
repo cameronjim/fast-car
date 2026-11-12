@@ -44,9 +44,19 @@ STATE_NAMES = {
     4: "NO_ODOM",
     5: "BLOCKED",
     6: "FAULT",
+    7: "RECOVERING",
+}
+BLOCK_NAMES = {
+    0: "NONE",
+    1: "ALL_COLLIDE",
+    2: "BELOW_SPEED_FLOOR",
+    3: "WHEEL_STALLED",
+    4: "GATE_REFUSING",
+    5: "RECOVERY_EXHAUSTED",
 }
 STATE_DRIVING = 1
 STATE_BLOCKED = 5
+STATE_RECOVERING = 7
 
 
 def _nan() -> float:
@@ -148,14 +158,22 @@ def eligible_ticks(
     return scan_ok & (age < ODOM_FRESH_S)
 
 
-def steering_change_stats(steering: NDArray[np.float64], tick_s: float) -> dict[str, float]:
+def steering_change_stats(
+    steering: NDArray[np.float64], tick_s: float, pair_mask: NDArray[np.bool_] | None = None
+) -> dict[str, float]:
     """Std, sign flips per second and p99 absolute value of the change of a steering series
     between consecutive samples. A flip is a change whose sign differs from the previous
-    change's; zero changes carry the previous sign (a held command is not a reversal)."""
+    change's; zero changes carry the previous sign (a held command is not a reversal).
+    `pair_mask` (one entry per consecutive pair) keeps only the changes between two samples that
+    both qualify, so a jump across a gap (another state) is not a change of the series."""
     s = np.asarray(steering, dtype=np.float64)
     if len(s) < 3:
         return {"std_rad": _nan(), "sign_flips_per_s": _nan(), "p99_abs_rad": _nan()}
     ds = np.diff(s)
+    if pair_mask is not None:
+        ds = ds[np.asarray(pair_mask, dtype=bool)]
+        if len(ds) < 2:
+            return {"std_rad": _nan(), "sign_flips_per_s": _nan(), "p99_abs_rad": _nan()}
     nonzero = ds[ds != 0.0]
     flips = int((np.sign(nonzero[1:]) != np.sign(nonzero[:-1])).sum()) if len(nonzero) > 1 else 0
     return {
@@ -177,8 +195,14 @@ def planner_metrics(
     dead_zone_mps: float = DEFAULT_DEAD_ZONE_MPS,
     recorded_t: NDArray[np.float64] | None = None,
     recorded_state: NDArray[np.integer] | None = None,
+    track_confidence: NDArray[np.float64] | None = None,
+    block_reason: NDArray[np.integer] | None = None,
+    freespace_goal_x_m: NDArray[np.float64] | None = None,
 ) -> dict[str, Any]:
-    """Planner numbers over the eligible ticks of a replay (see the module docstring)."""
+    """Planner numbers over the eligible ticks of a replay (see the module docstring). The speed
+    shares do not count RECOVERING ticks (a reverse command is neither zero nor a crawl); those
+    are counted on their own, with the share of ticks per block reason, the mean track confidence
+    and the share of ticks with a free-space goal when the replay wrote those columns."""
     ok = eligible_ticks(now_s, scan_age_s, odom_t)
     t, st = now_s[ok], np.asarray(state)[ok]
     v, steer = cmd_speed_mps[ok], cmd_steering_rad[ok]
@@ -187,22 +211,43 @@ def planner_metrics(
     tick_s = float(np.median(np.diff(t))) if n > 1 else 0.02
     solved = (st == STATE_DRIVING) | (st == STATE_BLOCKED)
     driving = st == STATE_DRIVING
+    fwd = st != STATE_RECOVERING
+    vf = v[fwd]
     out: dict[str, Any] = {
         "ticks": len(now_s),
         "eligible_ticks": n,
         "state_counts": counts,
-        "speed_zero_share": float(np.mean(v == 0.0)) if n else _nan(),
-        "speed_below_dead_zone_share": float(np.mean((v > 0.0) & (v < dead_zone_mps)))
-        if n
+        "recovering_ticks": int((~fwd).sum()),
+        "speed_zero_share": float(np.mean(vf == 0.0)) if len(vf) else _nan(),
+        "speed_below_dead_zone_share": float(np.mean((vf > 0.0) & (vf < dead_zone_mps)))
+        if len(vf)
         else _nan(),
+        "speed_negative_outside_recovering": int((vf < 0.0).sum()),
         "dead_zone_mps": float(dead_zone_mps),
         "collision_fraction_mean": _stat(np.mean, collision_fraction[ok][solved]),
-        "steering_change": steering_change_stats(steer[driving], tick_s),
+        "steering_change": steering_change_stats(
+            steer, tick_s, driving[1:] & driving[:-1] if n > 1 else None
+        ),
         "solve_time_ms_this_machine": {
             "p50": _stat(np.percentile, solve_time_s[ok][solved] * 1e3, 50),
             "p99": _stat(np.percentile, solve_time_s[ok][solved] * 1e3, 99),
         },
     }
+    if block_reason is not None and n:
+        br = np.asarray(block_reason)[ok]
+        out["block_reason_counts"] = {
+            BLOCK_NAMES.get(int(k), str(int(k))): int((br == k).sum())
+            for k in np.unique(br)
+            if k != 0
+        }
+    if track_confidence is not None and n:
+        tc = np.asarray(track_confidence, dtype=np.float64)[ok]
+        out["track_confidence_mean"] = float(np.mean(tc))
+        out["track_confidence_zero_share"] = float(np.mean(tc == 0.0))
+    if freespace_goal_x_m is not None and n:
+        out["freespace_goal_share"] = float(
+            np.mean(np.isfinite(np.asarray(freespace_goal_x_m)[ok]))
+        )
     if recorded_t is not None and recorded_state is not None and len(recorded_t) and n:
         out["agreement_with_recorded"] = state_agreement(t, st, recorded_t, recorded_state)
     return out

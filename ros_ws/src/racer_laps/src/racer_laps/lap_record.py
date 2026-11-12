@@ -59,7 +59,10 @@ class LapRecorder:
         self._brakes += 1
 
     def note_planner(self, state: int, clearance_m: float) -> None:
-        """Every planner status message (50 Hz), not only the ones at pose samples."""
+        """Every planner status message (50 Hz), not only the ones at pose samples. Any state but
+        DRIVING makes the lap unclean: NO_SCAN, NO_ODOM, BLOCKED (5), FAULT, and RECOVERING (7),
+        the car backing out of a stuck pose. Low track confidence alone does not (it is still
+        DRIVING)."""
         if state != STATE_DRIVING:
             self._non_driving = True
         if math.isfinite(clearance_m):

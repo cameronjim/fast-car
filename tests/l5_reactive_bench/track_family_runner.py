@@ -279,6 +279,10 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         perception, planner = pnp_launch.parameters_for(
             args.perception_bundle, args.dynamics_bundle, args.backend, args.v_max_mps, mounted
         )
+        if args.plant_speed_deadband:
+            # The test bundle has no speed dead zone of its own (the car's will): tell the planner
+            # about the plant's through its speed floor, dead zone plus the planner's margin.
+            planner["speed_floor_margin_mps"] = float(args.plant_speed_deadband) + 0.03
         nodes["track_perception_node"], nodes["mppi_planner_node"] = perception, planner
         pnp_nodes = [
             ("racer_track_perception", "track_perception_node"),
@@ -637,6 +641,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             }
             # Every /safety/events PHASE_ENGAGE with SEVERITY_BRAKE, whatever gate raised it.
             result["safety_brakes"] = sum(1 for e in recording.events if e[2] == 0 and e[3] == 2)
+            # Every engagement of safety_node's rate limit: the planner's own output rate limit
+            # is meant to keep it inside safety_node's, so a pass has none.
+            result["rate_limit_events"] = sum(
+                1 for e in recording.events if e[1] == "rate_limit" and e[2] == 0
+            )
             # The command path: only the planner on /drive_raw, only safety_node on /drive.
             result["publisher_nodes"] = {
                 topic: sorted(i.node_name for i in node.get_publishers_info_by_topic(topic))

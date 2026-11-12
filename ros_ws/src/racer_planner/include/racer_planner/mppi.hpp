@@ -1,5 +1,6 @@
 // MPPI solver. Samples control sequences around a warm started nominal, rolls each through the
-// dynamics model, scores it and returns the weighted average. No allocation after construction.
+// dynamics model, scores it and returns the weighted average. No allocation after construction,
+// and no random number is drawn in solve: the noise is a table generated once from the seed.
 #ifndef RACER_PLANNER_MPPI_HPP_
 #define RACER_PLANNER_MPPI_HPP_
 
@@ -11,17 +12,19 @@
 #include "racer_planner/footprint.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/rng.hpp"
+#include "racer_planner/speed_set.hpp"
 #include "racer_planner/vehicle_geometry.hpp"
 
 namespace racer_planner {
 
 struct MppiParams {
   int horizon_steps = 30;
-  int samples = 768;
-  double sigma_speed_mps = 0.25;
-  double sigma_steering_rad = 0.25;
-  double beta = 0.7;
-  double lambda = 1.0;
+  int samples = 512;
+  double sigma_speed_mps = 0.15;
+  double sigma_steering_rad = 0.12;
+  double beta = 0.8;
+  double lambda = 0.15;
+  double cost_scale_floor = 0.2;  // floor of (J_median - J_min) in the weight temperature
   std::uint64_t seed = 1;
   // cost weights and margins (see claude-docs/13 section 5.C and the commit that tuned them)
   double w_progress = 10.0;
@@ -34,8 +37,14 @@ struct MppiParams {
   double m_bound_m = 0.05;
   double w_lat = 5.0;
   double a_lat_max_mps2 = 2.0;
-  double w_du = 0.5;
+  double w_du = 0.5;          // speed command differences
+  double w_steer_rate = 0.1;  // steering command rate squared, first step against prev_cmd
   double w_term = 50.0;
+  double corner_radius_m = Footprint::kDefaultCornerRadiusM;
+  double tick_s = 0.02;  // control tick: the warm start advances the nominal by tick_s / dt
+  // Sampled and output speeds are 0 or at least this (0 turns the rule off). The Planner fills it
+  // from the dynamics bundle; the solver takes it as given.
+  double speed_floor_mps = 0.0;
 };
 
 struct CostBreakdown {
@@ -44,7 +53,8 @@ struct CostBreakdown {
   double clearance = 0.0;
   double boundary = 0.0;
   double lateral = 0.0;
-  double smoothness = 0.0;
+  double smoothness = 0.0;  // speed command differences
+  double steer_rate = 0.0;
   double terminal = 0.0;
   double total = 0.0;
   double s_end_m = 0.0;
@@ -56,14 +66,14 @@ struct CostBreakdown {
 
 struct SolveInput {
   State x0;          // car state in the planning frame, after the delay roll-forward
-  Control prev_cmd;  // last published command, for the smoothness term
+  Control prev_cmd;  // last published command, for the smoothness terms
   double v_cap_mps = 0.0;
   const TrackProjector* track = nullptr;
   const DistanceField* field = nullptr;
 };
 
 struct SolveOutput {
-  Control cmd;  // first command of the weighted average, before rate limiting
+  Control cmd;  // first command of the filtered weighted average, before rate limiting
   bool all_collide = false;
   double best_cost = 0.0;
   double plan_progress_m = 0.0;
@@ -74,6 +84,13 @@ struct SolveOutput {
 
 constexpr int kMinSamples = 64;
 constexpr int kMaxSamples = 4096;
+// Sample 0 is the nominal, 1 the nominal steering at speed 0, 2 to 28 the constant command arcs.
+constexpr int kArcSteeringValues = 9;
+constexpr int kArcSpeedValues = 3;
+constexpr int kStructuredSamples = 2 + kArcSteeringValues * kArcSpeedValues;
+
+// 3 tap smoothing (0.25, 0.5, 0.25) of the steering of a sequence, the end values repeated.
+void smooth_steering_3tap(Control* seq, int n);
 
 class MppiSolver {
  public:
@@ -94,6 +111,12 @@ class MppiSolver {
   // (the first is the initial state).
   const std::vector<Pose2>& plan() const { return plan_; }
   const std::vector<Control>& nominal() const { return u_; }
+  // The filtered weighted mean of the last solve (before the warm start shift).
+  const std::vector<Control>& mean_sequence() const { return u_new_; }
+  // The sampled sequences of the last solve (samples() * horizon_steps controls, sample major),
+  // for tests.
+  const std::vector<Control>& samples_buffer() const { return v_; }
+  int horizon() const { return horizon_; }
 
   // Cost of one control sequence of horizon_steps controls (for tests and diagnostics).
   double evaluate_sequence(const SolveInput& in, const Control* seq, CostBreakdown* out) const;
@@ -105,6 +128,7 @@ class MppiSolver {
   };
   double evaluate(const SolveInput& in, const Ctx& ctx, const Control* u, CostBreakdown* bd,
                   Pose2* poses) const;
+  void build_samples(const SolveInput& in, double v_cap);
 
   MppiParams p_;
   DynamicsModel model_;
@@ -116,10 +140,11 @@ class MppiSolver {
   int capacity_;
   int samples_;
   bool first_ = true;
-  GaussianRng rng_;
+  std::vector<double> noise_;       // capacity * horizon * 2 standard normals, frozen
   std::vector<Control> u_;          // nominal sequence
   std::vector<Control> v_;          // capacity * horizon sampled sequences
   std::vector<double> cost_;        // capacity
+  std::vector<double> scratch_;     // capacity, for the median
   std::vector<unsigned char> hit_;  // capacity, 1 when the sample collided
   std::vector<Control> u_new_;
   std::vector<Pose2> plan_;

@@ -2,7 +2,10 @@
 // behaviours: determinism, the collision fallback, the brake sample.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <set>
+#include <utility>
 #include <vector>
 
 #include "racer_planner/mppi.hpp"
@@ -22,6 +25,7 @@ MppiParams only_weights() {
   p.w_bound = 0.0;
   p.w_lat = 0.0;
   p.w_du = 0.0;
+  p.w_steer_rate = 0.0;
   p.w_term = 0.0;
   p.c_collision = 1e4;
   p.d_hard_m = -100.0;  // collisions off unless a test turns them on
@@ -254,24 +258,61 @@ TEST(MppiCost, LateralAccelerationOnlyAboveTheLimit) {
   EXPECT_EQ(none.lateral, 0.0);
 }
 
-TEST(MppiCost, SmoothnessIsTheWeightedSumOfSquaredControlChanges) {
+TEST(MppiCost, SmoothnessIsTheWeightedSumOfSquaredSpeedCommandChanges) {
   Env e;
   MppiParams p = only_weights();
   p.w_du = 0.5;
   auto s = e.solver(p);
   std::vector<Control> seq(kT, Control{0.5, 0.0});
-  seq[0] = Control{0.6, 0.1};  // change from prev (0.5, 0.0) at step 0, back at step 1
+  seq[0] = Control{0.6, 0.1};  // speed change from prev (0.5) at step 0, back at step 1
   CostBreakdown bd;
   SolveInput in = e.input(0.5, 0.0);
   in.prev_cmd = Control{0.5, 0.0};
   s.evaluate_sequence(in, seq.data(), &bd);
-  const double expect = 0.5 * ((0.1 * 0.1 + 0.1 * 0.1) + (0.1 * 0.1 + 0.1 * 0.1));
-  EXPECT_NEAR(bd.smoothness, expect, 1e-9);
+  EXPECT_NEAR(bd.smoothness, 0.5 * (0.1 * 0.1 + 0.1 * 0.1), 1e-9);  // steering is not in here
+  EXPECT_EQ(bd.steer_rate, 0.0);
   // A constant sequence equal to the previous command is free.
   const auto flat = e.constant(0.5, 0.0);
   CostBreakdown zero;
   s.evaluate_sequence(in, flat.data(), &zero);
   EXPECT_EQ(zero.smoothness, 0.0);
+}
+
+TEST(MppiCost, SteeringRateIsTheSquaredCommandRateTimesDtAgainstTheLastPublishedCommand) {
+  Env e;
+  MppiParams p = only_weights();
+  p.w_steer_rate = 0.1;
+  auto s = e.solver(p);
+  const double dt = e.dyn.dt_s;
+  std::vector<Control> seq(kT, Control{0.5, 0.0});
+  seq[0] = Control{0.5, 0.1};  // 0.1 rad from the published 0.0 at step 0, back at step 1
+  CostBreakdown bd;
+  SolveInput in = e.input(0.5, 0.0);
+  in.prev_cmd = Control{0.5, 0.0};
+  s.evaluate_sequence(in, seq.data(), &bd);
+  const double rate = 0.1 / dt;
+  EXPECT_NEAR(bd.steer_rate, 0.1 * (2.0 * rate * rate * dt), 1e-9);
+  EXPECT_EQ(bd.smoothness, 0.0);
+  EXPECT_NEAR(bd.total, bd.steer_rate, 1e-12);
+  // The first step is measured against the last published command, not against zero.
+  in.prev_cmd = Control{0.5, 0.1};
+  CostBreakdown held;
+  s.evaluate_sequence(in, seq.data(), &held);
+  EXPECT_NEAR(held.steer_rate, 0.1 * (rate * rate * dt), 1e-9);  // only the step back remains
+  // A constant steering equal to the published one is free.
+  const auto flat = e.constant(0.5, 0.1);
+  CostBreakdown zero;
+  s.evaluate_sequence(in, flat.data(), &zero);
+  EXPECT_EQ(zero.steer_rate, 0.0);
+  // A slower change of the same total size is cheaper (rate squared, not the total).
+  std::vector<Control> ramp(kT, Control{0.5, 0.1});
+  for (int t = 0; t < 5; ++t) ramp[t].steering_cmd = 0.1 * (t + 1) / 5.0;
+  in.prev_cmd = Control{0.5, 0.0};
+  CostBreakdown slow, fast;
+  s.evaluate_sequence(in, ramp.data(), &slow);
+  std::vector<Control> jump(kT, Control{0.5, 0.1});
+  s.evaluate_sequence(in, jump.data(), &fast);
+  EXPECT_LT(slow.steer_rate, fast.steer_rate);
 }
 
 TEST(MppiCost, TerminalTermRequiresStoppingWithinTheVisibleTrack) {
@@ -313,7 +354,7 @@ TEST(MppiCost, TotalIsTheSumOfTheTerms) {
   s.evaluate_sequence(in, seq.data(), &bd);
   EXPECT_NEAR(bd.total,
               bd.progress + bd.collision + bd.clearance + bd.boundary + bd.lateral + bd.smoothness +
-                  bd.terminal,
+                  bd.steer_rate + bd.terminal,
               1e-9);
 }
 
@@ -440,4 +481,240 @@ TEST(MppiSolver, SpeedCapIsRespectedByEveryCommand) {
     EXPECT_GE(out.cmd.speed_cmd, 0.0);
     for (const Control& c : s.nominal()) EXPECT_LE(c.speed_cmd, 0.25 + 1e-12);
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sampling, temperature and smoothing
+
+TEST(SpeedSet, SnapRules) {
+  EXPECT_EQ(snap_speed(0.0, 0.2, 0.6), 0.0);
+  EXPECT_EQ(snap_speed(0.09, 0.2, 0.6), 0.0);  // below half the floor
+  EXPECT_EQ(snap_speed(0.1, 0.2, 0.6), 0.2);   // from half the floor up to the floor
+  EXPECT_EQ(snap_speed(0.15, 0.2, 0.6), 0.2);
+  EXPECT_EQ(snap_speed(0.2, 0.2, 0.6), 0.2);
+  EXPECT_EQ(snap_speed(0.4, 0.2, 0.6), 0.4);
+  EXPECT_EQ(snap_speed(0.9, 0.2, 0.6), 0.6);   // the cap wins
+  EXPECT_EQ(snap_speed(0.4, 0.2, 0.15), 0.0);  // a cap under the floor leaves only 0
+  EXPECT_EQ(snap_speed(0.4, 0.2, 0.0), 0.0);
+  EXPECT_EQ(snap_speed(-0.4, 0.2, 0.6), 0.0);
+  EXPECT_EQ(snap_speed(std::nan(""), 0.2, 0.6), 0.0);
+  EXPECT_EQ(snap_speed(0.05, 0.0, 0.6), 0.05);  // floor 0: no rule
+  EXPECT_EQ(snap_speed(0.7, 0.0, 0.6), 0.6);
+}
+
+TEST(MppiSolver, TwoSolvesWithTheSameInputsAgreeBitForBit) {
+  Env e;
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 256;
+  p.seed = 11;
+  p.speed_floor_mps = 0.2;
+  auto a = e.solver(p, 256);
+  auto b = e.solver(p, 256);
+  e.set_points(wall_across(1.5));
+  SolveInput in = e.input(0.3, 0.05, 0.6);
+  in.x0.y = 0.1;
+  for (int i = 0; i < 4; ++i) {
+    const SolveOutput oa = a.solve(in), ob = b.solve(in);
+    EXPECT_EQ(oa.cmd.speed_cmd, ob.cmd.speed_cmd);
+    EXPECT_EQ(oa.cmd.steering_cmd, ob.cmd.steering_cmd);
+    EXPECT_EQ(oa.best_cost, ob.best_cost);
+    EXPECT_EQ(oa.collision_fraction, ob.collision_fraction);
+    ASSERT_EQ(a.mean_sequence().size(), b.mean_sequence().size());
+    for (std::size_t t = 0; t < a.mean_sequence().size(); ++t) {
+      EXPECT_EQ(a.mean_sequence()[t].steering_cmd, b.mean_sequence()[t].steering_cmd);
+      EXPECT_EQ(a.mean_sequence()[t].speed_cmd, b.mean_sequence()[t].speed_cmd);
+    }
+  }
+  // after a reset the same input gives the first answer again: no random draw happens in solve
+  a.reset();
+  const SolveOutput first_a = a.solve(in);
+  a.reset();
+  const SolveOutput again_a = a.solve(in);
+  EXPECT_EQ(first_a.cmd.steering_cmd, again_a.cmd.steering_cmd);
+  EXPECT_EQ(first_a.cmd.speed_cmd, again_a.cmd.speed_cmd);
+}
+
+TEST(MppiSolver, ArcPrimitivesAreSampledAndReachBothSteeringLimits) {
+  Env e;
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 64;
+  p.speed_floor_mps = 0.2;
+  auto s = e.solver(p, 64);
+  s.solve(e.input(0.3, 0.0, 0.6));
+  const auto& v = s.samples_buffer();
+  const int T = s.horizon();
+  // sample 1: the nominal steering at speed 0
+  for (int t = 0; t < T; ++t) EXPECT_EQ(v[static_cast<std::size_t>(T + t)].speed_cmd, 0.0);
+  // samples 2 to 28: every (steering, speed) pair once, constant along the horizon
+  std::set<std::pair<int, int>> seen;
+  const double speeds[3] = {0.2, 0.6, 0.4};
+  double lo = 1e9, hi = -1e9;
+  for (int a = 0; a < kArcSteeringValues * kArcSpeedValues; ++a) {
+    const Control* arc = &v[static_cast<std::size_t>(2 + a) * T];
+    for (int t = 1; t < T; ++t) {
+      ASSERT_EQ(arc[t].speed_cmd, arc[0].speed_cmd);
+      ASSERT_EQ(arc[t].steering_cmd, arc[0].steering_cmd);
+    }
+    lo = std::min(lo, arc[0].steering_cmd);
+    hi = std::max(hi, arc[0].steering_cmd);
+    const int is = static_cast<int>(std::lround((arc[0].steering_cmd - e.g.steering_min_rad) /
+                                                (e.g.steering_max_rad - e.g.steering_min_rad) *
+                                                (kArcSteeringValues - 1)));
+    int sp = -1;
+    for (int k = 0; k < 3; ++k) {
+      if (std::fabs(arc[0].speed_cmd - speeds[k]) < 1e-12) sp = k;
+    }
+    ASSERT_GE(sp, 0) << arc[0].speed_cmd;
+    seen.insert({is, sp});
+    EXPECT_NEAR(arc[0].steering_cmd,
+                e.g.steering_min_rad +
+                    (e.g.steering_max_rad - e.g.steering_min_rad) * is / (kArcSteeringValues - 1),
+                1e-12);
+  }
+  EXPECT_EQ(seen.size(), 27u);
+  EXPECT_DOUBLE_EQ(lo, e.g.steering_min_rad);
+  EXPECT_DOUBLE_EQ(hi, e.g.steering_max_rad);
+}
+
+TEST(MppiSolver, EveryCommandIsZeroOrAtLeastTheFloorAndWithinTheCap) {
+  Env e;
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 128;
+  p.speed_floor_mps = 0.2;
+  auto s = e.solver(p, 128);
+  for (double cap : {0.6, 0.25, 0.15, 0.0}) {
+    s.reset();
+    SolveInput in = e.input(0.1, 0.0, cap);
+    s.solve(in);
+    const auto& v = s.samples_buffer();
+    for (int k = 0; k < s.samples(); ++k) {
+      for (int t = 0; t < s.horizon(); ++t) {
+        const double sp = v[static_cast<std::size_t>(k) * s.horizon() + t].speed_cmd;
+        ASSERT_TRUE(sp == 0.0 || (sp >= 0.2 && sp <= cap + 1e-12)) << cap << " " << k << " " << sp;
+      }
+    }
+  }
+}
+
+TEST(MppiSolver, NoiseIsAntitheticBetweenTheTwoHalves) {
+  Env e;
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 129;  // 100 noise samples: 50 and their negations
+  p.sigma_speed_mps = 0.05;
+  p.sigma_steering_rad = 0.05;
+  auto s = e.solver(p, 129);
+  s.solve(
+      e.input(0.3, 0.0, 1.0));  // the first nominal is (0.3, 0.0), nothing clips at these sigmas
+  const auto& v = s.samples_buffer();
+  const int T = s.horizon();
+  const int m = 129 - kStructuredSamples;
+  ASSERT_EQ(m % 2, 0);
+  for (int j = 0; j < m / 2; ++j) {
+    const Control* a = &v[static_cast<std::size_t>(kStructuredSamples + j) * T];
+    const Control* b = &v[static_cast<std::size_t>(kStructuredSamples + j + m / 2) * T];
+    for (int t = 0; t < T; ++t) {
+      EXPECT_NEAR(a[t].steering_cmd + b[t].steering_cmd, 0.0, 1e-12);
+      EXPECT_NEAR(a[t].speed_cmd + b[t].speed_cmd, 0.6, 1e-12);
+    }
+  }
+}
+
+TEST(MppiSolver, Smooth3TapKeepsConstantsSpreadsAnImpulseAndRepeatsTheEnds) {
+  std::vector<Control> c(7, Control{0.3, 0.2});
+  smooth_steering_3tap(c.data(), 7);
+  for (const Control& x : c) {
+    EXPECT_DOUBLE_EQ(x.steering_cmd, 0.2);
+    EXPECT_DOUBLE_EQ(x.speed_cmd, 0.3);  // speed untouched
+  }
+  std::vector<Control> d(7, Control{0.0, 0.0});
+  d[3].steering_cmd = 1.0;
+  smooth_steering_3tap(d.data(), 7);
+  EXPECT_DOUBLE_EQ(d[2].steering_cmd, 0.25);
+  EXPECT_DOUBLE_EQ(d[3].steering_cmd, 0.5);
+  EXPECT_DOUBLE_EQ(d[4].steering_cmd, 0.25);
+  EXPECT_DOUBLE_EQ(d[1].steering_cmd, 0.0);
+  std::vector<Control> ends(4, Control{0.0, 0.0});
+  ends[0].steering_cmd = 1.0;
+  ends[3].steering_cmd = -1.0;
+  smooth_steering_3tap(ends.data(), 4);
+  EXPECT_DOUBLE_EQ(ends[0].steering_cmd, 0.75);  // end repeated: 0.25 * 1 + 0.5 * 1 + 0.25 * 0
+  EXPECT_DOUBLE_EQ(ends[3].steering_cmd, -0.75);
+  EXPECT_DOUBLE_EQ(ends[1].steering_cmd, 0.25);
+  smooth_steering_3tap(nullptr, 0);  // nothing to do, no crash
+}
+
+TEST(MppiSolver, WarmStartAdvancesTheMeanByTickOverDtOfAStep) {
+  Env e;
+  e.set_points(wall_across(2.0));
+  for (double tick : {0.02, 0.05, 0.0}) {
+    MppiParams p;
+    p.horizon_steps = kT;
+    p.samples = 128;
+    p.tick_s = tick;
+    auto s = e.solver(p, 128);
+    s.solve(e.input(0.3, 0.0, 0.6));
+    const double f = std::min(1.0, tick / e.dyn.dt_s);
+    const auto& mean = s.mean_sequence();
+    const auto& warm = s.nominal();
+    for (int t = 0; t + 1 < kT; ++t) {
+      EXPECT_NEAR(warm[t].steering_cmd,
+                  (1.0 - f) * mean[t].steering_cmd + f * mean[t + 1].steering_cmd, 1e-12);
+      EXPECT_NEAR(warm[t].speed_cmd, (1.0 - f) * mean[t].speed_cmd + f * mean[t + 1].speed_cmd,
+                  1e-12);
+    }
+    EXPECT_EQ(warm[kT - 1].steering_cmd, mean[kT - 1].steering_cmd);  // the last value is held
+  }
+}
+
+TEST(MppiSolver, FlatCostFieldGivesAFiniteWeightedMeanOfTheSamples) {
+  // Every cost weight off: all clean samples cost the same, the scale floor keeps the weights
+  // finite and uniform.
+  Env e;
+  MppiParams p = only_weights();
+  p.samples = 128;
+  p.sigma_speed_mps = 0.0;
+  p.sigma_steering_rad = 0.0;
+  auto s = e.solver(p, 128);
+  const SolveOutput out = s.solve(e.input(0.3, 0.0, 0.6));
+  EXPECT_TRUE(std::isfinite(out.cmd.speed_cmd));
+  EXPECT_TRUE(std::isfinite(out.cmd.steering_cmd));
+  EXPECT_FALSE(out.all_collide);
+  // The arcs are symmetric in steering, so the uniform mean steers straight.
+  EXPECT_NEAR(out.cmd.steering_cmd, 0.0, 0.05);
+}
+
+TEST(MppiSolver, SteeringCommandDoesNotChatterInAStaticScene) {
+  // The old solver drew fresh noise every tick and its mean wandered by sigma / sqrt(N). With the
+  // frozen noise table the same scene gives the same command tick after tick.
+  Env e;
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 512;
+  p.seed = 4;
+  p.speed_floor_mps = 0.2;
+  auto s = e.solver(p, 768);
+  SolveInput in = e.input(0.35, 0.0, 0.6);
+  in.x0.y = 0.08;
+  in.x0.yaw = 0.05;
+  for (int i = 0; i < 20; ++i) s.solve(in);  // let the warm start settle
+  double prev = s.solve(in).cmd.steering_cmd;
+  double sum2 = 0.0;
+  int flips = 0;
+  double prev_d = 0.0;
+  const int n = 200;
+  for (int i = 0; i < n; ++i) {
+    const double cur = s.solve(in).cmd.steering_cmd;
+    const double d = cur - prev;
+    sum2 += d * d;
+    if (i > 0 && d * prev_d < 0.0 && std::fabs(d) > 1e-6 && std::fabs(prev_d) > 1e-6) ++flips;
+    prev_d = d;
+    prev = cur;
+  }
+  const double rms = std::sqrt(sum2 / n);
+  EXPECT_LT(rms, 0.004);
+  EXPECT_LT(flips, n / 10);
 }

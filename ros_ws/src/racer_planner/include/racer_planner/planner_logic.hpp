@@ -31,6 +31,11 @@ struct LogicParams {
   double selfcheck_hold_s = 0.5;
   bool use_lap_guidance = false;
   double guidance_timeout_s = 2.0;
+  // Output shaping of a driving command (Planner): first-order low-pass time constant on the
+  // steering, and the share of the vehicle's steering rate and acceleration limits the planner's
+  // own rate limit may use (safety_node limits at the full values, so the planner stays inside).
+  double steer_output_tau_s = 0.04;
+  double rate_limit_fraction = 0.45;
 };
 
 struct TrackSummary {
@@ -103,9 +108,16 @@ Command command_for_state(PlannerState state, const Command& solver_cmd, double 
                           double v_cap_mps, double steer_min_rad, double steer_max_rad);
 
 // Output rate limits: steering by max_steer_step, speed upward by max_speed_up_step (slowing is
-// never limited). Both relative to the previous published command.
+// never limited). Both relative to the previous published command. With speed_floor_mps > 0 a
+// limited speed that would land in (0, floor) while the wanted speed is at least the floor goes
+// to the floor at once: the drivetrain ignores anything in between, so ramping through it only
+// delays the start.
 Command rate_limit(const Command& wanted, const Command& previous, double max_steer_step_rad,
-                   double max_speed_up_step_mps);
+                   double max_speed_up_step_mps, double speed_floor_mps = 0.0);
+
+// One step of a first-order low-pass: previous + (wanted - previous) * (1 - exp(-tick / tau)).
+// tau <= 0 or a non finite input passes `wanted` (or `previous` when wanted is not finite).
+double lowpass_step(double previous, double wanted, double tick_s, double tau_s);
 
 // A double rounded to float32 that never lies outside [lo, hi] (0.449f is above 0.449). Non
 // finite input gives 0.

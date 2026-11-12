@@ -113,14 +113,24 @@ Command command_for_state(PlannerState state, const Command& solver_cmd, double 
   return c;
 }
 
+double lowpass_step(double previous, double wanted, double tick_s, double tau_s) {
+  if (!std::isfinite(wanted)) return previous;
+  if (!std::isfinite(previous) || !(tau_s > 0.0) || !(tick_s > 0.0)) return wanted;
+  return previous + (wanted - previous) * (1.0 - std::exp(-tick_s / tau_s));
+}
+
 Command rate_limit(const Command& wanted, const Command& previous, double max_steer_step_rad,
-                   double max_speed_up_step_mps) {
+                   double max_speed_up_step_mps, double speed_floor_mps) {
   Command c;
   c.steering_rad =
       previous.steering_rad +
       std::min(std::max(wanted.steering_rad - previous.steering_rad, -max_steer_step_rad),
                max_steer_step_rad);
   c.speed_mps = std::min(wanted.speed_mps, previous.speed_mps + max_speed_up_step_mps);
+  if (speed_floor_mps > 0.0 && c.speed_mps > 0.0 && c.speed_mps < speed_floor_mps &&
+      wanted.speed_mps >= speed_floor_mps) {
+    c.speed_mps = speed_floor_mps;
+  }
   return c;
 }
 

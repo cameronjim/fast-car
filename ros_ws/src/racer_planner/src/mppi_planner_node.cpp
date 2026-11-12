@@ -95,17 +95,21 @@ class MppiPlannerNode : public rclcpp::Node {
     MppiParams& mp = cfg.mppi;
     mp.horizon_steps = static_cast<int>(
         declare_int("horizon_steps", 30, 5, 100, "Rollout steps of the bundle's dt."));
-    const int samples = static_cast<int>(
-        declare_int("samples", 768, kMinSamples, kMaxSamples, "Samples per solve."));
+    const int samples = static_cast<int>(declare_int(
+        "samples", 512, kMinSamples, kMaxSamples, "Samples per solve (the budget may lower it)."));
     mp.samples = samples;
-    cfg.max_samples = samples;
+    cfg.max_samples = static_cast<int>(declare_int("max_samples", 768, kMinSamples, kMaxSamples,
+                                                   "Solver capacity, at least samples."));
     mp.sigma_speed_mps =
         declare_double("sigma_speed_mps", mp.sigma_speed_mps, 0.0, 2.0, "Speed noise std (m/s).");
     mp.sigma_steering_rad = declare_double("sigma_steering_rad", mp.sigma_steering_rad, 0.0, 1.0,
                                            "Steering noise std (rad).");
     mp.beta =
         declare_double("noise_beta", mp.beta, 0.0, 0.99, "Time correlation of the control noise.");
-    mp.lambda = declare_double("lambda", mp.lambda, 1e-3, 1e3, "MPPI temperature.");
+    mp.lambda = declare_double("lambda", mp.lambda, 1e-3, 1e3,
+                               "MPPI temperature, a fraction of (median - minimum) cost.");
+    mp.cost_scale_floor = declare_double("cost_scale_floor", mp.cost_scale_floor, 1e-3, 1e3,
+                                         "Floor of (median - minimum) cost in the temperature.");
     mp.seed =
         static_cast<std::uint64_t>(declare_int("seed", 1, 0, 2147483647, "Noise generator seed."));
     mp.w_progress = declare_double("w_progress", mp.w_progress, 0.0, 1e3, "Progress weight.");
@@ -124,7 +128,16 @@ class MppiPlannerNode : public rclcpp::Node {
     mp.w_lat = declare_double("w_lat", mp.w_lat, 0.0, 1e4, "Lateral acceleration weight.");
     mp.a_lat_max_mps2 = declare_double("a_lat_max_mps2", mp.a_lat_max_mps2, 0.1, 50.0,
                                        "Lateral acceleration limit (m/s^2).");
-    mp.w_du = declare_double("w_du", mp.w_du, 0.0, 1e4, "Control smoothness weight.");
+    mp.w_du = declare_double("w_du", mp.w_du, 0.0, 1e4, "Speed command change weight.");
+    mp.w_steer_rate = declare_double("w_steer_rate", mp.w_steer_rate, 0.0, 1e4,
+                                     "Steering command rate weight (rad/s squared).");
+    mp.corner_radius_m = declare_double("corner_radius_m", mp.corner_radius_m, 0.005, 0.2,
+                                        "Radius of the footprint corner circles (m).");
+    lg.steer_output_tau_s = declare_double("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5,
+                                           "Steering output low-pass time constant (s), 0 is off.");
+    lg.rate_limit_fraction =
+        declare_double("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0,
+                       "Share of the steering rate and acceleration limits the output may use.");
     mp.w_term = declare_double("w_term", mp.w_term, 0.0, 1e5, "Stop within sight weight.");
     cfg.budget.halve_over_s =
         declare_double("solve_halve_over_ms", 15.0, 1.0, 200.0,

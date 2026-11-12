@@ -81,7 +81,14 @@ add_dependencies(mppi_bench racer_planner_generate_vehicle_params)
 target_include_directories(mppi_bench PRIVATE "${RACER_GENERATED_DIR}" src)
 target_link_libraries(mppi_bench racer_planner_core)
 
-install(TARGETS mppi_planner_node mppi_bench DESTINATION lib/${PROJECT_NAME})
+# -- planner_replay_cli: a recorded scan / odometry / track stream through the real Planner ------
+# tools/pnp_replay.py drives it; no ROS at run time.
+add_executable(planner_replay_cli src/planner_replay_cli.cpp)
+add_dependencies(planner_replay_cli racer_planner_generate_vehicle_params)
+target_include_directories(planner_replay_cli PRIVATE "${RACER_GENERATED_DIR}" src)
+target_link_libraries(planner_replay_cli racer_planner_core)
+
+install(TARGETS mppi_planner_node mppi_bench planner_replay_cli DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
@@ -121,6 +128,13 @@ if(BUILD_TESTING)
     NAME test_mppi_bench_smoke
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/run_bench_smoke.py"
             --bench "$<TARGET_FILE:mppi_bench>"
+            --repo-root "${RACER_REPO_ROOT}"
+  )
+
+  add_test(
+    NAME test_planner_replay_smoke
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/run_replay_smoke.py"
+            --cli "$<TARGET_FILE:planner_replay_cli>"
             --repo-root "${RACER_REPO_ROOT}"
   )
 

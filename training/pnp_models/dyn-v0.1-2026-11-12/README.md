@@ -2,7 +2,7 @@
 
 Fitted dynamics bundle for the Plug-and-Play planner. Weights are not committed; the bundle lives under car-data/pnp/models/.
 
-vehicle_params 0.15.0, sysid session none-preliminary. Validity: v up to 1.3 m/s.
+vehicle_params 0.16.0, sysid session none-preliminary. Validity: v up to 1.3 m/s.
 
 ## Fitted nominal parameters
 

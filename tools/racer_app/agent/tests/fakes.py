@@ -18,6 +18,13 @@ from racer_agent.hostinfo import GIB, HostInfo
 from racer_agent.rosstate import RosState
 from racer_agent.runner import CmdResult
 
+APP_DRIVE_PID = 4242
+
+
+def terminal_drive(pid: int, *words: str) -> dict:
+    """A driving launch started from a terminal: `python3 /opt/ros/humble/bin/ros2 launch ...`."""
+    return {"pid": pid, "argv": ["/usr/bin/python3", "/opt/ros/humble/bin/ros2", *words]}
+
 
 @dataclass
 class World:
@@ -34,6 +41,13 @@ class World:
     launch_dies_on_start: bool = False
     docker_run_fails: str = ""
     stuck_on_int: bool = False  # the stack ignores SIGINT until killed
+    stuck_on_term: bool = False  # ... and SIGTERM too, until SIGKILL
+    slow_stop_polls: int = 0  # after SIGINT the container takes this many polls to exit
+    #: driving launches started from a terminal: {"pid": int, "argv": [str, ...]} (container pids)
+    external_drives: list = field(default_factory=list)
+    ignore_int_external: bool = False
+    drive_cmd: str = ""  # the ros2 command of the app-started launch
+    signals: list = field(default_factory=list)  # (container, signal) of every docker kill
     park_reply: str = "response:\nstd_srvs.srv.Trigger_Response(success=True, message='ok')"
 
     def disk_usage(self, _path: str) -> tuple[int, int, int]:
@@ -97,7 +111,16 @@ class World:
             c = self.containers.get(argv[4])
             if not c:
                 return (1, "")
-            return (0, "true" if c["state"] == "running" else "false")
+            if c["state"] == "stopping":
+                c["polls"] = c.get("polls", 0) - 1
+                if c["polls"] <= 0:
+                    c["state"] = "exited"
+                    c.get("on_exit", lambda: None)()
+                    self.drive_label = None
+                    self.external_drives.clear()
+            return (0, "true" if c["state"] in ("running", "stopping") else "false")
+        if argv[2] == "-f" and argv[3] == "{{.State.ExitCode}}":
+            return (0, "0\n") if argv[4] in self.containers else (1, "")
         if argv[2] == "image":
             return None
         return None
@@ -119,13 +142,21 @@ class World:
         c = self.containers.get(name)
         if not c:
             return (1, "")
-        if "-s" in argv and argv[argv.index("-s") + 1] == "INT":
-            if not self.stuck_on_int:
-                c["state"] = "exited"
-                self.drive_label = None
+        sig = argv[argv.index("-s") + 1] if "-s" in argv else "KILL"
+        self.signals.append((name, sig))
+        if sig == "INT":
+            if self.stuck_on_int:
+                return (0, "")
+            if self.slow_stop_polls:
+                c["state"] = "stopping"
+                c["polls"] = self.slow_stop_polls
+                return (0, "")
+        if sig == "TERM" and self.stuck_on_term:
             return (0, "")
         c["state"] = "exited"
+        c.get("on_exit", lambda: None)()
         self.drive_label = None
+        self.external_drives.clear()
         return (0, "")
 
     def _exec(self, argv):
@@ -140,9 +171,27 @@ class World:
                 return (0, "")
             m = re.search(r"echo (\S+) > /tmp/racer-drive.mode", script)
             self.drive_label = m.group(1) if m else "unknown"
+            m = re.search(r"exec (ros2 .*?) > /tmp/racer-drive.log", script)
+            self.drive_cmd = m.group(1) if m else ""
             return (0, "")
         if script == cmd.DRIVE_STATUS_SCRIPT:
-            return (0, self.drive_label + "\n") if self.drive_label else (1, "")
+            return (0, f"{APP_DRIVE_PID}\n{self.drive_label}\n") if self.drive_label else (1, "")
+        if script == cmd.DRIVE_SCAN_SCRIPT:
+            return (0, self._scan())
+        m = re.fullmatch(
+            r"for p in ([0-9 ]+); do grep -aq ros2 /proc/\$p/cmdline 2>/dev/null && "
+            r"kill -(INT|TERM|KILL) \$p; done",
+            script,
+        )
+        if m:
+            pids = {int(x) for x in m.group(1).split()}
+            sig = m.group(2)
+            if sig == "INT" and self.ignore_int_external:
+                return (0, "")
+            self.external_drives[:] = [d for d in self.external_drives if d["pid"] not in pids]
+            if APP_DRIVE_PID in pids:
+                self.drive_label = None
+            return (0, "")
         m = re.search(r"kill -(INT|TERM|KILL) \$p$", script)
         if m:
             if self.drive_label is None:
@@ -163,6 +212,22 @@ class World:
             Path(str(host_path) + ".yaml").write_text("image: x.pgm\n")
             return (0, "result: 0")
         return (1, "")
+
+    def _scan(self) -> str:
+        """What DRIVE_SCAN_SCRIPT prints: every process whose command line mentions ros2."""
+        sep = "\x1f"
+        lines = [
+            f"1 python3{sep}/opt/ros/humble/bin/ros2{sep}launch{sep}racer_bringup{sep}car_teleop.launch.py"
+        ]
+        lines.append(
+            f"88 bash{sep}-c{sep}ros2 launch racer_control gap_follow.launch.py"
+        )  # a wrapper
+        if self.drive_label:
+            words = (self.drive_cmd or "ros2 launch racer_control gap_follow.launch.py").split()
+            lines.append(f"{APP_DRIVE_PID} python3{sep}/opt/ros/humble/bin/{sep.join(words)}")
+        for d in self.external_drives:
+            lines.append(f"{d['pid']} " + sep.join(d["argv"]))
+        return "\n".join(lines) + "\n"
 
     # -- convenience ----------------------------------------------------------------------
     def start_stack(self, flags: str = "lidar:=true vesc:=true", state: str = "running"):

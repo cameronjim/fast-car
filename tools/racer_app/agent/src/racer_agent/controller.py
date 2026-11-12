@@ -53,11 +53,45 @@ class ActionError(Exception):
         self.data = data or {}
 
 
+TERMINAL_SUFFIX = " (started from a terminal)"
+
+
+@dataclass(frozen=True)
+class DriveState:
+    """`label`: the drive the app started (None if none). `external`: other driving launches."""
+
+    label: str | None
+    external: list[cmd.DriveProcess]
+
+    @property
+    def mode(self) -> str | None:
+        if self.label:
+            return self.label
+        if self.external:
+            return self.external[0].mode + TERMINAL_SUFFIX
+        return None
+
+
 @dataclass(frozen=True)
 class Raceline:
     id: str
     path: Path
     source: str  # "repo" or "data"
+
+
+def _describe(mode: str, params: dict[str, Any]) -> str:
+    """The choices a drive was started with, for the action log line (the UI shows `detail`)."""
+    if mode == "pnp":
+        return (
+            f" dynamics={params.get('dynamics') or 'NONE'}"
+            f" perception={params.get('perception') or 'none'}"
+            f" planner_params={params.get('params_file') or 'default'}"
+            f" v_max={params.get('v_max_mps')}"
+        )
+    if mode == "gap_follow":
+        cap = params.get("max_speed_mps")
+        return f" max_speed={'profile default' if cap is None else f'{cap:.2f} m/s'}"
+    return ""
 
 
 class Controller:
@@ -89,6 +123,7 @@ class Controller:
         self._growth_lock = threading.Lock()
         self._growth_bag: str | None = None
         self._growth_samples: deque[tuple[float, int]] = deque()
+        self.last_stopped_external = 0  # terminal-started launches the last _kill_drive saw
 
     @staticmethod
     def _timer_defer(delay: float, fn: Callable[[], None]) -> None:
@@ -126,14 +161,29 @@ class Controller:
         res = self.runner.run(cmd.recorder_check_argv(self.s.stack_container), timeout=10)
         return res.ok and cmd.recorder_running(res.stdout)
 
-    def drive_mode(self) -> str | None:
-        """The running driving mode, or None. Asks the container, not our own memory."""
+    def drive_state(self) -> DriveState:
+        """Every driving launch in the container. Asks the container, not our own memory.
+
+        The one the app started is named by its pid file; any other (`docker exec ... ros2
+        launch` from a terminal) is found by scanning the container's processes for a driving
+        launch, so it shows in the app and STOP ALL can stop it too.
+        """
         res = self.runner.run(
             cmd.exec_bash(self.s.stack_container, cmd.DRIVE_STATUS_SCRIPT), timeout=10
         )
-        if res.ok and res.stdout.strip():
-            return res.stdout.strip()
-        return None
+        label, app_pid = None, None
+        lines = res.stdout.strip().splitlines() if res.ok else []
+        if len(lines) >= 2 and lines[0].isdigit():
+            app_pid, label = int(lines[0]), lines[1].strip() or None
+        scan = self.runner.run(
+            cmd.exec_bash(self.s.stack_container, cmd.DRIVE_SCAN_SCRIPT), timeout=10
+        )
+        found = cmd.parse_drive_processes(scan.stdout) if scan.ok else []
+        return DriveState(label, [p for p in found if p.pid != app_pid])
+
+    def drive_mode(self) -> str | None:
+        """The running driving mode (the app's, else one started from a terminal), or None."""
+        return self.drive_state().mode
 
     def _heartbeat_active(self) -> bool | None:
         res = self.runner.run(["systemctl", "is-active", HEARTBEAT_UNIT], timeout=5)
@@ -172,7 +222,8 @@ class Controller:
     def status(self) -> dict[str, Any]:
         snap = self.snapshot()
         report = evaluate(snap, self.s.thresholds)
-        mode = self.drive_mode() if snap.stack_running else None
+        drive = self.drive_state() if snap.stack_running else DriveState(None, [])
+        mode = drive.mode
         return {
             "time": self._clock(),
             "checks": report.as_dict(),
@@ -182,7 +233,14 @@ class Controller:
                 "flags": snap.stack_flags,
             },
             "cameras": {"running": snap.containers.get(self.s.camera_container) == "running"},
-            "drive": {"mode": mode, "running": mode is not None},
+            "drive": {
+                "mode": mode,
+                "running": mode is not None,
+                # driving launches the app did not start (docker exec ... ros2 launch)
+                "external": [
+                    {"pid": p.pid, "mode": p.mode, "command": p.command} for p in drive.external
+                ],
+            },
             "containers": snap.containers,
             "disk_free_gb": snap.disk_free_gb,
             "uptime_s": snap.uptime_s,
@@ -236,6 +294,10 @@ class Controller:
             "maps": self.maps(),
             "racelines": [r.id for r in self.racelines()],
             "drive_modes": list(cmd.DRIVE_MODES),
+            "gap_follow_speed": {
+                p: dict(zip(("min", "max"), self.gap_follow_speed_limits(p)))
+                for p in cmd.GAP_FOLLOW_PROFILES
+            },
             "policy": self.policy_status(),
             "pnp": self.pnp_status(),
             "patrols": self.patrols(),
@@ -364,6 +426,7 @@ class Controller:
             return {"message": "stack starting", "flags": params}
 
     def _wait_stopped(self, container: str, seconds: float) -> bool:
+        poll = 0.5 if seconds <= 60.0 else 1.0  # a 10 minute wait is not 1200 docker calls
         waited = 0.0
         while waited < seconds:
             res = self.runner.run(
@@ -371,31 +434,94 @@ class Controller:
             )
             if not res.ok or res.stdout.strip() != "true":
                 return True
-            self._sleep(0.5)
-            waited += 0.5
+            self._sleep(poll)
+            waited += poll
         return False
 
-    def _stop_container(self, container: str) -> str:
-        """SIGINT, wait, then SIGKILL, then rm. Not `docker stop`: see the runbook "Stopping"."""
+    def _exit_code(self, container: str) -> str:
+        res = self.runner.run(
+            ["docker", "inspect", "-f", "{{.State.ExitCode}}", container], timeout=10
+        )
+        return res.stdout.strip() if res.ok else "?"
+
+    def _stop_container(self, container: str, timeout_s: float) -> tuple[str, str]:
+        """SIGINT, wait up to `timeout_s`, then SIGTERM, a short wait, then SIGKILL, then rm.
+
+        Not `docker stop` (SIGTERM first: the runbook "Stopping" table shows it leaves the PWM
+        channels enabled at neutral, and it cuts the bag recorder off before it writes the mcap
+        footer and metadata.yaml). SIGINT is what Ctrl-C sends and what ros2 launch shuts down
+        cleanly on; the wait is long because closing a multi-GB bag takes minutes. Returns
+        (short outcome for the UI, detail for the action log).
+        """
         states = self.container_states()
         if container not in states:
-            return "not present"
-        how = "stopped"
+            return "not present", "not present"
+        how, detail = "stopped", "was not running"
         if states[container] == "running":
-            self.runner.run(["docker", "kill", "-s", "INT", container], timeout=15)
-            if not self._wait_stopped(container, 30.0):
-                self.runner.run(["docker", "kill", container], timeout=15)
-                how = "had to be killed"
+            start = self._clock()
+            killed = self.runner.run(["docker", "kill", "-s", "INT", container], timeout=15)
+            if not killed.ok:
+                log.warning("docker kill -s INT %s failed: %s", container, killed.tail())
+            if self._wait_stopped(container, timeout_s):
+                took = self._clock() - start
+                how = "stopped"
+                detail = (
+                    f"SIGINT, clean exit after {took:.0f} s, exit code {self._exit_code(container)}"
+                )
+            else:
+                log.warning(
+                    "%s still running %.0f s after SIGINT: sending SIGTERM", container, timeout_s
+                )
+                self.runner.run(["docker", "kill", "-s", "TERM", container], timeout=15)
+                if self._wait_stopped(container, self.s.stop_term_grace_s):
+                    how = "needed SIGTERM"
+                    detail = (
+                        f"no exit {timeout_s:.0f} s after SIGINT, exited after SIGTERM: "
+                        "a bag it was writing may be unfinished"
+                    )
+                else:
+                    log.warning("%s ignored SIGTERM: sending SIGKILL", container)
+                    self.runner.run(["docker", "kill", container], timeout=15)
+                    how = "had to be killed"
+                    detail = (
+                        f"ignored SIGINT for {timeout_s:.0f} s and SIGTERM for "
+                        f"{self.s.stop_term_grace_s:.0f} s, SIGKILL: a bag it was writing is unfinished"
+                    )
         self.runner.run(["docker", "rm", container], timeout=20)
-        return how
+        return how, detail
+
+    def _recording_bag(self) -> str | None:
+        """Name of the bag the recorder is writing now (the newest folder), or None."""
+        if not self.snapshot(fresh=True).recorder_running or not self.s.bags.is_dir():
+            return None
+        dirs = [p for p in self.s.bags.iterdir() if p.is_dir() and not p.is_symlink()]
+        return max(dirs, key=lambda p: p.stat().st_mtime).name if dirs else None
+
+    def _bag_finalized(self, name: str | None) -> str:
+        """After the stack stopped: did the recorder close that bag (metadata.yaml is written last)."""
+        if name is None:
+            return ""
+        if (self.s.bags / name / "metadata.yaml").is_file():
+            return f"; bag {name} finalized (metadata.yaml present)"
+        return (
+            f"; bag {name} has NO metadata.yaml: the recorder did not close it "
+            "(try `ros2 bag reindex`)"
+        )
 
     def stop_stack(self, actor: str = "") -> dict[str, Any]:
         with self._lock:
+            bag = self._recording_bag()
             self._kill_drive()
-            how = self._stop_container(self.s.stack_container)
+            how, detail = self._stop_container(self.s.stack_container, self.s.stop_timeout_stack_s)
             self._invalidate()
-            self._log("stack.stop", True, actor, how)
-            return {"message": f"stack {how}"}
+            bag_note = self._bag_finalized(bag) if how != "not present" else ""
+            ok = how in ("stopped", "not present") and "NO metadata" not in bag_note
+            self._log("stack.stop", ok, actor, detail + bag_note)
+            return {
+                "message": f"stack {how}{bag_note}",
+                "bag": bag,
+                "bag_finalized": bool(bag) and "NO metadata" not in bag_note,
+            }
 
     def restart_stack(self, flags: cmd.StackFlags | None, actor: str = "") -> dict[str, Any]:
         with self._lock:
@@ -451,9 +577,9 @@ class Controller:
 
     def stop_cameras(self, actor: str = "") -> dict[str, Any]:
         with self._lock:
-            how = self._stop_container(self.s.camera_container)
+            how, detail = self._stop_container(self.s.camera_container, self.s.stop_timeout_other_s)
             self._invalidate()
-            self._log("cameras.stop", True, actor, how)
+            self._log("cameras.stop", how in ("stopped", "not present"), actor, detail)
             return {"message": f"cameras {how}"}
 
     # ------------------------------------------------------------------------------------
@@ -547,9 +673,11 @@ class Controller:
 
     def stop_perception(self, actor: str = "") -> dict[str, Any]:
         with self._lock:
-            how = self._stop_container(self.s.perception_container)
+            how, detail = self._stop_container(
+                self.s.perception_container, self.s.stop_timeout_other_s
+            )
             self._invalidate()
-            self._log("perception.stop", True, actor, how)
+            self._log("perception.stop", how in ("stopped", "not present"), actor, detail)
             return {"message": f"perception {how}"}
 
     def _spiderbot_precondition(self, snap: Snapshot) -> None:
@@ -628,6 +756,7 @@ class Controller:
             "backends": list(cmd.PNP_BACKENDS),
             "speed_range": list(cmd.PNP_SPEED_RANGE),
             "default_speed": cmd.PNP_DEFAULT_SPEED_MPS,
+            "params_files": self.pnp_params_files(),
         }
         launch = self.s.repo_dir / "ros_ws" / "src" / "racer_bringup" / "launch" / "pnp.launch.py"
         if not found["dynamics"]:
@@ -637,6 +766,18 @@ class Controller:
         else:
             reason = ""
         return {"available": not reason, "reason": reason, **status}
+
+    def pnp_params_files(self) -> list[str]:
+        """Planner parameter files the PnP card offers: data/pnp/*.yaml, plain files with a
+        shell-safe name, found by the agent (a name from the request must be one of these)."""
+        base = self.s.pnp_dir
+        if not base.is_dir():
+            return []
+        return sorted(
+            p.name
+            for p in base.glob("*.yaml")
+            if p.is_file() and not p.is_symlink() and cmd.NAME_RE.match(p.name)
+        )
 
     def _run_loader(self, directory: Path) -> CmdResult:
         """Run `python3 -m racer_policy.check`, the same load_deployment the node runs at
@@ -714,9 +855,13 @@ class Controller:
         pnp_dynamics: str = "",
         pnp_backend: str = "net",
         pnp_v_max_mps: float = cmd.PNP_DEFAULT_SPEED_MPS,
+        pnp_params: str = "",
+        max_speed_mps: float | None = None,
     ) -> dict[str, Any]:
         action = f"drive.start.{mode}"
         params: dict[str, Any] = {"mode": mode, "profile": profile, "raceline": raceline}
+        if mode == "gap_follow":
+            params["max_speed_mps"] = max_speed_mps
         if mode == "spiderbot":
             params.update({"patrol": patrol, "rule": rule, "speed_mps": speed_mps})
         if mode == "ml_policy":
@@ -728,6 +873,7 @@ class Controller:
                     "dynamics": pnp_dynamics,
                     "backend": pnp_backend,
                     "v_max_mps": pnp_v_max_mps,
+                    "params_file": pnp_params,
                 }
             )
         if mode not in cmd.DRIVE_MODES:
@@ -737,7 +883,7 @@ class Controller:
                 generation = self._stop_generation
             used_override = False
             try:
-                ros_cmd, label = self._prepare_drive(
+                ros_cmd, label, resolved = self._prepare_drive(
                     mode,
                     profile,
                     raceline,
@@ -745,11 +891,18 @@ class Controller:
                     rule,
                     speed_mps,
                     policy,
-                    (pnp_perception, pnp_dynamics, pnp_backend, pnp_v_max_mps),
+                    (pnp_perception, pnp_dynamics, pnp_backend, pnp_v_max_mps, pnp_params),
+                    max_speed_mps,
                 )
+                params.update(resolved)
                 used_override = self._gate_drive(override, override_reason)
-                if self.drive_mode() is not None:
-                    raise ActionError("a driving launch is already running: stop it first", 409)
+                already = self.drive_mode()
+                if already is not None:
+                    raise ActionError(
+                        f"a driving launch is already running ({already}): stop it first "
+                        "(STOP ALL stops launches started from a terminal too)",
+                        409,
+                    )
                 if mode in ("tracker", "ml_policy", "spiderbot"):
                     self._tracker_precondition(self.snapshot(fresh=True))
                 if mode == "spiderbot":
@@ -789,7 +942,7 @@ class Controller:
                 action,
                 True,
                 actor,
-                f"running as {running}",
+                f"running as {running}" + _describe(mode, params),
                 params=params,
                 override=used_override,
                 override_reason=override_reason if used_override else "",
@@ -805,9 +958,13 @@ class Controller:
         rule: str = "arms_raised",
         speed_mps: float = cmd.SPIDERBOT_DEFAULT_SPEED_MPS,
         policy: str = "",
-        pnp: tuple[str, str, str, float] = ("", "", "net", cmd.PNP_DEFAULT_SPEED_MPS),
-    ) -> tuple[str, str]:
-        """Validate a driving request against the whitelist: (ros2 command, mode label)."""
+        pnp: tuple[str, str, str, float, str] = ("", "", "net", cmd.PNP_DEFAULT_SPEED_MPS, ""),
+        max_speed_mps: float | None = None,
+    ) -> tuple[str, str, dict[str, Any]]:
+        """Validate a driving request against the whitelist.
+
+        Returns (ros2 command, mode label, the choices as resolved here, for the log).
+        """
         if mode == "pnp":
             return self._prepare_pnp(*pnp)
         if mode == "spiderbot":
@@ -821,6 +978,7 @@ class Controller:
             return (
                 cmd.spiderbot_cmd(container_path, rule, speed_mps),
                 f"spiderbot:{patrol}",
+                {},
             )
         if mode == "ml_policy":
             status = self.policy_status()
@@ -851,35 +1009,96 @@ class Controller:
                     ),
                 ),
                 f"ml_policy:{policy}",
+                {"policy": policy},
             )
         if mode == "tracker":
             match = [r for r in self.racelines() if r.id == raceline]
             if not match:
                 raise ActionError(f"unknown raceline {raceline!r}", 400)
             path = cmd.container_path(self.s.repo_dir, match[0].path)
-            return cmd.ros_cmd_for("tracker", raceline_container_path=path), f"tracker:{raceline}"
+            return (
+                cmd.ros_cmd_for("tracker", raceline_container_path=path),
+                f"tracker:{raceline}",
+                {},
+            )
         if mode in ("gap_follow", "park") and not profile:
             profile = "lane-2026-10-25" if mode == "gap_follow" else "floor-2026-10-07"
         label = f"{mode}:{profile}" if profile else mode
-        return cmd.ros_cmd_for(mode, profile=profile), label
+        resolved: dict[str, Any] = {"profile": profile}
+        if mode == "gap_follow" and max_speed_mps is not None:
+            low, high = self.gap_follow_speed_limits(profile)
+            if (
+                isinstance(max_speed_mps, bool)
+                or not isinstance(max_speed_mps, (int, float))
+                or not (low <= float(max_speed_mps) <= high)
+            ):
+                raise ActionError(
+                    f"gap follow max speed for profile {profile} must be between {low:g} and "
+                    f"{high:g} m/s (the profile's ceiling, and vehicle_params' speed cap)",
+                    400,
+                )
+        elif mode != "gap_follow" and max_speed_mps is not None:
+            raise ActionError("a max speed is only used with gap follow", 400)
+        return (
+            cmd.ros_cmd_for(
+                mode, profile=profile, max_speed_mps=max_speed_mps if mode == "gap_follow" else None
+            ),
+            label,
+            resolved,
+        )
+
+    def gap_follow_speed_limits(self, profile: str) -> tuple[float, float]:
+        """(lowest, highest) max speed in m/s the app will pass to gap follow for `profile`.
+
+        The highest is the smaller of the profile's own ceiling and vehicle_params'
+        limits.global_speed_cap_mps, read from the single source of truth (null or unreadable
+        leaves just the profile's ceiling).
+        """
+        ceiling = cmd.GAP_FOLLOW_PROFILE_MAX_SPEED_MPS.get(
+            profile, cmd.GAP_FOLLOW_PROFILE_MAX_SPEED_MPS["none"]
+        )
+        cap = self._vehicle_speed_cap()
+        high = min(ceiling, cap) if cap is not None else ceiling
+        return min(cmd.GAP_FOLLOW_MIN_SPEED_MPS, high), high
+
+    def _vehicle_speed_cap(self) -> float | None:
+        path = self.s.repo_dir / "config" / "vehicle_params.yaml"
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            cap = (raw.get("limits") or {}).get("global_speed_cap_mps")
+        except (OSError, yaml.YAMLError, AttributeError):
+            return None
+        return float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) else None
 
     def _prepare_pnp(
-        self, perception: str, dynamics: str, backend: str, v_max_mps: float
-    ) -> tuple[str, str]:
+        self, perception: str, dynamics: str, backend: str, v_max_mps: float, params_file: str = ""
+    ) -> tuple[str, str, dict[str, Any]]:
         status = self.pnp_status()
         if not status["available"]:
             raise ActionError("Plug-and-Play is disabled: " + status["reason"], 409)
         if backend not in cmd.PNP_BACKENDS:
             raise ActionError(f"backend must be one of {list(cmd.PNP_BACKENDS)}", 400)
-        if not dynamics and len(status["dynamics"]) == 1:
-            dynamics = status["dynamics"][0]
+        # The bundle is always named in the request, never guessed from "there is only one": an
+        # empty name once reached the log (and the owner could not tell which bundle drove).
+        if not dynamics:
+            raise ActionError(
+                "no dynamics bundle in the request: choose one "
+                f"(available: {', '.join(status['dynamics']) or 'none'})",
+                400,
+            )
         if dynamics not in status["dynamics"]:
             raise ActionError(
-                f"choose a dynamics bundle (available: {', '.join(status['dynamics'])})", 400
+                f"unknown dynamics bundle {dynamics!r} "
+                f"(available: {', '.join(status['dynamics']) or 'none'})",
+                400,
+            )
+        if params_file and params_file not in status["params_files"]:
+            raise ActionError(
+                f"unknown planner params file {params_file!r} "
+                f"(available: {', '.join(status['params_files']) or 'none'})",
+                400,
             )
         if backend == "net":
-            if not perception and len(status["perception"]) == 1:
-                perception = status["perception"][0]
             if perception not in status["perception"]:
                 raise ActionError(
                     "backend net needs a perception bundle "
@@ -898,8 +1117,20 @@ class Controller:
                 pnp_dynamics_container_path=cmd.container_path(self.s.repo_dir, models / dynamics),
                 pnp_backend=backend,
                 pnp_v_max_mps=v_max_mps,
+                pnp_params_container_path=(
+                    cmd.container_path(self.s.repo_dir, self.s.pnp_dir / params_file)
+                    if params_file
+                    else ""
+                ),
             ),
             f"pnp:{backend}",
+            {
+                "dynamics": dynamics,
+                "perception": perception,
+                "backend": backend,
+                "v_max_mps": v_max_mps,
+                "params_file": params_file,
+            },
         )
 
     def _signal_drive(self, signal: str) -> bool:
@@ -909,11 +1140,31 @@ class Controller:
         )
         return res.ok
 
+    def _signal_external(self, drive: DriveState, signal: str) -> bool:
+        """Send `signal` to the driving launches the app did not start. True if any exist."""
+        if not drive.external:
+            return False
+        self.runner.run(
+            cmd.exec_bash(
+                self.s.stack_container,
+                cmd.drive_pids_signal_script([p.pid for p in drive.external], signal),
+            ),
+            timeout=10,
+        )
+        return True
+
     def _kill_drive(self) -> bool:
-        """SIGINT the driving launch (like Ctrl-C), escalate if it lingers. No locks taken."""
+        """SIGINT every driving launch (like Ctrl-C), escalate if one lingers. No locks taken.
+
+        That is the launch the app started and any started from a terminal in the container.
+        """
+        self.last_stopped_external = 0
         if self.container_states().get(self.s.stack_container) != "running":
             return False
-        found = self._signal_drive("INT")
+        drive = self.drive_state()
+        found = self._signal_drive("INT") if drive.label else False
+        self.last_stopped_external = len(drive.external)
+        found = self._signal_external(drive, "INT") or found
         if not found:
             return False
         for signal in ("TERM", "KILL"):
@@ -921,7 +1172,10 @@ class Controller:
                 self._sleep(0.5)
                 if self.drive_mode() is None:
                     return True
-            self._signal_drive(signal)
+            left = self.drive_state()
+            if left.label:
+                self._signal_drive(signal)
+            self._signal_external(left, signal)
         self._sleep(0.5)
         return True
 
@@ -934,16 +1188,20 @@ class Controller:
         with self._gen_lock:
             self._stop_generation += 1
         killed = self._kill_drive()
+        external = self.last_stopped_external
         # A start that was mid-flight holds the drive lock; wait for it, then kill again.
         got = self._drive_lock.acquire(timeout=10)
         try:
             if got:
                 killed = self._kill_drive() or killed
+                external = max(external, self.last_stopped_external)
         finally:
             if got:
                 self._drive_lock.release()
         self._invalidate()
         detail = "stopped the driving launch" if killed else "no driving launch was running"
+        if external:
+            detail += f" ({external} started from a terminal)"
         self._log("stop_all", True, actor, detail)
         return {"message": detail, "was_running": killed}
 
@@ -1103,17 +1361,20 @@ class Controller:
         if confirm != kind:
             raise ActionError(f"type {kind!r} to confirm", 400)
         self._log(f"system.{kind}", True, actor, "stopping the stack cleanly first")
+        # Each stop SIGINTs and waits (the bag has to be closed before the power goes), and writes
+        # its own action log line saying what happened.
         with self._lock:
-            self._kill_drive()
-            self._stop_container(self.s.camera_container)
-            self._stop_container(self.s.stack_container)
+            self.stop_all(actor)
+            self.stop_perception(actor)
+            self.stop_cameras(actor)
+            stopped = self.stop_stack(actor)
         verb = "reboot" if kind == "reboot" else "poweroff"
 
         def go() -> None:
             self.runner.run(["sudo", "-n", "/usr/bin/systemctl", verb], timeout=30)
 
         self._defer(2.0, go)
-        return {"message": f"{kind} in 2 s: the stack was stopped cleanly"}
+        return {"message": f"{kind} in 2 s: {stopped['message']}"}
 
     # ------------------------------------------------------------------------------------
     # autostart and boot bookkeeping

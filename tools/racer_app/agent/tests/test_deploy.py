@@ -95,9 +95,10 @@ def test_stack_unit_never_arms_or_drives(sb):
     sb.run(INSTALL)
     stack = (sb.etc / "systemd/system/racer-stack.service").read_text()
     exec_lines = [line for line in stack.splitlines() if line.startswith("Exec")]
-    assert exec_lines == [
-        f"ExecStart={DEPLOY.parents[2]}/tools/racer_app/agent/.venv/bin/racer-agent autostart"
-    ]
+    agent = f"{DEPLOY.parents[2]}/tools/racer_app/agent/.venv/bin/racer-agent"
+    assert exec_lines == [f"ExecStart={agent} autostart", f"ExecStop={agent} stop-stack"]
+    # systemd must outwait the agent's own SIGINT wait (600 s by default)
+    assert "TimeoutStopSec=720" in stack
 
 
 def test_sudoers_allows_exactly_reboot_and_poweroff(sb):

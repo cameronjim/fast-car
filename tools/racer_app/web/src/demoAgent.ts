@@ -1,0 +1,406 @@
+// An in-browser fake of the racer agent, for `?demo=1` and the vitest suite. It answers the same
+// HTTP API as the real agent (same shapes, same refusals, delayed so pending states are visible)
+// and plays scripted transitions: a stack that starts in stages, a slow stop that "closes the bag",
+// a drive, a dropped connection and a failed start. Nothing here talks to a car.
+
+import type { ActionReply, BagInfo, Check, FetchLike, LogEntry, Options, Status } from "./api";
+import type { VehicleInfo } from "./model";
+
+export type DemoPreset = "idle" | "running" | "driving" | "starting" | "offline" | "failed";
+
+export const DEMO_PRESETS: DemoPreset[] = ["idle", "running", "driving", "starting", "offline", "failed"];
+
+export function parsePreset(v: string | null | undefined): DemoPreset {
+  return DEMO_PRESETS.includes(v as DemoPreset) ? (v as DemoPreset) : "idle";
+}
+
+export interface DemoEvent {
+  severity: number;
+  phase: number;
+  durationS: number;
+  source: string;
+  detail: string;
+}
+
+type Sleep = (ms: number) => Promise<void>;
+
+interface Reply {
+  status: number;
+  body: unknown;
+}
+
+const ok = (message: string, extra: Record<string, unknown> = {}): Reply => ({
+  status: 200,
+  body: { ok: true, message, ...extra },
+});
+const fail = (status: number, error: string, extra: Record<string, unknown> = {}): Reply => ({
+  status,
+  body: { ok: false, error, ...extra },
+});
+
+export class DemoCar {
+  // what the "containers" are doing
+  containerUp = false;
+  nodesUp = false;
+  recorderUp = false;
+  closing = false;
+  cameras = false;
+  perception = false;
+  driveMode: string | null = null;
+  autostart = true;
+  flags: Record<string, string> = {};
+  // scripted trouble
+  offline = false;
+  lowBattery = false;
+  failNext = false;
+  bagStart = 0;
+  bagBaseMb = 0;
+  uptimeS = 5400;
+  private bornAt: number;
+  private pendingEvents: DemoEvent[] = [];
+  bags: BagInfo[] = [
+    { name: "run_2026-11-10_16-02-11", size_mb: 2480, mtime: 1_760_000_000, active: false },
+    { name: "run_2026-11-11_09-40-52", size_mb: 612, mtime: 1_760_100_000, active: false },
+    { name: "run_2026-11-11_14-18-03", size_mb: 4120, mtime: 1_760_200_000, active: false },
+  ];
+  log: LogEntry[] = [];
+
+  constructor(
+    private now: () => number = () => Date.now(),
+    private sleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+    /** Scales every scripted delay (tests pass a small number). */
+    private speed = 1,
+  ) {
+    this.bornAt = now();
+    this.addLog("agent", true, "agent started");
+  }
+
+  preset(p: DemoPreset): void {
+    this.offline = false;
+    this.failNext = false;
+    if (p === "running" || p === "driving") this.bringUp();
+    if (p === "driving") {
+      this.driveMode = "gap_follow";
+      this.pendingEvents.push({ severity: 0, phase: 0, durationS: 0, source: "gap_follow", detail: "drive started" });
+      this.addLog("drive/start", true, "mode=gap_follow profile=lane-2026-10-25");
+    }
+    if (p === "starting") void this.startStack();
+    if (p === "offline") {
+      this.bringUp();
+      this.offline = true;
+    }
+    if (p === "failed") {
+      this.failNext = true;
+      void this.startStack().catch(() => undefined);
+    }
+  }
+
+  private bringUp(): void {
+    this.containerUp = true;
+    this.nodesUp = true;
+    this.recorderUp = true;
+    this.flags = { lidar: "true", vesc: "true", mapping: "false", localization: "false" };
+    this.openBag(3200);
+    this.addLog("stack/start", true, "lidar=true vesc=true");
+    this.cameras = true;
+  }
+
+  private openBag(baseMb: number): void {
+    this.bagStart = this.now();
+    this.bagBaseMb = baseMb;
+    this.bags = [
+      { name: "run_2026-11-12_10-31-27", size_mb: baseMb, mtime: this.now() / 1000, active: true, growth_mb_s: 0.52 },
+      ...this.bags.filter((b) => !b.active),
+    ];
+  }
+
+  private closeBag(): void {
+    this.bags = this.bags.map((b) => ({ ...b, active: false, growth_mb_s: undefined }));
+  }
+
+  private grow(): BagInfo[] {
+    return this.bags.map((b) =>
+      b.active
+        ? { ...b, size_mb: this.bagBaseMb + ((this.now() - this.bagStart) / 1000) * 0.52, growth_mb_s: 0.5 + ((this.now() / 1000) % 3) * 0.03 }
+        : b,
+    );
+  }
+
+  addLog(action: string, ok: boolean, detail: string, extra: Partial<LogEntry> = {}): void {
+    this.log = [{ ts: this.now() / 1000, action, ok, actor: "app", detail, ...extra }, ...this.log].slice(0, 80);
+  }
+
+  drainEvents(): DemoEvent[] {
+    const e = this.pendingEvents;
+    this.pendingEvents = [];
+    return e;
+  }
+
+  /** The ROS bridge lives in the stack container. */
+  rosUp(): boolean {
+    return !this.offline && this.containerUp;
+  }
+
+  pushEvent(e: DemoEvent): void {
+    this.pendingEvents.push(e);
+  }
+
+  // -- scripted trouble, for the demo panel ---------------------------------------------------------
+
+  async dropConnection(ms: number): Promise<void> {
+    this.offline = true;
+    await this.sleep(ms);
+    this.offline = false;
+  }
+
+  // -- status -------------------------------------------------------------------------------------
+
+  checks(): Check[] {
+    const up = this.containerUp;
+    const lvl = (good: boolean): Check["level"] => (good ? "green" : "red");
+    const batt = this.lowBattery ? 10.9 : 11.8;
+    const battLevel: Check["level"] = this.lowBattery ? "red" : "green";
+    return [
+      { id: "stack", label: "Stack container", level: lvl(up), detail: up ? "car-stack is running" : "car-stack is not running", required: true },
+      { id: "recorder", label: "Bag recorder", level: lvl(this.recorderUp), detail: this.recorderUp ? "ros2 bag record is running" : "stack is not running", required: true },
+      { id: "safety", label: "Safety node", level: lvl(this.nodesUp), detail: this.nodesUp ? "/drive is being advertised (safety_node up)" : "nothing publishes /drive: safety_node is not up", required: true },
+      { id: "lidar", label: "LiDAR", level: lvl(this.nodesUp), detail: this.nodesUp ? "/scan at 10.1 Hz" : "no /scan", required: true },
+      { id: "vesc", label: "VESC", level: lvl(this.nodesUp), detail: this.nodesUp ? "telemetry fresh, no fault" : "no VESC telemetry (UART silent)", required: true },
+      { id: "battery", label: "Battery", level: this.nodesUp ? battLevel : "red", detail: this.nodesUp ? `${batt.toFixed(1)} V, ${(batt / 3).toFixed(2)} V per cell${this.lowBattery ? ", too low: charge it" : ""}` : "no VESC voltage reading", required: true },
+      { id: "disk", label: "Disk space", level: "green", detail: "142.0 GiB free", required: true },
+      { id: "heartbeat", label: "Heartbeat service", level: "green", detail: "racer-heartbeat.service is active", required: true },
+      { id: "temps", label: "Temperatures", level: "green", detail: "SoC 48 C, GPU 46 C", required: true },
+      { id: "wifi", label: "Wi-Fi link", level: "green", detail: "wlan0 -58 dBm", required: false },
+      { id: "cameras", label: "Cameras", level: this.cameras ? "green" : "amber", detail: this.cameras ? "USB and CSI streaming" : "cameras are off", required: false },
+    ];
+  }
+
+  status(): Status {
+    const checks = this.checks();
+    const reqRed = checks.some((c) => c.required && c.level === "red");
+    const anyRed = checks.some((c) => c.level === "red");
+    const anyAmber = checks.some((c) => c.level === "amber");
+    return {
+      time: this.now() / 1000,
+      checks: { overall: anyRed ? "red" : anyAmber ? "amber" : "green", ready: !reqRed, checks },
+      stack: { running: this.containerUp, recorder: this.recorderUp, flags: this.containerUp ? this.flags : {} },
+      cameras: { running: this.cameras },
+      drive: { mode: this.driveMode, running: !!this.driveMode },
+      containers: { "car-stack": this.containerUp ? "running" : "exited", "car-cameras": this.cameras ? "running" : "exited" },
+      disk_free_gb: 142,
+      uptime_s: this.uptimeS + (this.now() - this.bornAt) / 1000,
+      ros_connected: this.rosUp() && this.nodesUp,
+      autostart: this.autostart,
+      policy: { available: true, reason: "", valid: ["resid-v2"] },
+      perception: { available: true, reason: "", running: this.perception },
+      spiderbot: { available: true, reason: "" },
+      thresholds: { disk_red_gb: 5, cameras_min_free_gb: 10, battery_cells: 3 },
+    };
+  }
+
+  options(): Options {
+    return {
+      gap_follow_profiles: ["lane-2026-10-25", "corridor-fast"],
+      park_profiles: ["floor-2026-10-07"],
+      maps: ["lab-2026-10-30", "garage-2026-11-02"],
+      racelines: ["lab-line-v3"],
+      drive_modes: ["gap_follow", "wall_follow", "tracker", "park", "pnp", "ml_policy", "spiderbot"],
+      gap_follow_speed: {
+        "lane-2026-10-25": { min: 0.2, max: 1.5 },
+        "corridor-fast": { min: 0.2, max: 2.5 },
+      },
+      policy: { available: true, reason: "", valid: ["resid-v2"] },
+      pnp: {
+        available: true,
+        reason: "",
+        perception: ["net-2026-11-04"],
+        dynamics: ["dyn-2026-10-20"],
+        backends: ["geometric", "net"],
+        speed_range: [0.2, 1.5],
+        default_speed: 0.5,
+        params_files: ["planner-tight.yaml", "planner-wide.yaml"],
+      },
+      patrols: ["loop-a"],
+      spiderbot_rules: ["arms_raised"],
+      spiderbot_speed_range: [0.1, 1.0],
+      spiderbot_default_speed: 0.5,
+      perception: { available: true, reason: "", running: this.perception },
+      spiderbot: { available: true, reason: "" },
+    };
+  }
+
+  vehicle(): VehicleInfo {
+    return {
+      schema_version: "1.4.0",
+      lidar: { mount_x_m: 0.16, mount_y_m: 0, mount_yaw_rad: 0 },
+      chassis: { wheelbase_m: 0.31, length_m: 0.44, width_m: 0.2, front_overhang_m: 0.08, rear_overhang_m: 0.05 },
+      steering: { max_angle_rad: 0.42 },
+      actuation: { throttle_full_scale_mps: 3 },
+    };
+  }
+
+  // -- actions ------------------------------------------------------------------------------------
+
+  private async startStack(flags: Record<string, unknown> = {}): Promise<Reply> {
+    if (this.containerUp) return fail(409, "the stack is already running");
+    const f = (ms: number) => this.sleep(ms * this.speed);
+    if (this.failNext) {
+      this.failNext = false;
+      await f(1400);
+      this.addLog("stack/start", false, "car-stack exited with code 1: VESC port /dev/ttyTHS1 is busy");
+      return fail(500, "car-stack exited with code 1: VESC port /dev/ttyTHS1 is busy");
+    }
+    await f(800);
+    this.containerUp = true;
+    this.flags = {
+      lidar: String(flags.lidar ?? true),
+      vesc: String(flags.vesc ?? true),
+      mapping: String(flags.mapping ?? false),
+      localization: String(flags.localization ?? false),
+    };
+    this.addLog("stack/start", true, Object.entries(this.flags).map(([k, v]) => `${k}=${v}`).join(" "));
+    // The request returns once the container is up; the nodes and the recorder follow.
+    void f(2000).then(() => (this.nodesUp = true));
+    void f(3600).then(() => {
+      this.recorderUp = true;
+      this.openBag(0);
+    });
+    return ok("stack started");
+  }
+
+  private async stopStack(): Promise<Reply> {
+    if (!this.containerUp) return fail(409, "the stack is not running");
+    const f = (ms: number) => this.sleep(ms * this.speed);
+    this.driveMode = null;
+    this.closing = true;
+    await f(5000); // SIGINT, then the recorder closes the bag
+    this.closeBag();
+    this.containerUp = this.nodesUp = this.recorderUp = false;
+    this.closing = false;
+    this.cameras = false;
+    this.perception = false;
+    this.addLog("stack/stop", true, "stopped with SIGINT after 5.0 s, exit 0, bag has metadata.yaml");
+    return ok("stack stopped, bag closed");
+  }
+
+  private checkDrive(body: Record<string, unknown>): Reply | null {
+    if (!this.containerUp) return fail(409, "the stack is not running");
+    if (!this.recorderUp) return fail(409, "the bag recorder is not running (cannot be overridden)", { overridable: false });
+    if (this.driveMode) return fail(409, `already driving: ${this.driveMode}`);
+    if (this.lowBattery && !body.override) {
+      const msg = "Not ready: Battery (10.9 V, too low: charge it)";
+      return fail(409, msg, { overridable: true, failing: ["battery"] });
+    }
+    if (this.lowBattery && body.override && !String(body.override_reason ?? "").trim()) {
+      return fail(400, "an override needs a reason");
+    }
+    return null;
+  }
+
+  async handle(method: string, path: string, body: Record<string, unknown>): Promise<Reply> {
+    const f = (ms: number) => this.sleep(ms * this.speed);
+    if (method === "GET") {
+      await f(150);
+      if (path.startsWith("/api/status")) return { status: 200, body: this.status() };
+      if (path.startsWith("/api/options")) return { status: 200, body: this.options() };
+      if (path.startsWith("/api/vehicle")) return { status: 200, body: this.vehicle() };
+      if (path.startsWith("/api/bags")) return { status: 200, body: { bags: this.grow(), disk_free_gb: 142 } };
+      if (path.startsWith("/api/log")) return { status: 200, body: { entries: this.log } };
+      if (path.startsWith("/api/drive/log")) return { status: 200, body: { log: "" } };
+      return fail(404, "not found");
+    }
+    switch (path) {
+      case "/api/stop": {
+        await f(500);
+        const had = this.driveMode;
+        this.driveMode = null;
+        this.addLog("stop", true, had ? `stopped ${had}` : "nothing was driving");
+        return ok(had ? `stopped ${had}` : "nothing was driving");
+      }
+      case "/api/stack/start":
+        return this.startStack(body);
+      case "/api/stack/stop":
+        return this.stopStack();
+      case "/api/stack/restart": {
+        const r = await this.stopStack();
+        if (!r.body || (r.body as ActionReply).ok === false) return r;
+        return this.startStack({ lidar: true, vesc: true });
+      }
+      case "/api/cameras/start":
+        await f(1200);
+        this.cameras = true;
+        this.addLog("cameras/start", true, "usb and csi");
+        return ok("cameras started");
+      case "/api/cameras/stop":
+        await f(900);
+        this.cameras = false;
+        this.perception = false;
+        this.addLog("cameras/stop", true, "");
+        return ok("cameras stopped");
+      case "/api/perception/start":
+        await f(1500);
+        this.perception = true;
+        this.addLog("perception/start", true, "pose cuda");
+        return ok("perception started");
+      case "/api/perception/stop":
+        await f(900);
+        this.perception = false;
+        return ok("perception stopped");
+      case "/api/drive/start": {
+        await f(700);
+        const refused = this.checkDrive(body);
+        if (refused) {
+          this.addLog("drive/start", false, String((refused.body as ActionReply).error));
+          return refused;
+        }
+        this.driveMode = String(body.mode);
+        const override = !!body.override;
+        this.addLog("drive/start", true, `mode=${body.mode}`, override ? { override: true, override_reason: String(body.override_reason ?? "") } : {});
+        this.pushEvent({ severity: 0, phase: 0, durationS: 0, source: String(body.mode), detail: "drive started" });
+        return ok(`${body.mode} started`);
+      }
+      case "/api/map/save":
+        await f(900);
+        return ok(`map ${String(body.name)} saved`);
+      case "/api/bags/delete":
+        await f(700);
+        this.bags = this.bags.filter((b) => b.name !== body.name || b.active);
+        this.addLog("bags/delete", true, String(body.name));
+        return ok(`deleted ${String(body.name)}`);
+      case "/api/system/reboot":
+      case "/api/system/shutdown":
+        await f(800);
+        return ok("the Jetson is going down");
+      case "/api/settings":
+        await f(500);
+        this.autostart = !!body.autostart;
+        return ok(`autostart ${this.autostart ? "on" : "off"}`);
+      default:
+        if (path.startsWith("/api/park/")) {
+          await f(600);
+          const name = decodeURIComponent(path.slice("/api/park/".length));
+          this.addLog("park", true, name);
+          return ok(`park ${name}`);
+        }
+        return fail(404, "not found");
+    }
+  }
+
+  /** The fetch the Api class uses. A dropped connection rejects like a network error. */
+  fetch: FetchLike = async (input, init) => {
+    if (this.offline) {
+      await this.sleep(300 * this.speed);
+      throw new TypeError("Failed to fetch");
+    }
+    const path = input.replace(/^https?:\/\/[^/]+/, "");
+    let body: Record<string, unknown> = {};
+    try {
+      body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+    } catch {
+      /* no body */
+    }
+    const r = await this.handle(init?.method ?? "GET", path, body);
+    if (this.offline) throw new TypeError("Failed to fetch");
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { "Content-Type": "application/json" } });
+  };
+}

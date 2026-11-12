@@ -460,6 +460,7 @@ def test_gap_follow_speed_ceilings_match_the_launch_file():
         "floor-2026-10-06": dicts["FLOOR_2026_10_06_PROFILE"],
         "lane-2026-10-25": dicts["LANE_2026_10_25_PROFILE"],
         "race-2026-11-12": dicts["RACE_2026_11_12_PROFILE"],
+        "race-2026-11-13": dicts["RACE_2026_11_13_PROFILE"],
     }
     assert set(profiles) == set(cmd.GAP_FOLLOW_PROFILES)
     for name, values in profiles.items():

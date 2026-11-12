@@ -14,7 +14,16 @@ import random
 from pathlib import Path
 
 import pytest
-from race_tuning import replay_check, report, runs, selection, space, stats, tracks
+from race_tuning import (
+    replay_check,
+    report,
+    runs,
+    selection,
+    selection_gate,
+    space,
+    stats,
+    tracks,
+)
 
 # -- tracks ----------------------------------------------------------------------------------------
 
@@ -219,6 +228,106 @@ def test_rank_is_empty_when_nothing_is_admissible():
     base = selection.aggregate(_runs(20.0))
     bad = selection.aggregate(_runs(10.0, contacts=1), _runs(20.0))
     assert selection.rank({"bad": ({}, bad)}, base) == []
+
+
+# -- the wide family and the gate rule (2026-11-12 retune) --------------------------------------------
+
+
+def test_wide_tracks_are_deterministic_wide_and_valid_bridge_tracks():
+    assert tracks.sample_wide_track(2003) == tracks.sample_wide_track(2003)
+    for seed in list(tracks.WIDE_TUNING_SEEDS) + list(tracks.WIDE_HELD_OUT_SEEDS):
+        t = tracks.sample_wide_track(seed)
+        p = t.params_dict()
+        assert t.track == "stadium" and t.seed == seed
+        assert 1.3 <= p["lane_width_m"] <= 1.5
+        assert 1.5 <= p["straight_length_m"] <= 3.0
+        assert 0.0 <= p["island_radius_m"] <= 0.6
+        assert "/" not in t.name and " " not in t.name
+    # None of them is a narrow-family lane.
+    assert min(t.params_dict()["lane_width_m"] for t in tracks.wide_tuning_tracks()) >= 1.3
+
+
+def test_wide_tuning_and_held_out_tracks_are_disjoint_and_distinct():
+    tuning = tracks.wide_tuning_tracks()
+    held = tracks.wide_held_out_tracks()
+    assert len(tuning) >= 5 and len(held) == len(tracks.WIDE_HELD_OUT_SEEDS)
+    assert {t.key() for t in tuning}.isdisjoint(t.key() for t in held)
+    assert len({t.key() for t in held}) == len(held)
+    assert len(tracks.wide_tuning_tracks(3)) == 3 and len(tracks.wide_held_out_tracks(4)) == 4
+    assert set(tracks.WIDE_TUNING_SEEDS).isdisjoint(tracks.WIDE_HELD_OUT_SEEDS)
+    assert set(tracks.WIDE_TUNING_SEEDS).isdisjoint(tracks.TUNING_SEEDS + tracks.HELD_OUT_SEEDS)
+
+
+def test_family_tracks_dispatches_and_refuses_an_unknown_family():
+    assert tracks.family_tracks("narrow", True) == tracks.tuning_tracks()
+    assert tracks.family_tracks("narrow", False, 3) == tracks.held_out_tracks(3)
+    assert tracks.family_tracks("wide", True) == tracks.wide_tuning_tracks()
+    assert tracks.family_tracks("wide", False, 2) == tracks.wide_held_out_tracks(2)
+    with pytest.raises(ValueError, match="unknown track family"):
+        tracks.family_tracks("huge", True)
+
+
+def test_gate_rule_is_absolute_not_relative_to_the_baseline():
+    assert selection_gate.MAX_BRAKES_PER_LAP == 0.25 and selection_gate.MAX_ESCAPES_PER_LAP == 0.25
+    base_records = _runs(20.0, brakes=40)  # a baseline that brakes constantly
+
+    def agg(lap, **kw):
+        return selection.aggregate(_runs(lap, **kw), base_records)
+
+    assert selection_gate.admissible(agg(12.0, brakes=0)) == (True, [])
+    # 0.25 per lap exactly is allowed: 6 runs x 2 laps = 12 laps, 3 brakes.
+    assert selection_gate.admissible(agg(12.0, brakes=0))[0]
+    runs_3 = [
+        _rec(track=f"t{i}", direction=d, lap=12.0, brakes=0)
+        for i in range(3)
+        for d in ("ccw", "cw")
+    ]
+    runs_3[0] = _rec(track="t0", direction="ccw", lap=12.0, brakes=3)
+    assert selection_gate.admissible(selection.aggregate(runs_3, base_records))[0]
+    runs_4 = list(runs_3)
+    runs_4[0] = _rec(track="t0", direction="ccw", lap=12.0, brakes=4)
+    ok, why = selection_gate.admissible(selection.aggregate(runs_4, base_records))
+    assert not ok and any("brakes per lap" in w for w in why)
+    # The baseline's own brakes do not excuse the candidate (the relative rule would).
+    assert selection.admissible(
+        selection.aggregate(runs_4, base_records), selection.aggregate(base_records)
+    )[0]
+
+
+def test_gate_rule_names_every_violated_clause_and_needs_a_baseline_run():
+    base_records = _runs(20.0)
+    bad = selection.aggregate(
+        _runs(10.0, contacts=1, completed=False, clr=0.0, brakes=5, escapes=5), base_records
+    )
+    ok, why = selection_gate.admissible(bad)
+    assert not ok
+    for word in ("completed", "wall contacts", "clearance", "brakes per lap", "escapes per lap"):
+        assert any(word in w for w in why), word
+    elsewhere = selection.aggregate([_rec(track="elsewhere")], base_records)
+    assert any("baseline" in w for w in selection_gate.admissible(elsewhere)[1])
+
+
+def test_gate_rank_orders_by_ratio_and_breaks_ties_by_brakes_escapes_then_speed():
+    base_records = _runs(20.0)
+
+    def entry(lap, speed, **kw):
+        return ({"max_speed_mps": speed}, selection.aggregate(_runs(lap, **kw), base_records))
+
+    candidates = {
+        "slow": entry(14.0, 1.0),
+        "fast": entry(10.0, 1.6),
+        "fast_but_brakes": entry(8.0, 1.6, brakes=6),  # inadmissible: 1.0 brake per lap
+        "tie_escape": entry(10.1, 1.3, escapes=1),
+        "tie_clean_slower": entry(10.2, 1.0),
+        "tie_clean_faster": entry(10.3, 1.3),
+    }
+    ranked = [cid for cid, _, _ in selection_gate.rank(candidates)]
+    assert "fast_but_brakes" not in ranked
+    # fast (0.50), tie_escape (0.505), tie_clean_slower (0.51), tie_clean_faster (0.515) are within
+    # the tie band: fewest brakes, then fewest escapes, then lower top speed.
+    assert ranked[0] == "tie_clean_slower"  # 0 brakes, 0 escapes, the lowest top speed
+    assert ranked[-1] == "slow"
+    assert selection_gate.rank({"bad": ({}, selection.aggregate(_runs(10.0, contacts=1)))}) == []
 
 
 # -- space -----------------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 // Wiring from the ROS link to one mutable "latest values" object the dashboard reads.
 
-import type { RosLink, Unsubscribe } from "./ros";
+import type { RosSource, Unsubscribe } from "./ros";
 import {
   bytesToBlobUrl,
   eventLine,
@@ -60,6 +60,22 @@ export function emptyLive(): Live {
   };
 }
 
+/** Topic names the demo's fake link emits on (the only place besides this file naming /drive). */
+export const LIVE_TOPICS = {
+  odom: "/odom/wheel",
+  drive: "/drive",
+  voltage: "/telemetry/vesc/voltage_v",
+  currentIn: "/telemetry/vesc/current_input_a",
+  tempFet: "/telemetry/vesc/temp_fet_degc",
+  tempMotor: "/telemetry/vesc/temp_motor_degc",
+  fault: "/telemetry/vesc/fault",
+  lap: "/lap/status",
+  scan: "/scan",
+  map: "/map",
+  pose: "/pose",
+  events: "/safety/events",
+} as const;
+
 export const CAMERA_USB = "/camera/usb/image_raw/compressed";
 export const CAMERA_CSI = "/camera/csi0/image_raw/compressed";
 const CAMERA_PERIOD_MS = 700;
@@ -72,9 +88,11 @@ interface StringMsg {
 }
 interface CompressedImageLike {
   data: ArrayBufferView;
+  /** Only the demo sets this (it sends SVG, not JPEG). */
+  mime?: string;
 }
 
-export function startLive(ros: RosLink, live: Live, showCameras: () => boolean): Unsubscribe {
+export function startLive(ros: Pick<RosSource, "subscribe">, live: Live, showCameras: () => boolean): Unsubscribe {
   const now = () => Date.now();
   let eventCounter = 0;
   const unsubs: Unsubscribe[] = [];
@@ -121,7 +139,7 @@ export function startLive(ros: RosLink, live: Live, showCameras: () => boolean):
       topic,
       (m) => {
         if (!showCameras()) return;
-        const url = bytesToBlobUrl(m.data);
+        const url = bytesToBlobUrl(m.data, m.mime);
         const old = live[key];
         live[key] = url;
         if (old) URL.revokeObjectURL(old);

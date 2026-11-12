@@ -241,8 +241,7 @@ def run_segment(
         recorded_t=recorded[0] if recorded else None,
         recorded_state=recorded[1] if recorded else None,
         track_confidence=rows.get("track_confidence"),
-        block_reason=rows["block_reason"].astype(int) if "block_reason" in rows else None,
-        freespace_goal_x_m=rows.get("freespace_goal_x_m"),
+        block_reason=rows.get("block_reason"),
     )
     result["planner"]["parameters"] = {k: v for k, v in sorted(params.items())}
     if recorded:

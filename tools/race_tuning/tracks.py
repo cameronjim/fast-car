@@ -96,3 +96,66 @@ def held_out_tracks(count: int | None = None) -> list[TrackSpec]:
         seen.add(track.key())
         tracks.append(track)
     return tracks
+
+
+# -- The WIDE family (2026-11-12 race bag) ----------------------------------------------------------
+# The owner rebuilt the oval for the race: lanes of about 1.3 to 1.5 m, not the 0.85 to 1.2 m above.
+# docs/notes/safety-race-retune-2026-11-12.md retunes for it, so it gets its own seed ranges, tuning
+# and held-out disjoint like the narrow family. Same bridge track kinds, only wider lanes and a
+# little more straight.
+
+WIDE_TUNING_SEEDS = tuple(range(2001, 2009))  # 8 draws, de-duplicated below
+WIDE_HELD_OUT_SEEDS = tuple(range(3001, 3017))
+
+_WIDE_LANES = (1.3, 1.4, 1.5)
+_WIDE_STRAIGHTS = (1.5, 2.0, 3.0)
+_WIDE_RADII = (0.0, 0.2, 0.4, 0.6)
+
+
+def sample_wide_track(seed: int) -> TrackSpec:
+    """A stadium of the wide family for a seed (deterministic, no global random state)."""
+    rng = random.Random(f"race-wide-track-{seed}")
+    lane = rng.choice(_WIDE_LANES)
+    straight = rng.choice(_WIDE_STRAIGHTS)
+    radius = rng.choice(_WIDE_RADII)
+    params = {"lane_width_m": lane, "straight_length_m": straight, "island_radius_m": radius}
+    return TrackSpec(
+        f"wst_w{lane}_s{straight}_r{radius}", "stadium", tuple(sorted(params.items())), seed
+    )
+
+
+def wide_tuning_tracks(count: int | None = None) -> list[TrackSpec]:
+    """The wide tracks the search may see (de-duplicated by geometry, first seed kept)."""
+    seen: set = set()
+    out: list[TrackSpec] = []
+    for seed in WIDE_TUNING_SEEDS:
+        track = sample_wide_track(seed)
+        if track.key() not in seen:
+            seen.add(track.key())
+            out.append(track)
+    return out if count is None else out[:count]
+
+
+def wide_held_out_tracks(count: int | None = None) -> list[TrackSpec]:
+    """Wide held-out tracks: none equals a wide tuning track or another held-out track."""
+    seen = {sample_wide_track(s).key() for s in WIDE_TUNING_SEEDS}
+    wanted = len(WIDE_HELD_OUT_SEEDS) if count is None else count
+    out: list[TrackSpec] = []
+    seed = WIDE_HELD_OUT_SEEDS[0]
+    while len(out) < wanted and seed < WIDE_HELD_OUT_SEEDS[0] + 1000:
+        track = sample_wide_track(seed)
+        seed += 1
+        if track.key() in seen:
+            continue
+        seen.add(track.key())
+        out.append(track)
+    return out
+
+
+def family_tracks(family: str, tuning: bool, count: int | None = None) -> list[TrackSpec]:
+    """The tracks of a family ("narrow" is the original, "wide" the 1.3 to 1.5 m lanes)."""
+    if family == "wide":
+        return wide_tuning_tracks(count) if tuning else wide_held_out_tracks(count)
+    if family == "narrow":
+        return tuning_tracks() if tuning else held_out_tracks(count)
+    raise ValueError(f"unknown track family {family!r}")

@@ -145,20 +145,19 @@ def test_pnp_laps_the_track_through_the_real_command_path(
 # no steering lag. These run the same driver, perception and planner against a plant like the
 # car's: the dynamics bundle's actuation (gains, accel and decel limits), a 0.20 m/s speed dead
 # zone (a /drive speed under it leaves the car standing) and a 0.10 s steering lag. The planner's
-# model knows the dead zone (the bundle's speed_deadband_mps, so its speed floor sits above it) and
-# not the steering lag, which is the situation on the car since planner v0.1. Stadium
+# model does not know about either of the last two, which is the situation on the car. Stadium
 # with island radius 0.4 m and straight 2.0 m, lane 1.0 m and 1.3 m, both ways, geometric
 # backend, 0.5 m/s, and the scan-only fault case. Same pass criteria as above.
 #
-# Measured on unmodified main (2026-11-12, v0 driver, car `params`, seed 11), per case:
+# Measured on the v0 driver (main at 8766bec, 2026-11-12, car `params`, seed 11), per case:
 #   lane 1.0 ccw  passes in 6 of 7 runs (0 to 2 safety brakes); the seventh stalled after one lap
-#                 (94 brakes, BLOCKED and NO_ODOM), so this case can fail on a loaded machine
-#   lane 1.0 cw   3 laps, 0 brakes, 0 contacts
-#   lane 1.3 ccw  3 laps, 0 brakes, 0 contacts
-#   lane 1.3 cw   3 laps, 0 brakes, 0 contacts
+#                 (94 brakes, BLOCKED and NO_ODOM)
+#   lane 1.0 cw, lane 1.3 ccw, lane 1.3 cw   3 laps, 0 brakes, 0 contacts
 #   lane 1.3 ccw with --no-perception: 0 laps, planner_states NO_TRACK about 600 ticks (and NO_ODOM
-#                 at the start), stalled (v0). Since planner v0.1 the planner drives on the scan
-#                 alone and the case is an ordinary passing one.
+#                 at the start), stalled; this case was a strict xfail until the planner drove on
+#                 the scan alone
+# With the planner v0.1 of main (free-space field, no NO_TRACK state) all five pass: 3 laps,
+# 0 brakes, 0 contacts, laps of about 20 s (about 28 s for the scan-only case).
 CAR_LIKE_V_MAX_MPS = 0.5
 CAR_LIKE_PLANT = [
     "--plant-bundle",

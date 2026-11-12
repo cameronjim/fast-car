@@ -6,13 +6,17 @@ calls for every scan, built the way training/racer_pnp_perception/.../eval_bags.
 algorithm is copied here.
 
 The self-test (`check_fidelity`): replaying the geometric tracer over the recorded scans must give
-the recorded /pnp/local_track, matched by header stamp, to within 1e-5 m on every station. True
-of the v0 tracer on the 2026-11-12 bag, where the difference is 0.0.
+the recorded /pnp/local_track, matched by header stamp, to within 1e-5 m on every station. That
+holds only when the tracer is the one that recorded the bag: the 2026-11-12 bag was recorded with
+geometric-v0 (difference 0.0 there), and the tracer on main has moved on to v1, so against that
+bag the check now reports the v0 to v1 difference. Replay such a bag with the old tracer by
+pointing PNP_REPLAY_PERCEPTION_SRC at its racer_track_perception/src.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +31,12 @@ from pnp_replay.bag import Recording, scan_ranges
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PERCEPTION_SRC = REPO_ROOT / "ros_ws" / "src" / "racer_track_perception" / "src"
+# PNP_REPLAY_PERCEPTION_SRC points at another checkout's racer_track_perception/src, to replay a
+# bag with the tracer that recorded it (the --check-fidelity self-test needs the same tracer).
+PERCEPTION_SRC = Path(
+    os.environ.get("PNP_REPLAY_PERCEPTION_SRC")
+    or REPO_ROOT / "ros_ws" / "src" / "racer_track_perception" / "src"
+)
 FIDELITY_TOLERANCE_M = 1e-5
 STAMP_MATCH_S = 1e-3
 

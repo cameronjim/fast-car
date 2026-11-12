@@ -1217,6 +1217,16 @@ GapFollowResult GapFollower::process(const ScanInput& scan) {
     probe.lidar_mount_y_m = config_.swept_path.lidar_mount_y_m;
     result.free_path_m = free_arc_travel(scan, config_.laser_yaw_offset_rad, result.steering_rad,
                                          config_.free_path_horizon_m, probe, free_path_points_);
+    if (config_.free_path_on_published_steering) {
+      if (std::isfinite(published_steering_rad_)) {
+        const double along_published =
+            free_arc_travel(scan, config_.laser_yaw_offset_rad, published_steering_rad_,
+                            config_.free_path_horizon_m, probe, free_path_points_);
+        if (along_published < *result.free_path_m) {
+          result.free_path_m = along_published;
+        }
+      }
+    }
   }
   return result;
 }

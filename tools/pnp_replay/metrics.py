@@ -46,15 +46,15 @@ STATE_NAMES = {
     6: "FAULT",
     7: "RECOVERING",
 }
-BLOCK_NAMES = {
-    0: "NONE",
+STATE_DRIVING = 1
+# racer_pnp_msgs/PlannerStatus block_reason (planner v0.1 on; 0 is none).
+BLOCK_REASONS = {
     1: "ALL_COLLIDE",
     2: "BELOW_SPEED_FLOOR",
     3: "WHEEL_STALLED",
     4: "GATE_REFUSING",
     5: "RECOVERY_EXHAUSTED",
 }
-STATE_DRIVING = 1
 STATE_BLOCKED = 5
 STATE_RECOVERING = 7
 
@@ -164,8 +164,9 @@ def steering_change_stats(
     """Std, sign flips per second and p99 absolute value of the change of a steering series
     between consecutive samples. A flip is a change whose sign differs from the previous
     change's; zero changes carry the previous sign (a held command is not a reversal).
-    `pair_mask` (one entry per consecutive pair) keeps only the changes between two samples that
-    both qualify, so a jump across a gap (another state) is not a change of the series."""
+    `pair_mask` (one entry per consecutive pair) keeps only the changes between two samples
+    that both qualify, so a jump across a gap (another state) is not a change of the
+    series."""
     s = np.asarray(steering, dtype=np.float64)
     if len(s) < 3:
         return {"std_rad": _nan(), "sign_flips_per_s": _nan(), "p99_abs_rad": _nan()}
@@ -197,12 +198,11 @@ def planner_metrics(
     recorded_state: NDArray[np.integer] | None = None,
     track_confidence: NDArray[np.float64] | None = None,
     block_reason: NDArray[np.integer] | None = None,
-    freespace_goal_x_m: NDArray[np.float64] | None = None,
 ) -> dict[str, Any]:
-    """Planner numbers over the eligible ticks of a replay (see the module docstring). The speed
-    shares do not count RECOVERING ticks (a reverse command is neither zero nor a crawl); those
-    are counted on their own, with the share of ticks per block reason, the mean track confidence
-    and the share of ticks with a free-space goal when the replay wrote those columns."""
+    """Planner numbers over the eligible ticks of a replay (see the module docstring). The
+    speed shares do not count RECOVERING ticks (a reverse command is neither a stop nor a
+    crawl); those are counted on their own, and the steering change statistics use only the
+    changes between two consecutive DRIVING ticks."""
     ok = eligible_ticks(now_s, scan_age_s, odom_t)
     t, st = now_s[ok], np.asarray(state)[ok]
     v, steer = cmd_speed_mps[ok], cmd_steering_rad[ok]
@@ -233,21 +233,15 @@ def planner_metrics(
             "p99": _stat(np.percentile, solve_time_s[ok][solved] * 1e3, 99),
         },
     }
+    if track_confidence is not None and n:
+        out["track_confidence_mean"] = _stat(np.mean, track_confidence[ok])
     if block_reason is not None and n:
-        br = np.asarray(block_reason)[ok]
+        reasons = np.asarray(block_reason)[ok]
         out["block_reason_counts"] = {
-            BLOCK_NAMES.get(int(k), str(int(k))): int((br == k).sum())
-            for k in np.unique(br)
+            BLOCK_REASONS.get(int(k), str(int(k))): int((reasons == k).sum())
+            for k in np.unique(reasons)
             if k != 0
         }
-    if track_confidence is not None and n:
-        tc = np.asarray(track_confidence, dtype=np.float64)[ok]
-        out["track_confidence_mean"] = float(np.mean(tc))
-        out["track_confidence_zero_share"] = float(np.mean(tc == 0.0))
-    if freespace_goal_x_m is not None and n:
-        out["freespace_goal_share"] = float(
-            np.mean(np.isfinite(np.asarray(freespace_goal_x_m)[ok]))
-        )
     if recorded_t is not None and recorded_state is not None and len(recorded_t) and n:
         out["agreement_with_recorded"] = state_agreement(t, st, recorded_t, recorded_state)
     return out

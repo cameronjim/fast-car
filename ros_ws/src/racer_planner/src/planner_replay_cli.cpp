@@ -6,7 +6,7 @@
 // usage: planner_replay_cli --bundle DIR [--v-max M_S] [--set name=value]... [--stream FILE]
 //                           [--out CSV] [--describe]
 //
-// --set takes the planner node's parameter names (v_max_mps, conf_intrusion_zero,
+// --set takes the planner node's parameter names (v_max_mps, max_intrusion_fraction,
 // scan_timeout_s, samples, seed, w_progress, ...) with the node's defaults and ranges; --describe
 // prints the effective configuration as JSON and exits. A bundle that fails any row of the
 // refusal table exits 2 with "<RefusalName>: <message>" on stderr, as the node does.
@@ -28,12 +28,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "binding_geometry.hpp"
@@ -86,33 +84,15 @@ std::map<std::string, Param> default_params() {
   d("conf_age_zero_s", lg.conf_age_zero_s, 0.0, 5.0);
   d("conf_rise_per_s", lg.conf_rise_per_s, 0.01, 100.0);
   d("freespace_speed_fraction", lg.freespace_speed_fraction, 0.3, 1.0);
-  d("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5);
-  d("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0);
-  d("gap_reset_s", lg.gap_reset_s, 0.0, 0.058);
-  d("steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02);
-  d("cost_scale_floor", mp.cost_scale_floor, 1e-3, 1e3);
-  d("w_steer_rate", mp.w_steer_rate, 0.0, 1e4);
-  d("corner_radius_m", mp.corner_radius_m, 0.005, 0.2);
-  d("speed_floor_margin_mps", mp.speed_floor_margin_mps, 0.0, 0.5);
-  i("max_samples", cfg.max_samples, kMinSamples, kMaxSamples);
-  d("stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0);
-  d("gate_hold_s", cfg.drivability.gate_hold_s, 0.2, 600.0);
-  d("recover_distance_m", cfg.recovery.recover_distance_m, 0.1, 1.0);
-  d("recover_speed_mps", cfg.recovery.recover_speed_mps, 0.1, 0.6);
-  d("recover_max_s", cfg.recovery.recover_max_s, 0.5, 10.0);
-  d("recover_exhausted_hold_s", cfg.recovery.recover_exhausted_hold_s, 0.0, 600.0);
-  d("recover_retry_s", cfg.recovery.recover_retry_s, 0.5, 30.0);
-  d("recover_margin_m", cfg.recovery.recover_margin_m, 0.0, 0.3);
-  d("recover_gate_debounce_s", cfg.recovery.recover_gate_debounce_s, 0.02, 1.0);
-  d("recover_progress_m", cfg.recovery.recover_progress_m, 0.1, 5.0);
-  i("recover_max_attempts", cfg.recovery.recover_max_attempts, 1, 20);
   d("control_rate_hz", 50.0, 20.0, 100.0);
   i("horizon_steps", mp.horizon_steps, 5, 100);
   i("samples", mp.samples, kMinSamples, kMaxSamples);
+  i("max_samples", cfg.max_samples, kMinSamples, kMaxSamples);
   d("sigma_speed_mps", mp.sigma_speed_mps, 0.0, 2.0);
   d("sigma_steering_rad", mp.sigma_steering_rad, 0.0, 1.0);
   d("noise_beta", mp.beta, 0.0, 0.99);
   d("lambda", mp.lambda, 1e-3, 1e3);
+  d("cost_scale_floor", mp.cost_scale_floor, 1e-3, 1e3);
   i("seed", 1, 0, 2147483647);
   d("w_progress", mp.w_progress, 0.0, 1e3);
   d("c_collision", mp.c_collision, 0.0, 1e9);
@@ -125,8 +105,26 @@ std::map<std::string, Param> default_params() {
   d("w_lat", mp.w_lat, 0.0, 1e4);
   d("a_lat_max_mps2", mp.a_lat_max_mps2, 0.1, 50.0);
   d("w_du", mp.w_du, 0.0, 1e4);
+  d("w_steer_rate", mp.w_steer_rate, 0.0, 1e4);
+  d("corner_radius_m", mp.corner_radius_m, 0.005, 0.2);
+  d("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5);
+  d("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0);
   d("w_term", mp.w_term, 0.0, 1e5);
   d("move_margin", mp.move_margin, 0.0, 100.0);
+  d("speed_floor_margin_mps", mp.speed_floor_margin_mps, 0.0, 0.5);
+  d("steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02);
+  d("gap_reset_s", lg.gap_reset_s, 0.0, 0.058);
+  d("stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0);
+  d("gate_hold_s", cfg.drivability.gate_hold_s, 0.2, 600.0);
+  d("recover_distance_m", cfg.recovery.recover_distance_m, 0.1, 1.0);
+  d("recover_speed_mps", cfg.recovery.recover_speed_mps, 0.1, 0.6);
+  d("recover_max_s", cfg.recovery.recover_max_s, 0.5, 10.0);
+  d("recover_retry_s", cfg.recovery.recover_retry_s, 0.5, 30.0);
+  d("recover_margin_m", cfg.recovery.recover_margin_m, 0.0, 0.3);
+  d("recover_exhausted_hold_s", cfg.recovery.recover_exhausted_hold_s, 0.0, 600.0);
+  d("recover_gate_debounce_s", cfg.recovery.recover_gate_debounce_s, 0.02, 1.0);
+  d("recover_progress_m", cfg.recovery.recover_progress_m, 0.1, 5.0);
+  i("recover_max_attempts", cfg.recovery.recover_max_attempts, 1, 20);
   d("solve_halve_over_ms", 15.0, 1.0, 200.0);
   d("solve_restore_under_ms", 6.0, 0.5, 200.0);
   d("laser_yaw_from_vehicle_params", 1.0, 0.0, 1.0);
@@ -173,50 +171,43 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   lg.v_max_mps = v("v_max_mps");
   lg.scan_timeout_s = v("scan_timeout_s");
   lg.odom_timeout_s = v("odom_timeout_s");
-  for (auto [name, ptr] : std::initializer_list<std::pair<const char*, double*>>{
-           {"conf_intrusion_full", &lg.conf_intrusion_full},
-           {"conf_intrusion_zero", &lg.conf_intrusion_zero},
-           {"conf_residual_full_m", &lg.conf_residual_full_m},
-           {"conf_residual_zero_m", &lg.conf_residual_zero_m},
-           {"conf_valid_zero", &lg.conf_valid_zero},
-           {"conf_valid_full", &lg.conf_valid_full},
-           {"conf_age_full_s", &lg.conf_age_full_s},
-           {"conf_age_zero_s", &lg.conf_age_zero_s},
-           {"conf_rise_per_s", &lg.conf_rise_per_s},
-           {"freespace_speed_fraction", &lg.freespace_speed_fraction},
-           {"steer_output_tau_s", &lg.steer_output_tau_s},
-           {"rate_limit_fraction", &lg.rate_limit_fraction},
-           {"gap_reset_s", &lg.gap_reset_s},
-           {"steer_output_hysteresis_rad", &lg.steer_output_hysteresis_rad}}) {
-    *ptr = v(name);
-  }
+  lg.conf_intrusion_full = v("conf_intrusion_full");
+  lg.conf_intrusion_zero = v("conf_intrusion_zero");
+  lg.conf_residual_full_m = v("conf_residual_full_m");
+  lg.conf_residual_zero_m = v("conf_residual_zero_m");
+  lg.conf_valid_zero = v("conf_valid_zero");
+  lg.conf_valid_full = v("conf_valid_full");
+  lg.conf_age_full_s = v("conf_age_full_s");
+  lg.conf_age_zero_s = v("conf_age_zero_s");
+  lg.conf_rise_per_s = v("conf_rise_per_s");
+  lg.freespace_speed_fraction = v("freespace_speed_fraction");
   lg.use_lap_guidance = false;
-  cfg.tick_s = 1.0 / v("control_rate_hz");
+  lg.steer_output_tau_s = v("steer_output_tau_s");
+  lg.rate_limit_fraction = v("rate_limit_fraction");
+  lg.steer_output_hysteresis_rad = v("steer_output_hysteresis_rad");
+  lg.gap_reset_s = v("gap_reset_s");
   cfg.drivability.stall_hold_s = v("stall_hold_s");
   cfg.drivability.gate_hold_s = v("gate_hold_s");
   RecoveryParams& rc = cfg.recovery;
   rc.recover_distance_m = v("recover_distance_m");
   rc.recover_speed_mps = v("recover_speed_mps");
   rc.recover_max_s = v("recover_max_s");
-  rc.recover_exhausted_hold_s = v("recover_exhausted_hold_s");
   rc.recover_retry_s = v("recover_retry_s");
   rc.recover_margin_m = v("recover_margin_m");
+  rc.recover_exhausted_hold_s = v("recover_exhausted_hold_s");
   rc.recover_gate_debounce_s = v("recover_gate_debounce_s");
   rc.recover_progress_m = v("recover_progress_m");
   rc.recover_max_attempts = static_cast<int>(v("recover_max_attempts"));
+  cfg.tick_s = 1.0 / v("control_rate_hz");
   MppiParams& mp = cfg.mppi;
   mp.horizon_steps = static_cast<int>(v("horizon_steps"));
-  const int samples = static_cast<int>(v("samples"));
-  mp.samples = samples;
+  mp.samples = static_cast<int>(v("samples"));
   cfg.max_samples = static_cast<int>(v("max_samples"));
-  mp.cost_scale_floor = v("cost_scale_floor");
-  mp.w_steer_rate = v("w_steer_rate");
-  mp.corner_radius_m = v("corner_radius_m");
-  mp.speed_floor_margin_mps = v("speed_floor_margin_mps");
   mp.sigma_speed_mps = v("sigma_speed_mps");
   mp.sigma_steering_rad = v("sigma_steering_rad");
   mp.beta = v("noise_beta");
   mp.lambda = v("lambda");
+  mp.cost_scale_floor = v("cost_scale_floor");
   mp.seed = static_cast<std::uint64_t>(v("seed"));
   mp.w_progress = v("w_progress");
   mp.c_collision = v("c_collision");
@@ -229,8 +220,11 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   mp.w_lat = v("w_lat");
   mp.a_lat_max_mps2 = v("a_lat_max_mps2");
   mp.w_du = v("w_du");
+  mp.w_steer_rate = v("w_steer_rate");
+  mp.corner_radius_m = v("corner_radius_m");
   mp.w_term = v("w_term");
   mp.move_margin = v("move_margin");
+  mp.speed_floor_margin_mps = v("speed_floor_margin_mps");
   cfg.budget.halve_over_s = v("solve_halve_over_ms") * 1e-3;
   cfg.budget.restore_under_s = v("solve_restore_under_ms") * 1e-3;
   return cfg;
@@ -383,6 +377,7 @@ int main(int argc, char** argv) {
   std::vector<PointXY> points(kMaxScanPoints);
   DistanceField field;
   FreespaceField freespace(*geometry);
+  double last_published_speed = 0.0;
   bool have_prev_goal = false;
   PointXY prev_goal{0.0, 0.0};
   bool has_scan = false;
@@ -393,7 +388,6 @@ int main(int argc, char** argv) {
   double odom_stamp_s = 0.0;
   double wheel_speed_mps = 0.0;
   std::vector<float> ranges;
-  double last_published_speed = 0.0;
 
   std::string line;
   long line_no = 0;
@@ -423,6 +417,7 @@ int main(int argc, char** argv) {
           scan_to_points(ranges.data(), ranges.size(), amin, ainc, rmin, rmax, laser_yaw_rad,
                          *geometry, kBodyMarginM, points.data(), points.size());
       field.build(points.data(), count);
+      // As the node's scan callback: the free-space field with the previous scan's goal.
       freespace.build(field, points.data(), count, have_prev_goal ? &prev_goal : nullptr);
       have_prev_goal = freespace.valid();
       if (have_prev_goal) prev_goal = freespace.goal();
@@ -482,10 +477,10 @@ int main(int argc, char** argv) {
           << csv_number(o.plan_min_clearance_m) << ',' << csv_number(o.collision_fraction) << ','
           << csv_number(o.track_age_s) << ',' << csv_number(o.scan_age_s) << ',' << o.samples << ','
           << (o.samples_halved ? 1 : 0) << ',' << csv_number(o.track_confidence) << ','
-          << csv_number(o.has_freespace_goal ? o.freespace_goal_x_m : std::nan("")) << ','
-          << csv_number(o.has_freespace_goal ? o.freespace_goal_y_m : std::nan("")) << ','
-          << csv_number(o.has_freespace_goal ? o.freespace_reach_m : std::nan("")) << ','
-          << static_cast<int>(o.block_reason) << ',' << o.recovery_attempts << '\n';
+          << csv_number(o.has_freespace_goal ? o.freespace_goal_x_m : NAN) << ','
+          << csv_number(o.has_freespace_goal ? o.freespace_goal_y_m : NAN) << ','
+          << csv_number(o.freespace_reach_m) << ',' << static_cast<int>(o.block_reason) << ','
+          << o.recovery_attempts << '\n';
       last_published_speed = o.cmd.speed_mps;
     } else {
       die(2, "stream line " + std::to_string(line_no) + ": unknown event '" + std::string(1, kind) +

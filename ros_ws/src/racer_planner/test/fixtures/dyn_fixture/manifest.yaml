@@ -5,7 +5,7 @@ created_utc: "2026-11-12T00:00:00Z"
 git_sha: "0000000000000000000000000000000000000000"
 training_config_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
 vehicle_params:
-  schema_version: "0.14.0"
+  schema_version: "0.15.0"
   sysid_session_id: "none-preliminary"
 payload:
   - {file: "residual_mlp.f32", sha256: "e61c67bf424539c1d93b82a4e7b8e40a7317d713f8d77564f773d1e4ed8505c3"}

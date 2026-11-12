@@ -34,6 +34,8 @@ set +u
 source /opt/ros/humble/setup.bash
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 cd ros_ws
 
 PACKAGE_XMLS="$(find src -maxdepth 2 -name package.xml 2>/dev/null || true)"
@@ -72,4 +74,4 @@ colcon test-result --verbose
 
 # tools/tests/test_pnp_replay.py against the planner_replay_cli built above (tools/pnp_replay.py):
 # the end to end planner replay tests run here, where the binary exists, instead of skipping.
-"$(dirname "${BASH_SOURCE[0]}")/pnp_replay_test.sh"
+"${SCRIPT_DIR}/pnp_replay_test.sh"

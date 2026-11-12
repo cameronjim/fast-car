@@ -28,7 +28,7 @@ def bundle_with(tmp_path: Path, **nominal_extra) -> Path:
     return tmp_path
 
 
-def test_plant_parameters_come_from_io_nominal_including_the_fixtures_dead_zone():
+def test_plant_parameters_come_from_io_nominal_and_a_missing_dead_band_is_zero():
     p = runner.plant_parameters(NOMINAL_BUNDLE)
     assert p["plant_speed_gain"] == pytest.approx(1.0)
     assert p["plant_accel_max_mps2"] == pytest.approx(2.0)

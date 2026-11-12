@@ -4,8 +4,8 @@ version = "0.1.0"
 description = """
 Training and evaluation for the plug-and-play track perception net (circ_conv1d_v0): simulated
 lanes with free geometric labels, ray casting with real-scan nuisances, dataset generation,
-training, bundle export, the simulation evaluation and the real-bag gate. The numpy forward pass
-and the geometric tracer live in ros_ws/src/racer_track_perception, which this package imports.
+training, bundle export, the simulation evaluation, the real-bag gate and the map-free
+self-labels (selflabel.py, scan-to-scan ICP). The numpy forward pass and the geometric tracer live in ros_ws/src/racer_track_perception, which this package imports.
 
 torch is only in the `train` dependency group and is imported lazily inside functions, so the
 per-push CI job (uv sync --all-extras --dev) never installs it. Everything the CI job tests is
@@ -15,6 +15,7 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     "racer-track-perception",
     "numpy",
+    "scipy>=1.11",
     "pyyaml>=6.0",
 ]
 

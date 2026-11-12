@@ -111,6 +111,16 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.14.0 -> 0.15.0 on 2026-11-12: one new REQUIRED field,
+# actuation.peak_acceleration_mps2, and one value changed, actuation.stop_latency_s 0.20 -> 0.26,
+# both MEASURED with /odom/wheel on the 2026-11-12 race bag (docs/notes/safety-race-retune-2026-11-12.md;
+# the measurement is in the actuation section). racer_safety/safety_node now judges the TTC on the
+# fresh wheel speed (raised toward the request by at most peak_acceleration_mps2 * stop_latency_s)
+# instead of the request raised to the decaying bound; every threshold is unchanged. A new required
+# field changes the required-field set, so this is a minor bump per rule 5. EVERY BUNDLE THAT PINS
+# schema_version 0.14.0 (the policy contracts, the plug-and-play model manifests) refuses to load on
+# this version until it is re-exported against it.
+#
 # schema_version bumped 0.13.0 -> 0.14.0 on 2026-11-10: the first calibration from real
 # measurements (docs/notes/calibration-2026-11-10.md). No field added or removed (the
 # steering.pwm_to_angle_table key was already in the schema, null), but eight values change and
@@ -606,8 +616,31 @@ actuation:
   # model at that 90th percentile at 0.45 m/s and above every measured brake's travel, and keep
   # the speed bound decaying no faster than the slowest measured deceleration. Re-derive from
   # the first bag with /odom/wheel.
-  stop_latency_s: 0.20              # DERIVED 2026-11-02 (LiDAR scan matching of floor bags, see above)
-  stop_deceleration_mps2: 1.0       # DERIVED 2026-11-02 (LiDAR scan matching of floor bags, see above)
+  # RE-MEASURED 2026-11-12, schema 0.15.0, with /odom/wheel on the 2026-11-12T03-04-56 race bag (190 s
+  # of gap_follow at 1.0 to 1.5 m/s; docs/notes/safety-race-retune-2026-11-12.md, tools/audit_brakes.py):
+  #   * LATENCY, 0.20 -> 0.26 s. Counted from the scan's stamp: the scan is 0.100 s old when the gate
+  #     sees it (log time minus stamp, median 0.1005, p90 0.102, max 0.15 over 2901 scans), the gate
+  #     cycle adds up to 0.02 s, and the wheel speed starts to fall 0.10 to 0.14 s after the command
+  #     drops (17 hard slow-downs from 0.9 m/s or more: median 0.11, p90 0.14). 0.10 + 0.02 + 0.14.
+  #   * DECELERATION, 1.0 KEPT. Wheel-speed deceleration after the command goes to zero is 3.0 to 3.6
+  #     m/s^2 mean (peak 5 to 6), but the wheel speed overstates the car's: scan matching gives the
+  #     true speed as 0.64 of the wheel speed at full lock and 0.89 on a straight. The 9 clean stops to
+  #     rest (a command drop, the car at rest within 0.6 s) have a TRUE mean deceleration of 2.0 to 2.3
+  #     m/s^2 at full lock (6 of them) but 1.05, 1.75 and 0.83 m/s^2 with the steering near straight
+  #     (the last is the watchdog stop at the end of the run: 0.79 m/s true, 0.47 m of travel). Full
+  #     lock scrubs the front tyres, a straight stop does not, so the slowest measured, 0.8 to 1.0,
+  #     is what the model must cover; the 2026-11-02 value stays. Against the measured scan-matched
+  #     travel the model (0.26 s, 1.0 m/s^2) overstates it by 1.5 to 3.6 times at full lock and is
+  #     within 8 per cent on the straight stop.
+  #   * PEAK ACCELERATION (new, 2.2 m/s^2): the most the wheel speed gained over 0.2 s windows is
+  #     2.71 m/s^2 (one wheelspin burst), 99.9 per cent of windows are below 2.13 on the race run
+  #     and 1.78 over the whole 1990 s bag, 99 per cent below 1.67. Used only as a bound on how far
+  #     above the measured wheel speed a request can take the speed judged by safety_node before a
+  #     brake bites: judged speed <= measured + peak * latency (gate_logic.hpp JUDGED SPEED FROM THE
+  #     MEASURED WHEEL SPEED). The wheel speed it adds to already reads high where the wheels slip.
+  stop_latency_s: 0.26              # MEASURED 2026-11-12 (race bag, see above)
+  stop_deceleration_mps2: 1.0       # MEASURED 2026-11-12 (race bag): the slowest of 0.83 to 2.3, kept
+  peak_acceleration_mps2: 2.2       # MEASURED 2026-11-12 (race bag): above 99.9 per cent of 0.2 s windows
 
 sensors:
   imu:
@@ -821,10 +854,12 @@ meta:
   # DERIVED (push test; tooth counts unverified), steering.pwm_to_angle_table and the two angle
   # limits are MEASURED (effective angle at low speed, by scan matching), and the three limits.ttc_*
   # / min_forward_clearance_m values are re-tuned in true units and stay PROVISIONAL.
+  # Updated 2026-11-12 (schema 0.15.0): actuation.stop_latency_s and peak_acceleration_mps2 are
+  # MEASURED (wheel-speed response, scan matching and the scan age on the race bag).
   # sysid_session_id stays
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.14.0"
+  schema_version: "0.15.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

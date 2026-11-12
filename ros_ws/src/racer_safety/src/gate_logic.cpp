@@ -329,16 +329,42 @@ double SafetyGateLogic::next_speed_bound_mps(double bound_in_mps, double previou
   return toward_mps;
 }
 
+bool SafetyGateLogic::measured_speed_model_usable() const {
+  // gate_logic.hpp "JUDGED SPEED FROM THE MEASURED WHEEL SPEED": unset or unusable means the gate
+  // judges the request raised to the bound, never a guess at a model.
+  if (!limits_.measured_speed_model.has_value()) {
+    return false;
+  }
+  const MeasuredSpeedModel& m = *limits_.measured_speed_model;
+  if (!std::isfinite(m.latency_s)) {
+    return false;
+  }
+  if (!std::isfinite(m.peak_acceleration_mps2)) {
+    return false;
+  }
+  if (!(m.latency_s > 0.0)) {
+    return false;
+  }
+  if (!(m.peak_acceleration_mps2 > 0.0)) {
+    return false;
+  }
+  return true;
+}
+
 bool SafetyGateLogic::apply_obstacle_gate(double direction, GateSource source, double range_m,
                                           bool latched_in, const DriveCommand& requested,
-                                          double estimate_toward_mps, DriveCommand& target,
-                                          GateResult& result) const {
+                                          double estimate_toward_mps,
+                                          std::optional<double> measured_toward_mps,
+                                          DriveCommand& target, GateResult& result) const {
   // One implementation for both directions (gate_logic.hpp "THE REAR OBSTACLE GATE"):
   // direction +1.0 is the forward gate, -1.0 the rear gate. Whether the gate judges at all is
   // decided by the REQUEST: a request away from this side, or stopped, is never braked by it.
   // The speed the TTC divides by is the request's, raised to `estimate_toward_mps` (the decaying
   // bound of recent outputs and, when fresh, the measured wheel speed) when the car may still be
-  // moving faster than it is now asked to (gate_logic.hpp "SPEED FOR THE TTC").
+  // moving faster than it is now asked to (gate_logic.hpp "SPEED FOR THE TTC"). With a fresh
+  // measured speed and a usable model the judged speed is the measured one instead, raised toward
+  // the request by what the car can gain before a brake bites ("JUDGED SPEED FROM THE MEASURED
+  // WHEEL SPEED").
   const bool reverse = direction < 0.0;
   const double toward_mps = direction * requested.speed_mps;
   const double speed_toward_mps = toward_mps > 0.0 ? toward_mps : 0.0;
@@ -349,6 +375,28 @@ bool SafetyGateLogic::apply_obstacle_gate(double direction, GateSource source, d
   double ttc_speed_mps = speed_toward_mps;
   if (estimate_toward_mps > ttc_speed_mps) {
     ttc_speed_mps = estimate_toward_mps;
+  }
+  if (limits_.ttc_brake_s.has_value()) {
+    if (measured_toward_mps.has_value()) {
+      if (moving_toward) {
+        if (measured_speed_model_usable()) {
+          const MeasuredSpeedModel& m = *limits_.measured_speed_model;
+          double measured_mps = 0.0;
+          if (*measured_toward_mps > 0.0) {
+            measured_mps = *measured_toward_mps;
+          }
+          const double reachable_mps = measured_mps + m.peak_acceleration_mps2 * m.latency_s;
+          double judged_mps = speed_toward_mps;
+          if (judged_mps > reachable_mps) {
+            judged_mps = reachable_mps;
+          }
+          if (judged_mps < measured_mps) {
+            judged_mps = measured_mps;
+          }
+          ttc_speed_mps = judged_mps;
+        }
+      }
+    }
   }
   const bool obstacle = is_valid_range(range_m);  // finite and > 0
 
@@ -529,12 +577,27 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   const DriveCommand requested = cmd;
   DriveCommand target = requested;
   const double measured_mps = measured_speed_or_zero(input.measured_speed_mps);
+  // A measurement counts as fresh for "JUDGED SPEED FROM THE MEASURED WHEEL SPEED" only when it is
+  // present and finite (safety_node leaves it empty once /odom/wheel is stale).
+  bool measured_fresh = false;
+  if (input.measured_speed_mps.has_value()) {
+    if (std::isfinite(*input.measured_speed_mps)) {
+      measured_fresh = true;
+    }
+  }
+  std::optional<double> measured_forward;
+  std::optional<double> measured_reverse;
+  if (measured_fresh) {
+    measured_forward = measured_mps;
+    measured_reverse = -measured_mps;
+  }
   result.ttc_brake_latched = apply_obstacle_gate(
       1.0, GateSource::kTtc, input.min_scan_range_m, input.ttc_brake_latched, requested,
-      larger(result.speed_bound_forward_mps, measured_mps), target, result);
+      larger(result.speed_bound_forward_mps, measured_mps), measured_forward, target, result);
   result.reverse_brake_latched = apply_obstacle_gate(
       -1.0, GateSource::kTtcReverse, input.min_rear_scan_range_m, input.reverse_brake_latched,
-      requested, larger(result.speed_bound_reverse_mps, -measured_mps), target, result);
+      requested, larger(result.speed_bound_reverse_mps, -measured_mps), measured_reverse, target,
+      result);
 
   // 3c. Rate-limit clamp relative to the previous OUTPUT (what was actually commanded last
   // cycle, not what was requested), applied to whatever the obstacle gate left, then

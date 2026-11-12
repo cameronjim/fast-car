@@ -27,6 +27,11 @@
 //   distance_from_body                       true/false (forward_sector.hpp "DISTANCE FROM
 //                                            THE BODY"; false is the pre-0.13.0 head reference)
 //   speed_bound_deceleration_mps2            m/s^2; <= 0 turns the output bound off
+//   measured_speed_judging                   true/false: judge the TTC on the fresh wheel speed
+//                                            (gate_logic.hpp "JUDGED SPEED FROM THE MEASURED WHEEL
+//                                            SPEED"); false is the request raised to the bound.
+//                                            Uses stop_latency_s below
+//   peak_acceleration_mps2                   that model's speed-gain bound
 //   use_odometry, odom_timeout_s             O lines used or ignored; their freshness
 //   outer_corner_horizon_m, obstacle_corridor_margin_m, front_overhang_m, rear_overhang_m,
 //   ttc_forward_sector_half_angle_rad, obstacle_steering_hold_after_s, laser_yaw_rad,
@@ -123,6 +128,8 @@ std::map<std::string, Param> default_params() {
   p["min_forward_clearance_m"] = {vp.limits.min_forward_clearance_m, -1.0, 10.0};
   p["distance_from_body"] = {1.0, 0.0, 1.0};
   p["speed_bound_deceleration_mps2"] = {vp.actuation.stop_deceleration_mps2, -1.0, 100.0};
+  p["measured_speed_judging"] = {1.0, 0.0, 1.0};
+  p["peak_acceleration_mps2"] = {vp.actuation.peak_acceleration_mps2, 1e-3, 100.0};
   p["use_odometry"] = {1.0, 0.0, 1.0};
   p["odom_timeout_s"] = {0.1, 1e-3, 10.0};
   p["outer_corner_horizon_m"] = {vp.limits.outer_corner_horizon_m, 1e-3, 100.0};
@@ -330,6 +337,12 @@ int main(int argc, char** argv) {
   }
   if (value("speed_bound_deceleration_mps2") > 0.0) {
     limits.speed_bound_deceleration_mps2 = value("speed_bound_deceleration_mps2");
+  }
+  if (value("measured_speed_judging") > 0.5) {
+    racer_safety::MeasuredSpeedModel model;
+    model.latency_s = value("stop_latency_s");
+    model.peak_acceleration_mps2 = value("peak_acceleration_mps2");
+    limits.measured_speed_model = model;
   }
   limits.obstacle_steering_hold_after_s = value("obstacle_steering_hold_after_s");
   const double control_period_s = 1.0 / value("control_rate_hz");

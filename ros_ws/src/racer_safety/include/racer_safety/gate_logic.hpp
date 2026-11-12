@@ -164,6 +164,27 @@
 //     past output (or the wheels) is faster than the current request: right after a request
 //     drop, for about (old - new) / deceleration seconds.
 //
+// JUDGED SPEED FROM THE MEASURED WHEEL SPEED (2026-11-12, schema 0.15.0,
+// docs/notes/safety-race-retune-2026-11-12.md; read before changing step 3b). On the 2026-11-12
+// race bag (requests of 1.0 to 1.55 m/s) the TTC judged a speed the car was not doing: the
+// follower's request was 1.1 to 1.5 m/s while the wheels turned at 0.8 to 0.9, and the decaying
+// output bound held the judged speed at the last, faster OUTPUT for a second after the request
+// dropped although the wheel speed said the car had slowed (judged 1.5 m/s with the wheels at
+// 0.87). With a FRESH measured wheel speed (GateInput::measured_speed_mps) and a usable
+// SafetyLimits::measured_speed_model the TTC divides by
+//     v = max(v_measured, min(v_request, v_measured + a_peak * latency))
+// instead: the measured speed, raised toward the request by at most what the car can gain before
+// a brake takes effect (actuation.peak_acceleration_mps2 and actuation.stop_latency_s, both
+// MEASURED). The decaying bound is not used then (it only stands in for a measurement). Every
+// threshold, the floor, the latch and the release are unchanged; v is never above the speed the
+// rule above would judge, so this can only remove a trip, never add one.
+// Without a fresh measurement (the simulator, every bag before 2026-11, a stale /odom/wheel), or
+// with the model unset or unusable (non-finite, or latency or peak acceleration not above zero),
+// the gate is EXACTLY the one above: the request raised to the bound. The measured wheel speed
+// reads HIGH wherever the wheels slip (1.12 times the true speed on a straight, 1.56 times at full
+// lock on the race bag), so judging it is conservative there; it reads low only while the wheels
+// lock under a brake, when the latch is already set and the request holds it.
+//
 // THE REAR OBSTACLE GATE (added 2026-10-06 night; read before changing step 3b).
 //
 // Why. On the night floor test (bags 2026-10-06T23-19-41 and 23-25-38) the car ended nose-in
@@ -281,6 +302,14 @@ namespace racer_safety {
 // config/vehicle_params.yaml's `limits.ttc_warning_s`/`limits.ttc_brake_s` are currently
 // `null` (not yet tuned -- see that file's comments); when unset, the TTC gate is a documented
 // no-op (see evaluate()'s doc comment) rather than inventing an untuned threshold.
+
+// The model of "JUDGED SPEED FROM THE MEASURED WHEEL SPEED" (SI). Used only while it is usable:
+// both fields finite and above zero. Anything else behaves as if it were unset.
+struct MeasuredSpeedModel {
+  double latency_s = 0.0;               // vehicle_params actuation.stop_latency_s
+  double peak_acceleration_mps2 = 0.0;  // vehicle_params actuation.peak_acceleration_mps2
+};
+
 struct SafetyLimits {
   double steering_min_rad = 0.0;
   double steering_max_rad = 0.0;
@@ -314,6 +343,9 @@ struct SafetyLimits {
   // output bound falls at ("SPEED FOR THE TTC"). std::nullopt (the default, tests only) turns the
   // bound off: the TTC divides by the request (and a fresh measured speed, if any).
   std::optional<double> speed_bound_deceleration_mps2;
+  // "JUDGED SPEED FROM THE MEASURED WHEEL SPEED". Unset (the default, and what every test that
+  // predates it leaves) keeps the TTC on the request raised to the bound and the measurement.
+  std::optional<MeasuredSpeedModel> measured_speed_model;
   int watchdog_missed_cycles = 3;
   double control_period_s = 0.02;  // 1 / 50 Hz, claude-docs/04-architecture.md
 };
@@ -514,7 +546,11 @@ class SafetyGateLogic {
   // returns the new latch. `estimate_toward_mps` raises the TTC speed ("SPEED FOR THE TTC").
   bool apply_obstacle_gate(double direction, GateSource source, double range_m, bool latched_in,
                            const DriveCommand& requested, double estimate_toward_mps,
-                           DriveCommand& target, GateResult& result) const;
+                           std::optional<double> measured_toward_mps, DriveCommand& target,
+                           GateResult& result) const;
+  // Whether limits_.measured_speed_model is set and usable ("JUDGED SPEED FROM THE MEASURED WHEEL
+  // SPEED").
+  bool measured_speed_model_usable() const;
   // The decaying output bound toward one side after this cycle ("SPEED FOR THE TTC").
   double next_speed_bound_mps(double bound_in_mps, double previous_toward_mps, double dt_s) const;
   // TTC the request must exceed to release the latch. Only called when ttc_brake_s is set.

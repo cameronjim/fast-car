@@ -182,7 +182,10 @@ def bag_origin_s(path: str | Path) -> float:
     from mcap.reader import make_reader
 
     with bag_files(Path(path))[0].open("rb") as stream:
-        summary = make_reader(stream).get_summary()
+        try:
+            summary = make_reader(stream).get_summary()
+        except Exception:  # noqa: BLE001 - an unindexed file
+            return 0.0
     if summary is None or summary.statistics is None:
         return 0.0
     return summary.statistics.message_start_time / 1e9
@@ -216,16 +219,21 @@ def _read_window(file: Path, window_s: tuple[float, float], data: BagData) -> bo
     factory = DecoderFactory()
     decoders: dict[int, Any] = {}
     with file.open("rb") as stream:
-        reader = make_reader(stream)
-        summary = reader.get_summary()
+        try:
+            reader = make_reader(stream)
+            summary = reader.get_summary()
+        except Exception:  # noqa: BLE001 - an unindexed file (the recorder was killed) cannot seek
+            return False
         if summary is None or summary.statistics is None:
             return False
         origin_ns = summary.statistics.message_start_time
         topics = [t for t in WANTED_TOPICS if any(c.topic == t for c in summary.channels.values())]
         for schema, channel, message in reader.iter_messages(
             topics=topics,
-            start_time=origin_ns + int(window_s[0] * 1e9),
-            end_time=origin_ns + int(window_s[1] * 1e9),
+            start_time=None,
+            end_time=None,
+            starting_at=origin_ns + int(window_s[0] * 1e9),
+            ending_before=origin_ns + int(window_s[1] * 1e9),
         ):
             decoder = decoders.get(channel.id)
             if decoder is None:

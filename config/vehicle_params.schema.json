@@ -312,7 +312,7 @@
         "steering_pwm_period_us", "throttle_pwm_period_us",
         "steering_pwm_achieved_period_us", "throttle_pwm_achieved_period_us",
         "throttle_deadband_us",
-        "stop_latency_s", "stop_deceleration_mps2"
+        "stop_latency_s", "stop_deceleration_mps2", "peak_acceleration_mps2"
       ],
       "properties": {
         "command_to_torque_delay_s": {
@@ -381,6 +381,12 @@
           "type": "number", "minimum": 0, "maximum": 2,
           "units": "s",
           "description": "Stopping model of the whole stop chain (added 2026-11-02, schema 0.13.0): the time the car keeps its speed after racer_safety/safety_node's obstacle gate trips, counted from the scan the gate judged (scan age, the 50 Hz gate cycle, the PWM frame, the layer-1 mux frame, the VESC PPM filter and speed loop). With stop_deceleration_mps2 it predicts the stopping travel speed * stop_latency_s + speed^2 / (2 stop_deceleration_mps2) that tools/replay_safety.py reports for every brake, and it is what the TTC and floor values are checked against. Derived from LiDAR scan matching of recorded brakes, not from odometry."
+        },
+        "peak_acceleration_mps2": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 50,
+          "units": "m/s^2",
+          "sign_convention": "positive = magnitude of the acceleration",
+          "description": "The most the car can gain in speed per second, MEASURED as an upper bound on the wheel-speed gain over 0.2 s windows (added 2026-11-12, schema 0.15.0, docs/notes/safety-race-retune-2026-11-12.md). racer_safety/safety_node judges a request at no more than the measured wheel speed plus peak_acceleration_mps2 * stop_latency_s while /odom/wheel is fresh (gate_logic.hpp JUDGED SPEED FROM THE MEASURED WHEEL SPEED): the TTC is not computed on a speed the car cannot reach before a brake bites. A bound for that judgement, not a performance figure, and not actuation.max_acceleration_mps2 (the command rate limit, from the gym)."
         },
         "stop_deceleration_mps2": {
           "type": "number", "exclusiveMinimum": 0, "maximum": 50,

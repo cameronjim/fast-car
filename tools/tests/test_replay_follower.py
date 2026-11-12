@@ -231,6 +231,33 @@ def test_read_bag_cut_inside_a_record(indexed_bag, tmp_path):
     assert len(data.scans) <= 5
 
 
+def test_bag_origin_is_the_first_message_time(indexed_bag):
+    assert bag.bag_origin_s(indexed_bag) == pytest.approx(T0, abs=1e-3)
+
+
+def test_read_bag_window_seeks_the_indexed_bag(indexed_bag):
+    """A window in seconds from the first message decodes only that stretch (2026-11-12: a 6 GB
+    bag of 2000 s opens in a second); the whole-bag read is unchanged."""
+    whole = bag.read_bag(indexed_bag)
+    part = bag.read_bag(indexed_bag, window_s=(0.15, 0.35))
+    assert not part.truncated and part.decode_errors == 0
+    assert [round(s.stamp_s - T0, 1) for s in part.scans] == [0.2, 0.3]
+    assert 0 < len(part.drive_raw) < len(whole.drive_raw)
+    assert all(T0 + 0.15 <= d.log_time_s <= T0 + 0.35 for d in part.drive_raw)
+    assert [e.phase for e in part.events] == [0]  # the latch engages in the window, releases after
+    assert len(bag.read_bag(indexed_bag, window_s=(0.0, 100.0)).scans) == len(whole.scans)
+
+
+def test_read_bag_window_on_an_unindexed_bag_falls_back_to_the_stream(tmp_path):
+    """A recorder killed before finish() cannot seek; the window is then ignored, not an error
+    (the caller filters by time itself), and bag_origin_s is 0.0."""
+    path = tmp_path / "killed.mcap"
+    write_bag(path, finish=False, chunk_size=1)
+    data = bag.read_bag(path, window_s=(0.15, 0.35))
+    assert data.truncated and len(data.scans) == 5
+    assert bag.bag_origin_s(path) == 0.0
+
+
 def test_read_bag_directory_and_errors(indexed_bag, tmp_path):
     folder = tmp_path / "run"
     folder.mkdir()

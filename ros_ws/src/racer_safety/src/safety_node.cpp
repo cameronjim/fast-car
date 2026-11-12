@@ -318,6 +318,12 @@ class SafetyNode : public rclcpp::Node {
     // The decaying output bound's deceleration (schema 0.13.0, required, so always set; see
     // gate_logic.hpp "SPEED FOR THE TTC").
     limits.speed_bound_deceleration_mps2 = VEHICLE_PARAMS.actuation.stop_deceleration_mps2;
+    // The measured-speed model (schema 0.15.0, required, so always set; used while /odom/wheel is
+    // fresh, see gate_logic.hpp "JUDGED SPEED FROM THE MEASURED WHEEL SPEED").
+    racer_safety::MeasuredSpeedModel measured_speed_model;
+    measured_speed_model.latency_s = VEHICLE_PARAMS.actuation.stop_latency_s;
+    measured_speed_model.peak_acceleration_mps2 = VEHICLE_PARAMS.actuation.peak_acceleration_mps2;
+    limits.measured_speed_model = measured_speed_model;
     limits.watchdog_missed_cycles = watchdog_missed_cycles;
     limits.control_period_s = control_period_s_;
     gate_limits_ = limits;

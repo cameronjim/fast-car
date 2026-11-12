@@ -142,11 +142,8 @@ def simulate(
     for i in range(1, n + 1):
         t_cmd = t[i - 1] - plant.speed_delay_s
         u = speed_command(t_cmd)
-        rate = (
-            (u - wheel) / plant.speed_tau_s
-            if plant.speed_tau_s > 0.0
-            else math.copysign(math.inf, u - wheel)
-        )
+        # A zero time constant is a step: reach the command within one step, rate limits apart.
+        rate = (u - wheel) / (plant.speed_tau_s if plant.speed_tau_s > 0.0 else dt_s)
         rate = max(-plant.max_decel_mps2, min(plant.max_accel_mps2, rate))
         wheel += rate * dt_s
         target = steering_command(t[i - 1])

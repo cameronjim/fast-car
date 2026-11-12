@@ -139,6 +139,87 @@ TEST(DynamicsModel, SpeedGainScalesTheTargetSpeed) {
   EXPECT_NEAR(m.step(State{}, Control{1.0, 0.0}).v, kA * 0.5, 1e-12);
 }
 
+// Dead zone (bundle schema 1.1.0): target = gain * cmd when |cmd| >= deadband, else 0.
+DynamicsParams with_dead_zone(double deadband, double gain = 1.0) {
+  auto p = nominal();
+  p.nominal.speed_deadband_mps = deadband;
+  p.nominal.speed_gain = gain;
+  return p;
+}
+
+TEST(DynamicsModel, CommandBelowTheDeadZoneKeepsACarAtRestAtRest) {
+  const DynamicsModel m(with_dead_zone(0.2), synthetic(), 0.1);
+  EXPECT_EQ(m.step(State{}, Control{0.19, 0.0}).v, 0.0);
+  EXPECT_EQ(m.step(State{}, Control{0.05, 0.0}).v, 0.0);
+  EXPECT_EQ(m.step(State{}, Control{-0.1, 0.0}).v, 0.0);
+}
+
+TEST(DynamicsModel, CommandAtTheDeadZoneEdgeMoves) {
+  const DynamicsModel m(with_dead_zone(0.2), synthetic(), 0.1);
+  EXPECT_NEAR(m.step(State{}, Control{0.2, 0.0}).v, kA * 0.2, 1e-12);
+}
+
+TEST(DynamicsModel, CommandAboveTheDeadZoneIsUnchangedAndGainApplies) {
+  const DynamicsModel m(with_dead_zone(0.2, 0.9), synthetic(), 0.1);
+  EXPECT_NEAR(m.step(State{}, Control{0.5, 0.0}).v, kA * 0.9 * 0.5, 1e-12);
+}
+
+TEST(DynamicsModel, RollingCarDecaysToZeroUnderACommandInsideTheDeadZone) {
+  const DynamicsModel m(with_dead_zone(0.2), synthetic(), 0.1);
+  // v = 0.4, target 0: v' = 0.4 - kA * 0.4 (the gain is not applied inside the zone).
+  EXPECT_NEAR(m.step(State{0, 0, 0, 0.4, 0}, Control{0.1, 0.0}).v, 0.4 * (1.0 - kA), 1e-12);
+  State s{0, 0, 0, 0.4, 0};
+  for (int i = 0; i < 60; ++i) s = m.step(s, Control{0.1, 0.0});
+  EXPECT_LT(s.v, 1e-9);
+}
+
+TEST(DynamicsModel, RollingCarKeepsMovingJustAboveTheDeadZone) {
+  const DynamicsModel m(with_dead_zone(0.2), synthetic(), 0.1);
+  State s{0, 0, 0, 0.4, 0};
+  for (int i = 0; i < 60; ++i) s = m.step(s, Control{0.25, 0.0});
+  EXPECT_NEAR(s.v, 0.25, 1e-6);
+}
+
+TEST(DynamicsModel, DeadZoneIsSymmetricInTheSignOfTheCommand) {
+  const DynamicsModel m(with_dead_zone(0.2), synthetic(), 0.1);
+  // A reverse command inside the zone has a target of 0, beyond it the target is negative.
+  EXPECT_NEAR(m.step(State{0, 0, 0, 0.4, 0}, Control{-0.1, 0.0}).v, 0.4 * (1.0 - kA), 1e-12);
+  EXPECT_EQ(m.step(State{0, 0, 0, 0.1, 0}, Control{-0.5, 0.0}).v, 0.0);
+}
+
+TEST(DynamicsModel, ZeroDeadZoneIsTheOldModel) {
+  const DynamicsModel with(with_dead_zone(0.0), synthetic(), 0.1);
+  const DynamicsModel without(nominal(), synthetic(), 0.1);
+  for (double cmd : {-0.3, 0.0, 0.05, 0.4}) {
+    EXPECT_EQ(with.step(State{0, 0, 0, 0.2, 0.1}, Control{cmd, 0.1}).v,
+              without.step(State{0, 0, 0, 0.2, 0.1}, Control{cmd, 0.1}).v);
+  }
+}
+
+TEST(DynamicsModel, DeadZoneDoesNotTouchSteering) {
+  const DynamicsModel a(with_dead_zone(0.5), synthetic(), 0.1);
+  const DynamicsModel b(nominal(), synthetic(), 0.1);
+  const State s{0, 0, 0, 0.3, 0.05};
+  EXPECT_EQ(a.step(s, Control{0.1, 0.2}).delta, b.step(s, Control{0.1, 0.2}).delta);
+  EXPECT_EQ(a.step(s, Control{0.1, 0.2}).yaw, b.step(s, Control{0.1, 0.2}).yaw);
+}
+
+TEST(DynamicsModel, StepTrigAndStepAgreeAcrossTheDeadZone) {
+  const DynamicsModel m(with_dead_zone(0.2), synthetic(), 0.1);
+  const State s{0.1, 0.2, 0.7, 0.3, 0.05};
+  for (double cmd : {0.0, 0.1, 0.2, 0.3}) {
+    const State a = m.step(s, Control{cmd, 0.1});
+    const State b = m.step_trig(s, Control{cmd, 0.1}, std::cos(s.yaw), std::sin(s.yaw), nullptr);
+    EXPECT_EQ(a.v, b.v);
+    EXPECT_EQ(a.x, b.x);
+  }
+}
+
+TEST(DynamicsModel, NaNCommandStillGivesNaNSpeed) {
+  const DynamicsModel m(with_dead_zone(0.2), synthetic(), 0.1);
+  EXPECT_TRUE(std::isnan(m.step(State{}, Control{std::nan(""), 0.0}).v));
+}
+
 TEST(DynamicsModel, UndersteerReducesYawRate) {
   auto p = nominal();
   p.nominal.understeer_s2_per_m2 = 1.0;

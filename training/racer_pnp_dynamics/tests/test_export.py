@@ -184,3 +184,63 @@ def test_live_vehicle_loads_with_physical_values():
     assert v.wheelbase_m > 0 and v.steer_min_rad < 0 < v.steer_max_rad
     assert v.physical_lock_left_rad >= v.steer_max_rad
     assert v.schema_version and v.sysid_session_id
+
+
+def test_new_bundles_are_schema_1_1_with_the_dead_zone(tmp_path, toy_vehicle, toy_nominal):
+    manifest = _write(tmp_path, toy_vehicle, toy_nominal.replace(speed_deadband_mps=0.21))
+    assert manifest["bundle_schema_version"] == "1.1.0"
+    assert manifest["io"]["nominal"]["speed_deadband_mps"] == 0.21
+    assert export.read_bundle(tmp_path / "bundle").nominal.speed_deadband_mps == 0.21
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01])
+def test_dead_zone_out_of_range_is_refused_and_nothing_is_written(
+    tmp_path, toy_vehicle, toy_nominal, value
+):
+    with pytest.raises(export.BundleInvalid, match="speed_deadband_mps"):
+        _write(tmp_path, toy_vehicle, toy_nominal.replace(speed_deadband_mps=value))
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_a_manifest_without_the_dead_zone_is_refused_whatever_its_version(
+    tmp_path, toy_vehicle, toy_nominal
+):
+    manifest = _write(tmp_path, toy_vehicle, toy_nominal)
+    for version in ("1.0.0", "1.1.0", "1.9.0"):
+        bad = copy.deepcopy(manifest)
+        bad["bundle_schema_version"] = version
+        del bad["io"]["nominal"]["speed_deadband_mps"]
+        with pytest.raises(export.BundleInvalid, match="speed_deadband_mps"):
+            export.validate_manifest(bad)
+
+
+def test_read_bundle_refuses_a_bundle_without_the_dead_zone(tmp_path, toy_vehicle, toy_nominal):
+    _write(tmp_path, toy_vehicle, toy_nominal)
+    path = tmp_path / "bundle" / "manifest.yaml"
+    manifest = yaml.safe_load(path.read_text())
+    del manifest["io"]["nominal"]["speed_deadband_mps"]
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+    with pytest.raises(export.BundleInvalid, match="speed_deadband_mps"):
+        export.read_bundle(tmp_path / "bundle")
+
+
+def test_golden_crosses_the_dead_zone(toy_vehicle, toy_nominal):
+    p = toy_nominal.replace(speed_deadband_mps=0.2, speed_tau_s=0.05)
+    rows = np.asarray(export.golden_rows(p, Residual.disabled(), toy_vehicle, 0.9))
+    by = {k: rows[rows[:, 0] == k] for k in np.unique(rows[:, 0])}
+    assert len(by) == 12
+    ramp, from_rest, rolling = by[9], by[10], by[11]
+    assert ramp[:, 2].max() == pytest.approx(0.4) and ramp[-2, 2] < 0.05
+    assert ramp[:5, 7].max() == 0.0 and ramp[:, 7].max() > 0.3  # still, then moving, then back
+    assert from_rest[:, 7].max() == 0.0  # 0.1 m/s from rest never moves the car
+    assert rolling[0, 7] == 0.4 and rolling[-1, 7] < 1e-3  # 0.1 m/s from 0.4 m/s decays to 0
+
+
+def test_golden_round_trips_with_a_dead_zone(tmp_path, toy_vehicle, toy_nominal):
+    p = toy_nominal.replace(speed_deadband_mps=0.2)
+    _write(tmp_path, toy_vehicle, p)
+    golden = export.read_golden(tmp_path / "bundle" / "golden_rollouts.csv")
+    assert export.golden_matches(golden, p, Residual.disabled(), toy_vehicle)
+    assert not export.golden_matches(
+        golden, p.replace(speed_deadband_mps=0.0), Residual.disabled(), toy_vehicle
+    )

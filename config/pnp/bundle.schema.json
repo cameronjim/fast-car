@@ -181,6 +181,7 @@
           "additionalProperties": false,
           "required": [
             "speed_gain",
+            "speed_deadband_mps",
             "speed_tau_s",
             "accel_max_mps2",
             "decel_max_mps2",
@@ -193,6 +194,7 @@
           ],
           "properties": {
             "speed_gain": {"type": "number"},
+            "speed_deadband_mps": {"type": "number", "minimum": 0, "maximum": 1},
             "speed_tau_s": {"type": "number", "exclusiveMinimum": 0},
             "accel_max_mps2": {"type": "number", "exclusiveMinimum": 0},
             "decel_max_mps2": {"type": "number", "exclusiveMinimum": 0},

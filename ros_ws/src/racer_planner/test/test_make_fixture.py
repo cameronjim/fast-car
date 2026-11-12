@@ -60,3 +60,13 @@ def test_golden_has_nine_rollouts_of_forty_steps(tmp_path):
     assert len(rows) - 1 == 9 * 41
     # the weights are all zero when the residual is off
     assert set((tmp_path / "residual_mlp.f32").read_bytes()) == {0}
+
+
+def test_dead_zone_target_is_zero_below_and_gain_times_command_at_or_above():
+    nom = dict(mf.NOMINAL, speed_deadband_mps=0.2, speed_tau_s=0.05)
+    below = mf.step((0, 0, 0, 0.0, 0), (0.19, 0.0), nom, VEHICLE, 0.05)
+    at = mf.step((0, 0, 0, 0.0, 0), (0.2, 0.0), nom, VEHICLE, 0.05)
+    assert below[3] == 0.0
+    assert math.isclose(at[3], (1.0 - math.exp(-1.0)) * 0.2, rel_tol=1e-12)
+    rolling = mf.step((0, 0, 0, 0.4, 0), (0.1, 0.0), nom, VEHICLE, 0.05)
+    assert math.isclose(rolling[3], 0.4 * math.exp(-1.0), rel_tol=1e-12)

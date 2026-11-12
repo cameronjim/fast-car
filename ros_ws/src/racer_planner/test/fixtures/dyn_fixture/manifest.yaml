@@ -1,4 +1,4 @@
-bundle_schema_version: "1.0.0"
+bundle_schema_version: "1.1.0"
 kind: dynamics
 model_id: "dyn-fixture-v0-2026-11-12"
 created_utc: "2026-11-12T00:00:00Z"
@@ -16,6 +16,7 @@ io:
   dt_s: 0.05
   nominal:
     speed_gain: 0.95
+    speed_deadband_mps: 0.0
     speed_tau_s: 0.25
     accel_max_mps2: 2.0
     decel_max_mps2: 1.5

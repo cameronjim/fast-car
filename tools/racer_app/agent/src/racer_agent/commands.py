@@ -27,7 +27,13 @@ from .hostinfo import HostInfo
 #: tests/test_whitelist.py checks these against the launch files so they cannot drift.
 #: race-2026-11-12 (2026-11-12) has a 1.0 m/s ceiling and has never been driven: the app launches a
 #: profile with no speed argument, so choosing it here runs the car at that ceiling.
-GAP_FOLLOW_PROFILES = ("none", "floor-2026-10-06", "lane-2026-10-25", "race-2026-11-12")
+GAP_FOLLOW_PROFILES = (
+    "none",
+    "floor-2026-10-06",
+    "lane-2026-10-25",
+    "race-2026-11-12",
+    "race-2026-11-13",
+)
 PARK_PROFILES = ("none", "floor-2026-10-07")
 
 DRIVE_MODES = ("gap_follow", "wall_follow", "tracker", "park", "ml_policy", "spiderbot", "pnp")
@@ -52,6 +58,7 @@ GAP_FOLLOW_PROFILE_MAX_SPEED_MPS = {
     "floor-2026-10-06": 0.64,
     "lane-2026-10-25": 0.64,
     "race-2026-11-12": 1.0,
+    "race-2026-11-13": 1.3,
 }
 #: The node refuses min_speed_mps > max_speed_mps and every profile uses its default 0.36, so a
 #: cap below that is refused here instead of at launch.

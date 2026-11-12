@@ -42,6 +42,11 @@
        and its configs, and the adopted nodes those launch files start (all from apt in
        docker/ros-dev and docker/car). -->
   <exec_depend>racer_state</exec_depend>
+  <!-- pnp.launch.py (Plug-and-Play driver) -->
+  <exec_depend>racer_track_perception</exec_depend>
+  <exec_depend>racer_planner</exec_depend>
+  <exec_depend>racer_pnp_msgs</exec_depend>
+  <exec_depend>racer_laps</exec_depend>
   <exec_depend>robot_localization</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>nav2_amcl</exec_depend>

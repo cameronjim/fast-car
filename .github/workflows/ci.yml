@@ -364,6 +364,26 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_track_family_test.sh"
 
+  l5-pnp:
+    name: L5 Plug-and-Play canary (mapless perception + MPPI planner through the real command path, stadium both ways and a rounded rectangle, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # 2026-11-12 (claude-docs/13-plug-and-play.md): track_perception_node and mppi_planner_node
+    # lap tracks they never saw with no map and no pose, through safety_node, with the car's
+    # LiDAR and 50 Hz wheel speed: 3 laps, no wall contact, at most 3 safety brakes, one
+    # publisher each on /drive_raw and /drive. Same workspace-combination pattern as
+    # l5-track-family (see .github/scripts/l5_pnp_test.sh); a sibling job so the canaries fail
+    # independently.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 Plug-and-Play workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_pnp_test.sh"
+
   l5-policy:
     name: L5 policy canary (tracker handoff + policy_node + safety_node on a stadium vs the tracker alone, ros-dev + gym + torch)
     runs-on: ubuntu-latest

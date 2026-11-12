@@ -34,3 +34,5 @@ def test_latency_bench_table_and_default_configurations():
         "outside_entry_offset_m": 0.25,
     }
     assert bench.DEFAULT_CONFIGS["race_event"]["params"] == {"compute_on_scan": True}
+    # The race profile has compute_on_scan on, so the timer configuration must switch it off.
+    assert bench.DEFAULT_CONFIGS["race_timer"]["params"] == {"compute_on_scan": False}

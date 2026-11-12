@@ -56,3 +56,16 @@ def test_comparison_table_has_a_brakes_interval_column():
     table = report.comparison_table({"baseline": base}, "baseline")
     assert "Brakes per lap (95% CI)" in table
     assert "0.50 [0.00, 1.00]" in table or "0.50 [" in table
+
+
+def test_intervals_resample_cells_so_repeats_do_not_shrink_them():
+    cells = [("a", "ccw", 10.0), ("a", "cw", 14.0), ("b", "ccw", 20.0), ("b", "cw", 30.0)]
+    once = [_rec(t, d, lap) for t, d, lap in cells]
+    thrice = once * 3  # the same four cells, three times each
+    base = [_rec(t, d, 20.0) for t, d, _ in cells]
+    s1 = report.summarise_variant(once, base)
+    s3 = report.summarise_variant(thrice, base * 3)
+    assert s1["lap_time"] == s3["lap_time"]  # identical repeats change nothing
+    assert s1["ratio"] == pytest.approx(s3["ratio"])
+    mean, low, high = s3["lap_time"]  # type: ignore[misc]
+    assert mean == pytest.approx(18.5) and high - low > 3.0  # four cells, not twelve runs

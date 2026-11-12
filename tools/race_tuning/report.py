@@ -1,8 +1,9 @@
 """Markdown tables for the harness: one row per variant (and direction) with intervals.
 
-Intervals: completion is a Wilson interval over runs; lap time and the lap ratio against the
-baseline are percentile bootstrap intervals of the mean over runs (the runs are tracks x
-directions, so the spread is the spread over tracks: the simulator is deterministic enough that
+Intervals: completion is a Wilson interval over runs; lap time, the lap ratio against the
+baseline and the brakes per lap are percentile bootstrap intervals of the mean over track-direction
+CELLS (repeats of a cell are averaged first, see summarise_variant), so the spread is the spread
+over tracks: the simulator is deterministic enough that
 repeating one track gives the same lap to 0.1 s, which is why the harness varies the TRACK rather
 than the seed). Brakes and escapes are totals per lap over the runs. Everything is computed from
 RunRecords, so it is the same code whether the records came from a search or an evaluation.
@@ -21,7 +22,7 @@ import math
 import re
 
 from race_tuning.selection import RunRecord, baseline_times
-from race_tuning.stats import mean_ci, paired_ratio_ci, wilson_interval
+from race_tuning.stats import mean_ci, wilson_interval
 
 
 def _fmt_ci(mean: float, low: float, high: float, digits: int = 2) -> str:
@@ -39,15 +40,34 @@ def pool(variants: dict[str, list[RunRecord]]) -> dict[str, list[RunRecord]]:
     return merged
 
 
+def _clusters(records: list[RunRecord], value) -> list[float]:
+    """One number per (track, direction): the mean of `value(record)` over that cell's runs
+    (the repeats). Records for which value() is None are skipped."""
+    cells: dict[tuple[str, str], list[float]] = {}
+    for r in records:
+        v = value(r)
+        if v is not None and math.isfinite(v):
+            cells.setdefault((r.track, r.direction), []).append(v)
+    return [sum(v) / len(v) for v in cells.values()]
+
+
 def summarise_variant(records: list[RunRecord], baseline: list[RunRecord]) -> dict[str, object]:
+    """The variant's numbers. The intervals are CLUSTER bootstraps: repeats of one track and
+    direction are averaged first and the bootstrap resamples the track-direction cells, because
+    repeats of a cell are not independent evidence about other tracks (lap times repeat to 0.1 s,
+    so counting every repeat would shrink the interval by the square root of the repeat count)."""
     base = baseline_times(baseline)
     done = [r for r in records if r.completed]
     laps = sum(max(r.laps, 0) for r in records)
-    paired = [
-        (r.lap_time_s, base[(r.track, r.direction)]) for r in done if (r.track, r.direction) in base
-    ]
     clearances = [r.min_clearance_m for r in records if not math.isnan(r.min_clearance_m)]
     low, high = wilson_interval(len(done), len(records))
+    lap_cells = _clusters(done, lambda r: r.lap_time_s)
+    ratio_cells = _clusters(
+        done,
+        lambda r: (
+            r.lap_time_s / base[(r.track, r.direction)] if (r.track, r.direction) in base else None
+        ),
+    )
     return {
         "runs": len(records),
         "completed": len(done),
@@ -55,10 +75,12 @@ def summarise_variant(records: list[RunRecord], baseline: list[RunRecord]) -> di
         "contacts": sum(r.contacts for r in records),
         "min_clearance_m": min(clearances) if clearances else math.nan,
         "brakes_per_lap": sum(r.brakes for r in records) / laps if laps else math.nan,
-        "brakes_ci": mean_ci([r.brakes / r.laps for r in records if r.laps > 0], seed=1),
+        "brakes_ci": mean_ci(
+            _clusters(records, lambda r: r.brakes / r.laps if r.laps > 0 else None), seed=1
+        ),
         "escapes_per_lap": sum(r.escapes for r in records) / laps if laps else math.nan,
-        "lap_time": mean_ci([r.lap_time_s for r in done]),
-        "ratio": paired_ratio_ci([a for a, _ in paired], [b for _, b in paired]),
+        "lap_time": mean_ci(lap_cells, seed=2),
+        "ratio": mean_ci(ratio_cells, seed=3),
     }
 
 

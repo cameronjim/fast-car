@@ -328,7 +328,9 @@ def main(args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory() as tmp:
             try:
                 result = replay_bag(path, cli, race_params, base_params, Path(tmp))
-            except (replay.ReplayError, FileNotFoundError) as error:
+            except FileNotFoundError as error:
+                # An unreadable bag is skipped; a CLI that refuses the profile (ReplayError) is a
+                # bug and stops the run.
                 print(f"{path.name}: skipped ({error})")
                 continue
         if result is None:
@@ -341,6 +343,9 @@ def main(args: argparse.Namespace) -> int:
         args.out.mkdir(parents=True, exist_ok=True)
         (args.out / "replay_check.json").write_text(json.dumps(results, indent=2) + "\n")
         (args.out / "replay_check.md").write_text(text + "\n")
+    if not results:
+        print("NO BAG WAS REPLAYED (nothing to check is not a pass)")
+        return 1
     failed = [r["bag"] for r in results if not r["passed"]]
     if failed:
         print(f"HARD CHECKS FAILED on: {', '.join(failed)}")

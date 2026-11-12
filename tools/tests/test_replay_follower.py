@@ -292,11 +292,13 @@ def test_load_profiles_resolves_names_and_rejects_no_profiles(tmp_path):
         replay.load_profiles(launch)
 
 
-def test_node_parameter_names_in_the_floor_profile_are_known_to_the_cli():
-    """Every key of the shipped profile must be one the CLI knows or knowingly ignores."""
+def test_node_parameter_names_in_every_profile_are_known_to_the_cli():
+    """Every key of every shipped profile must be one the CLI knows or knowingly ignores (the
+    race profile once carried compute_on_scan, which the CLI refused: every bag was skipped)."""
     cpp = (REPO_ROOT / "ros_ws/src/racer_control/src/gap_follow_replay_cli.cpp").read_text()
-    for key in replay.load_profiles()["floor-2026-10-06"]:
-        assert f'"{key}"' in cpp or key.startswith("escape_"), key
+    for name, profile in replay.load_profiles().items():
+        for key in profile:
+            assert f'"{key}"' in cpp or key.startswith("escape_"), (name, key)
 
 
 def test_cli_defaults_match_the_node():

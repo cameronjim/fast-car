@@ -139,6 +139,11 @@ const ParamSpec kParams[] = {
 bool is_ignored_key(const std::string& key) {
   static const char* const kIgnored[] = {
       "reverse_escape",
+      // Race work (2026-11-12): command timing and the status stream, neither of which changes
+      // what the perception half or the speed chain computes.
+      "compute_on_scan",
+      "status_rate_hz",
+      "status_window_scans",
       "drive_feedback_timeout_s",
   };
   if (key.rfind("escape_", 0) == 0) {

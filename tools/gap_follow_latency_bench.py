@@ -40,7 +40,7 @@ DEFAULT_CONFIGS = {
         "profile": "lane-2026-10-25",
         "params": {"lane_lookahead_m": 0.8, "outside_entry_offset_m": 0.25},
     },
-    "race_timer": {"profile": "race-2026-11-12", "params": {}},
+    "race_timer": {"profile": "race-2026-11-12", "params": {"compute_on_scan": False}},
     "race_event": {"profile": "race-2026-11-12", "params": {"compute_on_scan": True}},
 }
 

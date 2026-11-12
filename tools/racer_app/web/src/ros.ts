@@ -33,6 +33,14 @@ interface Want {
   resubscribeTimer: ReturnType<typeof setTimeout> | null;
 }
 
+/** What the app needs from a ROS link: the real RosLink, or the demo's fake one. */
+export interface RosSource {
+  subscribe<T = unknown>(topic: string, handler: (msg: T) => void, opts?: SubscribeOptions): Unsubscribe;
+  onStatus(cb: (s: LinkStatus) => void): Unsubscribe;
+  connect(): void;
+  close(): void;
+}
+
 export interface LinkStatus {
   connected: boolean;
   topics: string[];

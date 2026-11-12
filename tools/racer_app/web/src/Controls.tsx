@@ -33,6 +33,35 @@ export async function run(
   }
 }
 
+/**
+ * A button that asks for a second click instead of window.confirm, which the desktop app's
+ * webview does not show (the click silently did nothing). The first click arms it for a few
+ * seconds and shows the question; the second click runs the action.
+ */
+export function ConfirmButton(p: {
+  label: string;
+  question: string;
+  onConfirm: () => void;
+  disabled?: boolean;
+  class?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  const click = () => {
+    if (armed) {
+      setArmed(false);
+      p.onConfirm();
+      return;
+    }
+    setArmed(true);
+    setTimeout(() => setArmed(false), 4000);
+  };
+  return (
+    <button class={p.class} disabled={p.disabled} title={p.question} onClick={click}>
+      {armed ? `${p.question} Click again` : p.label}
+    </button>
+  );
+}
+
 export function Controls(p: Props) {
   const { api, status, options, notify, refresh } = p;
   const stackUp = status?.stack.running ?? false;
@@ -129,7 +158,7 @@ export function Controls(p: Props) {
         <div class="row">
           <button disabled={stackUp} onClick={() => act(() => api.startStack({ lidar, vesc, mapping: mode === "mapping", localization: mode === "localization", map: mode === "localization" ? map : "" }))}>Start stack</button>
           <button disabled={!stackUp} onClick={() => act(() => api.restartStack())}>Restart</button>
-          <button class="danger" disabled={!stackUp} onClick={() => window.confirm("Stop the stack? Recording stops and the bag is closed.") && act(() => api.stopStack())}>Stop stack</button>
+          <ConfirmButton class="danger" disabled={!stackUp} label="Stop stack" question="Stop the stack? Recording stops." onConfirm={() => act(() => api.stopStack())} />
         </div>
         <div class="sub">Starts car-stack with the recorder. Running now: {stackUp ? Object.entries(status?.stack.flags ?? {}).map(([k, v]) => `${k}=${v}`).join(" ") || "default" : "nothing"}.</div>
         {recordingSummary(p.bags) && <div class="sub" aria-label="Current bag">{recordingSummary(p.bags)}</div>}
@@ -308,8 +337,8 @@ export function Controls(p: Props) {
         <h3>System</h3>
         <label class="row"><input type="checkbox" checked={status?.autostart ?? false} onChange={(e) => act(() => api.setAutostart(e.currentTarget.checked))} /> Start the stack at boot (LiDAR and VESC, no cameras)</label>
         <div class="row">
-          <button class="danger" onClick={() => window.confirm("Reboot the Jetson? The stack is stopped cleanly first.") && act(() => api.power("reboot"))}>Reboot</button>
-          <button class="danger" onClick={() => window.confirm("Shut the Jetson down? You will need to power it on by hand.") && act(() => api.power("shutdown"))}>Shut down</button>
+          <ConfirmButton class="danger" label="Reboot" question="Reboot the Jetson?" onConfirm={() => act(() => api.power("reboot"))} />
+          <ConfirmButton class="danger" label="Shut down" question="Shut the Jetson down?" onConfirm={() => act(() => api.power("shutdown"))} />
         </div>
       </section>
 
@@ -321,7 +350,7 @@ export function Controls(p: Props) {
             <li key={b.name}>
               <span>{b.name}</span>
               <span class="muted">{fmtBagSize(b.size_mb)}{b.active ? ` recording ${fmtGrowth(b.growth_mb_s)}` : ""}</span>
-              <button disabled={b.active} onClick={() => window.confirm(`Delete ${b.name}? This cannot be undone.`) && act(() => api.deleteBag(b.name))}>Delete</button>
+              <ConfirmButton disabled={b.active} label="Delete" question="Delete for good?" onConfirm={() => act(() => api.deleteBag(b.name))} />
             </li>
           ))}
           {p.bags.length === 0 && <li class="muted">No bags yet.</li>}

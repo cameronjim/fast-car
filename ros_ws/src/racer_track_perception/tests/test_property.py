@@ -69,5 +69,27 @@ def test_geometric_tracer_never_raises(pts) -> None:
     assert len(t.x_m) == 16 and t.arrays_ok()
 
 
+@SETTINGS
+@given(
+    pts=st.lists(
+        st.tuples(
+            st.floats(min_value=-8.0, max_value=8.0, width=32),
+            st.floats(min_value=-8.0, max_value=8.0, width=32),
+        ),
+        min_size=0,
+        max_size=600,
+    ),
+    cluster=st.floats(min_value=0.0, max_value=0.5),
+)
+def test_geometric_tracer_output_is_finite_for_any_scan(pts, cluster) -> None:
+    """Includes duplicated points and points on the car (a wall point pair at one position)."""
+    arr = np.array(pts, dtype=np.float64).reshape(-1, 2)
+    arr = np.vstack([arr, arr * cluster]) if len(arr) else arr
+    t = geometric.trace(arr, LIVE.body.half_width_m, 0.25)
+    for a in (t.x_m, t.y_m, t.half_width_left_m, t.half_width_right_m, t.sigma_m):
+        assert len(a) == 16 and np.isfinite(a).all()
+    assert 0 <= t.valid_count <= 16 and t.arrays_ok()
+
+
 def test_hypothesis_fixture_is_the_live_vehicle(live: LiveVehicle) -> None:
     assert live == LIVE

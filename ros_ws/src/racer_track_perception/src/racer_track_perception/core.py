@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 BACKEND_NET = "net"
 BACKEND_GEOMETRIC = "geometric"
-GEOMETRIC_MODEL_ID = "geometric-v0"
+GEOMETRIC_MODEL_ID = "geometric-v1"
 # Clamp on the net's log sigma before exponentiating (sigma 1e-3 m to 20 m).
 LOG_SIGMA_RANGE = (-7.0, 3.0)
 

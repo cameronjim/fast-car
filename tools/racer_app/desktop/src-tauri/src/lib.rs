@@ -1,7 +1,8 @@
 //! Racer desktop: a thin native shell around the web UI in `tools/racer_app/web`.
 //!
 //! It does three things the browser cannot: find the car on the LAN (mDNS, then a subnet scan,
-//! reconnecting by itself when the Jetson reboots), keep the agent token in the OS keychain, and
+//! reconnecting by itself when the Jetson reboots), keep the agent token in the OS keychain (or, when
+//! the keychain refuses, a private file in the app's data folder), and
 //! make HTTP calls to the agent without CORS (through `tauri-plugin-http`).
 //!
 //! It adds no way to drive. The native side sends `GET /health` and nothing else; the UI's
@@ -29,7 +30,7 @@ const SEARCHING_EVERY: Duration = Duration::from_millis(500);
 struct Shared {
     tracker: Mutex<Tracker>,
     net: Arc<dyn Net>,
-    secrets: Box<dyn token::Secrets>,
+    secrets: token::Store,
     data_dir: PathBuf,
     wake: Mutex<Sender<()>>,
 }
@@ -101,9 +102,24 @@ async fn add_manual(
     .map_err(|e| e.to_string())?
 }
 
+/// "Search again": a full search now (mDNS, then a subnet scan if mDNS found nothing), answering
+/// with how many cars it found so the UI can say searching, found or not found.
 #[tauri::command]
-fn rescan(shared: tauri::State<'_, SharedState>) {
-    wake(&shared);
+async fn search_cars(
+    app: AppHandle,
+    shared: tauri::State<'_, SharedState>,
+) -> Result<discovery::SearchOutcome, String> {
+    let shared = shared.inner().clone();
+    // mDNS waits a couple of seconds and the scan probes a /24: keep it off the async runtime.
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = discovery::search(&shared.tracker, shared.net.as_ref())
+            .ok_or_else(|| "the discovery state is unavailable".to_string())?;
+        persist(&shared);
+        let _ = app.emit(EVENT, &outcome.state);
+        Ok(outcome)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -121,9 +137,18 @@ fn token_get(shared: tauri::State<'_, SharedState>) -> Result<Option<String>, St
     shared.secrets.get()
 }
 
+/// Where the token is kept (keychain, or the app's data folder when the keychain refused).
 #[tauri::command]
-fn token_set(shared: tauri::State<'_, SharedState>, token: String) -> Result<(), String> {
-    token::store(shared.secrets.as_ref(), &token)
+fn token_storage(shared: tauri::State<'_, SharedState>) -> token::StorageInfo {
+    shared.secrets.storage()
+}
+
+#[tauri::command]
+fn token_set(
+    shared: tauri::State<'_, SharedState>,
+    token: String,
+) -> Result<token::StorageInfo, String> {
+    shared.secrets.set(&token)
 }
 
 #[tauri::command]
@@ -155,11 +180,12 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let last = store::load(&data_dir);
+            let secrets = token::Store::new(Box::new(token::Keychain), &data_dir);
             let (tx, rx) = channel();
             let shared: SharedState = Arc::new(Shared {
                 tracker: Mutex::new(Tracker::new(last, DEFAULT_PORT)),
                 net: Arc::new(net::RealNet::new()),
-                secrets: Box::new(token::Keychain),
+                secrets,
                 data_dir,
                 wake: Mutex::new(tx),
             });
@@ -174,9 +200,10 @@ pub fn run() {
             discovery_state,
             select_car,
             add_manual,
-            rescan,
+            search_cars,
             forget_car,
             token_get,
+            token_storage,
             token_set,
             token_clear,
         ])

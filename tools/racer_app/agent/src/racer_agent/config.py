@@ -68,6 +68,12 @@ class Settings:
     perception_container: str = "car-perception"
     token_sha256: str = ""
     thresholds: Thresholds = field(default_factory=Thresholds)
+    # How long a stop waits for SIGINT to finish before it escalates. The stack closes the bag on
+    # SIGINT, and a 6 GB mcap took minutes to finalize; SIGTERM or SIGKILL before that leaves a
+    # bag with no footer and no metadata.yaml. The other containers write no bag.
+    stop_timeout_stack_s: float = 600.0
+    stop_timeout_other_s: float = 120.0
+    stop_term_grace_s: float = 20.0  # after SIGTERM, before SIGKILL
 
     @property
     def bags(self) -> Path:
@@ -96,6 +102,10 @@ class Settings:
     @property
     def pnp_models_dir(self) -> Path:
         return self.repo_dir / "data" / "pnp" / "models"
+
+    @property
+    def pnp_dir(self) -> Path:
+        return self.repo_dir / "data" / "pnp"
 
     @property
     def action_log_path(self) -> Path:
@@ -154,6 +164,9 @@ def load_settings(path: Path | None = None) -> Settings:
         perception_image=str(raw.get("perception_image", "car:perception")),
         token_sha256=str(raw.get("token_sha256", "")),
         thresholds=thresholds,
+        stop_timeout_stack_s=float(raw.get("stop_timeout_stack_s", 600.0)),
+        stop_timeout_other_s=float(raw.get("stop_timeout_other_s", 120.0)),
+        stop_term_grace_s=float(raw.get("stop_term_grace_s", 20.0)),
     )
 
 

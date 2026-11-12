@@ -277,3 +277,31 @@ def test_thread_wrapper_starts_and_stops_cleanly():
     client.stop_thread()
     assert client._thread is None
     client.stop_thread()  # and so is a second stop
+
+
+def test_client_connects_to_a_bridge_that_only_speaks_the_sdk_subprotocol():
+    # foxglove_bridge 3.x rejects foxglove.websocket.v1 and only accepts foxglove.sdk.v1.
+    async def scenario() -> bool:
+        async def bridge(ws):
+            await ws.send(advertise("/drive"))
+            await asyncio.sleep(1.0)
+
+        async with websockets.serve(
+            bridge, "127.0.0.1", 0, subprotocols=[websockets.Subprotocol(rs.SDK_SUBPROTOCOL)]
+        ) as server:
+            port = server.sockets[0].getsockname()[1]
+            state = rs.RosState()
+            client = rs.FoxgloveClient(f"ws://127.0.0.1:{port}", state, reconnect_s=0.05)
+            task = asyncio.create_task(client.run())
+            connected = False
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                if state.snapshot().connected:
+                    connected = True
+                    break
+            assert client._stop is not None
+            client._stop.set()
+            await asyncio.wait_for(task, 5)
+        return connected
+
+    assert asyncio.run(scenario())

@@ -3,6 +3,7 @@
 racer-agent init [--rotate-token]   create the config and print the token ONCE
 racer-agent serve                   the HTTP API and web UI (racer-agent.service)
 racer-agent autostart               start the stack at boot (racer-stack.service)
+racer-agent stop-stack              SIGINT the stack and wait for the bag to close (racer-stack.service)
 """
 
 from __future__ import annotations
@@ -79,6 +80,20 @@ def cmd_autostart(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stop_stack(_: argparse.Namespace) -> int:
+    """What racer-stack.service runs on stop: SIGINT the stack and wait for the bag to close.
+
+    Without it a shutdown that docker handles (SIGTERM, then SIGKILL after 10 s) leaves a bag
+    with no footer. The wait is the agent's own (stop_timeout_stack_s), so systemd's
+    TimeoutStopSec in the unit has to be longer than that.
+    """
+    settings = load_settings()
+    controller = build_controller(settings)
+    result = controller.stop_stack(actor="systemd")
+    print(result["message"])
+    return 0 if not result.get("bag") or result.get("bag_finalized") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(prog="racer-agent", description=__doc__)
@@ -88,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     p_init.set_defaults(func=cmd_init)
     sub.add_parser("serve", help="run the API and web UI").set_defaults(func=cmd_serve)
     sub.add_parser("autostart", help="boot-time stack start").set_defaults(func=cmd_autostart)
+    sub.add_parser(
+        "stop-stack", help="SIGINT the stack and wait for the bag to close"
+    ).set_defaults(func=cmd_stop_stack)
     args = parser.parse_args(argv)
     return args.func(args)
 

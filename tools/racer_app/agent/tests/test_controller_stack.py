@@ -118,13 +118,114 @@ def test_stop_stack_uses_sigint_not_docker_stop(env):
     assert "car-stack" not in env.world.containers
 
 
-def test_stop_stack_escalates_to_sigkill_when_it_will_not_exit(env):
+def test_stop_stack_escalates_to_sigkill_only_after_the_long_wait(env):
     env.running_car()
     env.world.stuck_on_int = True
+    env.world.stuck_on_term = True
     result = env.controller.stop_stack()
     assert ("docker", "kill", "car-stack") in env.runner.calls
     assert "killed" in result["message"]
-    assert sum(env.sleeps) >= 30
+    assert env.world.signals == [("car-stack", "INT"), ("car-stack", "TERM"), ("car-stack", "KILL")]
+    # SIGINT got the whole stack timeout (a multi-GB bag takes minutes to close) before SIGTERM
+    assert sum(env.sleeps) >= env.settings.stop_timeout_stack_s + env.settings.stop_term_grace_s
+    assert env.settings.stop_timeout_stack_s >= 300
+    entry = env.last_log()
+    assert entry["action"] == "stack.stop" and entry["ok"] is False
+    assert "SIGKILL" in entry["detail"] and "unfinished" in entry["detail"]
+
+
+def test_stop_stack_sends_sigterm_before_sigkill(env):
+    env.running_car()
+    env.world.stuck_on_int = True
+    result = env.controller.stop_stack()
+    assert env.world.signals == [("car-stack", "INT"), ("car-stack", "TERM")]
+    assert "needed SIGTERM" in result["message"]
+    assert env.last_log()["ok"] is False
+
+
+def test_a_slow_bag_close_gets_time_and_is_never_sent_another_signal(env):
+    """The 6 GB bag that took minutes: SIGINT once, then wait; no SIGTERM, no SIGKILL."""
+    env.running_car()
+    env.world.slow_stop_polls = 200  # about 200 s at the 1 s poll of a long wait
+    bag = env.settings.bags / "2026-11-12T10-00-00_car_teleop"
+    bag.mkdir(parents=True)
+    (bag / "a.mcap").write_bytes(b"x")
+    env.world.containers["car-stack"]["on_exit"] = lambda: (bag / "metadata.yaml").write_text("x")
+    result = env.controller.stop_stack(actor="me")
+    assert env.world.signals == [("car-stack", "INT")]
+    assert sum(env.sleeps) >= 150
+    assert result["message"].startswith("stack stopped")
+    assert result["bag"] == bag.name and result["bag_finalized"] is True
+    entry = env.last_log()
+    assert entry["ok"] is True and "clean exit after" in entry["detail"]
+    assert "exit code 0" in entry["detail"] and "finalized" in entry["detail"]
+
+
+def test_a_stop_that_leaves_no_metadata_yaml_says_so_in_the_log(env):
+    env.running_car()
+    bag = env.settings.bags / "2026-11-12T10-00-00_car_teleop"
+    bag.mkdir(parents=True)
+    result = env.controller.stop_stack()
+    assert result["bag_finalized"] is False
+    entry = env.last_log()
+    assert entry["ok"] is False and "NO metadata.yaml" in entry["detail"]
+
+
+def test_stop_stack_with_no_recorder_makes_no_claim_about_a_bag(env):
+    env.running_car()
+    env.world.recorder = False
+    result = env.controller.stop_stack()
+    assert result["bag"] is None and "bag" not in result["message"]
+
+
+def test_restart_waits_for_the_clean_exit_before_starting_again(env):
+    env.running_car()
+    env.world.slow_stop_polls = 5
+    env.controller.restart_stack(None)
+    assert env.world.signals == [("car-stack", "INT")]
+    assert env.world.containers["car-stack"]["state"] == "running"
+    assert [e["action"] for e in env.actions.tail(2)] == [
+        "stack.start",
+        "stack.stop",
+    ]  # newest first
+
+
+def test_cameras_get_sigint_and_a_wait_too(env):
+    env.controller.start_cameras()
+    env.world.stuck_on_int = True
+    env.controller.stop_cameras()
+    assert env.world.signals == [("car-camera", "INT"), ("car-camera", "TERM")]
+    assert sum(env.sleeps) >= env.settings.stop_timeout_other_s
+
+
+def test_power_waits_for_the_stack_to_close_before_the_reboot_is_even_scheduled(env):
+    env.running_car()
+    env.world.slow_stop_polls = 50
+    env.controller.power("reboot", "reboot")
+    assert env.world.signals == [("car-stack", "INT")]
+    assert "car-stack" not in env.world.containers
+    assert not env.runner.calls_matching("sudo")
+    assert env.deferred  # scheduled only after the stop returned
+
+
+def test_disk_guard_stack_stop_is_a_sigint_with_the_long_wait(env):
+    from racer_agent.diskguard import DiskGuard
+
+    env.running_car()
+    env.world.free_gb = 1.0
+    env.world.slow_stop_polls = 30
+    assert "stop_stack" in DiskGuard(env.controller).tick()
+    assert env.world.signals == [("car-stack", "INT")]
+
+
+def test_the_stop_timeouts_come_from_the_config_file(tmp_path):
+    from racer_agent import config
+
+    path = tmp_path / "c.json"
+    path.write_text('{"stop_timeout_stack_s": 900, "stop_term_grace_s": 5}')
+    s = config.load_settings(path)
+    assert s.stop_timeout_stack_s == 900 and s.stop_term_grace_s == 5
+    assert s.stop_timeout_other_s == 120
 
 
 def test_stop_stack_when_absent_is_harmless(env):

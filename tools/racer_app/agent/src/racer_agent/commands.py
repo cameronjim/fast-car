@@ -39,6 +39,23 @@ PNP_BACKENDS = ("net", "geometric")
 PNP_SPEED_RANGE = (0.2, 1.5)
 PNP_DEFAULT_SPEED_MPS = 0.5
 PNP_MODELS_IN_CONTAINER = "/workspace/data/pnp/models/"
+#: Planner parameter files the PnP card can pick: plain `*.yaml` files directly under data/pnp (not
+#: under models/), passed as `params_file:=` to pnp.launch.py. The name is checked by NAME_RE.
+PNP_PARAMS_IN_CONTAINER = "/workspace/data/pnp/"
+
+#: Gap follow's speed ceiling per profile, in m/s: the profile's `max_speed_mps`, or the launch
+#: file's default (1.43) for `none`. A mirror of gap_follow.launch.py, checked against it by
+#: test_gap_follow_speed_ceilings_match_the_launch_file. The caller's cap can only go lower, and
+#: never above vehicle_params limits.global_speed_cap_mps (read at run time, not copied here).
+GAP_FOLLOW_PROFILE_MAX_SPEED_MPS = {
+    "none": 1.43,
+    "floor-2026-10-06": 0.64,
+    "lane-2026-10-25": 0.64,
+    "race-2026-11-12": 1.0,
+}
+#: The node refuses min_speed_mps > max_speed_mps and every profile uses its default 0.36, so a
+#: cap below that is refused here instead of at launch.
+GAP_FOLLOW_MIN_SPEED_MPS = 0.36
 
 #: Pose rules of racer_apps' spiderbot (racer_apps/spiderbot/pose_rules.py). test_spiderbot_whitelist
 #: checks this against the source so the two cannot drift.
@@ -312,12 +329,19 @@ def ros_cmd_for(
     pnp_dynamics_container_path: str = "",
     pnp_backend: str = "net",
     pnp_v_max_mps: float = PNP_DEFAULT_SPEED_MPS,
+    pnp_params_container_path: str = "",
+    max_speed_mps: float | None = None,
 ) -> str:
     """The ros2 command for a driving mode. Raises CommandError for anything off the lists."""
     if mode == "gap_follow":
         if profile not in GAP_FOLLOW_PROFILES:
             raise CommandError(f"gap_follow profile must be one of {list(GAP_FOLLOW_PROFILES)}")
-        return f"ros2 launch racer_control gap_follow.launch.py profile:={profile}"
+        speed_arg = ""
+        if max_speed_mps is not None:
+            if isinstance(max_speed_mps, bool) or not isinstance(max_speed_mps, (int, float)):
+                raise CommandError("gap follow max speed must be a number")
+            speed_arg = f" max_speed_mps:={float(max_speed_mps):.2f}"
+        return f"ros2 launch racer_control gap_follow.launch.py profile:={profile}{speed_arg}"
     if mode == "wall_follow":
         return "ros2 launch racer_control wall_follow.launch.py"
     if mode == "park":
@@ -346,7 +370,11 @@ def ros_cmd_for(
         )
     if mode == "pnp":
         return _pnp_cmd(
-            pnp_perception_container_path, pnp_dynamics_container_path, pnp_backend, pnp_v_max_mps
+            pnp_perception_container_path,
+            pnp_dynamics_container_path,
+            pnp_backend,
+            pnp_v_max_mps,
+            pnp_params_container_path,
         )
     raise CommandError(f"unknown driving mode {mode!r}")
 
@@ -360,7 +388,20 @@ def _pnp_bundle(path: str, what: str) -> str:
     return _quoted_ok(path)
 
 
-def _pnp_cmd(perception: str, dynamics: str, backend: str, v_max_mps: float) -> str:
+def _pnp_params(path: str) -> str:
+    """A planner parameter file directly under /workspace/data/pnp/, a plain *.yaml name."""
+    path = _inside_repo(path, "planner params file")
+    name = path[len(PNP_PARAMS_IN_CONTAINER) :] if path.startswith(PNP_PARAMS_IN_CONTAINER) else ""
+    if not name.endswith(".yaml") or not NAME_RE.match(name):
+        raise CommandError(
+            f"planner params file must be a *.yaml directly under {PNP_PARAMS_IN_CONTAINER}"
+        )
+    return _quoted_ok(path)
+
+
+def _pnp_cmd(
+    perception: str, dynamics: str, backend: str, v_max_mps: float, params_file: str = ""
+) -> str:
     """`ros2 launch racer_bringup pnp.launch.py ...` from checked bundle paths, a fixed backend
     and a speed cap formatted here. The nodes refuse any bundle that does not match this car;
     this only keeps the command inside the whitelist. The launch also refuses to start without
@@ -377,10 +418,11 @@ def _pnp_cmd(perception: str, dynamics: str, backend: str, v_max_mps: float) -> 
         perception_arg = f"perception_bundle:={_pnp_bundle(perception, 'perception bundle')} "
     else:
         perception_arg = ""
+    params_arg = f" params_file:={_pnp_params(params_file)}" if params_file else ""
     return (
         "ros2 launch racer_bringup pnp.launch.py "
         f"{perception_arg}dynamics_bundle:={dynamics_arg} "
-        f"backend:={backend} v_max_mps:={float(v_max_mps):.2f}"
+        f"backend:={backend} v_max_mps:={float(v_max_mps):.2f}{params_arg}"
     )
 
 
@@ -412,10 +454,11 @@ def spiderbot_cmd(
     )
 
 
-#: Prints the running mode and exits 0 when the drive process is alive, else exits 1.
+#: Prints the pid and then the mode of the drive the app started, and exits 0 when it is alive;
+#: exits 1 when there is none.
 DRIVE_STATUS_SCRIPT = (
     f'p=$(cat {DRIVE_PID_FILE} 2>/dev/null) && [ -n "$p" ] && '
-    f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && cat {DRIVE_MODE_FILE}"
+    f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && echo $p && cat {DRIVE_MODE_FILE}"
 )
 
 
@@ -425,6 +468,92 @@ def drive_signal_script(signal: str) -> str:
     return (
         f'p=$(cat {DRIVE_PID_FILE} 2>/dev/null) && [ -n "$p" ] && '
         f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && kill -{signal} $p"
+    )
+
+
+#: Driving launches the agent recognises by their command line, wherever they were started from
+#: (the app, or `docker exec ... ros2 launch` in a terminal). Launch file name -> mode.
+DRIVE_LAUNCH_FILES = {
+    "gap_follow.launch.py": "gap_follow",
+    "wall_follow.launch.py": "wall_follow",
+    "track_follow.launch.py": "track_follow",
+    "tracker.launch.py": "tracker",
+    "park.launch.py": "park",
+    "pnp.launch.py": "pnp",
+    "policy.launch.py": "ml_policy",
+    "spiderbot.launch.py": "spiderbot",
+}
+#: `ros2 run <pkg> <executable>` forms of the same drivers.
+DRIVE_RUN_EXECUTABLES = {
+    "gap_follow_node": "gap_follow",
+    "wall_follow_node": "wall_follow",
+    "tracker_node": "tracker",
+    "park_node": "park",
+    "mppi_planner_node": "pnp",
+    "policy_node": "ml_policy",
+    "spiderbot_node": "spiderbot",
+}
+_FIELD_SEP = "\x1f"
+
+#: Prints `PID<space>argv0<US>argv1...` for every process in the container whose command line
+#: mentions ros2, read from /proc: no `ps` needed in the image, and the pids are the container's
+#: own, which is what a `kill` run inside it needs (`docker top` shows host pids).
+DRIVE_SCAN_SCRIPT = (
+    r"for d in /proc/[0-9]*; do a=$(tr '\0' '\037' 2>/dev/null < $d/cmdline); "
+    r'case "$a" in *ros2*) echo "${d#/proc/} $a";; esac; done'
+)
+
+
+@dataclass(frozen=True)
+class DriveProcess:
+    pid: int
+    mode: str
+    command: str
+
+
+def parse_drive_processes(scan_output: str) -> list[DriveProcess]:
+    """The driving launches in the output of DRIVE_SCAN_SCRIPT.
+
+    A line counts only when the process itself is `ros2 launch` or `ros2 run` (argv[0] or argv[1]
+    is the ros2 script, as in `python3 /opt/ros/humble/bin/ros2 launch ...`) and it names a
+    launch file or executable from the tables above. A `bash -c "ros2 launch ..."` wrapper is one
+    single argument and never matches, and neither does the stack's own car_teleop launch.
+    """
+    found: list[DriveProcess] = []
+    for line in scan_output.splitlines():
+        pid_text, _, rest = line.partition(" ")
+        if not pid_text.isdigit():
+            continue
+        argv = rest.split(_FIELD_SEP)
+        idx = next(
+            (i for i in (0, 1) if i < len(argv) and argv[i].rsplit("/", 1)[-1] == "ros2"), None
+        )
+        if idx is None or idx + 1 >= len(argv):
+            continue
+        verb, tail = argv[idx + 1], argv[idx + 2 :]
+        names = [a.rsplit("/", 1)[-1] for a in tail if ":=" not in a and not a.startswith("-")]
+        table = DRIVE_LAUNCH_FILES if verb == "launch" else DRIVE_RUN_EXECUTABLES
+        mode = (
+            next((table[n] for n in names if n in table), None)
+            if verb in ("launch", "run")
+            else None
+        )
+        if mode:
+            found.append(DriveProcess(int(pid_text), mode, " ".join(argv[idx:])[:300]))
+    return found
+
+
+def drive_pids_signal_script(pids: Sequence[int], signal: str) -> str:
+    """Send `signal` to these container pids, each only if it is still a ros2 process."""
+    if signal not in ("INT", "TERM", "KILL"):
+        raise CommandError("bad signal")
+    clean = [int(p) for p in pids]
+    if not clean or any(p <= 1 for p in clean):
+        raise CommandError("bad pid list")
+    pid_list = " ".join(str(p) for p in clean)
+    return (
+        f"for p in {pid_list}; do "
+        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && kill -{signal} $p; done"
     )
 
 
@@ -444,7 +573,8 @@ def save_map_script(container_base: str) -> str:
 
 def recorder_check_argv(container: str) -> list[str]:
     """`docker top` lists the container's processes from the host, no exec needed."""
-    return ["docker", "top", container, "-eo", "args"]
+    # Newer docker refuses a ps format without a pid column.
+    return ["docker", "top", container, "-eo", "pid,args"]
 
 
 def recorder_running(top_output: str) -> bool:

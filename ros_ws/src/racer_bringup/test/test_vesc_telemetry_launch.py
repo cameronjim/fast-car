@@ -91,7 +91,7 @@ def _nodes(entities) -> list[Node]:
     return [e for e in entities if isinstance(e, Node)]
 
 
-_VESC_DEFAULTS = {"serial_port": "/dev/ttyTHS1", "baud": "115200"}
+_VESC_DEFAULTS = {"serial_port": "/dev/ttyTHS1", "baud": "115200", "poll_imu": "false"}
 
 
 # --- vesc_telemetry.launch.py ----------------------------------------------------------
@@ -116,13 +116,22 @@ def test_vesc_launch_starts_exactly_the_driver_and_the_odometry_node():
 def test_driver_parameters_come_from_the_launch_arguments():
     module = _load("vesc_telemetry.launch.py")
     driver, _ = module.vesc_nodes()
-    params = _node_parameters(driver, _context(serial_port="/dev/ttyTHS1", baud="115200"))
-    assert params == {"port": "/dev/ttyTHS1", "baud": 115200}
+    params = _node_parameters(
+        driver, _context(serial_port="/dev/ttyTHS1", baud="115200", poll_imu="false")
+    )
+    assert params == {"port": "/dev/ttyTHS1", "baud": 115200, "poll_imu": False}
     assert isinstance(params["baud"], int)
     # Fresh nodes: launch_ros' ParameterValue caches its first evaluation.
     driver, _ = module.vesc_nodes()
-    params = _node_parameters(driver, _context(serial_port="/dev/ttyACM0", baud="230400"))
-    assert params == {"port": "/dev/ttyACM0", "baud": 230400}
+    params = _node_parameters(
+        driver, _context(serial_port="/dev/ttyACM0", baud="230400", poll_imu="false")
+    )
+    assert params == {"port": "/dev/ttyACM0", "baud": 230400, "poll_imu": False}
+    driver, _ = module.vesc_nodes()
+    params = _node_parameters(
+        driver, _context(serial_port="/dev/ttyACM0", baud="115200", poll_imu="true")
+    )
+    assert params["poll_imu"] is True
 
 
 def test_no_node_remaps_anything_so_no_command_topic_is_connected():
@@ -175,6 +184,7 @@ def test_car_teleop_vesc_defaults_off():
     defaults = _defaults(_load("car_teleop.launch.py").generate_launch_description().entities)
     assert defaults["vesc"] == "false"
     assert defaults["vesc_serial_port"] == "/dev/ttyTHS1"
+    assert defaults["vesc_imu"] == "false"
 
 
 def test_car_teleop_includes_vesc_launch_only_when_asked():
@@ -184,10 +194,12 @@ def test_car_teleop_includes_vesc_launch_only_when_asked():
     assert include.condition.evaluate(_context(vesc="false")) is False
     assert include.condition.evaluate(_context(vesc="true")) is True
     forwarded = {
-        _perform(k, LaunchContext()): _perform(v, _context(vesc_serial_port="/dev/ttyTHS0"))
+        _perform(k, LaunchContext()): _perform(
+            v, _context(vesc_serial_port="/dev/ttyTHS0", vesc_imu="true")
+        )
         for k, v in include.launch_arguments
     }
-    assert forwarded == {"serial_port": "/dev/ttyTHS0"}
+    assert forwarded == {"serial_port": "/dev/ttyTHS0", "poll_imu": "true"}
 
 
 @pytest.mark.parametrize(
@@ -198,6 +210,9 @@ def test_car_teleop_includes_vesc_launch_only_when_asked():
         "/telemetry/vesc/temp_motor_degc",
         "/telemetry/vesc/fault",
         "/vesc/sensors/core",
+        # The VESC's own IMU, published only with vesc_imu:=true (2026-11-12).
+        "/vesc/sensors/imu",
+        "/vesc/sensors/imu/raw",
         # park_node's status line (roadmap 2.9), recorded with the drive it explains.
         "/park_node/status",
         # Unchanged entries still match.
@@ -214,7 +229,8 @@ def test_recorder_regex_keeps_the_vesc_topics(topic):
 # "/odom" itself used to be here; it is recorded on purpose since 2026-11-03 (the EKF's output,
 # docs/notes/localization-2026-11-03.md), so the anchoring check uses "/odom_raw" instead.
 @pytest.mark.parametrize(
-    "topic", ["/odom_raw", "/odom/wheel_extra", "/vesc/sensors/imu", "/park_node/status_extra"]
+    "topic",
+    ["/odom_raw", "/odom/wheel_extra", "/vesc/sensors/imu_extra", "/park_node/status_extra"],
 )
 def test_recorder_regex_is_still_anchored(topic):
     regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX
@@ -255,6 +271,15 @@ def test_patch_turns_every_set_command_send_into_a_no_op():
     ):
         assert f"send({packet}" in removed, f"patch does not remove send({packet}...)"
     assert "send(" not in added
+
+
+def test_patch_polls_the_imu_only_when_asked_and_only_by_a_read_request():
+    added = "\n".join(_patch_lines("+"))
+    assert 'declare_parameter<bool>("poll_imu", false)' in added
+    assert "if (poll_imu_)" in added
+    # The request is the one upstream already sends; no new packet type, no set-command.
+    assert "vesc_.requestImuData();" in added
+    assert "VescPacketSet" not in added
 
 
 def test_patch_turns_off_hardware_flow_control():

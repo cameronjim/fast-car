@@ -120,7 +120,7 @@ def test_format_errors(tmp_path: Path) -> None:
 
 def test_geometric_perceiver_on_a_synthetic_lane(live: LiveVehicle) -> None:
     p = core.TrackPerceiver(core.BACKEND_GEOMETRIC, live)
-    assert p.model_id == "geometric-v0"
+    assert p.model_id == "geometric-v1"
     t = p.process(corridor_ranges(live), **SCAN)
     assert t.valid_count == 16 and t.arrays_ok()
     assert np.abs(t.y_m).max() < 0.05

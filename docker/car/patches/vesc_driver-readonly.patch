@@ -1,3 +1,15 @@
+diff --git a/vesc_driver/include/vesc_driver/vesc_driver.hpp b/vesc_driver/include/vesc_driver/vesc_driver.hpp
+index eddf44d..ecfc03b 100644
+--- a/vesc_driver/include/vesc_driver/vesc_driver.hpp
++++ b/vesc_driver/include/vesc_driver/vesc_driver.hpp
+@@ -104,6 +104,7 @@ private:
+   rclcpp::SubscriptionBase::SharedPtr position_sub_;
+   rclcpp::SubscriptionBase::SharedPtr servo_sub_;
+   rclcpp::TimerBase::SharedPtr timer_;
++  bool poll_imu_{false};  // racer patch: see vesc_driver.cpp
+ 
+   // driver modes (possible states)
+   typedef enum
 diff --git a/vesc_driver/include/vesc_driver/vesc_interface.hpp b/vesc_driver/include/vesc_driver/vesc_interface.hpp
 index dcca50f..ac2ce2d 100644
 --- a/vesc_driver/include/vesc_driver/vesc_interface.hpp
@@ -21,19 +33,24 @@ index dcca50f..ac2ce2d 100644
     * Closes the serial port interface to the VESC.
     */
 diff --git a/vesc_driver/src/vesc_driver.cpp b/vesc_driver/src/vesc_driver.cpp
-index 5c8ef62..147a564 100644
+index 5c8ef62..9ee0849 100644
 --- a/vesc_driver/src/vesc_driver.cpp
 +++ b/vesc_driver/src/vesc_driver.cpp
-@@ -67,6 +67,8 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
+@@ -67,6 +67,13 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
  {
    // get vesc serial port address
    std::string port = declare_parameter<std::string>("port", "");
 +  // racer patch: serial baud rate as a parameter (upstream hard-codes 115200).
 +  vesc_.setBaudRate(static_cast<uint32_t>(declare_parameter<int>("baud", 115200)));
++
++  // racer patch: the IMU poll is OFF unless asked for (upstream always polls). COMM_GET_IMU_DATA
++  // is a read request, never a command; it is only for measuring whether this board's IMU is
++  // real (docs/notes/vesc-imu-2026-11-12.md). The car's own IMU is the dedicated one at the CG.
++  poll_imu_ = declare_parameter<bool>("poll_imu", false);
  
    // attempt to connect to the serial port
    try {
-@@ -82,26 +84,11 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
+@@ -82,26 +89,11 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
    imu_pub_ = create_publisher<VescImuStamped>("sensors/imu", rclcpp::QoS{10});
    imu_std_pub_ = create_publisher<Imu>("sensors/imu/raw", rclcpp::QoS{10});
  
@@ -65,18 +82,21 @@ index 5c8ef62..147a564 100644
  
    // create a 50Hz timer, used for state machine & polling VESC telemetry
    timer_ = create_wall_timer(20ms, std::bind(&VescDriver::timerCallback, this));
-@@ -146,8 +133,8 @@ void VescDriver::timerCallback()
+@@ -146,8 +138,11 @@ void VescDriver::timerCallback()
    } else if (driver_mode_ == MODE_OPERATING) {
      // poll for vesc state (telemetry)
      vesc_.requestState();
 -    // poll for vesc imu
 -    vesc_.requestImuData();
-+    // racer patch: no IMU poll. The car's IMU is the dedicated one at the CG, never the VESC's
-+    // (fast-car hardware doc), and halving the UART traffic leaves the state poll its full rate.
++    // racer patch: poll the IMU only with poll_imu:=true (default false, so the state poll keeps
++    // the whole UART when the IMU is not being measured).
++    if (poll_imu_) {
++      vesc_.requestImuData();
++    }
    } else {
      // unknown mode, how did that happen?
      assert(false && "unknown driver mode");
-@@ -163,6 +150,9 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
+@@ -163,6 +158,9 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
      auto state_msg = VescStateStamped();
      state_msg.header.stamp = now();
  

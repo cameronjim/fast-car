@@ -13,6 +13,10 @@ no odometry. Both backends run through `TrackPerceiver.process`, the code the no
 Per backend and bag it reports the median and 90th percentile of `boundary_residual_m`, the mean
 `intrusion_fraction`, the mean `valid_count` and the share of moving scans with `valid_count`
 under 6; with both backends, the mean distance between their centrelines over stations 0 to 7.
+It also reports the clearance deficit (label-free, offline only): for each valid station within
+2.0 m of the car, `min(half_width_left, half_width_right)` minus the Euclidean distance from the
+station to the nearest scan point, as p50, p90 and the share over 0.15 m. A correct corridor has a
+deficit near 0; a centreline 0.25 m too close to one wall has 0.25.
 It writes `metrics.json` and three overlay pictures per bag.
 
 The gate: the net is allowed on the car only if, over the two gate bags together, the median
@@ -39,6 +43,7 @@ from racer_track_perception.core import (
     BACKEND_NET,
     TrackPerceiver,
 )
+from racer_track_perception.preprocess import scan_to_points
 from racer_track_perception.track import LocalTrackData
 from racer_track_perception.vehicle import LiveVehicle, find_repo_root, load_live_vehicle
 
@@ -51,6 +56,8 @@ GATE_MEAN_INTRUSION = 0.02
 GATE_SHORT_SHARE = 0.05
 SHORT_VALID_COUNT = 6
 COMPARE_STATIONS = 8
+DEFICIT_STATION_RANGE_M = 2.0
+DEFICIT_BAD_M = 0.15
 N_OVERLAYS = 3
 VERDICT_PASS = "net passes"
 VERDICT_FAIL = "net fails, use backend:=geometric tonight"
@@ -93,13 +100,37 @@ def centreline_distance(a: LocalTrackData, b: LocalTrackData, stations: int = 8)
     return float(d.mean())
 
 
+def clearance_deficit(
+    track: LocalTrackData,
+    points: NDArray[np.floating],
+    station_range_m: float = DEFICIT_STATION_RANGE_M,
+) -> NDArray[np.float64]:
+    """Per valid station within `station_range_m` of the car: the smaller half width minus the
+    Euclidean distance to the nearest scan point. Empty when there is no valid station or no
+    point."""
+    n = track.valid_count
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if n < 1 or len(pts) == 0:
+        return np.zeros(0)
+    x = track.x_m[:n].astype(np.float64)
+    y = track.y_m[:n].astype(np.float64)
+    near = np.hypot(x, y) <= station_range_m
+    if not near.any():
+        return np.zeros(0)
+    d2 = (x[near, None] - pts[None, :, 0]) ** 2 + (y[near, None] - pts[None, :, 1]) ** 2
+    hw = np.minimum(track.half_width_left_m[:n], track.half_width_right_m[:n]).astype(np.float64)
+    return hw[near] - np.sqrt(d2.min(axis=1))
+
+
 def summarise(
     residual: NDArray[np.float64],
     intrusion: NDArray[np.float64],
     valid_count: NDArray[np.float64],
     latency_ms: NDArray[np.float64] | None = None,
+    deficit: NDArray[np.float64] | None = None,
 ) -> dict[str, Any]:
-    """The gate numbers for one backend over a set of moving scans."""
+    """The gate numbers for one backend over a set of moving scans. `deficit` is the clearance
+    deficit of every evaluated station of every scan, concatenated."""
     n = len(valid_count)
     res = residual[np.isfinite(residual)]
     out: dict[str, Any] = {
@@ -115,6 +146,17 @@ def summarise(
         if n
         else math.nan,
     }
+    if deficit is not None:
+        out["clearance_deficit_stations"] = len(deficit)
+        out["clearance_deficit_p50_m"] = (
+            float(np.percentile(deficit, 50)) if len(deficit) else math.nan
+        )
+        out["clearance_deficit_p90_m"] = (
+            float(np.percentile(deficit, 90)) if len(deficit) else math.nan
+        )
+        out["clearance_deficit_share_over_0_15"] = (
+            float(np.mean(deficit > DEFICIT_BAD_M)) if len(deficit) else math.nan
+        )
     if latency_ms is not None and len(latency_ms):
         out["latency_ms"] = {
             "p50": float(np.percentile(latency_ms, 50)),
@@ -141,12 +183,13 @@ def score_scans(
     perceivers: dict[str, TrackPerceiver], scans: list[ScanRec]
 ) -> tuple[dict[str, dict[str, NDArray[np.float64]]], list[dict[str, LocalTrackData]], list[float]]:
     """Run every perceiver over the scans. Returns per-backend arrays (residual, intrusion,
-    valid_count, latency_ms), the tracks per scan and the centreline distance per scan (NaN
+    valid_count, latency_ms, and deficit: one entry per evaluated station, not per scan), the tracks per scan and the centreline distance per scan (NaN
     unless both backends are present)."""
     names = list(perceivers)
     cols: dict[str, dict[str, list[float]]] = {
         n: {"residual": [], "intrusion": [], "valid": [], "latency": []} for n in names
     }
+    deficits: dict[str, list[NDArray[np.float64]]] = {n: [] for n in names}
     tracks: list[dict[str, LocalTrackData]] = []
     dist: list[float] = []
     for s in scans:
@@ -161,12 +204,25 @@ def score_scans(
             cols[n]["intrusion"].append(t.intrusion_fraction)
             cols[n]["valid"].append(float(t.valid_count))
             per[n] = t
+            veh = perceivers[n].vehicle
+            pts = scan_to_points(
+                s.ranges,
+                s.angle_min,
+                s.angle_increment,
+                s.range_min,
+                s.range_max,
+                veh.mount,
+                veh.body,
+            )
+            deficits[n].append(clearance_deficit(t, pts))
         tracks.append(per)
         if BACKEND_NET in per and BACKEND_GEOMETRIC in per:
             dist.append(centreline_distance(per[BACKEND_NET], per[BACKEND_GEOMETRIC]))
         else:
             dist.append(math.nan)
     arrays = {n: {k: np.array(v, dtype=np.float64) for k, v in c.items()} for n, c in cols.items()}
+    for n in names:
+        arrays[n]["deficit"] = np.concatenate([np.zeros(0), *deficits[n]])
     return arrays, tracks, dist
 
 
@@ -286,7 +342,7 @@ def evaluate_bag(
         "moving_source": info["moving_source"],
         "truncated": info["truncated"],
         "backends": {
-            n: summarise(a["residual"], a["intrusion"], a["valid"], a["latency"])
+            n: summarise(a["residual"], a["intrusion"], a["valid"], a["latency"], a["deficit"])
             for n, a in arrays.items()
         },
     }
@@ -314,9 +370,11 @@ def evaluate_bag(
 def pool(per_bag: list[dict[str, dict[str, NDArray[np.float64]]]], backend: str) -> dict[str, Any]:
     cat = {
         k: np.concatenate([b[backend][k] for b in per_bag])
-        for k in ("residual", "intrusion", "valid", "latency")
+        for k in ("residual", "intrusion", "valid", "latency", "deficit")
     }
-    return summarise(cat["residual"], cat["intrusion"], cat["valid"], cat["latency"])
+    return summarise(
+        cat["residual"], cat["intrusion"], cat["valid"], cat["latency"], cat["deficit"]
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

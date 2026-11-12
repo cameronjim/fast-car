@@ -14,6 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import pytest
+
+# Skips cleanly under a bare `uv run pytest` (no ROS); runs for real under colcon test.
+pytest.importorskip("rclpy")
+
 import launch
 import launch_testing
 import launch_testing.actions
@@ -21,6 +26,7 @@ import launch_testing.asserts
 import planner_launch_common as common
 import pytest
 from launch_ros.actions import Node as LaunchNode
+from launch_testing.util import KeepAliveProc
 
 _ROOT = Path(tempfile.mkdtemp(prefix="racer_planner_refusal_"))
 _GOOD = common.make_bundle(_ROOT, "good")
@@ -53,7 +59,15 @@ _MISSING = _node("planner_no_bundle", _ROOT / "does_not_exist")
 @pytest.mark.launch_test
 def generate_test_description():
     return launch.LaunchDescription(
-        [_CHECKSUM, _VEHICLE, _VALIDITY, _MISSING, launch_testing.actions.ReadyToTest()]
+        [
+            _CHECKSUM,
+            _VEHICLE,
+            _VALIDITY,
+            _MISSING,
+            # every process under test exits at startup; keep the launch alive for the checks
+            KeepAliveProc(),
+            launch_testing.actions.ReadyToTest(),
+        ]
     )
 
 

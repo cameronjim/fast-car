@@ -67,6 +67,36 @@ describe("Api", () => {
     expect(init.headers.Authorization).toBe("Bearer t");
   });
 
+  it("starts Plug-and-Play through the normal drive route with bundle names, backend and cap only", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(reply(200, { ok: true, message: "pnp:geometric started" }));
+    await new Api(memoryTokens("t"), fetchImpl).startDrive({
+      mode: "pnp",
+      pnp_backend: "geometric",
+      pnp_dynamics: "dyn-v0-2026-11-12",
+      pnp_perception: "",
+      pnp_v_max_mps: 0.4,
+    });
+    const [path, init] = fetchImpl.mock.calls[0];
+    expect(path).toBe("/api/drive/start");
+    expect(JSON.parse(init.body)).toEqual({
+      mode: "pnp",
+      pnp_backend: "geometric",
+      pnp_dynamics: "dyn-v0-2026-11-12",
+      pnp_perception: "",
+      pnp_v_max_mps: 0.4,
+    });
+    expect(init.headers.Authorization).toBe("Bearer t");
+  });
+
+  it("a disabled Plug-and-Play reply keeps the reason for the UI", async () => {
+    const body = { ok: false, error: "Plug-and-Play is disabled: no dynamics bundle" };
+    const api = new Api(memoryTokens("t"), vi.fn().mockResolvedValue(reply(409, body)));
+    const err = await api.startDrive({ mode: "pnp", pnp_backend: "geometric" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+    expect(err.message).toContain("no dynamics bundle");
+  });
+
   it("perception and spiderbot go through the fixed routes with their fields", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(reply(200, { ok: true }));
     const api = new Api(memoryTokens("t"), fetchImpl);

@@ -8,6 +8,7 @@ numbers only ever come from config/vehicle_params.yaml (see test_fixture.py).
 from __future__ import annotations
 
 import pytest
+import racer_pnp_dynamics.bags  # noqa: F401  (puts tools/ on sys.path for the tests)
 from racer_pnp_dynamics.model import Nominal
 from racer_pnp_dynamics.vehicle import Vehicle
 

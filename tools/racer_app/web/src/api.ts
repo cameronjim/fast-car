@@ -32,6 +32,17 @@ export interface Status {
   thresholds: { disk_red_gb: number; cameras_min_free_gb: number; battery_cells: number };
 }
 
+/** The Plug-and-Play driver: bundles found under data/pnp/models, by kind. */
+export interface PnpOptions {
+  available: boolean;
+  reason: string;
+  perception: string[];
+  dynamics: string[];
+  backends: string[];
+  speed_range: [number, number];
+  default_speed: number;
+}
+
 export interface Options {
   gap_follow_profiles: string[];
   park_profiles: string[];
@@ -39,6 +50,7 @@ export interface Options {
   racelines: string[];
   drive_modes: string[];
   policy: { available: boolean; reason: string; valid: string[] };
+  pnp?: PnpOptions;
   patrols?: string[];
   spiderbot_rules?: string[];
   spiderbot_speed_range?: [number, number];
@@ -193,6 +205,10 @@ export class Api {
     patrol?: string;
     rule?: string;
     speed_mps?: number;
+    pnp_perception?: string;
+    pnp_dynamics?: string;
+    pnp_backend?: string;
+    pnp_v_max_mps?: number;
   }) => this.call<ActionReply>("POST", "/api/drive/start", b);
   startPerception = (b: { mode: string; device: string }) =>
     this.call<ActionReply>("POST", "/api/perception/start", b);

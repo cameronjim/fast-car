@@ -191,6 +191,13 @@ def test_ml_policy_route_says_why_not(env, client):
     assert r.status_code == 409 and "ML policy is disabled" in r.json()["error"]
 
 
+def test_pnp_route_says_why_not(env, client):
+    env.running_car()
+    body = {"mode": "pnp", "pnp_backend": "geometric"}
+    r = client.post("/api/drive/start", headers=AUTH, json=body)
+    assert r.status_code == 409 and "Plug-and-Play is disabled" in r.json()["error"]
+
+
 def test_park_route(env, client):
     env.running_car()
     client.post("/api/drive/start", headers=AUTH, json={"mode": "park"})

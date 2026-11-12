@@ -94,6 +94,10 @@ class Settings:
         return self.repo_dir / "data" / "policies"
 
     @property
+    def pnp_models_dir(self) -> Path:
+        return self.repo_dir / "data" / "pnp" / "models"
+
+    @property
     def action_log_path(self) -> Path:
         return self.state_dir / "actions.jsonl"
 

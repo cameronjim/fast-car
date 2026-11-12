@@ -244,3 +244,107 @@ def _profile_keys(launch_file: str, var: str) -> set[str]:
 def test_profile_whitelists_match_the_launch_files():
     assert _profile_keys("gap_follow.launch.py", "PROFILES") == set(cmd.GAP_FOLLOW_PROFILES)
     assert _profile_keys("park.launch.py", "PROFILES") == set(cmd.PARK_PROFILES)
+
+
+# -- Plug-and-Play ---------------------------------------------------------------------------
+
+PNP = "/workspace/data/pnp/models/"
+
+
+def test_pnp_is_a_drive_mode():
+    assert "pnp" in cmd.DRIVE_MODES
+
+
+def test_pnp_net_command_launches_pnp_launch_with_checked_bundles():
+    out = cmd.ros_cmd_for(
+        "pnp",
+        pnp_perception_container_path=PNP + "trackperc-v0-2026-11-12",
+        pnp_dynamics_container_path=PNP + "dyn-v0-2026-11-12",
+        pnp_backend="net",
+        pnp_v_max_mps=0.5,
+    )
+    assert out == (
+        "ros2 launch racer_bringup pnp.launch.py "
+        f"perception_bundle:={PNP}trackperc-v0-2026-11-12 "
+        f"dynamics_bundle:={PNP}dyn-v0-2026-11-12 backend:=net v_max_mps:=0.50"
+    )
+
+
+def test_pnp_geometric_command_has_no_perception_bundle():
+    out = cmd.ros_cmd_for(
+        "pnp",
+        pnp_dynamics_container_path=PNP + "dyn-v0-2026-11-12",
+        pnp_backend="geometric",
+        pnp_v_max_mps=0.4,
+    )
+    assert "perception_bundle" not in out
+    assert out.endswith("backend:=geometric v_max_mps:=0.40")
+
+
+def test_pnp_command_names_no_drive_topic_and_does_not_disable_the_recorder_guard():
+    out = cmd.ros_cmd_for("pnp", pnp_dynamics_container_path=PNP + "d", pnp_backend="geometric")
+    assert "/drive" not in out and "require_recorder" not in out
+
+
+@pytest.mark.parametrize("speed", [0.2, 0.5, 1.0, 1.5, 1])
+def test_pnp_speed_inside_the_range_is_formatted(speed):
+    out = cmd.ros_cmd_for(
+        "pnp",
+        pnp_dynamics_container_path=PNP + "d",
+        pnp_backend="geometric",
+        pnp_v_max_mps=speed,
+    )
+    assert f"v_max_mps:={float(speed):.2f}" in out
+
+
+@pytest.mark.parametrize("speed", [0.19, 1.51, 0, -0.5, 9.0, True, "0.5", None, float("nan")])
+def test_pnp_speed_outside_the_range_or_not_a_number_is_refused(speed):
+    with pytest.raises(cmd.CommandError):
+        cmd.ros_cmd_for(
+            "pnp",
+            pnp_dynamics_container_path=PNP + "d",
+            pnp_backend="geometric",
+            pnp_v_max_mps=speed,
+        )
+
+
+@pytest.mark.parametrize("backend", ["", "NET", "net; reboot", "classical"])
+def test_pnp_backend_must_be_on_the_list(backend):
+    with pytest.raises(cmd.CommandError, match="backend"):
+        cmd.ros_cmd_for("pnp", pnp_dynamics_container_path=PNP + "d", pnp_backend=backend)
+
+
+@pytest.mark.parametrize(
+    "dynamics",
+    [
+        "",
+        "/etc/pnp/d",
+        "/workspace/data/policies/d",
+        "/workspace/data/pnp/models/",
+        "/workspace/data/pnp/models/../../etc",
+        "/workspace/data/pnp/models/a/b",
+        "/workspace/data/pnp/models/d; reboot",
+        "/workspace/data/pnp/models/$(reboot)",
+        "/workspace/data/pnp/models/d d",
+    ],
+)
+def test_pnp_bundle_paths_must_be_one_directory_under_the_models_dir(dynamics):
+    with pytest.raises(cmd.CommandError):
+        cmd.ros_cmd_for("pnp", pnp_dynamics_container_path=dynamics, pnp_backend="geometric")
+
+
+def test_pnp_net_backend_needs_a_perception_bundle_under_the_models_dir():
+    with pytest.raises(cmd.CommandError):
+        cmd.ros_cmd_for(
+            "pnp",
+            pnp_dynamics_container_path=PNP + "d",
+            pnp_perception_container_path="",
+            pnp_backend="net",
+        )
+    with pytest.raises(cmd.CommandError):
+        cmd.ros_cmd_for(
+            "pnp",
+            pnp_dynamics_container_path=PNP + "d",
+            pnp_perception_container_path="/workspace/data/x",
+            pnp_backend="net",
+        )

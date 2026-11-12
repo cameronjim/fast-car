@@ -152,6 +152,15 @@ class Residual:
         )
 
 
+def steering_target(steer_cmd: np.ndarray, params: Nominal, vehicle: Vehicle) -> np.ndarray:
+    """The steady state road wheel angle of a steering command (the first line of the step)."""
+    steer_cmd = np.asarray(steer_cmd, dtype=np.float64)
+    gain = np.where(steer_cmd >= 0.0, params.steer_gain_left, params.steer_gain_right)
+    return np.clip(
+        gain * steer_cmd + params.steer_offset_rad, vehicle.steer_min_rad, vehicle.steer_max_rad
+    )
+
+
 def step(
     state: np.ndarray,
     control: np.ndarray,
@@ -167,10 +176,7 @@ def step(
     speed_cmd = control[..., 0]
     steer_cmd = control[..., 1]
 
-    gain = np.where(steer_cmd >= 0.0, params.steer_gain_left, params.steer_gain_right)
-    delta_target = np.clip(
-        gain * steer_cmd + params.steer_offset_rad, vehicle.steer_min_rad, vehicle.steer_max_rad
-    )
+    delta_target = steering_target(steer_cmd, params, vehicle)
     a_d = 1.0 - np.exp(-dt / params.steer_tau_s)
     rate = vehicle.steer_rate_max_rad_per_s * dt
     delta_next = delta + np.clip(a_d * (delta_target - delta), -rate, rate)

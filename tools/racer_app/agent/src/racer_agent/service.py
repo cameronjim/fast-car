@@ -63,6 +63,10 @@ class DriveBody(Body):
     patrol: str = ""
     rule: str = "arms_raised"
     speed_mps: float = 0.5
+    pnp_perception: str = ""
+    pnp_dynamics: str = ""
+    pnp_backend: str = "net"
+    pnp_v_max_mps: float = 0.5
 
 
 class PerceptionBody(Body):

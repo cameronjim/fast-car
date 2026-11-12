@@ -1,0 +1,36 @@
+bundle_schema_version: 1.1.0
+kind: dynamics
+model_id: dyn-car-2026-11-12
+created_utc: '2026-11-12T00:00:00Z'
+git_sha: '0000000000000000000000000000000000000000'
+training_config_sha256: 987b15916974f5eb116ccb01ff77e15361a6ccf2fb1d84fc32d2f18462922517
+vehicle_params: {schema_version: 0.16.0, sysid_session_id: none-preliminary}
+payload:
+- {file: residual_mlp.f32, sha256: aa8b81d746d258905bc11c22f78ed6b9fd538b6253f38b1adf2ad74004b4268a}
+- {file: golden_rollouts.csv, sha256: aa883c97dc038c553c528e8ef81fbf35fe59d2ec47a4c2da19f2e838de6b8405}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9482438088762631, speed_deadband_mps: 0.22, speed_tau_s: 0.22460632746810144,
+    accel_max_mps2: 2.0, decel_max_mps2: 0.6731081096112491, steer_gain_left: 0.9166243626015708,
+    steer_gain_right: 1.0114633713998802, steer_offset_rad: 0.015222998571431204,
+    steer_tau_s: 0.02787697420940658, command_delay_s: 0.0, understeer_s2_per_m2: 0.10938200992093731}
+  residual:
+    enabled: false
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers:
+    - [4, 32]
+    - [32, 32]
+    - [32, 2]
+    activation: tanh
+    input_mean: [0.0, 0.0, 0.0, 0.0]
+    input_std: [1.0, 1.0, 1.0, 1.0]
+    output_scale: [1.0, 1.0]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['fitted nominal of dyn-v0.1-2026-11-12, residual disabled, for simulation and
+    tests']
+metrics: {}

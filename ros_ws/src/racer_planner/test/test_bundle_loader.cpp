@@ -88,13 +88,13 @@ TEST(BundleLoader, ManifestInvalidWhenTheRootIsNotAMapping) {
 
 TEST(BundleLoader, BundleSchemaVersionMismatch) {
   BundleCopy b;
-  b.edit_manifest("bundle_schema_version: \"1.0.0\"", "bundle_schema_version: \"2.0.0\"");
+  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"2.0.0\"");
   expect_refusal(load(b), RefusalCode::BundleSchemaVersionMismatch);
 }
 
 TEST(BundleLoader, MinorVersionBumpIsAccepted) {
   BundleCopy b;
-  b.edit_manifest("bundle_schema_version: \"1.0.0\"", "bundle_schema_version: \"1.3.0\"");
+  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"1.3.0\"");
   EXPECT_TRUE(load(b).ok());
 }
 
@@ -171,6 +171,38 @@ TEST(BundleLoader, IoContractMismatchMissingNominalField) {
   BundleCopy b;
   b.edit_manifest("    command_delay_s: 0.08\n", "");
   expect_refusal(load(b), RefusalCode::IoContractMismatch);
+}
+
+// Schema 1.1.0: io.nominal.speed_deadband_mps is required, whatever the version says. No default.
+TEST(BundleLoader, IoContractMismatchMissingDeadZoneFieldNamesIt) {
+  BundleCopy b;
+  b.edit_manifest("    speed_deadband_mps: 0.0\n", "");
+  const auto r = load(b);
+  expect_refusal(r, RefusalCode::IoContractMismatch);
+  EXPECT_NE(r.refusal->message.find("speed_deadband_mps"), std::string::npos) << r.refusal->message;
+}
+
+TEST(BundleLoader, MissingDeadZoneFieldIsRefusedEvenAtAnOldSchemaVersion) {
+  BundleCopy b;
+  b.edit_manifest("    speed_deadband_mps: 0.0\n", "");
+  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"1.0.0\"");
+  const auto r = load(b);
+  expect_refusal(r, RefusalCode::IoContractMismatch);
+  EXPECT_NE(r.refusal->message.find("speed_deadband_mps"), std::string::npos) << r.refusal->message;
+}
+
+TEST(BundleLoader, IoContractMismatchDeadZoneOutOfRange) {
+  for (const char* bad : {"-0.1", "1.5"}) {
+    BundleCopy b;
+    b.edit_manifest("speed_deadband_mps: 0.0", std::string("speed_deadband_mps: ") + bad);
+    expect_refusal(load(b), RefusalCode::IoContractMismatch);
+  }
+}
+
+TEST(BundleLoader, ADeadZoneTheGoldenRolloutsWereNotMadeWithIsRefused) {
+  BundleCopy b;
+  b.edit_manifest("speed_deadband_mps: 0.0", "speed_deadband_mps: 0.6");
+  expect_refusal(load(b), RefusalCode::GoldenRolloutMismatch);
 }
 
 TEST(BundleLoader, GoldenRolloutMismatchWithOneAlteredNumber) {
@@ -255,4 +287,28 @@ TEST(BundleLoader, DynNominalV0FromTheDynamicsWorkstreamLoads) {
   EXPECT_EQ(r.bundle->model_id, "dyn-nominal-v0");
   EXPECT_FALSE(r.bundle->params.residual.enabled);
   EXPECT_LT(r.bundle->golden_max_abs_error, kGoldenTolerance);
+}
+
+// The fitted nominal of the car (brief 14), residual disabled, with a dead zone and golden
+// rollouts that cross it. Loading it is the proof that this step reproduces model.py there.
+TEST(BundleLoader, DynCar20261112WithADeadZoneLoadsAndReproducesTheGoldenRollouts) {
+  const std::string dir =
+      std::string(RACER_PLANNER_REPO_ROOT) + "/config/pnp/fixtures/dyn-car-2026-11-12";
+  const auto r = load_dynamics_bundle(dir, test::binding_geometry(), 0.5);
+  ASSERT_TRUE(r.ok()) << (r.refusal ? std::string(refusal_code_name(r.refusal->code)) + ": " +
+                                          r.refusal->message
+                                    : "");
+  EXPECT_EQ(r.bundle->model_id, "dyn-car-2026-11-12");
+  EXPECT_FALSE(r.bundle->params.residual.enabled);
+  EXPECT_GT(r.bundle->params.nominal.speed_deadband_mps, 0.0);
+  EXPECT_LT(r.bundle->golden_max_abs_error, kGoldenTolerance);
+  EXPECT_GT(r.bundle->params.v_max_mps, 0.94);
+  // The golden rollouts include three that cross the dead zone: the same parameters with the
+  // dead zone removed no longer reproduce them, so a match is not only the rest of the model.
+  DynamicsParams no_dead_zone = r.bundle->params;
+  no_dead_zone.nominal.speed_deadband_mps = 0.0;
+  const auto mismatch = verify_golden_rollouts(no_dead_zone, test::binding_geometry(),
+                                               dir + "/golden_rollouts.csv", nullptr);
+  ASSERT_TRUE(mismatch.has_value());
+  EXPECT_EQ(mismatch->code, RefusalCode::GoldenRolloutMismatch);
 }

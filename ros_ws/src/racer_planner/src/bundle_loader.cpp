@@ -354,6 +354,7 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
     if (!nom.IsMap()) refuse(iom, "io.nominal is not a mapping");
     NominalParams& n = params.nominal;
     n.speed_gain = double_of(nom["speed_gain"], iom, "nominal.speed_gain");
+    n.speed_deadband_mps = double_of(nom["speed_deadband_mps"], iom, "nominal.speed_deadband_mps");
     n.speed_tau_s = double_of(nom["speed_tau_s"], iom, "nominal.speed_tau_s");
     n.accel_max_mps2 = double_of(nom["accel_max_mps2"], iom, "nominal.accel_max_mps2");
     n.decel_max_mps2 = double_of(nom["decel_max_mps2"], iom, "nominal.decel_max_mps2");
@@ -366,7 +367,7 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
     if (n.speed_tau_s <= 0.0 || n.steer_tau_s <= 0.0 || n.accel_max_mps2 <= 0.0 ||
         n.decel_max_mps2 <= 0.0 || n.speed_gain <= 0.0 || n.steer_gain_left <= 0.0 ||
         n.steer_gain_right <= 0.0 || n.command_delay_s < 0.0 || n.command_delay_s > 0.5 ||
-        n.understeer_s2_per_m2 < 0.0) {
+        n.understeer_s2_per_m2 < 0.0 || n.speed_deadband_mps < 0.0 || n.speed_deadband_mps > 1.0) {
       refuse(iom, "io.nominal has a value outside the range the planner implements");
     }
     const YAML::Node res = io["residual"];

@@ -1,7 +1,8 @@
-"""Real-bag entry point (thin glue, needs the bags and, for the residual, torch):
+"""Real-bag entry point (thin glue, needs the bags, torch for the residual and matplotlib for
+the profile plot):
 
 uv sync --group train
-uv run python -m racer_pnp_dynamics.cli --date 2026-11-12
+uv run --with matplotlib python -m racer_pnp_dynamics.cli --date 2026-11-12
 """
 
 from __future__ import annotations
@@ -13,11 +14,14 @@ import subprocess
 from pathlib import Path
 
 from .dataset import by_split
-from .pipeline import run_fit_and_export
+from .pipeline import PnpRuns, run_fit_and_export
+from .pnp_eval import read_legacy_bundle
 from .recordings import all_segments, load_recordings
 from .vehicle import load_vehicle, repo_root
 
 DATA_ROOT = Path("/Users/cameronjim/code/car-data")
+PNP_BAG = "2026-11-12T03-04-56_car_teleop"
+OLD_BUNDLE = "dyn-v0-2026-11-12"
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - real data
@@ -34,7 +38,18 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - real data
     vehicle = load_vehicle()
     runs, motions, dropped = load_recordings(args.bags, vehicle, args.cache, args.workers)
     segments = all_segments(runs, motions)
-    model_id = f"dyn-v0-{args.date}"
+    model_id = f"dyn-v0.1-{args.date}"
+    pnp_run = next((r for r in runs if r.name == PNP_BAG), None)
+    pnp = (
+        PnpRuns(
+            pnp_run,
+            motions.get(PNP_BAG),
+            pnp_run.scans[0].log_time_s,
+            read_legacy_bundle(args.models / OLD_BUNDLE),
+        )
+        if pnp_run is not None and pnp_run.scans and (args.models / OLD_BUNDLE).is_dir()
+        else None
+    )
     git_sha = subprocess.run(
         ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -51,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - real data
         bundle_dir=args.models / model_id,
         pointer_dir=root / "training" / "pnp_models" / model_id,
         data_lines=data_lines,
+        pnp=pnp,
+        profile_png=True,
         notes={
             "train_segments": len(by_split(segments, "train")),
             "dropped_nested_bags": dropped,

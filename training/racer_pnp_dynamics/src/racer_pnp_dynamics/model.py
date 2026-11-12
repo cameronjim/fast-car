@@ -5,6 +5,9 @@ rollouts to 1e-4. float64 throughout. The step reads the wheelbase, the steering
 steering rate limit from the generated vehicle_params binding (`Vehicle`), nothing physical is
 typed here.
 
+Speed command dead zone (bundle schema 1.1.0): a command with |cmd| < speed_deadband_mps has a
+steady state wheel speed of 0, otherwise speed_gain * cmd.
+
 State  [x_m, y_m, yaw_rad, v_mps, delta_rad], control [speed_cmd_mps, steering_cmd_rad].
 `v` is the WHEEL speed. All right hand sides use the state at the start of the step. The command
 delay is not part of the step: whoever rolls the model forward feeds it the delayed commands.
@@ -34,6 +37,7 @@ class Nominal:
     """`io.nominal` of a dynamics bundle."""
 
     speed_gain: float
+    speed_deadband_mps: float
     speed_tau_s: float
     accel_max_mps2: float
     decel_max_mps2: float
@@ -59,6 +63,7 @@ class Nominal:
 # as the baseline the fit has to beat.
 PLACEHOLDER_NOMINAL = Nominal(
     speed_gain=1.0,
+    speed_deadband_mps=0.0,
     speed_tau_s=0.25,
     accel_max_mps2=2.0,
     decel_max_mps2=1.5,
@@ -161,6 +166,16 @@ def steering_target(steer_cmd: np.ndarray, params: Nominal, vehicle: Vehicle) ->
     )
 
 
+def speed_target(speed_cmd: np.ndarray, params: Nominal) -> np.ndarray:
+    """The steady state wheel speed of a speed command: `speed_gain * cmd`, or 0 when the command
+    is inside the dead zone (|cmd| < speed_deadband_mps; the wheels do not turn). Written as "not
+    below" so a NaN command still gives NaN, as the C++ step does."""
+    speed_cmd = np.asarray(speed_cmd, dtype=np.float64)
+    return np.where(
+        np.abs(speed_cmd) < params.speed_deadband_mps, 0.0, params.speed_gain * speed_cmd
+    )
+
+
 def step(
     state: np.ndarray,
     control: np.ndarray,
@@ -182,7 +197,7 @@ def step(
     delta_next = delta + np.clip(a_d * (delta_target - delta), -rate, rate)
     a_v = 1.0 - np.exp(-dt / params.speed_tau_s)
     dv = np.clip(
-        a_v * (params.speed_gain * speed_cmd - v),
+        a_v * (speed_target(speed_cmd, params) - v),
         -params.decel_max_mps2 * dt,
         params.accel_max_mps2 * dt,
     )

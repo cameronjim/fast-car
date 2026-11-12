@@ -60,3 +60,22 @@ def test_golden_has_nine_rollouts_of_forty_steps(tmp_path):
     assert len(rows) - 1 == 9 * 41
     # the weights are all zero when the residual is off
     assert set((tmp_path / "residual_mlp.f32").read_bytes()) == {0}
+
+
+def test_dead_zone_target_is_zero_below_and_gain_times_command_at_or_above():
+    # accel/decel limits far above the step so only the lag acts; expected values are computed
+    # with the same expression the step uses (a_v * (target - v)), not a rearranged one
+    nom = dict(
+        mf.NOMINAL,
+        speed_deadband_mps=0.2,
+        speed_tau_s=0.05,
+        accel_max_mps2=100.0,
+        decel_max_mps2=100.0,
+    )
+    a_v = 1.0 - math.exp(-0.05 / nom["speed_tau_s"])
+    below = mf.step((0, 0, 0, 0.0, 0), (0.19, 0.0), nom, VEHICLE, 0.05)
+    at = mf.step((0, 0, 0, 0.0, 0), (0.2, 0.0), nom, VEHICLE, 0.05)
+    assert below[3] == 0.0
+    assert at[3] == max(0.0, 0.0 + a_v * (nom["speed_gain"] * 0.2 - 0.0))
+    rolling = mf.step((0, 0, 0, 0.4, 0), (0.1, 0.0), nom, VEHICLE, 0.05)
+    assert rolling[3] == max(0.0, 0.4 + a_v * (0.0 - 0.4))

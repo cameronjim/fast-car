@@ -22,6 +22,23 @@ def test_conversion_is_applied_exactly_once():
     assert run.has_odom
 
 
+def test_a_bag_in_current_units_is_not_converted():
+    run = bags.run_from_bag_data("b", _bag(1.0, steer=0.3), recorded=None)
+    assert run.speed_cmd_mps[10] == 1.0 and run.wheel_speed_mps[10] == 1.0
+    assert run.steering_cmd_rad[5] == 0.3
+
+
+def test_units_are_decided_per_bag_and_unknown_new_bags_are_refused():
+    from racer_pnp_dynamics import recordings
+
+    for name in ("2026-11-12T03-04-56_car_teleop", "2026-11-12T02-57-50_car_teleop"):
+        assert recordings.recorded_for(name) is None
+    for name in ("2026-10-24T23-13-18_car_teleop", "2026-11-11T04-20-19_car_teleop_v3"):
+        assert recordings.recorded_for(name) is calibration.RECORDED_0_13_0
+    with pytest.raises(ValueError, match="CURRENT_UNITS_BAGS"):
+        recordings.recorded_for("2026-11-13T01-00-00_car_teleop")
+
+
 def test_input_bag_is_not_mutated():
     bag = _bag(1.401)
     bags.run_from_bag_data("b", bag)

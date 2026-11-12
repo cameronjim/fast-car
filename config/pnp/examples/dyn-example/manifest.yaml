@@ -1,5 +1,5 @@
 # Example manifest for a dynamics bundle. Dummy hashes, no payload files.
-bundle_schema_version: "1.0.0"
+bundle_schema_version: "1.1.0"
 kind: dynamics
 model_id: "dyn-v0-2026-11-12-example"
 created_utc: "2026-11-12T03:00:00Z"
@@ -17,6 +17,7 @@ io:
   dt_s: 0.05
   nominal:
     speed_gain: 1.0
+    speed_deadband_mps: 0.0
     speed_tau_s: 0.25
     accel_max_mps2: 2.0
     decel_max_mps2: 1.5

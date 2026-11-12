@@ -58,5 +58,8 @@ committed baseline CSVs (old rule in brackets): std R0 0.018 (0.018), R1 0.019 (
 (0.021), R3 0.022 (0.022), L 0.022 (0.023) rad; sign flips per s 24.2, 27.6, 25.5, 26.8, 24.2. The
 rule changes the v0 numbers by under 0.002 rad, so the comparison with `baselines/v0-2026-11-12.json`
 stands. The fixture's recorded tracks are geometric-v0; main's tracer is geometric-v1 since #145,
-so `--check-fidelity` against that bag no longer holds (its tests are skipped with that reason
-until a bag recorded with the current tracer replaces it).
+so the harness (which runs the current tracer) no longer reproduces that bag's tracks and
+`--check-fidelity` against it fails. The self-test stays in the suite against a frozen test-only
+copy of the v0 tracer (`tools/tests/fixtures/geometric_v0_tracer.py`, swapped in for the length of
+the test), and `test_harness_runs_the_current_tracer` pins that the harness itself uses the
+current one. Delete the copy together with the 2026-11-12 fixture.

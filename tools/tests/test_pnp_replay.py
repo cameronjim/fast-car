@@ -483,29 +483,62 @@ def perceiver() -> perception.Perceiver:
     return perception.build_perceiver("geometric")
 
 
-V0_TRACER_GONE = (
-    "the fixture's recorded /pnp/local_track is geometric-v0 and main's geometric backend is "
-    "geometric-v1 since #145, so the replayed tracer cannot reproduce it; the self-test needs a "
-    "bag recorded with the current tracer"
-)
+def _v0_tracer_module():
+    """The frozen geometric-v0 tracer (tools/tests/fixtures/geometric_v0_tracer.py): the fixture's
+    recorded /pnp/local_track was made by it, main's tracer is geometric-v1 since #145."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "geometric_v0_tracer", REPO_ROOT / "tools" / "tests" / "fixtures" / "geometric_v0_tracer.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # its dataclasses look their module up by name
+    spec.loader.exec_module(module)
+    return module
 
 
-@pytest.mark.skip(reason=V0_TRACER_GONE)
+@pytest.fixture
+def v0_perceiver(monkeypatch: pytest.MonkeyPatch) -> perception.Perceiver:
+    """A perceiver that traces with the frozen v0 tracer (the core module's `geometric` is swapped
+    for the length of the test; everything else is the current perception code)."""
+    core = perception._import_core()
+    monkeypatch.setattr(core, "geometric", _v0_tracer_module())
+    p = perception.build_perceiver("geometric")
+    p.model_id = "geometric-v0"
+    return p
+
+
 @pytest.mark.parametrize("name", ["R0", "R1", "R3"])
 def test_replayed_v0_tracer_equals_the_recorded_track(
-    name: str, perceiver: perception.Perceiver
+    name: str, v0_perceiver: perception.Perceiver
 ) -> None:
     """The harness self-test: the replayed geometric tracer gives the recorded /pnp/local_track,
     matched by header stamp, to 1e-5 m (on this bag the difference is exactly 0)."""
     rec, a, b = cut_fixture.load_cut(FIXTURE, name)
     scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
-    tracks = perception.run_perceiver(perceiver, rec, scans)
+    tracks = perception.run_perceiver(v0_perceiver, rec, scans)
     fid = perception.check_fidelity(rec, tracks, a, b)
     assert fid.matched >= 15, fid
     assert fid.valid_count_mismatches == 0
     assert fid.max_centreline_diff_m <= 1e-5
     assert fid.max_width_diff_m <= 1e-5
     assert fid.ok
+
+
+def test_harness_runs_the_current_tracer(perceiver: perception.Perceiver) -> None:
+    """The harness itself traces with the current geometric tracer (the one on main), not the frozen
+    v0 copy the fidelity tests use; the two are different implementations and give different tracks
+    on the fixture's scans, so a recorded v0 track is no longer reproduced by the harness."""
+    core = perception._import_core()
+    from racer_track_perception import geometric
+
+    assert core.geometric is geometric  # the production module, not the test copy
+    assert perceiver.model_id == core.GEOMETRIC_MODEL_ID == "geometric-v1"
+    rec, a, b = cut_fixture.load_cut(FIXTURE, "R1")
+    scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
+    current = perception.run_perceiver(perceiver, rec, scans)
+    assert not perception.check_fidelity(rec, current, a, b).ok  # the recording is v0's
 
 
 def test_fidelity_check_fails_on_a_changed_track(perceiver: perception.Perceiver) -> None:
@@ -703,9 +736,11 @@ def r1_recording(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, float,
     return path, a, b
 
 
-@pytest.mark.skip(reason=V0_TRACER_GONE)
 def test_cli_perception_only_run_writes_json_and_passes_the_fidelity_check(
-    r1_recording: tuple[Path, float, float], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    r1_recording: tuple[Path, float, float],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    v0_perceiver: perception.Perceiver,  # swaps in the frozen v0 tracer the bag was recorded with
 ) -> None:
     path, a, b = r1_recording
     out = tmp_path / "r1.json"

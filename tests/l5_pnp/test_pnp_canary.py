@@ -129,7 +129,10 @@ def test_pnp_laps_the_track_through_the_real_command_path(
     assert result["laps"] >= LAPS, result.get("stopped_because")
     assert result["wall_contacts"] == 0
     assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
-    assert result["rate_limit_events"] == 0, "safety_node rate-limited the planner's command"
+    assert result["rate_limit_events"] == 0, (
+        "safety_node rate-limited the planner's command: "
+        f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
+    )
     assert result["publisher_nodes"] == {
         "/drive_raw": ["mppi_planner_node"],
         "/drive": ["safety_node"],
@@ -243,7 +246,10 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
     assert result["laps"] >= LAPS, result.get("stopped_because")
     assert result["wall_contacts"] == 0
     assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
-    assert result["rate_limit_events"] == 0, "safety_node rate-limited the planner's command"
+    assert result["rate_limit_events"] == 0, (
+        "safety_node rate-limited the planner's command: "
+        f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
+    )
     assert result["publisher_nodes"] == {
         "/drive_raw": ["mppi_planner_node"],
         "/drive": ["safety_node"],

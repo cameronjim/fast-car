@@ -72,7 +72,7 @@ CSI_FORWARDED = {
     "csi_width": ("width", "1280", "CSI camera 0 capture width, pixels (an IMX219 mode)."),
     "csi_height": ("height", "720", "CSI camera 0 capture height, pixels."),
     "csi_fps": ("fps", "60", "CSI camera 0 frame rate, frames per second."),
-    "csi_flip_method": ("flip_method", "0", "CSI camera 0 nvvidconv flip-method, 0..7."),
+    "csi_flip_method": ("flip_method", "2", "CSI camera 0 nvvidconv flip-method, 0..7."),
 }
 
 

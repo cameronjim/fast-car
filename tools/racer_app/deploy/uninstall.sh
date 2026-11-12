@@ -12,7 +12,7 @@ set -euo pipefail
 SUDO="${RACER_SUDO-sudo}"
 ETC="${RACER_ETC:-/etc}"
 STATE_DIR="${RACER_STATE_DIR:-/var/lib/racer-app}"
-SYSTEMCTL="${RACER_SYSTEMCTL:-systemctl}"
+SYSTEMCTL="${RACER_SYSTEMCTL:-${SUDO:+$SUDO }systemctl}"
 PURGE=0
 for arg in "$@"; do
   case "$arg" in

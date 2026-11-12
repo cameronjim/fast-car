@@ -194,14 +194,14 @@ _CSI_DEFAULTS = {
     "width": "1280",
     "height": "720",
     "fps": "60",
-    "flip_method": "0",
+    "flip_method": "2",
     "jpeg_quality": "80",
 }
 
 _DEFAULT_PIPELINE = (
     "nvarguscamerasrc sensor-id=0 ! "
     "video/x-raw(memory:NVMM),width=1280,height=720,framerate=60/1,format=NV12 ! "
-    "nvvidconv flip-method=0 ! "
+    "nvvidconv flip-method=2 ! "
     "video/x-raw,width=1280,height=720,format=BGRx ! "
     "videoconvert"
 )
@@ -222,7 +222,7 @@ def test_csi_declares_arguments_with_defaults():
 
 def test_csi_pipeline_for_the_defaults():
     module = _load("camera_csi.launch.py")
-    assert module.argus_pipeline(0, 1280, 720, 60, 0) == _DEFAULT_PIPELINE
+    assert module.argus_pipeline(0, 1280, 720, 60, 2) == _DEFAULT_PIPELINE
 
 
 def test_csi_pipeline_follows_its_arguments():

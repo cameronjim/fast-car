@@ -82,7 +82,7 @@ describe("RosLink", () => {
     link.onStatus((s) => seen.push(s));
     link.connect();
     expect(sockets[0].url).toBe("ws://car:8765");
-    expect(sockets[0].protocols).toEqual(["foxglove.websocket.v1"]);
+    expect(sockets[0].protocols).toEqual(["foxglove.sdk.v1", "foxglove.websocket.v1"]);
     sockets[0].open();
     expect(seen.at(-1)).toEqual({ connected: true, topics: [] });
     sockets[0].serverJson({ op: "advertise", channels: [channel(1, "/drive", "x/msg/X", "float32 data")] });

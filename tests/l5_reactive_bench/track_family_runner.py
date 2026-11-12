@@ -97,6 +97,31 @@ def car_parameters(car: str) -> dict:
     return {"steering_limit_left_rad": left, "steering_limit_right_rad": right}
 
 
+def plant_parameters(bundle_dir: Path) -> dict:
+    """Bridge plant-realism parameters from a dynamics bundle's io.nominal: the sim car then
+    actuates the way the planner's model says the real car does."""
+    nominal = yaml.safe_load((bundle_dir / "manifest.yaml").read_text())["io"]["nominal"]
+    return {
+        "plant_steer_gain_left": float(nominal["steer_gain_left"]),
+        "plant_steer_gain_right": float(nominal["steer_gain_right"]),
+        "plant_speed_gain": float(nominal["speed_gain"]),
+        "plant_accel_max_mps2": float(nominal["accel_max_mps2"]),
+        "plant_decel_max_mps2": float(nominal["decel_max_mps2"]),
+        # Absent in manifests made before the dead band was fitted: no dead band.
+        "plant_speed_deadband_mps": float(nominal.get("speed_deadband_mps", 0.0)),
+    }
+
+
+def plant_overrides(args: argparse.Namespace) -> dict:
+    """Bridge plant-realism parameters given by runner flags; they win over --plant-bundle."""
+    flags = (
+        (args.plant_speed_deadband, "plant_speed_deadband_mps"),
+        (args.plant_steer_tau, "plant_steer_tau_s"),
+        (args.plant_command_delay, "plant_command_delay_s"),
+    )
+    return {key: float(value) for value, key in flags if value is not None}
+
+
 def bridge_track_parameters(track: str, track_params: dict, seed: int, reverse: bool) -> dict:
     unknown = set(track_params) - set(_FLOAT_TRACK_KEYS) - set(_STRING_TRACK_KEYS)
     if unknown:
@@ -200,6 +225,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     localised = args.driver == "tracker_loc"
     bridge = bridge_track_parameters(args.track, track_params, args.seed, args.reverse)
     bridge.update(car_parameters(args.car))
+    if args.plant_bundle:
+        bridge.update(plant_parameters(Path(args.plant_bundle)))
+    bridge.update(plant_overrides(args))
     mounted = args.lidar == "mounted" or localised
     if mounted:
         from racer_tools.vehicle_params_loader import load_vehicle_params
@@ -252,10 +280,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             args.perception_bundle, args.dynamics_bundle, args.backend, args.v_max_mps, mounted
         )
         nodes["track_perception_node"], nodes["mppi_planner_node"] = perception, planner
-        for package, name in (
+        pnp_nodes = [
             ("racer_track_perception", "track_perception_node"),
             ("racer_planner", "mppi_planner_node"),
-        ):
+        ]
+        if args.no_perception:
+            # The scan-only fault case: the planner starts and no track ever arrives.
+            del nodes["track_perception_node"]
+            pnp_nodes = pnp_nodes[1:]
+        for package, name in pnp_nodes:
             stack.append((name, [base._executable(package, name)]))
         result.update({"backend": args.backend, "v_max_mps": args.v_max_mps, "pnp": nodes})
     else:
@@ -657,6 +690,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--policy-dir", help="policy directory (driver tracker_policy)")
     parser.add_argument("--perception-bundle", default="", help="track_perception bundle (pnp)")
     parser.add_argument("--dynamics-bundle", default="", help="dynamics bundle (pnp)")
+    parser.add_argument(
+        "--plant-bundle",
+        default="",
+        help="dynamics bundle whose io.nominal sets the sim car's actuation (steer gain, speed "
+        "gain, accel and decel limits, and speed_deadband_mps when it has one); default: the "
+        "gym's own plant",
+    )
+    parser.add_argument(
+        "--plant-speed-deadband",
+        type=float,
+        default=None,
+        help="a /drive speed under this magnitude (m/s) leaves the car standing; overrides "
+        "--plant-bundle",
+    )
+    parser.add_argument(
+        "--plant-steer-tau",
+        type=float,
+        default=None,
+        help="first order lag of the wheel angle (s); overrides --plant-bundle",
+    )
+    parser.add_argument(
+        "--plant-command-delay",
+        type=float,
+        default=None,
+        help="the /drive command acts this long after it arrives (s); overrides --plant-bundle",
+    )
+    parser.add_argument(
+        "--no-perception",
+        action="store_true",
+        help="driver pnp: start the planner without track_perception_node (the scan-only fault "
+        "case: no track ever arrives)",
+    )
     parser.add_argument("--backend", default="geometric", choices=("net", "geometric"))
     parser.add_argument("--v-max-mps", type=float, default=0.6, help="pnp planner speed cap")
     parser.add_argument("--profile", default="lane-2026-10-25", help="gap_follow profile")

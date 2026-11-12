@@ -69,3 +69,7 @@ colcon build --symlink-install
 # and with the gtest binaries, at a cost of tens of seconds. No test is skipped or retried.
 colcon test --executor sequential --event-handlers console_direct+
 colcon test-result --verbose
+
+# tools/tests/test_pnp_replay.py against the planner_replay_cli built above (tools/pnp_replay.py):
+# the end to end planner replay tests run here, where the binary exists, instead of skipping.
+"$(dirname "${BASH_SOURCE[0]}")/pnp_replay_test.sh"

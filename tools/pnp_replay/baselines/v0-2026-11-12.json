@@ -1,0 +1,417 @@
+{
+  "tool": "tools/pnp_replay.py",
+  "bag": "2026-11-12T03-04-56_car_teleop",
+  "backend": "geometric",
+  "perception_model_id": "geometric-v0",
+  "tracks": "replay",
+  "track_latency_s": 0.03,
+  "clip_speed_to_cap": true,
+  "v_max_mps": 0.4,
+  "dynamics_bundle": "dyn-v0-2026-11-12",
+  "segments": {
+    "R0": {
+      "kind": "pnp",
+      "t_from": 472.6417441368103,
+      "t_to": 491.5022552013397,
+      "duration_s": 18.86051106452942,
+      "perception": {
+        "scans": 28,
+        "scans_with_track": 28,
+        "intrusion_mean": 0.06607555246915811,
+        "intrusion_p90": 0.11787360982391103,
+        "intrusion_share_over_0.10": 0.2857142857142857,
+        "boundary_residual_p50_m": 0.041408623135470904,
+        "boundary_residual_p90_m": 0.10362166183537674,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.27597124236906945,
+        "clearance_deficit_share_over_0.15": 0.18796992481203006,
+        "clearance_deficit_stations": 399,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 171,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "planner": {
+        "ticks": 944,
+        "eligible_ticks": 944,
+        "state_counts": {
+          "DRIVING": 299,
+          "NO_TRACK": 645
+        },
+        "speed_zero_share": 0.6832627118644068,
+        "speed_below_dead_zone_share": 0.00211864406779661,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.00019596571899665555,
+        "steering_change": {
+          "std_rad": 0.01806448184075761,
+          "sign_flips_per_s": 24.16107382552533,
+          "p99_abs_rad": 0.04616553414099994
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.9549209999999999,
+          "p99": 1.1289954799999997
+        },
+        "agreement_with_recorded": {
+          "share": 0.8363636363636363,
+          "ticks_compared": 935,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 137,
+            "DRIVING->NO_ODOM": 40,
+            "DRIVING->NO_TRACK": 113,
+            "NO_TRACK->NO_TRACK": 645
+          }
+        },
+        "parameters": {
+          "max_intrusion_fraction": 0.1
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 137,
+        "NO_TRACK": 759,
+        "NO_ODOM": 39
+      },
+      "planner_csv": "baseline.R0.planner.csv"
+    },
+    "R1": {
+      "kind": "pnp",
+      "t_from": 1087.1732635498047,
+      "t_to": 1123.4339282512665,
+      "duration_s": 36.26066470146179,
+      "perception": {
+        "scans": 90,
+        "scans_with_track": 90,
+        "intrusion_mean": 0.14870233332965324,
+        "intrusion_p90": 0.2129378296687015,
+        "intrusion_share_over_0.10": 0.8777777777777778,
+        "boundary_residual_p50_m": 0.18231789588358743,
+        "boundary_residual_p90_m": 0.23397259035131118,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.011111111111111112,
+        "clearance_deficit_p90_m": 0.30783678634497763,
+        "clearance_deficit_share_over_0.15": 0.3062200956937799,
+        "clearance_deficit_stations": 1254,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 359,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "planner": {
+        "ticks": 1814,
+        "eligible_ticks": 1814,
+        "state_counts": {
+          "DRIVING": 1400,
+          "NO_TRACK": 354,
+          "BLOCKED": 60
+        },
+        "speed_zero_share": 0.22822491730981256,
+        "speed_below_dead_zone_share": 0.3699007717750827,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.2984553367612397,
+        "steering_change": {
+          "std_rad": 0.020022692894169056,
+          "sign_flips_per_s": 27.483917083656163,
+          "p99_abs_rad": 0.064
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.899861,
+          "p99": 1.1702657200000002
+        },
+        "agreement_with_recorded": {
+          "share": 0.9608599779492834,
+          "ticks_compared": 1814,
+          "replayed_to_recorded": {
+            "BLOCKED->BLOCKED": 60,
+            "DRIVING->DRIVING": 1331,
+            "DRIVING->NO_TRACK": 69,
+            "NO_TRACK->DRIVING": 2,
+            "NO_TRACK->NO_TRACK": 352
+          }
+        },
+        "parameters": {
+          "max_intrusion_fraction": 0.2
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 1333,
+        "NO_TRACK": 421,
+        "BLOCKED": 60
+      },
+      "planner_csv": "baseline.R1.planner.csv"
+    },
+    "R2": {
+      "kind": "pnp",
+      "t_from": 1130.692860841751,
+      "t_to": 1167.453664779663,
+      "duration_s": 36.76080393791199,
+      "perception": {
+        "scans": 12,
+        "scans_with_track": 12,
+        "intrusion_mean": 0.2534101800015537,
+        "intrusion_p90": 0.28354944716947533,
+        "intrusion_share_over_0.10": 1.0,
+        "boundary_residual_p50_m": 0.21109842967283118,
+        "boundary_residual_p90_m": 0.23599082941481897,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.30737271046621895,
+        "clearance_deficit_share_over_0.15": 0.3977272727272727,
+        "clearance_deficit_stations": 176,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 347,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "planner": {
+        "ticks": 1839,
+        "eligible_ticks": 1839,
+        "state_counts": {
+          "DRIVING": 54,
+          "NO_TRACK": 1785
+        },
+        "speed_zero_share": 0.9706362153344209,
+        "speed_below_dead_zone_share": 0.0032626427406199023,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.0,
+        "steering_change": {
+          "std_rad": 0.021267030606841274,
+          "sign_flips_per_s": 26.415094339646664,
+          "p99_abs_rad": 0.06248915020759999
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.973254,
+          "p99": 1.0887733199999998
+        },
+        "agreement_with_recorded": {
+          "share": 0.9630032644178455,
+          "ticks_compared": 1838,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 29,
+            "DRIVING->NO_ODOM": 25,
+            "NO_TRACK->DRIVING": 27,
+            "NO_TRACK->NO_ODOM": 11,
+            "NO_TRACK->NO_SCAN": 5,
+            "NO_TRACK->NO_TRACK": 1741
+          }
+        },
+        "parameters": {
+          "max_intrusion_fraction": 0.2
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 56,
+        "NO_TRACK": 1741,
+        "NO_SCAN": 5,
+        "NO_ODOM": 37
+      },
+      "planner_csv": "baseline.R2.planner.csv"
+    },
+    "R3": {
+      "kind": "pnp",
+      "t_from": 1174.0713098049164,
+      "t_to": 1188.859958410263,
+      "duration_s": 14.78864860534668,
+      "perception": {
+        "scans": 19,
+        "scans_with_track": 19,
+        "intrusion_mean": 0.1292063343659289,
+        "intrusion_p90": 0.2625485608170845,
+        "intrusion_share_over_0.10": 0.5789473684210527,
+        "boundary_residual_p50_m": 0.09800596867065736,
+        "boundary_residual_p90_m": 0.2956388761420048,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.11777343639301657,
+        "clearance_deficit_share_over_0.15": 0.0421455938697318,
+        "clearance_deficit_stations": 261,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 135,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "planner": {
+        "ticks": 740,
+        "eligible_ticks": 740,
+        "state_counts": {
+          "DRIVING": 668,
+          "NO_TRACK": 72
+        },
+        "speed_zero_share": 0.0972972972972973,
+        "speed_below_dead_zone_share": 0.8121621621621622,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.5188431730399252,
+        "steering_change": {
+          "std_rad": 0.021721594917898462,
+          "sign_flips_per_s": 26.911544227910532,
+          "p99_abs_rad": 0.055270280114000016
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.7528255,
+          "p99": 1.03510639
+        },
+        "agreement_with_recorded": {
+          "share": 0.9310810810810811,
+          "ticks_compared": 740,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 643,
+            "DRIVING->NO_SCAN": 1,
+            "DRIVING->NO_TRACK": 24,
+            "NO_TRACK->DRIVING": 26,
+            "NO_TRACK->NO_TRACK": 46
+          }
+        },
+        "parameters": {
+          "max_intrusion_fraction": 0.2
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 669,
+        "NO_TRACK": 70,
+        "NO_SCAN": 1
+      },
+      "planner_csv": "baseline.R3.planner.csv"
+    },
+    "L": {
+      "kind": "fast",
+      "t_from": 1749.0233232975006,
+      "t_to": 1922.9527442455292,
+      "duration_s": 173.92942094802856,
+      "perception": {
+        "scans": 317,
+        "scans_with_track": 317,
+        "intrusion_mean": 0.07495458540383548,
+        "intrusion_p90": 0.19039156404394994,
+        "intrusion_share_over_0.10": 0.2618296529968454,
+        "boundary_residual_p50_m": 0.09420268275131183,
+        "boundary_residual_p90_m": 0.2187155512469599,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.19258987136800282,
+        "clearance_deficit_share_over_0.15": 0.15359618717504334,
+        "clearance_deficit_stations": 4616,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 5
+      },
+      "fidelity": {
+        "skipped": "no recorded /pnp/local_track in this segment"
+      },
+      "planner": {
+        "ticks": 8697,
+        "eligible_ticks": 8697,
+        "state_counts": {
+          "DRIVING": 8078,
+          "NO_TRACK": 520,
+          "BLOCKED": 99
+        },
+        "speed_zero_share": 0.07554329078992757,
+        "speed_below_dead_zone_share": 0.22513510405887088,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.1697399463929742,
+        "steering_change": {
+          "std_rad": 0.023111474610569376,
+          "sign_flips_per_s": 24.20453138543739,
+          "p99_abs_rad": 0.064
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.997296,
+          "p99": 1.2392169199999994
+        },
+        "parameters": {
+          "max_intrusion_fraction": 0.1
+        }
+      },
+      "planner_csv": "baseline.L.planner.csv"
+    }
+  },
+  "planner_config": {
+    "dynamics_model_id": "dyn-v0-2026-11-12",
+    "parameters": {
+      "a_lat_max_mps2": 2,
+      "c_collision": 10000,
+      "control_rate_hz": 50,
+      "d_hard_m": 0.03,
+      "d_soft_base_m": 0.15,
+      "horizon_steps": 30,
+      "lambda": 1,
+      "laser_yaw_from_vehicle_params": 1,
+      "laser_yaw_offset_rad": 0,
+      "m_bound_m": 0.05,
+      "max_boundary_residual_m": 0.25,
+      "max_intrusion_fraction": 0.1,
+      "min_valid_stations": 6,
+      "noise_beta": 0.7,
+      "odom_timeout_s": 0.1,
+      "samples": 768,
+      "scan_timeout_s": 0.35,
+      "seed": 1,
+      "selfcheck_hold_s": 0.5,
+      "sigma_speed_mps": 0.25,
+      "sigma_steering_rad": 0.25,
+      "solve_halve_over_ms": 15,
+      "solve_restore_under_ms": 6,
+      "t_headway_s": 0.25,
+      "track_timeout_s": 0.3,
+      "v_max_mps": 0.4,
+      "w_bound": 200,
+      "w_clear": 200,
+      "w_du": 0.5,
+      "w_lat": 5,
+      "w_progress": 10,
+      "w_term": 50
+    },
+    "laser_yaw_rad": 3.141593,
+    "horizon_steps": 30,
+    "delay_ticks": 0,
+    "tick_s": 0.02
+  },
+  "pooled": {
+    "segments": [
+      "R0",
+      "R1",
+      "R2",
+      "R3"
+    ],
+    "perception": {
+      "scans": 149,
+      "scans_with_track": 149,
+      "intrusion_mean": 0.13912193276360077,
+      "intrusion_p90": 0.24013753581661892,
+      "intrusion_share_over_0.10": 0.738255033557047,
+      "boundary_residual_p50_m": 0.1577478789942181,
+      "boundary_residual_p90_m": 0.23564006031593474,
+      "valid_count_p10": 16.0,
+      "valid_count_share_under_6": 0.006711409395973154,
+      "clearance_deficit_p90_m": 0.2926502191642937,
+      "clearance_deficit_share_over_0.15": 0.2583732057416268,
+      "clearance_deficit_stations": 2090
+    }
+  }
+}

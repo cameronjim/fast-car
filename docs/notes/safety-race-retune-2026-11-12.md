@@ -245,3 +245,89 @@ the 6 GB bag opens in a second; an unindexed file is read whole). Tests: `test_b
 cases on synthetic walls and known dynamics, including the bug it found in itself: a zero speed time
 constant chattered between the limits), `test_replay_follower.py` (window), `test_replay_safety.py`
 (`--window`).
+
+## 5. The follower, and the retune
+
+**What the follower saw at the five straight brakes.** The race profile (at `max_speed_mps 2.08`, as
+driven) replayed on the bag's real scans, one scan before each brake (the replay is the node's own
+code, `gap_follow_replay_cli --speed`):
+
+| brake | gate saw (request m/s, steering) | follower, target steering | follower, published steering | free path it measured (m) | speed it allowed (m/s) |
+|---|---|---|---|---|---|
+| 1874.1 | 1.16, -0.00 | -0.36 | -0.13 | 2.04 | 1.95 |
+| 1883.9 | 1.31, -0.06 | -0.41 | -0.20 | 2.04 | 1.55 |
+| 1892.1 | 1.16, -0.04 | -0.42 | -0.21 | 2.04 | 1.54 |
+| 1909.8 | 1.11, -0.01 | -0.45 | -0.20 | 2.04 | 1.58 |
+| 1920.1 | 1.30, -0.05 | -0.33 | -0.16 | 2.04 | 1.75 |
+
+The free path is the whole horizon (2.04 m) because it was measured along the TARGET arc, already
+turning away from the wall; the car, with the steering low-pass (0.15 s) and the servo behind it,
+was on a nearly straight arc with the wall 0.7 m of body distance ahead. (The replay's published
+steering is its own, not the car's, which was nearer zero; the direction is the same.) The race
+speed law says "stop inside the free path"; it was told the path was free.
+
+**The change.** `GapFollowConfig::free_path_on_published_steering` (node parameter and launch
+argument of the same name, default false, so every old profile reproduces exactly): the free path
+the speed law uses is the shorter of the target arc and the arc of the steering the car is at (the
+low-passed command as last published, threaded from the command half to the scan half under the
+node's existing mutex). The replay CLI does the same with its own filter output. Tests: a gtest on
+the core (flag off ignores the published steering, unknown or equal steering changes nothing, a
+hard turn into a side wall shortens the path and not the steering), the node parameter table
+comparison (`test_replay_follower.py`), launch tests for the new argument and the old profiles
+carrying no race parameter.
+
+**The harness and the rule, committed before the runs** (commits 365e7de and the one after it):
+`tools/race_tuning/tracks.py` has a WIDE family (stadiums, lanes 1.3, 1.4, 1.5 m, straights 1.5, 2.0,
+3.0 m, island radius 0 to 0.6 m; 8 tuning tracks, held-out seeds disjoint, tested), `selection_gate.py`
+has the rule, `race_tune.py evaluate --family wide --rule gate` applies it, and
+`tools/race_tuning/retune_2026_11_12.sh` is the exact variant list. The rule: a candidate is
+admissible if, over its 16 tuning runs (8 tracks, both directions, 2 laps), every run completed, there
+was no wall contact, the minimum body clearance was at least 0.04 m, and `safety_node` braked at most
+0.25 times per lap and reversed at most 0.25 times per lap (absolute, not relative to a baseline: the
+first rule let a faster car brake as often as the slow one and that is the thing the bag showed). The
+best admissible candidate has the lowest lap time relative to the baseline on the same track and
+direction; within 0.02 of each other, fewer brakes, then fewer escapes, then the lower speed. The
+held-out tracks are then run three times, pooled, with the same clauses.
+
+Candidates (each at 1.0, 1.3, 1.6 m/s, on `race-2026-11-12`): A the published-arc stopping law;
+B A with `stopping_margin_m` 0.2 (was 0.1); C B with `lane_lookahead_m` 0.8 (was 0.6); D B with
+`a_lat_max_mps2` 1.0 (was 1.5). References: the profile as shipped at 1.0 m/s, and at 1.6 and
+2.08 m/s (the owner's run).
+
+**Tuning result** (16 runs per variant, real time factor at least 0.99, no wall contact anywhere):
+
+| variant | min clearance (m) | brakes per lap | lap time (s) | lap ratio vs the lane profile at 0.64 m/s | gate rule |
+|---|---|---|---|---|---|
+| baseline (lane profile, 0.64 m/s) | 0.200 | 0.00 | 20.95 | 1.000 | reference |
+| ref10 (race-2026-11-12, 1.0 m/s) | 0.163 | 0.00 | 11.84 | 0.565 | yes |
+| ref16 (the same at 1.6 m/s) | 0.165 | 1.28 [1.00, 1.56] | 10.74 | 0.520 | no, 1.28 brakes per lap |
+| ref208 (the owner's 2.08 m/s) | 0.162 | 1.91 [1.56, 2.16] | 11.13 | 0.539 | no, 1.91 |
+| A at 1.0 | 0.173 | 0.00 | 12.33 | 0.591 | yes |
+| **A at 1.3** | 0.173 | 0.03 [0.00, 0.09] | 11.15 | **0.539** | **yes, the winner** |
+| A at 1.6 | 0.169 | 1.06 [0.75, 1.38] | 11.38 | 0.551 | no, 1.06 |
+| B at 1.0 / 1.3 / 1.6 | 0.214 / 0.213 / 0.211 | 0.00 / 0.00 / 0.03 | 14.81 / 13.92 / 13.78 | 0.719 / 0.681 / 0.675 | yes |
+| C at 1.0 / 1.3 / 1.6 | 0.199 / 0.198 / 0.199 | 0.00 / 0.00 / 0.00 | 12.98 / 11.98 / 11.82 | 0.632 / 0.589 / 0.583 | yes |
+| D at 1.0 / 1.3 / 1.6 | 0.215 / 0.211 / 0.213 | 0.00 / 0.00 / 0.16 | 14.95 / 14.44 / 14.35 | 0.726 / 0.705 / 0.701 | yes |
+
+The simulator reproduces the bag's failure: the shipped profile at 1.6 and 2.08 m/s brakes 1.3 and
+1.9 times per lap on these lanes (the car braked 0.7 times per lap on the floor), and at its own
+1.0 m/s it does not. The published-arc law alone (A) brakes 0.03 times per lap at 1.3 m/s (the
+shipped law was not run at 1.3) and 1.06 at 1.6 against the shipped law's 1.28, a sixth fewer. A
+larger stopping margin (B) removes the rest at the price of 25 per cent of the
+lap time; the longer lookahead (C) removes it without that price: 0 brakes in 16 runs at 1.6 m/s,
+8 per cent slower than A at 1.3. The lateral limit (D) bought nothing and cost speed.
+
+By the rule the winner is **A at 1.3 m/s: `race-2026-11-13`** (`gap_follow.launch.py`
+`RACE_2026_11_13_PROFILE`: `race-2026-11-12` with `max_speed_mps 1.3` and
+`free_path_on_published_steering true`; nothing else moved). C at 1.6 m/s is the way up to 1.6 with no
+brakes at all; it was not chosen by the rule (it is slower than A at 1.3) and is run on the held-out
+tracks as a disclosed extra, below.
+
+**Lateral acceleration, measured.** From scan matching (true speed times true yaw rate, 1492 usable
+pairs of the race run): median 0.53 m/s^2, 90th percentile 0.91, 99th 1.15, maximum 1.34, with no sign
+of the limit in the bag (no slide, the curvature ratio 1.04 at full lock). `/odom` cannot give it (its
+yaw rate is modelled). The speed law's `a_lat_max_mps2` is in the units of the command, the wheel
+speed, which reads 1.12 to 1.56 times the truth: the profile's 1.5 means a TRUE 0.5 m/s^2 at full lock
+(R 0.69 m) and about 0.95 at 0.2 rad. So the measured cornering says the law is well inside what the
+car did, not at its limit. Raising it was not in the candidate list (the sim's tyre model is not the
+floor's and nothing here measured the limit), lowering it (D) bought nothing, so it stays 1.5.

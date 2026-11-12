@@ -648,6 +648,16 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 for topic in ("/drive_raw", "/drive")
             }
         t_first = recording.odom[0][0] if recording.odom else 0.0
+        if os.environ.get("RUNNER_TRACE_NPZ"):
+            # Diagnostics only: the command stream and the events, for timing analysis offline.
+            np.savez(
+                os.environ["RUNNER_TRACE_NPZ"],
+                drive_raw=np.array(recording.drive_raw),
+                drive=np.array(recording.drive),
+                events=np.array([(e[0], e[2], e[3]) for e in recording.events]),
+                event_sources=np.array([e[1] for e in recording.events]),
+                t_first=t_first,
+            )
         result["safety_events"] = [
             {**e, "t_s": round(e["t_s"] - t_first, 2)} for e in event_details
         ]

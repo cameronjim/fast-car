@@ -71,6 +71,7 @@ struct TickOutput {
   double freespace_reach_m = 0.0;
   BlockReason block_reason = BlockReason::None;
   int recovery_attempts = 0;
+  bool gap_reset = false;  // the tick after a stall: the speed ramp restarted from zero
 };
 
 class Planner {
@@ -114,6 +115,8 @@ class Planner {
   std::array<Control, 32> ring_{};  // commands published but not yet acting
   int ring_head_ = 0;
   Command last_published_;
+  double last_tick_s_ = 0.0;
+  bool have_last_tick_ = false;
   double steer_lp_ = 0.0;  // output low-pass state, valid while driving
   bool steer_lp_valid_ = false;
   Pose2 ego_pose_;

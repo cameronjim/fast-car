@@ -88,6 +88,7 @@ std::map<std::string, Param> default_params() {
   d("freespace_speed_fraction", lg.freespace_speed_fraction, 0.3, 1.0);
   d("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5);
   d("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0);
+  d("gap_reset_s", lg.gap_reset_s, 0.0, 0.058);
   d("steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02);
   d("cost_scale_floor", mp.cost_scale_floor, 1e-3, 1e3);
   d("w_steer_rate", mp.w_steer_rate, 0.0, 1e4);
@@ -185,6 +186,7 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
            {"freespace_speed_fraction", &lg.freespace_speed_fraction},
            {"steer_output_tau_s", &lg.steer_output_tau_s},
            {"rate_limit_fraction", &lg.rate_limit_fraction},
+           {"gap_reset_s", &lg.gap_reset_s},
            {"steer_output_hysteresis_rad", &lg.steer_output_hysteresis_rad}}) {
     *ptr = v(name);
   }

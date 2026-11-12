@@ -163,6 +163,9 @@ class MppiPlannerNode : public rclcpp::Node {
     lg.steer_output_hysteresis_rad = declare_double(
         "steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02,
         "The steering output holds until the target is this far from it (rad), 0 is off.");
+    lg.gap_reset_s = declare_double("gap_reset_s", lg.gap_reset_s, 0.0, 0.058,
+                                    "Gap between ticks above which the speed ramp restarts from 0 "
+                                    "(safety_node's watchdog trips at 60 ms), 0 is off (s).");
     lg.rate_limit_fraction =
         declare_double("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0,
                        "Share of the steering rate and acceleration limits the output may use.");

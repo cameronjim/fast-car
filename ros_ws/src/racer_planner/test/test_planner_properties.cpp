@@ -446,3 +446,40 @@ TEST(Planner, AStartFromRestHasTwoTicksInsideTheDeadZoneAtMostAndNeverOutrunsThe
   EXPECT_NEAR(speeds[k + 1], 2 * 0.23 / 3.0, 1e-9);
   EXPECT_NEAR(speeds[k + 2], 0.23, 1e-9);
 }
+
+TEST(Planner, AfterAStallLongerThanTheWatchdogTheSpeedRampRestartsFromZero) {
+  // Captured on the canary under CPU load: a 61 ms gap between /drive_raw messages tripped
+  // safety_node's watchdog (its output went to 0) and the next command, at full speed, was
+  // rate limited by safety (a rate_limit event). The planner now restarts the ramp from 0.
+  const double step = 0.45 * test::binding_geometry().max_acceleration_mps2 * 0.02;
+  Rig r(0.6, 0.23);
+  TickOutput out;
+  for (int i = 0; i < 80; ++i) out = r.tick();
+  ASSERT_GT(out.cmd.speed_mps, 0.4);
+  EXPECT_FALSE(out.gap_reset);
+  const double steering_before = out.cmd.steering_rad;
+  r.now += 0.04;  // a 60 ms gap since the previous tick
+  out = r.tick();
+  EXPECT_TRUE(out.gap_reset);
+  EXPECT_LE(out.cmd.speed_mps, step + 1e-12);  // from 0, one ramp step
+  EXPECT_NEAR(out.cmd.steering_rad, steering_before, 0.03);
+  double prev = out.cmd.speed_mps;
+  for (int i = 0; i < 12; ++i) {
+    out = r.tick();
+    EXPECT_FALSE(out.gap_reset);
+    EXPECT_LE(out.cmd.speed_mps - prev, step + 1e-12);  // the ramp never outruns the limit
+    prev = out.cmd.speed_mps;
+  }
+  EXPECT_GT(prev, 0.4);  // and it gets back to speed
+}
+
+TEST(Planner, ASmallJitterInTheTickTimeDoesNotRestartTheRamp) {
+  Rig r(0.6, 0.23);
+  TickOutput out;
+  for (int i = 0; i < 80; ++i) out = r.tick();
+  const double before = out.cmd.speed_mps;
+  r.now += 0.02;  // a 40 ms gap: under the 50 ms threshold
+  out = r.tick();
+  EXPECT_FALSE(out.gap_reset);
+  EXPECT_NEAR(out.cmd.speed_mps, before, 0.1);
+}

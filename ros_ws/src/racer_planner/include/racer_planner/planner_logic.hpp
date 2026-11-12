@@ -27,6 +27,11 @@ struct LogicParams {
   double odom_timeout_s = 0.10;
   bool use_lap_guidance = false;
   double guidance_timeout_s = 2.0;
+  // A gap between two planner ticks longer than this (s) means the planner was stalled long
+  // enough for safety_node's /drive_raw watchdog (60 ms) to have braked: the speed ramp then
+  // restarts from zero, as from rest, instead of asking safety for a jump from 0 to the old
+  // speed (which it rate limits). 0 turns it off.
+  double gap_reset_s = 0.05;
   double gated_timeout_s = 0.2;  // the gated /drive older than this never counts
   // Output shaping of a driving command (Planner): first-order low-pass time constant on the
   // steering, and the share of the vehicle's steering rate and acceleration limits the planner's

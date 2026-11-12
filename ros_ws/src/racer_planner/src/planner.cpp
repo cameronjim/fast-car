@@ -91,6 +91,17 @@ void Planner::finish_tick(const Command& published) {
 
 TickOutput Planner::run(const TickInput& in) {
   TickOutput out;
+  // After a stall long enough for safety_node's watchdog to brake, its output is 0: restart the
+  // speed ramp from there (a start from rest) rather than step from the old speed.
+  if (std::isfinite(in.now_s)) {
+    if (have_last_tick_ && cfg_.logic.gap_reset_s > 0.0 &&
+        in.now_s - last_tick_s_ > cfg_.logic.gap_reset_s) {
+      last_published_.speed_mps = 0.0;
+      out.gap_reset = true;
+    }
+    last_tick_s_ = in.now_s;
+    have_last_tick_ = true;
+  }
   if (in.has_odom && std::isfinite(in.wheel_speed_mps)) est_.v = std::max(0.0, in.wheel_speed_mps);
   // The dead reckoning takes the signed wheel speed (the car backs up while recovering).
   ego_.push(in.now_s,

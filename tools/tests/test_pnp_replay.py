@@ -582,3 +582,82 @@ def test_planner_replay_refuses_a_bundle_that_fails_a_check(tmp_path: Path) -> N
     stream.write_text("")
     with pytest.raises(planner_stream.ReplayError, match="ManifestMissing"):
         planner_stream.run_cli(cli, bad, 0.4, {}, stream, tmp_path / "o.csv")
+
+
+# --- the command line ------------------------------------------------------------------------
+
+
+def _script():
+    """tools/pnp_replay.py as a module (the package of the same name wins `import pnp_replay`)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "pnp_replay_script", REPO_ROOT / "tools" / "pnp_replay.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="module")
+def r1_recording(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, float, float]:
+    """The fixture's R1 cut saved as an ordinary recording .npz, the way a bag's cache is."""
+    rec, a, b = cut_fixture.load_cut(FIXTURE, "R1")
+    path = tmp_path_factory.mktemp("rec") / "r1.npz"
+    bag.save_recording(rec, path)
+    return path, a, b
+
+
+def test_cli_perception_only_run_writes_json_and_passes_the_fidelity_check(
+    r1_recording: tuple[Path, float, float], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, a, b = r1_recording
+    out = tmp_path / "r1.json"
+    code = _script().main(
+        [str(path), "--from", str(a), "--to", str(b), "--no-planner", "--check-fidelity",
+         "--out", str(out)]
+    )  # fmt: skip
+    assert code == 0
+    result = json.loads(out.read_text())
+    seg = result["segments"]["W"]
+    assert seg["fidelity"]["ok"] and seg["fidelity"]["max_centreline_diff_m"] <= 1e-5
+    assert seg["perception"]["scans"] > 0 and "planner" not in seg
+    assert "intrusion mean" in capsys.readouterr().out
+
+
+def test_cli_usage_errors_exit_2_and_say_why(
+    r1_recording: tuple[Path, float, float], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, a, b = r1_recording
+    main = _script().main
+    out = ["--out", str(tmp_path / "x.json")]
+    assert main([str(path), "--segment", "R9", "--no-planner", *out]) == 2
+    assert "no segment R9" in capsys.readouterr().err
+    assert main([str(path), "--from", str(a), "--to", str(b), *out]) == 2  # no bundle
+    assert "--dynamics-bundle is required" in capsys.readouterr().err
+    code = main([str(path), "--from", str(a), "--to", str(b), "--no-planner", "--check-fidelity",
+                 "--backend", "net", *out])  # fmt: skip
+    assert code == 2
+    assert "--backend geometric" in capsys.readouterr().err
+    assert main([str(tmp_path / "missing.npz"), "--no-planner", *out]) == 2
+
+
+def test_cli_planner_run_compares_with_a_baseline(
+    r1_recording: tuple[Path, float, float], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _cli_or_skip()
+    path, a, b = r1_recording
+    main = _script().main
+    common = [str(path), "--from", str(a), "--to", str(b), "--tracks", "recorded",
+              "--dynamics-bundle", str(DYNAMICS_BUNDLE), "--v-max", "0.4",
+              "--set", "solve_halve_over_ms=200"]  # fmt: skip
+    first = tmp_path / "first.json"
+    assert main([*common, "--out", str(first)]) == 0
+    capsys.readouterr()
+    second = tmp_path / "second.json"
+    assert main([*common, "--out", str(second), "--compare", str(first)]) == 0
+    table = capsys.readouterr().out
+    assert "baseline" in table and "DRIVING" in table
+    planner = json.loads(second.read_text())["segments"]["W"]["planner"]
+    assert planner["state_counts"]["DRIVING"] > 100
+    assert planner["parameters"] == {"solve_halve_over_ms": 200.0}

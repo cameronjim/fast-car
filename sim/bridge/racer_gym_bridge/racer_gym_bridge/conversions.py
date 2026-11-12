@@ -211,3 +211,47 @@ def mirrored_speed_to_accel(
     else:
         accel = -forward(-target_mps, -current_mps)
     return float(min(max(accel, -a_max), a_max))
+
+
+def apply_speed_deadband(requested_mps: float, deadband_mps: float) -> float:
+    """The speed a drive train that does not move below `deadband_mps` acts on: a request whose
+    magnitude is below the dead band is 0, anything else passes unchanged (the car's ESC and
+    motor stay still for a small request, then jump to the commanded speed). A dead band of 0 or
+    less is off."""
+    if deadband_mps > 0.0 and abs(requested_mps) < deadband_mps:
+        return 0.0
+    return float(requested_mps)
+
+
+class FirstOrderLag:
+    """A first order lag stepped at a fixed period, exact for a held input: after n steps of a
+    constant target the output has covered 1 - exp(-n dt / tau) of the distance (63 percent after
+    one time constant). `tau_s` of 0 or less is a pass through. Starts at `initial`."""
+
+    def __init__(self, tau_s: float, dt_s: float, initial: float = 0.0) -> None:
+        if dt_s <= 0.0:
+            raise ValueError("dt_s must be positive")
+        self._alpha = 1.0 if tau_s <= 0.0 else 1.0 - math.exp(-dt_s / tau_s)
+        self.value = float(initial)
+
+    def step(self, target: float) -> float:
+        self.value += self._alpha * (float(target) - self.value)
+        return self.value
+
+
+class CommandDelay:
+    """A FIFO that delays each command by `delay_s`, rounded to whole steps of `dt_s`: the value
+    pushed on step k comes back on step k + round(delay_s / dt_s). Until then it returns
+    `initial`. A delay under half a step is a pass through."""
+
+    def __init__(self, delay_s: float, dt_s: float, initial: tuple[float, ...] = (0.0, 0.0)):
+        if dt_s <= 0.0:
+            raise ValueError("dt_s must be positive")
+        self.steps = max(0, round(delay_s / dt_s))
+        self._fifo: list[tuple[float, ...]] = [tuple(initial)] * self.steps
+
+    def push(self, command: tuple[float, ...]) -> tuple[float, ...]:
+        if self.steps == 0:
+            return command
+        self._fifo.append(command)
+        return self._fifo.pop(0)

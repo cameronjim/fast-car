@@ -284,7 +284,9 @@ def _autopilot_nodes(context):
     if mapping:
         actions.append(
             IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(os.path.join(_LAUNCH_DIR, "mapping.launch.py"))
+                PythonLaunchDescriptionSource(os.path.join(_LAUNCH_DIR, "mapping.launch.py")),
+                # The sim's car steers exactly as commanded: no measured yaw rate gain table.
+                launch_arguments={"yaw_gain_override": "1.0"}.items(),
             )
         )
     if localization:
@@ -294,6 +296,7 @@ def _autopilot_nodes(context):
                 launch_arguments={
                     "map": LaunchConfiguration("map"),
                     "set_initial_pose": "false",
+                    "yaw_gain_override": "1.0",
                 }.items(),
             )
         )

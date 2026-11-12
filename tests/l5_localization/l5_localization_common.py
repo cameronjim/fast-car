@@ -783,7 +783,9 @@ def launch_actions(track: Track, mode: str, map_yaml: Path | None, seed: int):
         name="bridge_node",
         parameters=[bridge_parameters(track, seed)],
     )
-    overrides = {}
+    # The sim's car steers exactly as commanded, so wheel_twist_node must not apply the real
+    # car's measured yaw rate gain table (vehicle_params steering.yaw_rate_gain_table).
+    overrides = {"yaw_gain_override": "1.0"}
     if os.environ.get("L5_EKF_PARAMS"):
         overrides["ekf_params_file"] = os.environ["L5_EKF_PARAMS"]
     if mode == "mapping":

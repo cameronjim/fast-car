@@ -41,6 +41,24 @@
         }
       }
     },
+    "yaw_gain_point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["abs_angle_rad", "gain"],
+      "properties": {
+        "abs_angle_rad": {
+          "type": "number", "minimum": 0, "maximum": 1.5708,
+          "units": "rad",
+          "sign_convention": "magnitude of the road-wheel angle; the gain is the same left and right",
+          "description": "|delta| of pwm_to_angle_table this gain applies at."
+        },
+        "gain": {
+          "type": "number", "minimum": 0.5, "maximum": 1.5,
+          "units": "1 (true yaw rate per modelled yaw rate)",
+          "description": "True yaw rate divided by speed * tan(delta) / wheelbase_m at this angle."
+        }
+      }
+    },
     "sensor_extrinsic": {
       "type": "object",
       "additionalProperties": false,
@@ -238,7 +256,7 @@
       "additionalProperties": false,
       "required": [
         "min_angle_rad", "max_angle_rad", "min_rate_rad_per_s", "max_rate_rad_per_s",
-        "time_constant_s", "pwm_to_angle_table",
+        "time_constant_s", "yaw_rate_gain_table", "pwm_to_angle_table",
         "pwm_min_us", "pwm_max_us", "pwm_neutral_us", "pwm_left_bound"
       ],
       "properties": {
@@ -253,6 +271,11 @@
           "units": "rad",
           "sign_convention": "road-wheel angle, LEFT positive (claude-docs/06-vehicle-params.md)",
           "description": "Maximum (leftmost) road-wheel angle PLANNING may command (see min_angle_rad). Since 2026-11-10 set to the weaker right-hand lock so that a planned turn is one the car can make to either side; the left stop's larger measured angle lives in pwm_to_angle_table."
+        },
+        "yaw_rate_gain_table": {
+          "type": "array", "maxItems": 16,
+          "items": {"$ref": "#/$defs/yaw_gain_point"},
+          "description": "Added 2026-11-12, schema 0.15.0. The yaw rate the car really turns at divided by speed * tan(delta) / wheelbase_m, against |delta| of pwm_to_angle_table, with speed the /odom/wheel speed. Piecewise linear in |delta|, held at the first and last gain outside the table, ascending abs_angle_rad. MEASURED 2026-11-12 by registering every LiDAR scan against a finished map (docs/notes/mapping-2026-11-12.md), at 0.3 to 1.2 m/s. It folds together the steering angle table's error and the 3 to 6 percent over-read of /odom/wheel against ground speed (a flat error at every angle), so it must be re-derived when drivetrain.gear_ratio is re-measured. Consumed by racer_state/wheel_twist_node: yaw rate = speed * gain(|delta|) * tan(delta) / wheelbase_m. Planners and racer_safety still use the table's angles and know nothing of it. One point of gain 1.0, or an empty table, means the model is exact."
         },
         "min_rate_rad_per_s": {
           "type": "number", "minimum": -20, "maximum": 0,

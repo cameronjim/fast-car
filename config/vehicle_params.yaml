@@ -111,6 +111,14 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.15.0 -> 0.16.0 on 2026-11-12: one new REQUIRED field,
+# steering.yaw_rate_gain_table (MEASURED, see the steering section and
+# docs/notes/mapping-2026-11-12.md). The wheel-odometry yaw rate v tan(delta) / L over-read the
+# turn rate by 1.17x at full lock and under-read it below 0.15 rad, on the 2026-11-10 and
+# 2026-11-12 oval bags (scan-to-map registration). No existing value changes; rule 5 bumps on any
+# change, and every committed policy contract and PnP bundle pins the schema_version, so they
+# refuse until re-exported against 0.16.0.
+#
 # schema_version bumped 0.14.0 -> 0.15.0 on 2026-11-12: one new REQUIRED field,
 # actuation.peak_acceleration_mps2, and one value changed, actuation.stop_latency_s 0.20 -> 0.26,
 # both MEASURED with /odom/wheel on the 2026-11-12 race bag (docs/notes/safety-race-retune-2026-11-12.md;
@@ -426,6 +434,28 @@ steering:
   min_rate_rad_per_s: -3.2          # gym: sv_min
   max_rate_rad_per_s: 3.2           # gym: sv_max
   time_constant_s: null             # needs Phase 2/3 measurement
+  # MEASURED 2026-11-12 (docs/notes/mapping-2026-11-12.md): the yaw rate the car really turns at,
+  # per speed * tan(delta) / wheelbase_m (delta from pwm_to_angle_table, speed the /odom/wheel
+  # speed). Method: every LiDAR scan of three oval bags registered against a finished map of the
+  # same run (no frame-to-frame ICP, which reads forward travel low in a corridor), ratio of the
+  # summed |heading change| over 1 s windows, by |delta| bin, pooled over the 2026-11-11 _cw left
+  # turns (n 271 / 199 / 169 / 1216 windows per bin), the 2026-11-11 _v3 right turns (331 / 317 /
+  # 168 / 1143) and the first slow lap of 2026-11-12 (49 / 81 / 110 / 401), speeds 0.3 to 1.2 m/s.
+  # Per bag at |delta| >= 0.35: 0.859, 0.858, 0.853. Left and right agree, so one table.
+  # Pooled: 1.12 at 0.10 rad, 0.96 at 0.20, 0.92 at 0.30, 0.86 at 0.42 and above. The model
+  # over-predicted the turn at full lock by 1.17x and under-predicted it below 0.15 rad. It is
+  # the product of two errors the data cannot split cleanly: the steering angle table (the
+  # curvature per tan(delta) / wheelbase: 1.15 to 0.89 over the same bins) and a flat 3 to 6 percent
+  # over-read of wheel speed against ground speed (0.94 to 1.0 at every angle, inside the push
+  # test's tolerance, see gear_ratio). Re-derive it if gear_ratio is re-measured. Consumed by
+  # racer_state/wheel_twist_node only; NOT folded into pwm_to_angle_table or min/max_angle_rad,
+  # which would shrink the planning limits every planner and racer_safety use (a decision for the
+  # owner). Planners and the safety corridor still assume the table's angles.
+  yaw_rate_gain_table:
+    - {abs_angle_rad: 0.10, gain: 1.12}
+    - {abs_angle_rad: 0.20, gain: 0.96}
+    - {abs_angle_rad: 0.30, gain: 0.92}
+    - {abs_angle_rad: 0.42, gain: 0.86}
   # PER-SIDE STEERING CALIBRATION, MEASURED 2026-11-10 (docs/notes/calibration-2026-11-10.md).
   # Piecewise linear, pulse ascending, LEFT positive (a shorter pulse is left, see pwm_left_bound).
   # Method: scan matching of consecutive LiDAR scans while the car held full lock at about 0.27 m/s,
@@ -861,6 +891,6 @@ meta:
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.15.0"
+  schema_version: "0.16.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

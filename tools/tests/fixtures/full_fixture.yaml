@@ -48,6 +48,8 @@ steering:
   min_rate_rad_per_s: -3.2
   max_rate_rad_per_s: 3.2
   time_constant_s: 0.05
+  yaw_rate_gain_table:
+    - {abs_angle_rad: 0.2, gain: 0.95}
   pwm_to_angle_table:
     - pwm_us: 1000.0
       angle_rad: 0.4189

@@ -212,7 +212,7 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:                     transitions are also in /rosout
 #:   /camera/<name>/record/compressed
 #:                     JPEG frames of every camera (optional, cameras:=true or the car-camera
-#:                     container), from racer_perception's camera_record_node: at most 5 Hz,
+#:                     container), from camera_record_node (cameras.launch.py): at most 5 Hz,
 #:                     fitted inside 640 x 360, and published ONLY while /drive_raw is being
 #:                     published (a driving launch is up), so cameras on and the car idle record
 #:                     nothing. NOT the full-rate /camera/<name>/image_raw/compressed (about

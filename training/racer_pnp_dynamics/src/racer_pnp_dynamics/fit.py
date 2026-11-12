@@ -254,6 +254,7 @@ class SpeedFit:
 
 
 DEADBAND_ROUND_MPS = 0.01
+HELD_WIDTH_MPS = 0.01  # a launch interval narrower than this: the car was held under that command
 
 
 def launch_deadband(runs: Sequence[Run], delay_s: float = 0.0) -> dict[str, object]:
@@ -264,7 +265,7 @@ def launch_deadband(runs: Sequence[Run], delay_s: float = 0.0) -> dict[str, obje
     is an upper bound and stays in; that makes the estimate lean high when most launches are
     jumps. Zero (no dead zone) when no launch is left."""
     launches = [x for r in runs if r.has_odom for x in find_launches(r, delay_s)]
-    kept = [x for x in launches if abs(x.width_mps) > 1e-6]
+    kept = [x for x in launches if abs(x.width_mps) > HELD_WIDTH_MPS]
     resolved = [x for x in kept if 0.0 < x.width_mps <= RESOLVED_WIDTH_MPS]
     out: dict[str, object] = {
         "launches": len(launches),

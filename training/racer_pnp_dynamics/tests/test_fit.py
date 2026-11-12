@@ -170,7 +170,7 @@ def test_no_dead_zone_in_the_data_gives_a_small_estimate_from_ramped_launches(to
         TRUTH, toy_vehicle, seconds=700.0, seed=22, ramp_mps2=0.5, speed_noise=0.002, name="nodz"
     )
     result = fit.fit_nominal(make_segments(run, motion), toy_vehicle, delays=(0.10,))
-    assert result.nominal.speed_deadband_mps < 0.12
+    assert result.nominal.speed_deadband_mps < 0.16  # delay 0.1 s and the lag, at 0.5 m/s2
     assert result.deadband_choice["launches_used"] >= 5
 
 

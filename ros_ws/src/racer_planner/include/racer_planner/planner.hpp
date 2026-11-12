@@ -10,6 +10,7 @@
 #include "racer_planner/distance_field.hpp"
 #include "racer_planner/dynamics_model.hpp"
 #include "racer_planner/ego_motion.hpp"
+#include "racer_planner/freespace_field.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/mppi.hpp"
 #include "racer_planner/planner_logic.hpp"
@@ -32,11 +33,17 @@ struct TickInput {
   double wheel_speed_mps = 0.0;
   bool has_scan = false;
   double scan_stamp_s = 0.0;
-  const DistanceField* field = nullptr;   // built from the scan stamped scan_stamp_s
-  const LocalTrackData* track = nullptr;  // latest track, null when none yet
+  const DistanceField* field = nullptr;       // built from the scan stamped scan_stamp_s
+  const FreespaceField* freespace = nullptr;  // built from the same scan, null or invalid: none
+  const LocalTrackData* track = nullptr;      // latest track, null when none yet
   bool has_guidance = false;
   double guidance_stamp_s = 0.0;
   double guidance_v_cap_mps = 0.0;
+  // The gated /drive as seen by the node, read only. A stale or missing one never counts as the
+  // gate refusing.
+  bool has_gated = false;
+  double gated_stamp_s = 0.0;
+  double gated_speed_mps = 0.0;
 };
 
 struct TickOutput {
@@ -54,6 +61,12 @@ struct TickOutput {
   double scan_age_s = 0.0;
   int samples = 0;
   bool samples_halved = false;  // the budget halved the sample count after this tick's solve
+  double track_confidence = 0.0;
+  bool has_freespace_goal = false;
+  double freespace_goal_x_m = 0.0;  // base_link now, valid when has_freespace_goal
+  double freespace_goal_y_m = 0.0;
+  double freespace_reach_m = 0.0;
+  BlockReason block_reason = BlockReason::None;
 };
 
 class Planner {
@@ -66,7 +79,7 @@ class Planner {
 
   // Weighted mean plan of the last Driving tick, in the planning frame (the scan frame).
   const std::vector<Pose2>& plan_scan_frame() const { return solver_.plan(); }
-  // Car pose now in the planning frame, valid after a Driving or Blocked tick.
+  // Car pose now in the planning frame, valid after a tick that was not Fault, NoOdom or NoScan.
   const Pose2& ego_in_scan_frame() const { return ego_pose_; }
   bool plan_valid() const { return plan_valid_; }
   int horizon_steps() const { return horizon_; }
@@ -84,8 +97,9 @@ class Planner {
   EgoMotion ego_;
   MppiSolver solver_;
   SampleBudget budget_;
-  SelfCheckHold hold_;
+  DrivabilityMonitor drivability_;
   TrackProjector projector_;
+  double confidence_ = 0.0;
   int horizon_;
   int delay_ticks_;
   State est_;                       // v from the wheel, delta from the model

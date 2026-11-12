@@ -4,11 +4,12 @@
 std_msgs/Header header
 uint8 STATE_STARTING=0
 uint8 STATE_DRIVING=1
-# Local track stale, invalid, or failing its self-check.
+# Not produced since planner v0.1: a missing or distrusted track lowers track_confidence and the
+# planner drives on the scan alone. Kept for old bags.
 uint8 STATE_NO_TRACK=2
 uint8 STATE_NO_SCAN=3
 uint8 STATE_NO_ODOM=4
-# Every sampled trajectory collides.
+# Nothing drivable and no recovery running, see block_reason.
 uint8 STATE_BLOCKED=5
 # Internal error, commands zero speed.
 uint8 STATE_FAULT=6
@@ -22,7 +23,8 @@ float32 cmd_steering_rad
 float32 est_speed_mps
 # Modelled road wheel angle used as the initial state.
 float32 est_steering_rad
-# Speed cap in force this tick.
+# Effective speed cap in force this tick (v_max or the guidance cap, scaled down with the track
+# confidence).
 float32 v_cap_mps
 float32 best_cost
 # Centreline progress of the weighted mean plan.
@@ -37,3 +39,19 @@ float32 scan_age_s
 uint16 samples
 string dynamics_model_id
 string perception_model_id
+# Appended in planner v0.1. Weight of the track prior this tick, 0 to 1 (1 minus it weighs the
+# free-space progress field).
+float32 track_confidence
+# Free-space goal in base_link now; NaN when there is no field.
+float32 freespace_goal_x_m
+float32 freespace_goal_y_m
+# Cost-to-reach of the goal from the car, metres of weighted path.
+float32 freespace_reach_m
+uint8 BLOCK_NONE=0
+uint8 BLOCK_ALL_COLLIDE=1
+uint8 BLOCK_BELOW_SPEED_FLOOR=2
+uint8 BLOCK_WHEEL_STALLED=3
+uint8 BLOCK_GATE_REFUSING=4
+uint8 BLOCK_RECOVERY_EXHAUSTED=5
+# Why the planner is in STATE_BLOCKED (BLOCK_NONE otherwise).
+uint8 block_reason

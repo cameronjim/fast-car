@@ -5,6 +5,27 @@
 
 namespace racer_planner {
 
+namespace {
+// Rotates the unit vector (c, s) by the angle d: the step's yaw increment is small (under 0.1 rad
+// at the vehicle's limits), so a 7th order series is exact to about 1e-12 and replaces two
+// libm calls per step. Anything larger, or not finite, recomputes from the yaw itself.
+inline void rotate_cs(double yaw_new, double d, double* c, double* s) {
+  if (!(std::fabs(d) < 0.5)) {
+    *c = std::cos(yaw_new);
+    *s = std::sin(yaw_new);
+    return;
+  }
+  const double d2 = d * d;
+  const double cd = 1.0 - d2 * (0.5 - d2 * (1.0 / 24.0 - d2 * (1.0 / 720.0)));
+  const double sd = d * (1.0 - d2 * (1.0 / 6.0 - d2 * (1.0 / 120.0 - d2 * (1.0 / 5040.0))));
+  const double nc = *c * cd - *s * sd;
+  const double ns = *s * cd + *c * sd;
+  const double k = 1.5 - 0.5 * (nc * nc + ns * ns);  // one Newton step back onto the unit circle
+  *c = nc * k;
+  *s = ns * k;
+}
+}  // namespace
+
 void smooth_steering_3tap(Control* seq, int n) {
   if (n < 1) return;
   double prev = seq[0].steering_cmd;
@@ -22,6 +43,7 @@ MppiSolver::MppiSolver(const MppiParams& params, const DynamicsModel& model,
       model_(model),
       footprint_(geometry, params.corner_radius_m),
       half_width_m_(geometry.width_m * 0.5),
+      wheelbase_m_(geometry.wheelbase_m),
       stop_decel_mps2_(geometry.stop_deceleration_mps2),
       steer_min_(geometry.steering_min_rad),
       steer_max_(geometry.steering_max_rad),
@@ -47,10 +69,27 @@ void MppiSolver::reset() {
   std::fill(u_.begin(), u_.end(), Control{});
 }
 
+MppiSolver::Ctx MppiSolver::make_ctx(const SolveInput& in) const {
+  Ctx ctx;
+  const double c = std::isfinite(in.confidence) ? clamp_double(in.confidence, 0.0, 1.0) : 0.0;
+  ctx.use_track = c > 0.0 && in.track != nullptr && in.track->valid();
+  ctx.c = ctx.use_track ? c : 0.0;
+  ctx.use_free = ctx.c < 1.0 && in.freespace != nullptr && in.freespace->valid();
+  if (ctx.use_track) {
+    ctx.hint0 = in.track->locate(in.x0.x, in.x0.y);
+    int h = ctx.hint0;
+    ctx.s_start = in.track->project(in.x0.x, in.x0.y, &h).s;
+  }
+  if (ctx.use_free) {
+    ctx.phi_start = in.freespace->phi(in.x0.x + wheelbase_m_ * std::cos(in.x0.yaw),
+                                      in.x0.y + wheelbase_m_ * std::sin(in.x0.yaw));
+  }
+  return ctx;
+}
+
 double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control* u,
                             CostBreakdown* bd, Pose2* poses) const {
   const double dt = model_.dt();
-  const TrackProjector& track = *in.track;
   const DistanceField& field = *in.field;
   State s = in.x0;
   double cs = std::cos(s.yaw);
@@ -60,8 +99,10 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   double s_end = ctx.s_start;
   double min_clear = 1e9;
   bool collided = false;
+  int since_projection = 0;
+  Pose2 last{s.x, s.y, s.yaw};  // pose at the last scored step: where the progress is measured
   Control prev = in.prev_cmd;
-  if (poses != nullptr) poses[0] = Pose2{s.x, s.y, s.yaw};
+  if (poses != nullptr) poses[0] = last;
   for (int t = 0; t < horizon_; ++t) {
     const Control& ut = u[t];
     if (!collided) {
@@ -72,10 +113,10 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
     }
     prev = ut;
     const double v_before = s.v;
+    const double yaw_before = s.yaw;
     double yaw_rate = 0.0;
     s = model_.step_trig(s, ut, cs, sn, &yaw_rate);
-    cs = std::cos(s.yaw);
-    sn = std::sin(s.yaw);
+    rotate_cs(s.yaw, s.yaw - yaw_before, &cs, &sn);
     if (poses != nullptr) poses[t + 1] = Pose2{s.x, s.y, s.yaw};
     if (collided) {
       if (poses == nullptr) break;
@@ -85,8 +126,16 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
     }
     const double clearance = footprint_.clearance(field, s.x, s.y, cs, sn);
     min_clear = std::min(min_clear, clearance);
-    const Projection pr = track.project(s.x, s.y, &hint);
-    s_end = pr.s;
+    last = Pose2{s.x, s.y, s.yaw};
+    ++since_projection;
+    // The track is projected on every second step (and on the last), the boundary term of a
+    // projected step covers the steps since the previous projection.
+    const bool project = ctx.use_track && ((t & 1) == 1 || t == horizon_ - 1);
+    Projection pr;
+    if (project) {
+      pr = in.track->project(s.x, s.y, &hint);
+      s_end = pr.s;
+    }
     if (clearance < p_.d_hard_m) {
       collided = true;  // progress is frozen at this step, the rest of the rollout is not scored
       if (poses == nullptr) break;
@@ -97,34 +146,49 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
       const double e = d_soft - clearance;
       j_clear += e * e * dt;
     }
-    const double side = pr.d >= 0.0 ? pr.half_left : pr.half_right;
-    const double excess = std::fabs(pr.d) - (side - half_width_m_ - p_.m_bound_m);
-    if (excess > 0.0) j_bound += excess * excess * dt;
+    if (project) {
+      const double side = pr.d >= 0.0 ? pr.half_left : pr.half_right;
+      const double excess = std::fabs(pr.d) - (side - half_width_m_ - p_.m_bound_m);
+      if (excess > 0.0) j_bound += excess * excess * dt * since_projection;
+      since_projection = 0;
+    }
     const double lat = std::fabs(v_before * yaw_rate);
     if (lat > p_.a_lat_max_mps2) {
       const double e = lat - p_.a_lat_max_mps2;
       j_lat += e * e * dt;
     }
   }
+  const double c = ctx.c;
+  const double progress_track = ctx.use_track ? s_end - ctx.s_start : 0.0;
+  double phi_end = 0.0;
+  double progress_free = 0.0;
+  if (ctx.use_free) {
+    phi_end = in.freespace->phi(last.x + wheelbase_m_ * std::cos(last.yaw),
+                                last.y + wheelbase_m_ * std::sin(last.yaw));
+    progress_free = ctx.phi_start - phi_end;
+  }
+  const double progress = c * progress_track + (1.0 - c) * progress_free;
   CostBreakdown local;
   CostBreakdown& o = bd != nullptr ? *bd : local;
-  o.progress = -p_.w_progress * (s_end - ctx.s_start);
+  o.progress = -p_.w_progress * progress;
   o.collision = collided ? p_.c_collision : 0.0;
   o.clearance = p_.w_clear * j_clear;
-  o.boundary = p_.w_bound * j_bound;
+  o.boundary = c * p_.w_bound * j_bound;
   o.lateral = p_.w_lat * j_lat;
   o.smoothness = p_.w_du * j_du;
   o.steer_rate = p_.w_steer_rate * j_sr;
   double terminal = 0.0;
   if (!collided) {
-    const double need = s.v * s.v / (2.0 * stop_decel_mps2_) - (track.s_valid_end() - s_end);
+    const double sight = (ctx.use_track ? c * (in.track->s_valid_end() - s_end) : 0.0) +
+                         (ctx.use_free ? (1.0 - c) * phi_end : 0.0);
+    const double need = s.v * s.v / (2.0 * stop_decel_mps2_) - sight;
     if (need > 0.0) terminal = p_.w_term * need * need;
   }
   o.terminal = terminal;
   o.total = o.progress + o.collision + o.clearance + o.boundary + o.lateral + o.smoothness +
             o.steer_rate + o.terminal;
   o.s_end_m = s_end;
-  o.progress_m = s_end - ctx.s_start;
+  o.progress_m = progress;
   o.min_clearance_m = min_clear;
   o.v_end_mps = s.v;
   o.collided = collided;
@@ -133,11 +197,7 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
 
 double MppiSolver::evaluate_sequence(const SolveInput& in, const Control* seq,
                                      CostBreakdown* out) const {
-  Ctx ctx;
-  ctx.hint0 = in.track->locate(in.x0.x, in.x0.y);
-  int hint = ctx.hint0;
-  ctx.s_start = in.track->project(in.x0.x, in.x0.y, &hint).s;
-  return evaluate(in, ctx, seq, out, nullptr);
+  return evaluate(in, make_ctx(in), seq, out, nullptr);
 }
 
 void MppiSolver::build_samples(const SolveInput&, double v_cap) {
@@ -202,12 +262,7 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
   const int T = horizon_;
   const int N = samples_;
   const double v_cap = std::max(0.0, in.v_cap_mps);
-  Ctx ctx;
-  ctx.hint0 = in.track->locate(in.x0.x, in.x0.y);
-  {
-    int h = ctx.hint0;
-    ctx.s_start = in.track->project(in.x0.x, in.x0.y, &h).s;
-  }
+  const Ctx ctx = make_ctx(in);
   if (first_) {
     for (auto& c : u_) c = Control{clamp_double(in.x0.v, 0.0, v_cap), 0.0};
     first_ = false;
@@ -272,6 +327,13 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
     smooth_steering_3tap(u_new_.data(), T);
   }
   out.cmd = u_new_[0];
+  {
+    const int n =
+        std::min(T, std::max(1, static_cast<int>(std::lround(p_.plan_window_s / model_.dt()))));
+    double sum = 0.0;
+    for (int t = 0; t < n; ++t) sum += u_new_[t].speed_cmd;
+    out.plan_speed_mps = sum / n;
+  }
   // The weighted mean rollout, for the plan topic and the status numbers.
   CostBreakdown pbd;
   evaluate(in, ctx, u_new_.data(), &pbd, plan_.data());

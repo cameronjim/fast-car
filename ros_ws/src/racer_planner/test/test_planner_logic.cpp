@@ -31,15 +31,13 @@ LogicInputs healthy() {
 }
 
 PlannerState gate_state(const LogicInputs& in, const LogicParams& p = LogicParams{}) {
-  SelfCheckHold hold;
-  return evaluate_gate(in, p, &hold).state;
+  return evaluate_gate(in, p).state;
 }
 
 }  // namespace
 
 TEST(Gate, HealthyInputsDrive) {
-  SelfCheckHold hold;
-  const Gate g = evaluate_gate(healthy(), LogicParams{}, &hold);
+  const Gate g = evaluate_gate(healthy(), LogicParams{});
   EXPECT_EQ(g.state, PlannerState::Driving);
   EXPECT_TRUE(g.may_solve);
 }
@@ -48,10 +46,7 @@ TEST(Gate, InternalErrorIsFaultAndWinsOverEverything) {
   LogicInputs in = healthy();
   in.internal_error = true;
   in.has_odom = false;  // would be NO_ODOM
-  const Gate g = [&] {
-    SelfCheckHold hold;
-    return evaluate_gate(in, LogicParams{}, &hold);
-  }();
+  const Gate g = evaluate_gate(in, LogicParams{});
   EXPECT_EQ(g.state, PlannerState::Fault);
   EXPECT_FALSE(g.may_solve);
 }
@@ -85,7 +80,6 @@ TEST(Gate, ScanRowAtPassBoundaryAndFail) {
   for (const auto& c : cases) {
     LogicInputs in = healthy();
     in.scan_stamp_s = in.now_s - c.age;
-    in.track.stamp_s = in.now_s - 0.1;  // keep the track fresh so only the scan row is tested
     EXPECT_EQ(gate_state(in, p), c.stale ? PlannerState::NoScan : PlannerState::Driving) << c.name;
   }
   LogicInputs none = healthy();
@@ -93,48 +87,37 @@ TEST(Gate, ScanRowAtPassBoundaryAndFail) {
   EXPECT_EQ(gate_state(none), PlannerState::NoScan);
 }
 
-TEST(Gate, TrackRowAtPassBoundaryAndFail) {
-  const LogicParams p;  // 0.30 s
-  const StaleCase cases[] = {
-      {"fresh", 0.1, false}, {"at the limit", 0.30, false}, {"just over", 0.301, true}};
-  for (const auto& c : cases) {
+TEST(Gate, TheTrackNeverGates) {
+  // Missing, stale, invalid, too short and failing its self-check: the planner still solves, the
+  // track only lowers the confidence.
+  {
     LogicInputs in = healthy();
-    in.track.stamp_s = in.now_s - c.age;
-    EXPECT_EQ(gate_state(in, p), c.stale ? PlannerState::NoTrack : PlannerState::Driving) << c.name;
+    in.track.present = false;
+    EXPECT_EQ(gate_state(in), PlannerState::Driving);
   }
-  LogicInputs none = healthy();
-  none.track.present = false;
-  EXPECT_EQ(gate_state(none), PlannerState::NoTrack);
-}
-
-TEST(Gate, TrackInvalidPerTheContractIsNoTrack) {
+  {
+    LogicInputs in = healthy();
+    in.track.stamp_s = in.now_s - 30.0;
+    EXPECT_EQ(gate_state(in), PlannerState::Driving);
+  }
   for (TrackValidity v :
        {TrackValidity::NoTrack, TrackValidity::WrongLength, TrackValidity::WrongSpacing,
         TrackValidity::WrongFrame, TrackValidity::NonFinite}) {
     LogicInputs in = healthy();
     in.track.validity = v;
-    EXPECT_EQ(gate_state(in), PlannerState::NoTrack) << static_cast<int>(v);
+    EXPECT_EQ(gate_state(in), PlannerState::Driving) << static_cast<int>(v);
   }
-}
-
-TEST(Gate, MinValidStationsPassBoundaryFail) {
-  LogicParams p;  // 6
-  LogicInputs in = healthy();
-  in.track.valid_count = 7;
-  EXPECT_EQ(gate_state(in, p), PlannerState::Driving);
-  in.track.valid_count = 6;
-  EXPECT_EQ(gate_state(in, p), PlannerState::Driving);
-  in.track.valid_count = 5;
-  EXPECT_EQ(gate_state(in, p), PlannerState::NoTrack);
-  in.track.valid_count = 0;
-  EXPECT_EQ(gate_state(in, p), PlannerState::NoTrack);
+  {
+    LogicInputs in = healthy();
+    in.track.valid_count = 0;
+    in.track.boundary_residual_m = 9.0;
+    in.track.intrusion_fraction = 1.0;
+    EXPECT_TRUE(evaluate_gate(in, LogicParams{}).may_solve);
+  }
 }
 
 TEST(Gate, TimestampJumpsAreStale) {
   LogicInputs in = healthy();
-  in.track.stamp_s = in.now_s + 10.0;  // from the future
-  EXPECT_EQ(gate_state(in), PlannerState::NoTrack);
-  in = healthy();
   in.scan_stamp_s = in.now_s + 10.0;
   EXPECT_EQ(gate_state(in), PlannerState::NoScan);
   in = healthy();
@@ -150,9 +133,6 @@ TEST(Gate, NaNTimesAreStale) {
   in.scan_stamp_s = kNaN;
   EXPECT_EQ(gate_state(in), PlannerState::NoScan);
   in = healthy();
-  in.track.stamp_s = kNaN;
-  EXPECT_EQ(gate_state(in), PlannerState::NoTrack);
-  in = healthy();
   in.now_s = kNaN;
   EXPECT_EQ(gate_state(in), PlannerState::NoOdom);
 }
@@ -161,117 +141,314 @@ TEST(Gate, RowsAreCheckedInTheTableOrder) {
   LogicInputs in = healthy();
   in.has_odom = false;
   in.has_scan = false;
-  in.track.present = false;
   EXPECT_EQ(gate_state(in), PlannerState::NoOdom);
   in.has_odom = true;
   EXPECT_EQ(gate_state(in), PlannerState::NoScan);
   in.has_scan = true;
-  EXPECT_EQ(gate_state(in), PlannerState::NoTrack);
-  in.track.present = true;
   EXPECT_EQ(gate_state(in), PlannerState::Driving);
 }
 
-TEST(SelfCheck, LimitsAtPassBoundaryAndFail) {
-  const LogicParams p;  // 0.25 m, 0.10
-  EXPECT_FALSE(selfcheck_over_limits(0.10, 0.02, p));
-  EXPECT_FALSE(selfcheck_over_limits(0.25, 0.10, p));  // boundary is not over
-  EXPECT_TRUE(selfcheck_over_limits(0.2501, 0.0, p));
-  EXPECT_TRUE(selfcheck_over_limits(0.0, 0.1001, p));
+// ---------------------------------------------------------------------------------------------
+// Track confidence
+
+TEST(Ramp, DownAtBothEndsAndBetween) {
+  EXPECT_DOUBLE_EQ(ramp_down(0.0, 0.03, 0.15), 1.0);
+  EXPECT_DOUBLE_EQ(ramp_down(0.03, 0.03, 0.15), 1.0);  // the full end
+  EXPECT_NEAR(ramp_down(0.09, 0.03, 0.15), 0.5, 1e-12);
+  EXPECT_DOUBLE_EQ(ramp_down(0.15, 0.03, 0.15), 0.0);  // the zero end
+  EXPECT_DOUBLE_EQ(ramp_down(9.0, 0.03, 0.15), 0.0);
+  EXPECT_DOUBLE_EQ(ramp_down(-1.0, 0.03, 0.15), 1.0);
+  EXPECT_DOUBLE_EQ(ramp_down(kNaN, 0.03, 0.15), 0.0);
+  EXPECT_DOUBLE_EQ(ramp_down(INFINITY, 0.03, 0.15), 0.0);
+  // degenerate ends make a step at `full`
+  EXPECT_DOUBLE_EQ(ramp_down(0.1, 0.1, 0.1), 1.0);
+  EXPECT_DOUBLE_EQ(ramp_down(0.1001, 0.1, 0.1), 0.0);
+  EXPECT_DOUBLE_EQ(ramp_down(0.1001, 0.2, 0.1), 1.0);
 }
 
-TEST(SelfCheck, NaNCountsAsOverTheLimit) {
+TEST(Ramp, UpAtBothEndsAndBetween) {
+  EXPECT_DOUBLE_EQ(ramp_up(0.0, 3.0, 8.0), 0.0);
+  EXPECT_DOUBLE_EQ(ramp_up(3.0, 3.0, 8.0), 0.0);  // the zero end
+  EXPECT_NEAR(ramp_up(5.5, 3.0, 8.0), 0.5, 1e-12);
+  EXPECT_DOUBLE_EQ(ramp_up(8.0, 3.0, 8.0), 1.0);  // the full end
+  EXPECT_DOUBLE_EQ(ramp_up(16.0, 3.0, 8.0), 1.0);
+  EXPECT_DOUBLE_EQ(ramp_up(kNaN, 3.0, 8.0), 0.0);
+  EXPECT_DOUBLE_EQ(ramp_up(5.0, 5.0, 5.0), 1.0);  // degenerate: a step at zero, reached
+  EXPECT_DOUBLE_EQ(ramp_up(4.999, 5.0, 5.0), 0.0);
+}
+
+namespace {
+TrackSummary good_summary(double now) {
+  TrackSummary t;
+  t.present = true;
+  t.stamp_s = now - 0.1;
+  t.validity = TrackValidity::Ok;
+  t.valid_count = 16;
+  t.boundary_residual_m = 0.0;
+  t.intrusion_fraction = 0.0;
+  return t;
+}
+}  // namespace
+
+TEST(TrackConfidenceRaw, EachInputAloneAtItsEndsAndInTheMiddle) {
   const LogicParams p;
-  EXPECT_TRUE(selfcheck_over_limits(kNaN, 0.0, p));
-  EXPECT_TRUE(selfcheck_over_limits(0.0, kNaN, p));
-  EXPECT_TRUE(selfcheck_over_limits(INFINITY, 0.0, p));
-}
-
-TEST(SelfCheckHold, MustBeContinuousForTheHoldTime) {
-  SelfCheckHold h;
-  EXPECT_FALSE(h.update(true, 10.0, 0.5));
-  EXPECT_FALSE(h.update(true, 10.3, 0.5));
-  EXPECT_FALSE(h.update(true, 10.499, 0.5));
-  EXPECT_TRUE(h.update(true, 10.5, 0.5));
-  EXPECT_TRUE(h.update(true, 12.0, 0.5));
-  EXPECT_FALSE(h.update(false, 12.02, 0.5));  // recovers at once
-  EXPECT_FALSE(h.update(true, 12.04, 0.5));   // and the timer restarts
-  EXPECT_FALSE(h.update(true, 12.3, 0.5));
-  EXPECT_TRUE(h.update(true, 12.55, 0.5));
-}
-
-TEST(SelfCheckHold, ZeroHoldTripsImmediately) {
-  SelfCheckHold h;
-  EXPECT_TRUE(h.update(true, 5.0, 0.0));
-}
-
-TEST(SelfCheckHold, NaNTimeResetsAndDoesNotTrip) {
-  SelfCheckHold h;
-  h.update(true, 1.0, 0.5);
-  EXPECT_FALSE(h.update(true, kNaN, 0.5));
-  EXPECT_FALSE(h.update(true, 1.2, 0.5));  // restarted at 1.2
-}
-
-TEST(Gate, SelfCheckOverLimitForTheHoldTimeGivesNoTrackThenRecovers) {
-  LogicParams p;
-  SelfCheckHold hold;
-  LogicInputs in = healthy();
-  in.track.boundary_residual_m = 0.5;  // over
-  double t = 100.0;
-  PlannerState s = PlannerState::Driving;
-  for (int i = 0; i < 20; ++i, t += 0.02) {
-    in.now_s = t;
-    in.odom_stamp_s = t;
-    in.scan_stamp_s = t - 0.1;
-    in.track.stamp_s = t - 0.1;
-    s = evaluate_gate(in, p, &hold).state;
-    EXPECT_EQ(s, PlannerState::Driving) << i;  // 0.38 s over, below the 0.5 s hold
+  const double now = 50.0;
+  EXPECT_DOUBLE_EQ(track_confidence_raw(good_summary(now), now, p), 1.0);
+  {  // intrusion 0.03 .. 0.15
+    TrackSummary t = good_summary(now);
+    t.intrusion_fraction = 0.03;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 1.0);
+    t.intrusion_fraction = 0.09;
+    EXPECT_NEAR(track_confidence_raw(t, now, p), 0.5, 1e-12);
+    t.intrusion_fraction = 0.15;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 0.0);
   }
-  for (int i = 0; i < 10; ++i, t += 0.02) {
-    in.now_s = t;
-    in.odom_stamp_s = t;
-    in.scan_stamp_s = t - 0.1;
-    in.track.stamp_s = t - 0.1;
-    s = evaluate_gate(in, p, &hold).state;
+  {  // residual 0.10 .. 0.30 m
+    TrackSummary t = good_summary(now);
+    t.boundary_residual_m = 0.10;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 1.0);
+    t.boundary_residual_m = 0.20;
+    EXPECT_NEAR(track_confidence_raw(t, now, p), 0.5, 1e-12);
+    t.boundary_residual_m = 0.30;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 0.0);
   }
-  EXPECT_EQ(s, PlannerState::NoTrack);
-  in.track.boundary_residual_m = 0.05;
-  in.now_s = t;
-  in.odom_stamp_s = t;
-  in.scan_stamp_s = t - 0.1;
-  in.track.stamp_s = t - 0.1;
-  EXPECT_EQ(evaluate_gate(in, p, &hold).state, PlannerState::Driving);
-}
-
-TEST(Gate, SelfCheckIntrusionAndNaNAlsoTrip) {
-  for (int variant = 0; variant < 3; ++variant) {
-    LogicParams p;
-    p.selfcheck_hold_s = 0.0;
-    LogicInputs in = healthy();
-    if (variant == 0) in.track.intrusion_fraction = 0.5;
-    if (variant == 1) in.track.boundary_residual_m = kNaN;
-    if (variant == 2) in.track.intrusion_fraction = kNaN;
-    EXPECT_EQ(gate_state(in, p), PlannerState::NoTrack) << variant;
+  {  // valid stations 3 .. 8
+    TrackSummary t = good_summary(now);
+    t.valid_count = 8;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 1.0);
+    t.valid_count = 5;
+    EXPECT_NEAR(track_confidence_raw(t, now, p), 0.4, 1e-12);
+    t.valid_count = 3;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 0.0);
+    t.valid_count = 0;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 0.0);
+  }
+  {  // age 0.25 .. 0.60 s
+    TrackSummary t = good_summary(now);
+    t.stamp_s = now - 0.25;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 1.0);
+    t.stamp_s = now - 0.425;
+    EXPECT_NEAR(track_confidence_raw(t, now, p), 0.5, 1e-12);
+    t.stamp_s = now - 0.60;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 0.0);
+    t.stamp_s = now - 30.0;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 0.0);
   }
 }
 
-TEST(Gate, SelfCheckHoldIsResetByAnUnusableTrack) {
-  LogicParams p;
-  SelfCheckHold hold;
-  LogicInputs in = healthy();
-  in.track.boundary_residual_m = 0.9;
-  evaluate_gate(in, p, &hold);  // starts the timer at t = 100
-  LogicInputs gone = in;
-  gone.track.present = false;
-  gone.now_s = 100.4;
-  gone.odom_stamp_s = 100.4;
-  gone.scan_stamp_s = 100.3;
-  EXPECT_EQ(evaluate_gate(gone, p, &hold).state, PlannerState::NoTrack);
-  in.now_s = 100.8;
-  in.odom_stamp_s = 100.8;
-  in.scan_stamp_s = 100.7;
-  in.track.stamp_s = 100.7;
-  // only 0.0 s over since the reset, not 0.8 s
-  EXPECT_EQ(evaluate_gate(in, p, &hold).state, PlannerState::Driving);
+TEST(TrackConfidenceRaw, IsTheMinimumOfTheFour) {
+  const LogicParams p;
+  const double now = 50.0;
+  TrackSummary t = good_summary(now);
+  t.intrusion_fraction = 0.09;   // 0.5
+  t.boundary_residual_m = 0.14;  // 0.8
+  t.valid_count = 7;             // 0.8
+  t.stamp_s = now - 0.325;       // 0.785714...
+  EXPECT_NEAR(track_confidence_raw(t, now, p), 0.5, 1e-12);
+  t.intrusion_fraction = 0.0;  // now the age is the smallest
+  EXPECT_NEAR(track_confidence_raw(t, now, p), 1.0 - (0.325 - 0.25) / 0.35, 1e-12);
+  t.stamp_s = now - 0.1;  // fresh: the residual and the station count tie at 0.8
+  EXPECT_NEAR(track_confidence_raw(t, now, p), 0.8, 1e-12);
+  t.boundary_residual_m = 0.0;
+  EXPECT_NEAR(track_confidence_raw(t, now, p), 0.8, 1e-12);  // the station count alone
+  t.valid_count = 8;
+  EXPECT_NEAR(track_confidence_raw(t, now, p), 1.0, 1e-12);
+}
+
+TEST(TrackConfidenceRaw, ZeroWhenMissingInvalidOrNotFinite) {
+  const LogicParams p;
+  const double now = 50.0;
+  TrackSummary missing = good_summary(now);
+  missing.present = false;
+  EXPECT_DOUBLE_EQ(track_confidence_raw(missing, now, p), 0.0);
+  for (TrackValidity v :
+       {TrackValidity::NoTrack, TrackValidity::WrongLength, TrackValidity::WrongSpacing,
+        TrackValidity::WrongFrame, TrackValidity::NonFinite}) {
+    TrackSummary t = good_summary(now);
+    t.validity = v;
+    EXPECT_DOUBLE_EQ(track_confidence_raw(t, now, p), 0.0) << static_cast<int>(v);
+  }
+  TrackSummary a = good_summary(now);
+  a.intrusion_fraction = kNaN;
+  EXPECT_DOUBLE_EQ(track_confidence_raw(a, now, p), 0.0);
+  TrackSummary b = good_summary(now);
+  b.boundary_residual_m = INFINITY;
+  EXPECT_DOUBLE_EQ(track_confidence_raw(b, now, p), 0.0);
+  TrackSummary c = good_summary(now);
+  c.stamp_s = kNaN;
+  EXPECT_DOUBLE_EQ(track_confidence_raw(c, now, p), 0.0);
+  EXPECT_DOUBLE_EQ(track_confidence_raw(good_summary(now), kNaN, p), 0.0);
+  // a timestamp from the future by more than the age ramp's zero end is a jump
+  TrackSummary future = good_summary(now);
+  future.stamp_s = now + 0.7;
+  EXPECT_DOUBLE_EQ(track_confidence_raw(future, now, p), 0.0);
+  future.stamp_s = now + 0.3;  // slightly ahead is clock skew, treated as fresh
+  EXPECT_DOUBLE_EQ(track_confidence_raw(future, now, p), 1.0);
+}
+
+TEST(TrackConfidence, FallsAtOnceAndRisesSlowly) {
+  const double tick = 0.02;
+  EXPECT_DOUBLE_EQ(track_confidence(0.0, 1.0, tick, 1.0), 0.0);  // falls at once
+  EXPECT_DOUBLE_EQ(track_confidence(0.4, 1.0, tick, 1.0), 0.4);
+  EXPECT_NEAR(track_confidence(1.0, 0.0, tick, 1.0), 0.02, 1e-12);  // rises 1/s
+  EXPECT_NEAR(track_confidence(1.0, 0.5, tick, 1.0), 0.52, 1e-12);
+  EXPECT_DOUBLE_EQ(track_confidence(1.0, 0.99, tick, 1.0), 1.0);  // never above c_raw
+  EXPECT_DOUBLE_EQ(track_confidence(0.3, 0.29, tick, 1.0), 0.3);  // the target is reached
+  // a full rise from 0 takes one second at 1 per second
+  double c = 0.0;
+  int ticks = 0;
+  while (c < 1.0 && ticks < 1000) {
+    c = track_confidence(1.0, c, tick, 1.0);
+    ++ticks;
+  }
+  EXPECT_EQ(ticks, 50);
+  // bad inputs: NaN previous counts as 0, NaN raw as 0, a faster rise parameter is honoured
+  EXPECT_NEAR(track_confidence(1.0, kNaN, tick, 1.0), 0.02, 1e-12);
+  EXPECT_DOUBLE_EQ(track_confidence(kNaN, 0.5, tick, 1.0), 0.0);
+  EXPECT_NEAR(track_confidence(1.0, 0.0, tick, 5.0), 0.1, 1e-12);
+  EXPECT_DOUBLE_EQ(track_confidence(1.0, 0.5, tick, 0.0), 0.5);  // no rise at all
+  EXPECT_DOUBLE_EQ(track_confidence(7.0, 7.0, tick, 1.0), 1.0);  // clamped into [0, 1]
+  EXPECT_DOUBLE_EQ(track_confidence(-3.0, 0.5, tick, 1.0), 0.0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Nothing drivable
+
+namespace {
+DrivabilityInputs moving() {
+  DrivabilityInputs in;
+  in.plan_speed_mps = 0.4;
+  in.speed_floor_mps = 0.23;
+  in.wheel_speed_mps = 0.3;
+  in.published_speed_mps = 0.3;
+  return in;
+}
+}  // namespace
+
+TEST(Drivability, HealthyIsDrivable) {
+  DrivabilityMonitor m;
+  EXPECT_EQ(m.update(moving(), 1.0), BlockReason::None);
+  for (auto r : {BlockReason::AllCollide, BlockReason::BelowSpeedFloor, BlockReason::WheelStalled,
+                 BlockReason::GateRefusing}) {
+    EXPECT_FALSE(m.active(r));
+    EXPECT_DOUBLE_EQ(m.held_s(r), 0.0);
+  }
+}
+
+TEST(Drivability, AllCollideIsImmediateAndFirst) {
+  DrivabilityMonitor m;
+  DrivabilityInputs in = moving();
+  in.all_collide = true;
+  in.plan_speed_mps = 0.0;  // would also be reason 2
+  EXPECT_EQ(m.update(in, 1.0), BlockReason::AllCollide);
+  EXPECT_EQ(m.update(in, 1.4), BlockReason::AllCollide);
+  EXPECT_NEAR(m.held_s(BlockReason::AllCollide), 0.4, 1e-12);
+  EXPECT_FALSE(m.active(BlockReason::BelowSpeedFloor));  // reason 1 takes it
+  in.all_collide = false;
+  in.plan_speed_mps = 0.4;
+  EXPECT_EQ(m.update(in, 1.42), BlockReason::None);
+  EXPECT_DOUBLE_EQ(m.held_s(BlockReason::AllCollide), 0.0);  // the timer restarts
+}
+
+TEST(Drivability, PlanSpeedBelowTheFloorIsImmediate) {
+  DrivabilityMonitor m;
+  DrivabilityInputs in = moving();
+  in.plan_speed_mps = 0.229;
+  EXPECT_EQ(m.update(in, 1.0), BlockReason::BelowSpeedFloor);
+  in.plan_speed_mps = 0.23;  // at the floor is drivable
+  EXPECT_EQ(m.update(in, 1.02), BlockReason::None);
+  in.plan_speed_mps = kNaN;
+  EXPECT_EQ(m.update(in, 1.04), BlockReason::BelowSpeedFloor);
+  // with the floor off the threshold is a token speed, not zero
+  in.speed_floor_mps = 0.0;
+  in.plan_speed_mps = 0.0;
+  EXPECT_EQ(m.update(in, 1.06), BlockReason::BelowSpeedFloor);
+  in.plan_speed_mps = 0.1;
+  EXPECT_EQ(m.update(in, 1.08), BlockReason::None);
+}
+
+TEST(Drivability, NoPlanIsReasonTwo) {
+  DrivabilityMonitor m;
+  DrivabilityInputs in = moving();
+  in.no_plan = true;
+  in.all_collide = true;  // meaningless without a plan
+  EXPECT_EQ(m.update(in, 1.0), BlockReason::BelowSpeedFloor);
+}
+
+TEST(Drivability, WheelStalledNeedsTheHoldAndAPublishedSpeedAtTheFloor) {
+  DrivabilityMonitor m;
+  DrivabilityInputs in = moving();
+  in.wheel_speed_mps = 0.0;
+  in.published_speed_mps = 0.23;
+  EXPECT_EQ(m.update(in, 10.0), BlockReason::None);
+  EXPECT_EQ(m.update(in, 11.49), BlockReason::None);
+  EXPECT_EQ(m.update(in, 11.5), BlockReason::WheelStalled);
+  EXPECT_NEAR(m.held_s(BlockReason::WheelStalled), 1.5, 1e-12);
+  // the published speed below the floor (the planner stopped itself) ends the condition
+  in.published_speed_mps = 0.1;
+  EXPECT_EQ(m.update(in, 11.52), BlockReason::None);
+  in.published_speed_mps = 0.23;
+  EXPECT_EQ(m.update(in, 11.54), BlockReason::None);  // and the timer restarted
+  // moving at 0.03 m/s or more is not stalled
+  in.wheel_speed_mps = 0.03;
+  EXPECT_EQ(m.update(in, 20.0), BlockReason::None);
+  EXPECT_FALSE(m.active(BlockReason::WheelStalled));
+  in.wheel_speed_mps = 0.0299;
+  m.update(in, 21.0);
+  EXPECT_TRUE(m.active(BlockReason::WheelStalled));
+}
+
+TEST(Drivability, GateRefusingNeedsAFreshGatedSpeedZeroForTheHold) {
+  DrivabilityMonitor m;
+  DrivabilityInputs in = moving();
+  in.gate_fresh = true;
+  in.gated_speed_mps = 0.0;
+  in.published_speed_mps = 0.3;
+  EXPECT_EQ(m.update(in, 5.0), BlockReason::None);
+  EXPECT_EQ(m.update(in, 5.99), BlockReason::None);
+  EXPECT_EQ(m.update(in, 6.0), BlockReason::GateRefusing);
+  // a stale /drive never counts
+  in.gate_fresh = false;
+  EXPECT_EQ(m.update(in, 6.02), BlockReason::None);
+  EXPECT_EQ(m.update(in, 9.0), BlockReason::None);
+  // the gate passing speed through, or nothing published, is not refusing
+  in.gate_fresh = true;
+  in.gated_speed_mps = 0.3;
+  EXPECT_EQ(m.update(in, 10.0), BlockReason::None);
+  in.gated_speed_mps = 0.0;
+  in.published_speed_mps = 0.0;
+  EXPECT_EQ(m.update(in, 11.0), BlockReason::None);
+  EXPECT_FALSE(m.active(BlockReason::GateRefusing));
+}
+
+TEST(Drivability, ReasonsAreReportedInTheOrderOneToFour) {
+  DrivabilityParams p;
+  p.stall_hold_s = 0.0;
+  p.gate_hold_s = 0.0;
+  DrivabilityMonitor m(p);
+  DrivabilityInputs in = moving();
+  in.wheel_speed_mps = 0.0;
+  in.gate_fresh = true;
+  in.gated_speed_mps = 0.0;
+  EXPECT_EQ(m.update(in, 1.0), BlockReason::WheelStalled);  // 3 before 4
+  in.wheel_speed_mps = 0.3;
+  EXPECT_EQ(m.update(in, 1.02), BlockReason::GateRefusing);
+  in.plan_speed_mps = 0.0;
+  EXPECT_EQ(m.update(in, 1.04), BlockReason::BelowSpeedFloor);  // 2 before 3 and 4
+  in.all_collide = true;
+  EXPECT_EQ(m.update(in, 1.06), BlockReason::AllCollide);
+  m.reset();
+  EXPECT_FALSE(m.active(BlockReason::AllCollide));
+  EXPECT_EQ(m.held_s(BlockReason::AllCollide), 0.0);
+  EXPECT_EQ(m.held_s(BlockReason::None), 0.0);
+  EXPECT_FALSE(m.active(BlockReason::RecoveryExhausted));
+}
+
+TEST(Drivability, NaNTimeNeverActivates) {
+  DrivabilityMonitor m;
+  DrivabilityInputs in = moving();
+  in.all_collide = true;
+  EXPECT_EQ(m.update(in, kNaN), BlockReason::None);
 }
 
 TEST(SpeedCap, ConfiguredCapWithoutGuidance) {
@@ -300,6 +477,32 @@ TEST(SpeedCap, GuidanceOnlyWhenEnabledFreshAndLower) {
   in.guidance_stamp_s = in.now_s - 0.5;
   in.has_guidance = false;
   EXPECT_DOUBLE_EQ(speed_cap(p, in), 0.5);
+}
+
+TEST(SpeedCap, ConfidenceScalesTheCapBetweenTheFreeSpaceFractionAndOne) {
+  LogicParams p;
+  p.v_max_mps = 0.5;
+  p.freespace_speed_fraction = 0.7;
+  const LogicInputs in = healthy();
+  EXPECT_NEAR(speed_cap(p, in, 1.0), 0.5, 1e-12);
+  EXPECT_NEAR(speed_cap(p, in, 0.0), 0.35, 1e-12);
+  EXPECT_NEAR(speed_cap(p, in, 0.5), 0.5 * 0.85, 1e-12);
+  EXPECT_NEAR(speed_cap(p, in), 0.5, 1e-12);  // default confidence 1
+  EXPECT_NEAR(speed_cap(p, in, kNaN), 0.35, 1e-12);
+  EXPECT_NEAR(speed_cap(p, in, 3.0), 0.5, 1e-12);  // clamped
+  EXPECT_NEAR(speed_cap(p, in, -3.0), 0.35, 1e-12);
+  // the guidance cap is scaled the same way and the result never exceeds v_max
+  p.use_lap_guidance = true;
+  LogicInputs g = healthy();
+  g.has_guidance = true;
+  g.guidance_stamp_s = g.now_s;
+  g.guidance_v_cap_mps = 0.3;
+  EXPECT_NEAR(speed_cap(p, g, 0.0), 0.3 * 0.7, 1e-12);
+  EXPECT_NEAR(speed_cap(p, g, 1.0), 0.3, 1e-12);
+  p.freespace_speed_fraction = 1.0;  // no slowing at all
+  EXPECT_NEAR(speed_cap(p, in, 0.0), 0.5, 1e-12);
+  p.freespace_speed_fraction = 7.0;  // clamped to 1: never above v_max
+  EXPECT_NEAR(speed_cap(p, in, 0.0), 0.5, 1e-12);
 }
 
 TEST(SpeedCap, NaNAndNegativeGuidance) {

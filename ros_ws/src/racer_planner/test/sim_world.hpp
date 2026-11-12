@@ -14,6 +14,7 @@
 
 #include "racer_planner/distance_field.hpp"
 #include "racer_planner/dynamics_model.hpp"
+#include "racer_planner/freespace_field.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/planner.hpp"
 #include "racer_planner/vehicle_geometry.hpp"
@@ -109,18 +110,19 @@ inline World right_bend() {
   return w;
 }
 
-// Counter clockwise stadium: lane 1.0, straights 2.0 m, island radius 0.4. The bottom straight
-// runs from (0, 0) to (2, 0).
-inline World stadium() {
+// Counter clockwise oval: straights of length `len`, island end radius `ri`, lane width `lane`.
+// The bottom straight runs from (0, 0) to (len, 0).
+inline World oval(double lane = 1.0, double ri = 0.4, double len = 2.0) {
   World w;
   w.closed = true;
-  const double ri = 0.4, ro = 1.4, rc = 0.9, len = 2.0;
-  w.add_wall(0.0, 0.5, len, 0.5);
-  w.add_wall(0.0, 2 * rc - 0.5, len, 2 * rc - 0.5);
+  w.lane_m = lane;
+  const double ro = ri + lane, rc = ri + lane / 2.0, h = lane / 2.0;
+  w.add_wall(0.0, h, len, h);
+  w.add_wall(0.0, 2 * rc - h, len, 2 * rc - h);
   w.add_arc_wall(len, rc, ri, -M_PI / 2, M_PI / 2);
   w.add_arc_wall(0.0, rc, ri, M_PI / 2, 3 * M_PI / 2);
-  w.add_wall(0.0, -0.5, len, -0.5);
-  w.add_wall(0.0, 2 * rc + 0.5, len, 2 * rc + 0.5);
+  w.add_wall(0.0, -h, len, -h);
+  w.add_wall(0.0, 2 * rc + h, len, 2 * rc + h);
   w.add_arc_wall(len, rc, ro, -M_PI / 2, M_PI / 2);
   w.add_arc_wall(0.0, rc, ro, M_PI / 2, 3 * M_PI / 2);
   w.add_centre_line(0.0, 0.0, len, 0.0);
@@ -130,6 +132,9 @@ inline World stadium() {
   w.finish_centre(0.0, 0.0);
   return w;
 }
+
+// Counter clockwise stadium: lane 1.0, straights 2.0 m, island radius 0.4.
+inline World stadium() { return oval(1.0, 0.4, 2.0); }
 
 // Corridor with a wall across it, 2.5 m ahead of the origin. The oracle centreline runs on through
 // it (the track does not know about the obstacle, only the scan does).
@@ -207,7 +212,12 @@ inline double ray_cast(const World& w, double ox, double oy, double bearing, dou
 // Oracle local track for a car pose: the 16 stations along the centreline from the point nearest
 // the rear axle, in base_link, constant half width of lane / 2 on both sides. Open worlds end
 // where the centreline ends (valid_count shrinks).
-inline LocalTrackData oracle_track(const World& w, double x, double y, double yaw, double stamp) {
+//
+// With bias_outer_m > 0 the stations in corners are pushed that far toward the outer wall (the
+// way the first tracer was wrong on the car) and the self-check numbers are those the tracer
+// reported there: intrusion 0.2 and boundary residual 0.25 m. On straights the track is exact.
+inline LocalTrackData oracle_track(const World& w, double x, double y, double yaw, double stamp,
+                                   double bias_outer_m = 0.0) {
   LocalTrackData t;
   t.stamp_s = stamp;
   t.frame_id = "base_link";
@@ -238,7 +248,31 @@ inline LocalTrackData oracle_track(const World& w, double x, double y, double ya
         ok = false;
       }
     }
-    const double wx = w.centre[idx].first - x, wy = w.centre[idx].second - y;
+    double px = w.centre[idx].first, py = w.centre[idx].second;
+    if (bias_outer_m > 0.0) {
+      // turning rate over +/- 0.3 m of the centreline: the push is full from 0.5 rad/m
+      const std::size_t span = 15;
+      const std::size_t i0 = (idx + n - span) % n, i1 = (idx + span) % n;
+      const std::size_t i2 = (idx + n - 1) % n, i3 = (idx + 1) % n;
+      auto heading = [&](std::size_t a, std::size_t b) {
+        return std::atan2(w.centre[b].second - w.centre[a].second,
+                          w.centre[b].first - w.centre[a].first);
+      };
+      double turn = heading(idx, i1) - heading(i0, idx);
+      while (turn > M_PI) turn -= 2.0 * M_PI;
+      while (turn < -M_PI) turn += 2.0 * M_PI;
+      const double rate = turn / 0.6;
+      const double push = bias_outer_m * std::min(1.0, std::fabs(rate) / 0.5);
+      const double hd = heading(i2, i3);
+      const double outward = rate > 0.0 ? -1.0 : 1.0;  // away from the centre of the turn
+      px += outward * push * (-std::sin(hd));
+      py += outward * push * std::cos(hd);
+      if (push > 0.05) {
+        t.intrusion_fraction = 0.2;
+        t.boundary_residual_m = 0.25;
+      }
+    }
+    const double wx = px - x, wy = py - y;
     t.x_m.push_back(c * wx + s * wy);
     t.y_m.push_back(-s * wx + c * wy);
     t.half_width_left_m.push_back(w.lane_m / 2.0);
@@ -262,11 +296,24 @@ struct SimResult {
   bool finished = false;
   PlannerState final_state = PlannerState::Starting;
   int ticks_driving = 0, ticks_no_track = 0, ticks_blocked = 0, ticks_no_scan = 0, ticks_other = 0;
+  int ticks_no_track_conf = 0;  // driving with track confidence 0
+  int max_consecutive_blocked = 0;
   double max_solve_s = 0.0;
+};
+
+enum class TrackMode {
+  Oracle,  // the geometry's centreline
+  None,    // no track message at all
+  Biased,  // pushed bias_outer_m toward the outer wall in corners, self-check as the tracer's
 };
 
 struct SimSetup {
   const World* world = nullptr;
+  TrackMode track_mode = TrackMode::Oracle;
+  double track_bias_outer_m = 0.25;
+  // Plant features the planner's model does not have.
+  double plant_dead_zone_mps = 0.0;      // a speed command below this gives a zero target speed
+  double plant_extra_steer_tau_s = 0.0;  // extra first-order steering lag
   VehicleGeometry geometry;
   DynamicsParams planner_dynamics;
   PlannerConfig config;
@@ -289,6 +336,7 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
 
   DynamicsParams plant_params = setup.planner_dynamics;
   plant_params.nominal.speed_tau_s *= setup.plant_speed_lag_factor;
+  plant_params.nominal.steer_tau_s += setup.plant_extra_steer_tau_s;
   const DynamicsModel plant(plant_params, g, tick);
   const int delay_ticks =
       static_cast<int>(std::lround(plant_params.nominal.command_delay_s / tick));
@@ -313,6 +361,9 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
   };
   std::deque<Pending> pending;
   DistanceField field;
+  FreespaceField freespace(g);
+  bool have_prev_goal = false;
+  PointXY prev_goal{0.0, 0.0};
   LocalTrackData track;
   bool has_scan = false, has_track = false;
   double scan_stamp = 0.0;
@@ -323,6 +374,7 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
   car.yaw = setup.start_yaw;
 
   SimResult run;
+  int blocked_run = 0;
   double speed_sum = 0.0;
   int speed_n = 0;
   // unwrapped centreline progress from the start
@@ -368,14 +420,21 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
           scan_to_points(ranges.data(), kBeams, angle_min, inc, range_min, range_max,
                          g.lidar_mount_yaw_rad, g, 0.02, points.data(), points.size());
       p.pts.assign(points.begin(), points.begin() + static_cast<std::ptrdiff_t>(m));
-      p.track = oracle_track(world, car.x, car.y, car.yaw, t);
+      p.track =
+          oracle_track(world, car.x, car.y, car.yaw, t,
+                       setup.track_mode == TrackMode::Biased ? setup.track_bias_outer_m : 0.0);
       pending.push_back(std::move(p));
     }
     while (!pending.empty() && pending.front().deliver_s <= t + 1e-9) {
       field.build(pending.front().pts.data(), pending.front().pts.size());
+      freespace.build(field, pending.front().pts.data(), pending.front().pts.size(),
+                      have_prev_goal ? &prev_goal : nullptr);
+      have_prev_goal = freespace.valid();
+      if (have_prev_goal) prev_goal = freespace.goal();
       scan_stamp = pending.front().stamp_s;
       track = pending.front().track;
-      has_scan = has_track = true;
+      has_scan = true;
+      has_track = setup.track_mode != TrackMode::None;
       pending.pop_front();
     }
 
@@ -387,6 +446,7 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
     in.has_scan = has_scan;
     in.scan_stamp_s = scan_stamp;
     in.field = has_scan ? &field : nullptr;
+    in.freespace = has_scan ? &freespace : nullptr;
     in.track = has_track ? &track : nullptr;
     const TickOutput out = planner.tick(in);
     run.max_solve_s = std::max(run.max_solve_s, out.solve_time_s);
@@ -394,6 +454,7 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
     switch (out.state) {
       case PlannerState::Driving:
         ++run.ticks_driving;
+        if (out.track_confidence == 0.0) ++run.ticks_no_track_conf;
         break;
       case PlannerState::NoTrack:
         ++run.ticks_no_track;
@@ -409,9 +470,16 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
         break;
     }
 
+    if (out.state == PlannerState::Blocked) {
+      ++blocked_run;
+      run.max_consecutive_blocked = std::max(run.max_consecutive_blocked, blocked_run);
+    } else {
+      blocked_run = 0;
+    }
     fifo.push_back(Control{out.cmd.speed_mps, out.cmd.steering_rad});
-    const Control acting = delay_ticks > 0 ? fifo.front() : fifo.back();
+    Control acting = delay_ticks > 0 ? fifo.front() : fifo.back();
     if (delay_ticks > 0) fifo.pop_front();
+    if (acting.speed_cmd < setup.plant_dead_zone_mps) acting.speed_cmd = 0.0;
     const State prev = car;
     car = plant.step(car, acting);
     run.distance_m += std::hypot(car.x - prev.x, car.y - prev.y);

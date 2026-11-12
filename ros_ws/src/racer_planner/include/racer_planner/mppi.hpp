@@ -10,6 +10,7 @@
 #include "racer_planner/distance_field.hpp"
 #include "racer_planner/dynamics_model.hpp"
 #include "racer_planner/footprint.hpp"
+#include "racer_planner/freespace_field.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/rng.hpp"
 #include "racer_planner/speed_set.hpp"
@@ -41,7 +42,8 @@ struct MppiParams {
   double w_steer_rate = 0.1;  // steering command rate squared, first step against prev_cmd
   double w_term = 50.0;
   double corner_radius_m = Footprint::kDefaultCornerRadiusM;
-  double tick_s = 0.02;  // control tick: the warm start advances the nominal by tick_s / dt
+  double plan_window_s = 0.5;  // window of SolveOutput::plan_speed_mps
+  double tick_s = 0.02;        // control tick: the warm start advances the nominal by tick_s / dt
   // Sampled and output speeds are 0 or at least this (0 turns the rule off). The Planner fills it
   // from the dynamics bundle; the solver takes it as given.
   double speed_floor_mps = 0.0;
@@ -58,7 +60,7 @@ struct CostBreakdown {
   double terminal = 0.0;
   double total = 0.0;
   double s_end_m = 0.0;
-  double progress_m = 0.0;  // s_end - s_start
+  double progress_m = 0.0;  // blended: c * (s_end - s_start) + (1 - c) * (Phi_start - Phi_end)
   double min_clearance_m = 0.0;
   double v_end_mps = 0.0;
   bool collided = false;
@@ -68,8 +70,11 @@ struct SolveInput {
   State x0;          // car state in the planning frame, after the delay roll-forward
   Control prev_cmd;  // last published command, for the smoothness terms
   double v_cap_mps = 0.0;
-  const TrackProjector* track = nullptr;
+  const TrackProjector* track = nullptr;  // null (or confidence 0): the track is not used
   const DistanceField* field = nullptr;
+  // Weight of the track prior, 0 to 1. The free-space progress field weighs (1 - confidence).
+  double confidence = 1.0;
+  const FreespaceField* freespace = nullptr;  // null or not valid(): no free-space part
 };
 
 struct SolveOutput {
@@ -78,6 +83,7 @@ struct SolveOutput {
   double best_cost = 0.0;
   double plan_progress_m = 0.0;
   double plan_min_clearance_m = 0.0;
+  double plan_speed_mps = 0.0;  // mean speed command of the weighted mean over its first window
   double collision_fraction = 0.0;
   int samples = 0;
 };
@@ -104,7 +110,8 @@ class MppiSolver {
 
   void reset();  // forget the warm start
 
-  // Needs a valid track (build() true) and a field. Never allocates.
+  // Needs a distance field and either a valid track with confidence above 0 or a valid free-space
+  // field (the planner decides "nothing drivable" before calling). Never allocates.
   SolveOutput solve(const SolveInput& in);
 
   // Weighted mean rollout of the last solve, horizon_steps + 1 poses in the planning frame
@@ -125,7 +132,12 @@ class MppiSolver {
   struct Ctx {
     double s_start = 0.0;
     int hint0 = 0;
+    double phi_start = 0.0;
+    double c = 0.0;  // effective track weight
+    bool use_track = false;
+    bool use_free = false;
   };
+  Ctx make_ctx(const SolveInput& in) const;
   double evaluate(const SolveInput& in, const Ctx& ctx, const Control* u, CostBreakdown* bd,
                   Pose2* poses) const;
   void build_samples(const SolveInput& in, double v_cap);
@@ -134,6 +146,7 @@ class MppiSolver {
   DynamicsModel model_;
   Footprint footprint_;
   double half_width_m_;
+  double wheelbase_m_;
   double stop_decel_mps2_;
   double steer_min_, steer_max_;
   int horizon_;

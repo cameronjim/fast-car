@@ -49,6 +49,10 @@ class DistanceField {
     return d0 + ay * (d1 - d0);
   }
 
+  // The distance at grid node (i, j), metres, no interpolation. Node (i, j) is at
+  // (kXMinM + i * res, kYMinM + j * res).
+  double node(int i, int j) const { return dist_[static_cast<std::size_t>(j) * nx_ + i]; }
+
   int nx() const { return nx_; }
   int ny() const { return ny_; }
   std::size_t seed_count() const { return seeds_; }

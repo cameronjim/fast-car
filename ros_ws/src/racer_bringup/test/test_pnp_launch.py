@@ -43,6 +43,7 @@ def _context(**overrides: str) -> LaunchContext:
         "v_max_mps": "0.5",
         "require_recorder": "true",
         "laser_yaw_from_vehicle_params": "true",
+        "lap_memory": "false",
         "params_file": "",
     }
     configs.update(overrides)
@@ -90,6 +91,7 @@ def test_argument_defaults() -> None:
         "v_max_mps": "0.5",
         "require_recorder": "true",
         "laser_yaw_from_vehicle_params": "true",
+        "lap_memory": "false",
         "params_file": "",
     }
     assert declared["backend"].choices == ["net", "geometric"]
@@ -241,3 +243,50 @@ def test_recorder_regex_takes_the_pnp_topics(topic) -> None:
 def test_recorder_regex_leaves_out_lookalikes(topic) -> None:
     regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX
     assert re.search(regex, topic) is None, topic
+
+
+def _bundle(tmp_path: Path, v_max: float = 0.9) -> str:
+    (tmp_path / "manifest.yaml").write_text(
+        f"io:\n  validity: {{v_min_mps: 0.0, v_max_mps: {v_max}}}\n"
+    )
+    return str(tmp_path)
+
+
+def test_lap_memory_is_off_by_default(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(_context())
+    assert not [a for a in actions if getattr(a, "node_package", "") == "racer_laps"]
+    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    assert "use_lap_guidance" not in _flat_params(planner)
+
+
+def test_lap_memory_adds_the_node_with_the_bundle_validity_as_ceiling(
+    monkeypatch, tmp_path
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    ctx = _context(lap_memory="true", dynamics_bundle=_bundle(tmp_path, 0.9), v_max_mps="0.4")
+    actions = m._make_actions(ctx)
+    laps = [a for a in actions if getattr(a, "node_package", "") == "racer_laps"]
+    assert len(laps) == 1 and laps[0].node_executable == "lap_memory_node"
+    p = _flat_params(laps[0])
+    assert float(p["v_cap_ceiling_mps"]) == 0.9 and float(p["v_cap_start_mps"]) == 0.4
+    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    assert _flat_params(planner)["use_lap_guidance"] is True
+    assert len([a for a in actions if isinstance(a, RegisterEventHandler)]) == 3
+
+
+def test_lap_memory_start_cap_never_exceeds_the_ceiling(tmp_path) -> None:
+    params = _module().lap_memory_parameters(_bundle(tmp_path, 0.5), 0.8)
+    assert params == {"v_cap_ceiling_mps": 0.5, "v_cap_start_mps": 0.5}
+
+
+def test_lap_memory_refuses_a_bundle_without_validity(monkeypatch, tmp_path) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    (tmp_path / "manifest.yaml").write_text("io: {}\n")
+    with pytest.raises(RuntimeError, match="validity"):
+        m._make_actions(_context(lap_memory="true", dynamics_bundle=str(tmp_path)))
+    with pytest.raises(RuntimeError, match="validity"):
+        m._make_actions(_context(lap_memory="true", dynamics_bundle=str(tmp_path / "none")))

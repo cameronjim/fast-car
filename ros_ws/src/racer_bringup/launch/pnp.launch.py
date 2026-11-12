@@ -21,6 +21,8 @@ Refusals (a launch that does not start is the safe outcome):
   is in the ROS graph (CLAUDE.md invariant 5: every run is logged). The check waits up to 5 s.
   Only sim tests pass false.
 * `dynamics_bundle` is required, and `perception_bundle` is required with `backend:=net`.
+* `lap_memory` (default false) adds racer_laps' lap_memory_node and sets the planner's
+  `use_lap_guidance`. The first run is the two nodes only.
 * If either node exits for any reason the whole launch shuts down, so a node that refuses its
   bundle leaves nothing running; safety_node's watchdog then brakes on the silent /drive_raw.
 """
@@ -28,6 +30,7 @@ Refusals (a launch that does not start is the safe outcome):
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import (
@@ -132,6 +135,29 @@ def nodes_for(perception_params: dict, planner_params: dict, params_file: str) -
     return perception, planner
 
 
+def validity_v_max_mps(dynamics_bundle: str) -> float:
+    """`io.validity.v_max_mps` of the dynamics bundle's manifest. Raises (so the launch fails
+    before any node starts) if it cannot be read: the lap memory cap ceiling comes from here."""
+    import yaml
+
+    path = Path(dynamics_bundle) / "manifest.yaml"
+    try:
+        manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return float(manifest["io"]["validity"]["v_max_mps"])
+    except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
+        raise RuntimeError(f"pnp.launch.py: no io.validity.v_max_mps in {path}") from exc
+
+
+def lap_memory_parameters(dynamics_bundle: str, v_max_mps: float) -> dict:
+    """Parameters of racer_laps' lap_memory_node: the cap starts at the launch's v_max_mps and
+    can rise to, never above, the dynamics bundle's validity range."""
+    ceiling = validity_v_max_mps(dynamics_bundle)
+    return {
+        "v_cap_ceiling_mps": ceiling,
+        "v_cap_start_mps": min(float(v_max_mps), ceiling),
+    }
+
+
 def _bool(value: str, name: str) -> bool:
     value = value.strip().lower()
     if value not in ("true", "false"):
@@ -150,6 +176,11 @@ def _make_actions(context: LaunchContext) -> list:
         float(arg("v_max_mps")),
         _bool(arg("laser_yaw_from_vehicle_params"), "laser_yaw_from_vehicle_params"),
     )
+    lap_memory = _bool(arg("lap_memory"), "lap_memory")
+    lap_params = None
+    if lap_memory:
+        lap_params = lap_memory_parameters(arg("dynamics_bundle"), float(arg("v_max_mps")))
+        planner_params["use_lap_guidance"] = True
     if _bool(arg("require_recorder"), "require_recorder") and not recorder_in_graph():
         raise RuntimeError(RECORDER_REFUSAL)
     perception, planner = nodes_for(perception_params, planner_params, arg("params_file"))
@@ -162,7 +193,26 @@ def _make_actions(context: LaunchContext) -> list:
         )
         for node, name in ((perception, "track_perception_node"), (planner, "mppi_planner_node"))
     ]
-    return [perception, planner, *stop_all]
+    actions = [perception, planner, *stop_all]
+    if lap_params is not None:
+        base = [arg("params_file")] if arg("params_file") else []
+        laps = Node(
+            package="racer_laps",
+            executable="lap_memory_node",
+            name="lap_memory_node",
+            output="screen",
+            parameters=[*base, lap_params],
+        )
+        actions += [
+            laps,
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=laps,
+                    on_exit=[EmitEvent(event=Shutdown(reason="lap_memory_node exited"))],
+                )
+            ),
+        ]
+    return actions
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -205,6 +255,16 @@ def generate_launch_description() -> LaunchDescription:
                 description=(
                     "true on the car: the LiDAR mount yaw comes from vehicle_params. false only "
                     "in the simulator, whose scan is already in the vehicle frame."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "lap_memory",
+                default_value="false",
+                choices=["true", "false"],
+                description=(
+                    "Also start racer_laps' lap_memory_node (needs the map -> base_link TF from "
+                    "mapping or localisation) and let the planner use its speed cap. The cap "
+                    "ceiling is the dynamics bundle's validity v_max_mps. Off for a first run."
                 ),
             ),
             DeclareLaunchArgument(

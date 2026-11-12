@@ -135,5 +135,5 @@ Everything here is a command to type on the car. Stop at the first thing that do
   places.
 - Reverse and recovery: v0 has none. If the planner reports `BLOCKED` the car stops and stays
   stopped.
-- Lap memory (part D) is not in this launch.
+- Lap memory (part D) is off: `pnp.launch.py lap_memory:=true` adds it (needs the map to base_link TF) and caps at the dynamics bundle validity. Tonight is A+B+C only.
 - The app button is tested against a fake docker layer only.

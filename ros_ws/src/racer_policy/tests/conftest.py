@@ -132,8 +132,10 @@ _TEMPLATE: dict[str, Any] = {
         # re-tuned TTC thresholds; value-only, no field added).
         # then 0.14.0 -> 0.15.0 on 2026-11-12 when the required actuation.peak_acceleration_mps2 and
         # limits.stopping_margin_m were added (the stopping-distance gate) and the stopping model was
-        # measured.
-        "schema_version": "0.15.0",
+        # measured,
+        # then 0.15.0 -> 0.16.0 on 2026-11-12 when the required steering.yaw_rate_gain_table was
+        # added (wheel odometry yaw).
+        "schema_version": "0.16.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

@@ -348,6 +348,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                         str(LOCALISATION_LAUNCH / "localization.launch.py"),
                         f"map:={map_yaml}",
                         "set_initial_pose:=false",
+                        # the sim's car steers exactly as commanded (vehicle_params'
+                        # steering.yaw_rate_gain_table is the real car's measured value)
+                        "yaw_gain_override:=1.0",
                         *([f"amcl_params_file:={args.amcl_params}"] if args.amcl_params else []),
                         *([f"ekf_params_file:={args.ekf_params}"] if args.ekf_params else []),
                     ],

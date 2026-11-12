@@ -7,7 +7,10 @@
 //   vx = v                      (the VESC's wheel speed, signed: negative in reverse)
 //   vy = 0                      (sent as a measurement with a small variance: the
 //                                non-holonomic constraint is the most useful thing we know)
-//   wz = v * tan(delta) / L     (delta road-wheel angle, LEFT positive; L the wheelbase)
+//   wz = v * g(|delta|) * tan(delta) / L
+//                               (delta road-wheel angle, LEFT positive; L the wheelbase; g the
+//                                measured yaw_rate_gain_table, piecewise linear in |delta|, 1.0
+//                                when the model is exact)
 //
 // Signs follow claude-docs/06-vehicle-params.md: left steering forwards gives positive
 // (counter-clockwise) yaw rate; the same steering in reverse gives negative yaw rate, which
@@ -16,8 +19,8 @@
 // Variances (the EKF needs honest ones, not zeros):
 //
 //   var(vx) = (speed_std_floor + speed_std_fraction * |v|)^2
-//   var(wz) = (v / (L cos^2 delta))^2 * steering_std^2   (steering model error)
-//           + (tan(delta) / L)^2 * var(vx)              (speed error)
+//   var(wz) = (v (g / cos^2 delta + g' tan delta) / L)^2 * steering_std^2 (steering error)
+//           + (g tan(delta) / L)^2 * var(vx)            (speed error)
 //           + yaw_rate_std_floor^2                      (slip, wheelbase error)
 //   var(vy) = lateral_std^2
 //
@@ -29,13 +32,28 @@
 #define RACER_STATE_WHEEL_TWIST_HPP_
 
 #include <optional>
+#include <vector>
 
 #include "racer_state/servo_model.hpp"
 
 namespace racer_state {
 
+// One knot of steering.yaw_rate_gain_table: the true yaw rate per modelled yaw rate at |delta|.
+struct YawGainKnot {
+  double abs_angle_rad = 0.0;
+  double gain = 1.0;
+};
+
+// Piecewise linear in |delta|, held at the first and last gain outside the knots; an empty table
+// is 1. slope_per_rad (optional) receives d gain / d|delta| (0 outside the knots).
+double yaw_gain(const std::vector<YawGainKnot>& table, double abs_delta_rad,
+                double* slope_per_rad = nullptr);
+
 struct WheelTwistConfig {
   double wheelbase_m = 0.0;  // chassis.wheelbase_m
+  // steering.yaw_rate_gain_table. Empty = 1 everywhere (the sim's car turns exactly as the
+  // model says).
+  std::vector<YawGainKnot> yaw_gain_table;
   double speed_std_floor_mps = 0.02;
   double speed_std_fraction = 0.03;
   double steering_std_rad = 0.03;
@@ -44,8 +62,8 @@ struct WheelTwistConfig {
   double lateral_std_mps = 0.05;
 };
 
-// Throws std::invalid_argument unless the wheelbase is positive and every std is finite and
-// non-negative.
+// Throws std::invalid_argument unless the wheelbase is positive, the yaw gain knots are finite,
+// positive and ascending in angle, and every std is finite and non-negative.
 void validate(const WheelTwistConfig& config);
 
 struct WheelTwist {

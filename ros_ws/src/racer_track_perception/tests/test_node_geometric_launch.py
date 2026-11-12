@@ -55,7 +55,7 @@ class TestGeometricNode(unittest.TestCase):
         self.assertEqual(status["state"], "no_scan")
         self.assertEqual(status["scans_seen"], 0)
         self.assertEqual(status["backend"], "geometric")
-        self.assertEqual(status["model_id"], "geometric-v0")
+        self.assertEqual(status["model_id"], "geometric-v1")
 
     def test_b_nominal_scan_gives_a_track_with_the_scans_stamp(self):
         self.h.run_scans(at_least=5)
@@ -64,7 +64,7 @@ class TestGeometricNode(unittest.TestCase):
         for msg in self.h.tracks:
             self.assertIn(stamp_ns(msg), published, "the track carries the scan's stamp")
             self.assertEqual(msg.header.frame_id, "base_link")
-            self.assertEqual(msg.model_id, "geometric-v0")
+            self.assertEqual(msg.model_id, "geometric-v1")
             self.assertEqual(msg.backend, msg.BACKEND_GEOMETRIC)
             self.assertAlmostEqual(msg.station_spacing_m, 0.2, places=6)
             for arr in (

@@ -251,6 +251,7 @@ def test_arch_requires_type() -> None:
     "key",
     [
         "speed_gain",
+        "speed_deadband_mps",
         "speed_tau_s",
         "accel_max_mps2",
         "decel_max_mps2",
@@ -265,6 +266,27 @@ def test_arch_requires_type() -> None:
 def test_missing_dynamics_nominal_key_is_rejected(key: str) -> None:
     manifest = load("dynamics")
     del manifest["io"]["nominal"][key]
+    assert not is_valid(manifest)
+
+
+def test_dynamics_example_carries_the_dead_zone_and_schema_1_1() -> None:
+    manifest = load("dynamics")
+    assert manifest["bundle_schema_version"] == "1.1.0"
+    assert manifest["io"]["nominal"]["speed_deadband_mps"] == 0.0
+    assert is_valid(manifest)
+
+
+@pytest.mark.parametrize("value", [0.0, 0.2, 1.0])
+def test_dead_zone_in_range_is_accepted(value: float) -> None:
+    manifest = load("dynamics")
+    manifest["io"]["nominal"]["speed_deadband_mps"] = value
+    assert is_valid(manifest)
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01, "0.2", None])
+def test_dead_zone_out_of_range_or_not_a_number_is_rejected(value: object) -> None:
+    manifest = load("dynamics")
+    manifest["io"]["nominal"]["speed_deadband_mps"] = value
     assert not is_valid(manifest)
 
 

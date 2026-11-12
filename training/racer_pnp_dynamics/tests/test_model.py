@@ -189,3 +189,53 @@ def test_pack_unpack_round_trip_and_size():
     with pytest.raises(ValueError):
         unpack_weights(flat[:-1])
     assert w.layers() == [[4, 32], [32, 32], [32, 2]]
+
+
+def test_dead_zone_command_below_it_has_zero_target(toy_vehicle, toy_nominal):
+    p = toy_nominal.replace(speed_deadband_mps=0.2, speed_gain=0.9)
+    from_rest = step([0, 0, 0, 0.0, 0.0], [0.19, 0.0], p, toy_vehicle)
+    assert from_rest[3] == 0.0
+    rolling = step([0, 0, 0, 0.4, 0.0], [0.19, 0.0], p, toy_vehicle)
+    assert rolling[3] == pytest.approx(0.4 - A_V * 0.4)  # target 0, not 0.9 * 0.19
+
+
+def test_dead_zone_command_at_the_edge_and_above_it_moves(toy_vehicle, toy_nominal):
+    p = toy_nominal.replace(speed_deadband_mps=0.2, speed_gain=0.9)
+    at_edge = step([0, 0, 0, 0.0, 0.0], [0.2, 0.0], p, toy_vehicle)
+    assert at_edge[3] == pytest.approx(A_V * 0.9 * 0.2)
+    above = step([0, 0, 0, 0.0, 0.0], [0.5, 0.0], p, toy_vehicle)
+    assert above[3] == pytest.approx(A_V * 0.9 * 0.5)
+
+
+def test_dead_zone_is_symmetric_in_the_sign_of_the_command(toy_vehicle, toy_nominal):
+    p = toy_nominal.replace(speed_deadband_mps=0.2)
+    inside = step([0, 0, 0, 0.4, 0.0], [-0.1, 0.0], p, toy_vehicle)
+    assert inside[3] == pytest.approx(0.4 - A_V * 0.4)
+    assert step([0, 0, 0, 0.05, 0.0], [-0.5, 0.0], p, toy_vehicle)[3] == 0.0
+
+
+def test_zero_dead_zone_is_the_old_model(toy_vehicle, toy_nominal):
+    cmds = np.array([[-0.3, 0.1], [0.0, 0.1], [0.05, 0.1], [0.4, 0.1]])
+    state = np.tile([0.0, 0.0, 0.0, 0.2, 0.1], (4, 1))
+    a = step(state, cmds, toy_nominal.replace(speed_deadband_mps=0.0), toy_vehicle)
+    dv = np.clip(
+        A_V * (toy_nominal.speed_gain * cmds[:, 0] - 0.2),
+        -toy_nominal.decel_max_mps2 * 0.05,
+        toy_nominal.accel_max_mps2 * 0.05,
+    )
+    np.testing.assert_allclose(a[:, 3], np.maximum(0.0, 0.2 + dv), atol=1e-15)
+
+
+def test_dead_zone_broadcasts_over_batches_and_keeps_nan(toy_vehicle, toy_nominal):
+    p = toy_nominal.replace(speed_deadband_mps=0.2)
+    state = np.zeros((3, 5))
+    out = step(state, np.array([[0.1, 0.0], [0.3, 0.0], [np.nan, 0.0]]), p, toy_vehicle)
+    assert out[0, 3] == 0.0 and out[1, 3] > 0.0 and np.isnan(out[2, 3])
+
+
+def test_dead_zone_does_not_touch_steering(toy_vehicle, toy_nominal):
+    a = step([0, 0, 0, 0.3, 0.05], [0.1, 0.2], toy_nominal, toy_vehicle)
+    b = step(
+        [0, 0, 0, 0.3, 0.05], [0.1, 0.2], toy_nominal.replace(speed_deadband_mps=0.5), toy_vehicle
+    )
+    assert a[2] == b[2] and a[4] == b[4]

@@ -118,7 +118,7 @@ TEST(BundleLoader, ChecksumMismatch) {
 
 TEST(BundleLoader, VehicleParamsMismatchSchemaVersion) {
   BundleCopy b;
-  b.edit_manifest("schema_version: \"0.15.0\"", "schema_version: \"0.13.0\"");
+  b.edit_manifest("schema_version: \"0.16.0\"", "schema_version: \"0.13.0\"");
   expect_refusal(load(b), RefusalCode::VehicleParamsMismatch);
 }
 

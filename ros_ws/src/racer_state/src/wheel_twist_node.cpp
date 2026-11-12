@@ -104,6 +104,22 @@ class WheelTwistNode : public rclcpp::Node {
 
     WheelTwistConfig twist;
     twist.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
+    // 0 means "use vehicle_params": the car's measured yaw rate gain table. A launch file whose
+    // car has no such error (the sim's bridge steers exactly the command) passes 1.0.
+    const double gain_override =
+        declare_double("yaw_gain_override", 0.0, 0.0, 2.0,
+                       "0 = steering.yaw_rate_gain_table from vehicle_params; otherwise this "
+                       "constant gain (the sim's car turns exactly as modelled: 1.0).");
+    if (gain_override > 0.0) {
+      twist.yaw_gain_table = {YawGainKnot{0.0, gain_override}};
+    } else {
+      for (const auto& point : VEHICLE_PARAMS.steering.yaw_rate_gain_table) {
+        twist.yaw_gain_table.push_back(YawGainKnot{point.abs_angle_rad, point.gain});
+      }
+    }
+    RCLCPP_INFO(get_logger(), "yaw rate gain: %s (%zu knots)",
+                gain_override > 0.0 ? "constant override" : "vehicle_params table",
+                twist.yaw_gain_table.size());
     twist.speed_std_floor_mps =
         declare_double("speed_std_floor_mps", twist.speed_std_floor_mps, 0.0, 10.0,
                        "Wheel speed std at standstill (m/s): quantisation and ERPM noise.");

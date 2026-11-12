@@ -100,7 +100,9 @@ def test_odometry_starts_the_twist_node_and_the_ekf_on_slash_odom():
 def test_odometry_defaults():
     defaults = _defaults(_entities("odometry.launch.py"))
     assert defaults["wheel_odom_topic"] == "/odom/wheel"
-    assert set(defaults) == {"ekf_params_file", "wheel_odom_topic"}
+    # 0 = use vehicle_params' measured yaw rate gain table; sim launches pass 1.0.
+    assert defaults["yaw_gain_override"] == "0.0"
+    assert set(defaults) == {"ekf_params_file", "wheel_odom_topic", "yaw_gain_override"}
 
 
 # --- mapping.launch.py -------------------------------------------------------------------

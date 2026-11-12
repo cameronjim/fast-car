@@ -141,6 +141,83 @@ TEST(WheelTwistConfig, ValidateRejectsNonsense) {
   config = twist_fixture();
   config.steering_std_rad = kInf;
   EXPECT_THROW(validate(config), std::invalid_argument);
+  for (const double bad : {0.0, -0.9, kNaN, kInf}) {
+    config = twist_fixture();
+    config.yaw_gain_table = {YawGainKnot{0.1, bad}};
+    EXPECT_THROW(validate(config), std::invalid_argument) << bad;
+  }
+  config = twist_fixture();
+  config.yaw_gain_table = {YawGainKnot{0.3, 0.9}, YawGainKnot{0.2, 1.0}};  // not ascending
+  EXPECT_THROW(validate(config), std::invalid_argument);
+  config.yaw_gain_table = {YawGainKnot{0.2, 1.0}, YawGainKnot{0.2, 0.9}};  // repeated angle
+  EXPECT_THROW(validate(config), std::invalid_argument);
+  config.yaw_gain_table = {YawGainKnot{-0.1, 1.0}};
+  EXPECT_THROW(validate(config), std::invalid_argument);
+}
+
+TEST(YawGain, InterpolatesAndHoldsOutsideTheKnots) {
+  const std::vector<YawGainKnot> table = {YawGainKnot{0.1, 1.1}, YawGainKnot{0.3, 0.9}};
+  double slope = 99.0;
+  EXPECT_DOUBLE_EQ(yaw_gain({}, 0.2, &slope), 1.0);
+  EXPECT_DOUBLE_EQ(slope, 0.0);
+  EXPECT_DOUBLE_EQ(yaw_gain(table, 0.0, &slope), 1.1);  // held below the first knot
+  EXPECT_DOUBLE_EQ(slope, 0.0);
+  EXPECT_NEAR(yaw_gain(table, 0.2, &slope), 1.0, 1e-12);
+  EXPECT_NEAR(slope, -1.0, 1e-12);
+  EXPECT_NEAR(yaw_gain(table, 0.1), 1.1, 1e-12);
+  EXPECT_NEAR(yaw_gain(table, 0.3), 0.9, 1e-12);
+  EXPECT_DOUBLE_EQ(yaw_gain(table, 0.9, &slope), 0.9);  // held above the last knot
+  EXPECT_DOUBLE_EQ(slope, 0.0);
+  EXPECT_DOUBLE_EQ(yaw_gain(table, 0.2), yaw_gain(table, 0.2, nullptr));
+}
+
+TEST(ComputeWheelTwist, YawGainScalesYawRateAndItsVarianceNotSpeed) {
+  WheelTwistConfig config = twist_fixture();
+  const auto base = compute_wheel_twist(1.5, 0.3, true, config);
+  config.yaw_gain_table = {YawGainKnot{0.0, 0.9}};  // constant: no slope term
+  const auto scaled = compute_wheel_twist(1.5, 0.3, true, config);
+  ASSERT_TRUE(base.has_value());
+  ASSERT_TRUE(scaled.has_value());
+  EXPECT_DOUBLE_EQ(scaled->vx_mps, base->vx_mps);
+  EXPECT_NEAR(scaled->wz_rad_per_s, 0.9 * base->wz_rad_per_s, 1e-12);
+  EXPECT_DOUBLE_EQ(scaled->var_vx, base->var_vx);
+  // Hand computation of var(wz): the two propagated terms scale with gain^2, the floor does not.
+  const double speed_std = 0.02 + 0.03 * 1.5;
+  const double d_delta = 0.9 * 1.5 / (kWheelbase * std::cos(0.3) * std::cos(0.3));
+  const double d_v = 0.9 * std::tan(0.3) / kWheelbase;  // the constant gain has no slope term
+  const double expected =
+      d_delta * d_delta * 0.03 * 0.03 + d_v * d_v * speed_std * speed_std + 0.02 * 0.02;
+  EXPECT_NEAR(scaled->var_wz, expected, 1e-12);
+}
+
+TEST(ComputeWheelTwist, AngleDependentGainUsesTheSlopeInTheVariance) {
+  WheelTwistConfig config = twist_fixture();
+  config.yaw_gain_table = {YawGainKnot{0.1, 1.1}, YawGainKnot{0.3, 0.9}};
+  for (const double delta : {0.2, -0.2}) {
+    const auto twist = compute_wheel_twist(1.5, delta, true, config);
+    ASSERT_TRUE(twist.has_value());
+    const double g = 1.0;       // gain at |0.2|
+    const double slope = -1.0;  // per rad of |delta|
+    EXPECT_NEAR(twist->wz_rad_per_s, 1.5 * g * std::tan(delta) / kWheelbase, 1e-12);
+    // d wz / d delta = v (g / cos^2 + g' tan) / L with g' = slope * sign(delta).
+    const double sign = delta < 0.0 ? -1.0 : 1.0;
+    const double d_delta =
+        1.5 * (g / (std::cos(delta) * std::cos(delta)) + sign * slope * std::tan(delta)) /
+        kWheelbase;
+    const double d_v = g * std::tan(delta) / kWheelbase;
+    const double speed_std = 0.02 + 0.03 * 1.5;
+    EXPECT_NEAR(twist->var_wz,
+                d_delta * d_delta * 0.03 * 0.03 + d_v * d_v * speed_std * speed_std + 0.02 * 0.02,
+                1e-12);
+  }
+}
+
+TEST(ComputeWheelTwist, YawGainKeepsTheSignConventions) {
+  WheelTwistConfig config = twist_fixture();
+  config.yaw_gain_table = {YawGainKnot{0.1, 1.1}, YawGainKnot{0.3, 0.9}};
+  EXPECT_GT(compute_wheel_twist(1.0, 0.2, true, config)->wz_rad_per_s, 0.0);
+  EXPECT_LT(compute_wheel_twist(1.0, -0.2, true, config)->wz_rad_per_s, 0.0);
+  EXPECT_LT(compute_wheel_twist(-1.0, 0.2, true, config)->wz_rad_per_s, 0.0);
 }
 
 TEST(WheelTwistEstimator, RejectsBadTimeout) {

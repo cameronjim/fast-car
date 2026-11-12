@@ -238,8 +238,9 @@ RUN bash -c 'source /opt/ros/humble/setup.bash && ros2 pkg prefix sllidar_ros2'
 # version and its state. It also fixes three things for a UART link: a `baud` parameter
 # (upstream hard-codes 115200), NO flow control (upstream sets hardware flow control, which on
 # a 3-wire TX/RX/GND UART would wait on a CTS line that is not connected), and copies
-# temp_fet / temp_motor into the message (upstream parses them but leaves them 0). It drops
-# the IMU poll: the car's IMU is the dedicated one, never the VESC's. The RUN below refuses the
+# temp_fet / temp_motor into the message (upstream parses them but leaves them 0). It makes
+# the IMU poll opt-in (parameter poll_imu, default false; a read request, never a command), so the
+# IMU topics are silent unless asked for. The RUN below refuses the
 # build if the patched source still contains a subscription or a set-command send.
 #
 # DEPENDENCIES. vesc_driver uses transport_drivers' serial_driver, which is a Humble apt

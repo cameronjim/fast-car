@@ -618,16 +618,20 @@ DEAD_ZONE = 0.20
 
 
 def assert_only_start_ramp_ticks_are_in_the_dead_zone(rows: dict) -> None:
-    """No command strictly between 0 and the dead zone except the one ramp tick of a start from
-    rest (0.45 of the vehicle's acceleration limit per tick, so at most 0.09 m/s)."""
+    """No command strictly between 0 and the dead zone except the ramp of a start from rest: at
+    most two consecutive ticks, the first from a zero, each step at most 0.45 of the vehicle's
+    acceleration limit per tick (0.086 m/s), then the floor or a stop."""
     v = rows["cmd_speed_mps"]
-    inside = np.nonzero((v > 0.0) & (v < DEAD_ZONE))[0]
-    for i in inside:
+    run = 0
+    for i, x in enumerate(v):
         before = v[i - 1] if i > 0 else 0.0  # a replay starts from rest
-        assert before == 0.0, f"tick {i}: {before} -> {v[i]}"
-        assert v[i] <= 0.09, v[i]
-        if i + 1 < len(v):
-            assert not (0.0 < v[i + 1] < DEAD_ZONE)  # one tick only: out of it (or stopped) next
+        if 0.0 < x < DEAD_ZONE:
+            run += 1
+            assert run <= 2, f"tick {i}: {run} ticks in the dead zone"
+            assert before == 0.0 or 0.0 < before < DEAD_ZONE, f"tick {i}: {before} -> {x}"
+            assert x - before <= 0.0857, f"tick {i}: step {x - before}"
+        else:
+            run = 0
 
 
 def test_planner_replay_r0_drives_on_the_scan_where_v0_went_to_no_track(tmp_path: Path) -> None:

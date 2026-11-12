@@ -136,8 +136,7 @@ double lowpass_step(double previous, double wanted, double tick_s, double tau_s)
 }
 
 Command rate_limit(const Command& wanted, const Command& previous, double max_steer_step_rad,
-                   double max_speed_up_step_mps, double speed_floor_mps,
-                   double max_speed_jump_mps) {
+                   double max_speed_up_step_mps, double speed_floor_mps) {
   Command c;
   c.steering_rad =
       previous.steering_rad +
@@ -152,9 +151,12 @@ Command rate_limit(const Command& wanted, const Command& previous, double max_st
   }
   const double base = std::max(previous.speed_mps, 0.0);  // from reverse: to zero at once
   c.speed_mps = std::min(wanted.speed_mps, base + max_speed_up_step_mps);
-  if (speed_floor_mps > 0.0 && base > 0.0 && c.speed_mps > 0.0 && c.speed_mps < speed_floor_mps &&
-      wanted.speed_mps >= speed_floor_mps && speed_floor_mps - base <= max_speed_jump_mps) {
-    c.speed_mps = speed_floor_mps;  // second tick of a start: out of the dead zone
+  if (speed_floor_mps > 0.0 && max_speed_up_step_mps > 0.0 && base < speed_floor_mps &&
+      wanted.speed_mps >= speed_floor_mps) {
+    // up to the floor in equal steps, each within the limit
+    const double steps = std::ceil(speed_floor_mps / max_speed_up_step_mps - 1e-9);
+    c.speed_mps =
+        std::min(wanted.speed_mps, std::min(speed_floor_mps, base + speed_floor_mps / steps));
   }
   return c;
 }

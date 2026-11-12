@@ -101,6 +101,7 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
     }
     double now = 1000.0;
     double prev_speed = 0.0;
+    int ramp_run = 0;
     for (int tick = 0; tick < 80; ++tick, now += 0.02) {
       LocalTrackData track = good_track(now - uni(0.0, 0.5));
       track.valid_count = static_cast<int>(uni(-1, 20));
@@ -136,12 +137,17 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
         ASSERT_GE(out.cmd.speed_mps, -reverse_limit - 1e-12);
       } else {
         ASSERT_GE(out.cmd.speed_mps, 0.0) << "state " << static_cast<int>(out.state);
-        // 0 or at least the floor, except the one ramp tick of a start from rest
-        const bool first_ramp_tick =
-            prev_speed == 0.0 && out.cmd.speed_mps <= 0.45 * g.max_acceleration_mps2 * 0.02 + 1e-12;
-        ASSERT_TRUE(out.cmd.speed_mps == 0.0 || out.cmd.speed_mps >= floor_mps - 1e-12 ||
-                    first_ramp_tick)
-            << "speed " << out.cmd.speed_mps << " floor " << floor_mps << " prev " << prev_speed;
+        // 0 or at least the floor, except the (at most two) ramp ticks of a start from rest
+        const bool in_dead_zone = out.cmd.speed_mps > 0.0 && out.cmd.speed_mps < floor_mps - 1e-12;
+        if (in_dead_zone) {
+          ++ramp_run;
+          ASSERT_TRUE(prev_speed == 0.0 || prev_speed < floor_mps - 1e-12)
+              << "dead zone entered from " << prev_speed;
+          ASSERT_LE(ramp_run, 2) << "more than two ticks inside the dead zone";
+          ASSERT_LE(out.cmd.speed_mps - prev_speed, 0.45 * g.max_acceleration_mps2 * 0.02 + 1e-12);
+        } else {
+          ramp_run = 0;
+        }
       }
       ASSERT_LE(out.cmd.speed_mps, std::max(0.0, out.v_cap_mps) + 1e-12);
       ASSERT_LE(out.v_cap_mps, cfg.logic.v_max_mps + 1e-12);
@@ -413,7 +419,7 @@ TEST(Planner, LeavingDrivingRestartsTheLowPassFromTheLastPublishedSteering) {
             0.45 * r.g.steering_max_rate_rad_per_s * 0.02 + 1e-12);
 }
 
-TEST(Planner, AStartFromRestHasExactlyOneTickInsideTheDeadZoneAndNeverOutrunsTheSafetyLimit) {
+TEST(Planner, AStartFromRestHasTwoTicksInsideTheDeadZoneAtMostAndNeverOutrunsTheLimit) {
   Rig r(0.6, 0.23);
   r.v = 0.0;
   std::vector<double> speeds;
@@ -425,18 +431,18 @@ TEST(Planner, AStartFromRestHasExactlyOneTickInsideTheDeadZoneAndNeverOutrunsThe
   EXPECT_EQ(out.state, PlannerState::Driving);
   int inside = 0;
   double prev = 0.0;
-  const double safety_step = r.g.max_acceleration_mps2 * 0.02;
+  const double step = 0.45 * r.g.max_acceleration_mps2 * 0.02;  // the planner's own rate limit
   for (double v : speeds) {
     if (v > 0.0 && v < 0.23 - 1e-12) ++inside;
-    EXPECT_LE(v - prev, safety_step + 1e-12);  // never more than safety_node's own limit
+    EXPECT_LE(v - prev, step + 1e-12);  // equal ramp steps, none above 0.45 of the limit
     prev = v;
   }
-  EXPECT_EQ(inside, 1);  // the only exception, the first ramp tick
+  EXPECT_EQ(inside, 2);  // the only exception: two ramp ticks from rest
   EXPECT_GE(speeds.back(), 0.23 - 1e-12);
-  // and it is the first tick above 0, at the planner's own (0.45) rate
   std::size_t k = 0;
   while (k < speeds.size() && speeds[k] == 0.0) ++k;
-  ASSERT_LT(k + 1, speeds.size());
-  EXPECT_LE(speeds[k], 0.45 * safety_step + 1e-12);
-  EXPECT_GE(speeds[k + 1], 0.23 - 1e-12);
+  ASSERT_LT(k + 2, speeds.size());
+  EXPECT_NEAR(speeds[k], 0.23 / 3.0, 1e-9);
+  EXPECT_NEAR(speeds[k + 1], 2 * 0.23 / 3.0, 1e-9);
+  EXPECT_NEAR(speeds[k + 2], 0.23, 1e-9);
 }

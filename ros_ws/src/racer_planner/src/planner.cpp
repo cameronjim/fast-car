@@ -275,8 +275,7 @@ TickOutput Planner::run(const TickInput& in) {
       state == PlannerState::Recovering) {
     const double f = cfg_.logic.rate_limit_fraction;
     c = rate_limit(c, last_published_, f * geometry_.steering_max_rate_rad_per_s * cfg_.tick_s,
-                   f * geometry_.max_acceleration_mps2 * cfg_.tick_s, floor_mps,
-                   geometry_.max_acceleration_mps2 * cfg_.tick_s);
+                   f * geometry_.max_acceleration_mps2 * cfg_.tick_s, floor_mps);
   }
   out.state = state;
   out.cmd = c;

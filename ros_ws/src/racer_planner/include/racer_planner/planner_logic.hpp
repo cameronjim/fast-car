@@ -130,13 +130,12 @@ Command command_for_state(PlannerState state, const Command& solver_cmd, double 
 // Output rate limits: steering by max_steer_step, the speed's magnitude by max_speed_up_step when
 // it grows, forward or backward (slowing, braking to zero included, is never limited; a request
 // across zero goes to zero at once and grows from there). The dead zone: with speed_floor_mps > 0 a
-// forward speed that is still below the floor after a limited step goes to the floor on the next
-// tick when that step is no larger than max_speed_jump_mps (the vehicle's own acceleration limit,
-// the one safety_node applies), so a start from rest takes two ticks and exactly one of them, the
-// first, is inside the dead zone.
+// forward speed below the floor that is asked to go to the floor ramps in equal steps of floor /
+// ceil(floor / max_speed_up_step_mps), never larger than max_speed_up_step_mps, so a start from
+// rest at a 0.23 m/s floor is three ticks of 0.077 m/s: at most two ticks inside the dead zone,
+// then the floor itself.
 Command rate_limit(const Command& wanted, const Command& previous, double max_steer_step_rad,
-                   double max_speed_up_step_mps, double speed_floor_mps = 0.0,
-                   double max_speed_jump_mps = 0.0);
+                   double max_speed_up_step_mps, double speed_floor_mps = 0.0);
 
 // One step of a first-order low-pass: previous + (wanted - previous) * (1 - exp(-tick / tau)).
 // tau <= 0 or a non finite input passes `wanted` (or `previous` when wanted is not finite).

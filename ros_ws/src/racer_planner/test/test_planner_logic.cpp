@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <limits>
+#include <vector>
 
 #include "racer_planner/planner_logic.hpp"
 
@@ -669,31 +670,43 @@ TEST(Staleness, AgeAndStaleHelpers) {
   EXPECT_FALSE(is_stale(10.0, 10.1, 0.2));  // slightly ahead of now is clock skew, not stale
 }
 
-TEST(RateLimit, StartFromRestTakesTwoTicksAndOnlyTheFirstIsInsideTheDeadZone) {
-  const double step = 0.086, jump = 0.19, floor = 0.23;
-  Command prev{0.0, 0.0};
-  const Command first = rate_limit(Command{0.5, 0.0}, prev, 0.064, step, floor, jump);
-  EXPECT_NEAR(first.speed_mps, step,
-              1e-12);  // the one tick inside the dead zone, at the planner rate
-  const Command second = rate_limit(Command{0.5, 0.0}, first, 0.064, step, floor, jump);
-  EXPECT_NEAR(second.speed_mps, floor, 1e-12);  // out of it, by less than safety_node's limit
-  EXPECT_LE(second.speed_mps - first.speed_mps, jump);
-  const Command third = rate_limit(Command{0.5, 0.0}, second, 0.064, step, floor, jump);
-  EXPECT_NEAR(third.speed_mps, floor + step, 1e-12);  // the ordinary step above the floor
-  // a floor too far above the first step for one vehicle step keeps ramping at the planner rate
-  const Command far = rate_limit(Command{0.5, 0.0}, first, 0.064, step, 0.35, jump);
-  EXPECT_NEAR(far.speed_mps, 2.0 * step, 1e-12);
-  // an unsnapped wanted speed below the floor is only limited, never lifted
-  EXPECT_NEAR(rate_limit(Command{0.1, 0.0}, prev, 0.064, step, floor, jump).speed_mps, 0.086,
+TEST(RateLimit, StartFromRestRampsToTheFloorInEqualStepsWithinTheLimit) {
+  const double step = 0.086, floor = 0.23;
+  const double eq = floor / 3.0;  // ceil(0.23 / 0.086) = 3 equal steps
+  Command v{0.0, 0.0};
+  std::vector<double> seen;
+  for (int i = 0; i < 5; ++i) {
+    v = rate_limit(Command{0.5, 0.0}, v, 0.064, step, floor);
+    seen.push_back(v.speed_mps);
+  }
+  EXPECT_NEAR(seen[0], eq, 1e-12);            // inside the dead zone
+  EXPECT_NEAR(seen[1], 2.0 * eq, 1e-12);      // inside the dead zone, the last one
+  EXPECT_NEAR(seen[2], floor, 1e-12);         // the floor itself
+  EXPECT_NEAR(seen[3], floor + step, 1e-12);  // then the ordinary step
+  EXPECT_NEAR(seen[4], floor + 2 * step, 1e-12);
+  double prev = 0.0;
+  for (double x : seen) {
+    EXPECT_LE(x - prev, step + 1e-12);  // no step above the planner's own limit
+    prev = x;
+  }
+  // the wanted speed is reached when it is the floor, and not exceeded
+  EXPECT_NEAR(
+      rate_limit(Command{0.23, 0.0}, Command{2.0 * 0.23 / 3.0, 0.0}, 0.064, step, floor).speed_mps,
+      0.23, 1e-12);
+  // an unsnapped wanted speed below the floor is only limited, never lifted to the floor
+  EXPECT_NEAR(rate_limit(Command{0.1, 0.0}, Command{0.0, 0.0}, 0.064, step, floor).speed_mps, 0.086,
               1e-12);
-  EXPECT_NEAR(rate_limit(Command{0.1, 0.0}, first, 0.064, step, floor, jump).speed_mps, 0.1, 1e-12);
+  EXPECT_NEAR(rate_limit(Command{0.1, 0.0}, Command{0.086, 0.0}, 0.064, step, floor).speed_mps, 0.1,
+              1e-12);
+  // a floor that one step reaches takes one tick
+  EXPECT_NEAR(rate_limit(Command{0.5, 0.0}, Command{0.0, 0.0}, 0.064, step, 0.08).speed_mps, 0.08,
+              1e-12);
   // slowing is never limited, and 0 stays 0
-  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, Command{0.4, 0.0}, 0.064, step, floor, jump).speed_mps,
-            0.0);
-  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, prev, 0.064, step, floor, jump).speed_mps, 0.0);
+  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, Command{0.4, 0.0}, 0.064, step, floor).speed_mps, 0.0);
+  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, Command{0.0, 0.0}, 0.064, step, floor).speed_mps, 0.0);
   // floor 0 is the plain rule
-  EXPECT_NEAR(rate_limit(Command{0.5, 0.0}, first, 0.064, step, 0.0, jump).speed_mps, 2 * step,
-              1e-12);
+  EXPECT_NEAR(rate_limit(Command{0.5, 0.0}, Command{0.086, 0.0}, 0.064, step, 0.0).speed_mps,
+              2 * step, 1e-12);
 }
 
 TEST(LowPass, FirstOrderStepAndEdgeCases) {

@@ -23,8 +23,9 @@
 //   Abort      the gated /drive speed is not negative for recover_gate_debounce_s while the request
 //              is negative, or /drive is stale: wait recover_retry_s.
 //   Attempts   counted since the car last covered recover_progress_m forward. After
-//              recover_max_attempts the recovery is exhausted: BLOCKED, reason 5, until the car is
-//              moved (a drivable forward plan for recover_release_s).
+//              recover_max_attempts the recovery is exhausted: BLOCKED, reason 5, for at least
+//              recover_exhausted_hold_s and until the car is moved (a drivable forward plan for
+//              recover_release_s).
 #ifndef RACER_PLANNER_RECOVERY_HPP_
 #define RACER_PLANNER_RECOVERY_HPP_
 
@@ -46,6 +47,9 @@ struct RecoveryParams {
   double recover_progress_m = 0.5;
   int recover_max_attempts = 3;
   double recover_release_s = 1.0;
+  // Once exhausted the planner stays BLOCKED at least this long: backing out of a wall makes a
+  // forward plan possible again at once, and without a hold it would drive straight back at it.
+  double recover_exhausted_hold_s = 30.0;
   double hold_collide_s = 0.6;  // reasons 1 and 2
   double hold_stall_s = 1.5;    // reason 3
   double hold_gate_s = 1.0;     // reason 4
@@ -130,6 +134,7 @@ class Recovery {
   bool have_next_plan_ = false;
   bool gate_bad_ = false;
   double gate_bad_since_s_ = 0.0;
+  double exhausted_since_s_ = 0.0;
   bool release_ = false;
   double release_since_s_ = 0.0;
 };

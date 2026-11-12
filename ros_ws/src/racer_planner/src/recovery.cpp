@@ -164,7 +164,9 @@ void Recovery::finish() {
 RecoveryOutput Recovery::update(const RecoveryInput& in) {
   const double tick = std::isfinite(in.tick_s) && in.tick_s > 0.0 ? in.tick_s : 0.02;
   const double wheel = std::isfinite(in.wheel_speed_mps) ? in.wheel_speed_mps : 0.0;
-  if (phase_ != RecoveryPhase::Reversing && wheel > 0.0) forward_m_ += wheel * tick;
+  // Net forward distance by wheel odometry (backing up takes it away again), so dithering back and
+  // forth in front of an obstacle does not count as progress.
+  forward_m_ = std::max(0.0, forward_m_ + wheel * tick);
   if (forward_m_ >= p_.recover_progress_m) {
     attempts_ = 0;
     forward_m_ = 0.0;
@@ -173,6 +175,7 @@ RecoveryOutput Recovery::update(const RecoveryInput& in) {
     case RecoveryPhase::Idle:
       if (attempts_ >= p_.recover_max_attempts) {
         phase_ = RecoveryPhase::Exhausted;
+        exhausted_since_s_ = in.now_s;
         release_ = false;
         return out(in, false, 0.0);
       }
@@ -225,7 +228,8 @@ RecoveryOutput Recovery::update(const RecoveryInput& in) {
         release_ = false;
         return out(in, false, 0.0);
       }
-      if (in.reason == BlockReason::None) {
+      if (in.reason == BlockReason::None &&
+          in.now_s - exhausted_since_s_ >= p_.recover_exhausted_hold_s) {
         if (!release_) {
           release_ = true;
           release_since_s_ = in.now_s;

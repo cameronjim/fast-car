@@ -28,12 +28,12 @@ def bundle_with(tmp_path: Path, **nominal_extra) -> Path:
     return tmp_path
 
 
-def test_plant_parameters_come_from_io_nominal_and_a_missing_dead_band_is_zero():
+def test_plant_parameters_come_from_io_nominal_including_the_fixtures_dead_zone():
     p = runner.plant_parameters(NOMINAL_BUNDLE)
     assert p["plant_speed_gain"] == pytest.approx(1.0)
     assert p["plant_accel_max_mps2"] == pytest.approx(2.0)
     assert p["plant_decel_max_mps2"] == pytest.approx(1.5)
-    assert p["plant_speed_deadband_mps"] == 0.0
+    assert p["plant_speed_deadband_mps"] == pytest.approx(0.20)  # dyn-nominal-v0 carries it
     assert "plant_steer_tau_s" not in p and "plant_command_delay_s" not in p
 
 

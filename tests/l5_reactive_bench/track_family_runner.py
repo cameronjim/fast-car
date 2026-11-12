@@ -279,10 +279,6 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         perception, planner = pnp_launch.parameters_for(
             args.perception_bundle, args.dynamics_bundle, args.backend, args.v_max_mps, mounted
         )
-        if args.plant_speed_deadband:
-            # The test bundle has no speed dead zone of its own (the car's will): tell the planner
-            # about the plant's through its speed floor, dead zone plus the planner's margin.
-            planner["speed_floor_margin_mps"] = float(args.plant_speed_deadband) + 0.03
         nodes["track_perception_node"], nodes["mppi_planner_node"] = perception, planner
         pnp_nodes = [
             ("racer_track_perception", "track_perception_node"),

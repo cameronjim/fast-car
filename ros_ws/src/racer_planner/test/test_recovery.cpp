@@ -371,7 +371,9 @@ TEST(Recovery, ExhaustionAfterTheMaximumAttemptsAndReleaseWhenTheCarCanDriveAgai
   EXPECT_EQ(rec.attempts(), 0);
   EXPECT_EQ(rec.phase(), RecoveryPhase::Idle);
   // a blocked tick in between restarts the release timer
-  Recovery again(params(), s.g, 0.23);
+  RecoveryParams no_hold = params();
+  no_hold.recover_exhausted_hold_s = 0.0;
+  Recovery again(no_hold, s.g, 0.23);
   double u = 100.0;
   for (int attempt = 1; attempt <= 3; ++attempt) {
     RecoveryInput a = stuck(s, u, BlockReason::AllCollide, 0.7);
@@ -387,6 +389,28 @@ TEST(Recovery, ExhaustionAfterTheMaximumAttemptsAndReleaseWhenTheCarCanDriveAgai
   again.update(stuck(s, u + 1.5, BlockReason::AllCollide, 5.0));  // blocked again: timer resets
   EXPECT_TRUE(again.update(stuck(s, u + 2.2, BlockReason::None, 0.0)).exhausted);
   EXPECT_FALSE(again.update(stuck(s, u + 3.3, BlockReason::None, 0.0)).exhausted);
+}
+
+TEST(Recovery, ExhaustedStaysBlockedForTheHoldEvenWhenAForwardPlanExists) {
+  const Scene s = nose_in(0.12);
+  Recovery rec(params(), s.g, 0.23);
+  double t = 10.0;
+  for (int attempt = 1; attempt <= 3; ++attempt) {
+    RecoveryInput in = stuck(s, t, BlockReason::AllCollide, 0.7);
+    rec.update(in);
+    in.gate_fresh = false;
+    t += 0.02;
+    in.now_s = t;
+    rec.update(in);
+    t += 3.1;
+  }
+  EXPECT_TRUE(rec.update(stuck(s, t, BlockReason::AllCollide, 5.0)).exhausted);
+  // a forward plan exists (the car backed away from the wall) but the 30 s hold has not passed
+  for (double dt : {1.0, 2.5, 10.0, 25.0}) {
+    EXPECT_TRUE(rec.update(stuck(s, t + dt, BlockReason::None, 0.0)).exhausted) << dt;
+  }
+  EXPECT_TRUE(rec.update(stuck(s, t + 30.5, BlockReason::None, 0.0)).exhausted);  // release timer
+  EXPECT_FALSE(rec.update(stuck(s, t + 31.6, BlockReason::None, 0.0)).exhausted);
 }
 
 TEST(Recovery, AttemptsResetWhenTheCarCoversHalfAMetreForward) {
@@ -443,6 +467,7 @@ PlannerConfig planner_config() {
   c.mppi.samples = 128;
   c.max_samples = 128;
   c.mppi.seed = 3;
+  c.recovery.recover_exhausted_hold_s = 2.0;  // the default 30 s would make these tests long
   return c;
 }
 

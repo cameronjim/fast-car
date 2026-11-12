@@ -317,7 +317,16 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
       for (int t = 0; t < win; ++t) sum += vk[t].speed_cmd;
       cls_[k] = sum / win >= thr ? 1 : 0;
     }
-    const unsigned char best_class = cls_[best];
+    // Standing still is the default: the plan moves only when the best moving sample beats the best
+    // standing one by move_margin, so a car at the edge of what it can do does not flicker
+    // between creeping and stopping.
+    double best_move = 1e300, best_still = 1e300;
+    for (int k = 0; k < N; ++k) {
+      if (hit_[k]) continue;
+      double& b = cls_[k] ? best_move : best_still;
+      b = std::min(b, cost_[k]);
+    }
+    const unsigned char best_class = best_move + p_.move_margin < best_still ? 1 : 0;
     int in_class = 0;
     double j_min_c = 1e300;
     for (int k = 0; k < N; ++k) {

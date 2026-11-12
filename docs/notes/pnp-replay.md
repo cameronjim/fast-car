@@ -52,3 +52,11 @@ The speed shares do not count RECOVERING ticks, and the steering change statisti
 changes between two consecutive DRIVING ticks (a jump across a recovery or a stop is not a change
 of the command). Planner CSV columns appended: `track_confidence`, `freespace_goal_x_m`,
 `freespace_goal_y_m`, `freespace_reach_m`, `block_reason`, `recovery_attempts`.
+
+Steering change statistics of the v0 driver, recomputed with the consecutive-pair rule from the
+committed baseline CSVs (old rule in brackets): std R0 0.018 (0.018), R1 0.019 (0.020), R2 0.020
+(0.021), R3 0.022 (0.022), L 0.022 (0.023) rad; sign flips per s 24.2, 27.6, 25.5, 26.8, 24.2. The
+rule changes the v0 numbers by under 0.002 rad, so the comparison with `baselines/v0-2026-11-12.json`
+stands. The fixture's recorded tracks are geometric-v0; main's tracer is geometric-v1 since #145,
+so `--check-fidelity` against that bag no longer holds (its tests are skipped with that reason
+until a bag recorded with the current tracer replaces it).

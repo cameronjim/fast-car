@@ -166,6 +166,9 @@ class MppiPlannerNode : public rclcpp::Node {
     lg.rate_limit_fraction =
         declare_double("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0,
                        "Share of the steering rate and acceleration limits the output may use.");
+    mp.move_margin =
+        declare_double("move_margin", mp.move_margin, 0.0, 100.0,
+                       "Cost the best moving sample must beat the best standing one by.");
     mp.w_term = declare_double("w_term", mp.w_term, 0.0, 1e5, "Stop within sight weight.");
     cfg.drivability.stall_hold_s = declare_double(
         "stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0,
@@ -182,6 +185,9 @@ class MppiPlannerNode : public rclcpp::Node {
                                           "Reverse speed (m/s), at least the speed floor.");
     rc.recover_margin_m = declare_double("recover_margin_m", rc.recover_margin_m, 0.0, 0.3,
                                          "Clearance added to d_hard_m for the reverse arc (m).");
+    rc.recover_exhausted_hold_s =
+        declare_double("recover_exhausted_hold_s", rc.recover_exhausted_hold_s, 0.0, 600.0,
+                       "Least time BLOCKED with reason 5 after the attempts run out (s).");
     rc.recover_max_s = declare_double("recover_max_s", rc.recover_max_s, 0.5, 10.0,
                                       "A recovery ends after this long (s).");
     rc.recover_retry_s =

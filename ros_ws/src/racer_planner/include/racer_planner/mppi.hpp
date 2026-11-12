@@ -41,6 +41,8 @@ struct MppiParams {
   double w_du = 0.5;          // speed command differences
   double w_steer_rate = 0.1;  // steering command rate squared, first step against prev_cmd
   double w_term = 50.0;
+  // The plan moves only if the best moving sample beats the best standing one by this much cost.
+  double move_margin = 0.3;
   double corner_radius_m = Footprint::kDefaultCornerRadiusM;
   double plan_window_s = 0.5;  // window of SolveOutput::plan_speed_mps
   double tick_s = 0.02;        // control tick: the warm start advances the nominal by tick_s / dt

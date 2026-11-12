@@ -99,6 +99,7 @@ std::map<std::string, Param> default_params() {
   d("recover_distance_m", cfg.recovery.recover_distance_m, 0.1, 1.0);
   d("recover_speed_mps", cfg.recovery.recover_speed_mps, 0.1, 0.6);
   d("recover_max_s", cfg.recovery.recover_max_s, 0.5, 10.0);
+  d("recover_exhausted_hold_s", cfg.recovery.recover_exhausted_hold_s, 0.0, 600.0);
   d("recover_retry_s", cfg.recovery.recover_retry_s, 0.5, 30.0);
   d("recover_margin_m", cfg.recovery.recover_margin_m, 0.0, 0.3);
   d("recover_gate_debounce_s", cfg.recovery.recover_gate_debounce_s, 0.02, 1.0);
@@ -124,6 +125,7 @@ std::map<std::string, Param> default_params() {
   d("a_lat_max_mps2", mp.a_lat_max_mps2, 0.1, 50.0);
   d("w_du", mp.w_du, 0.0, 1e4);
   d("w_term", mp.w_term, 0.0, 1e5);
+  d("move_margin", mp.move_margin, 0.0, 100.0);
   d("solve_halve_over_ms", 15.0, 1.0, 200.0);
   d("solve_restore_under_ms", 6.0, 0.5, 200.0);
   d("laser_yaw_from_vehicle_params", 1.0, 0.0, 1.0);
@@ -194,6 +196,7 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   rc.recover_distance_m = v("recover_distance_m");
   rc.recover_speed_mps = v("recover_speed_mps");
   rc.recover_max_s = v("recover_max_s");
+  rc.recover_exhausted_hold_s = v("recover_exhausted_hold_s");
   rc.recover_retry_s = v("recover_retry_s");
   rc.recover_margin_m = v("recover_margin_m");
   rc.recover_gate_debounce_s = v("recover_gate_debounce_s");
@@ -225,6 +228,7 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   mp.a_lat_max_mps2 = v("a_lat_max_mps2");
   mp.w_du = v("w_du");
   mp.w_term = v("w_term");
+  mp.move_margin = v("move_margin");
   cfg.budget.halve_over_s = v("solve_halve_over_ms") * 1e-3;
   cfg.budget.restore_under_s = v("solve_restore_under_ms") * 1e-3;
   return cfg;

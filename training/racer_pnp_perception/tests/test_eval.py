@@ -56,6 +56,49 @@ def test_summarise() -> None:
     assert math.isnan(empty["boundary_residual_median_m"]) and "latency_ms" not in empty
 
 
+def straight_wall_points(left_y: float = 0.5, right_y: float = -0.5) -> np.ndarray:
+    x = np.arange(-1.0, 4.0, 0.01)
+    return np.vstack(
+        [
+            np.stack([x, np.full_like(x, left_y)], axis=1),
+            np.stack([x, np.full_like(x, right_y)], axis=1),
+        ]
+    )
+
+
+def test_clearance_deficit_of_a_centred_and_an_off_centre_track() -> None:
+    pts = straight_wall_points()
+    centred = eb.clearance_deficit(make_track(16), pts)
+    assert len(centred) == 11  # stations 0..10 are within 2.0 m of the car
+    assert np.abs(centred).max() < 1e-6
+    # Hand case: the centreline 0.25 m too close to the left wall (y = 0.25, half width 0.5) has
+    # a nearest wall point 0.25 m away, so the deficit is 0.5 - 0.25 = 0.25.
+    close = eb.clearance_deficit(make_track(16, 0.25), pts)
+    assert np.allclose(close, 0.25, atol=1e-6)
+    # A corridor narrower than the claimed half width has a positive deficit too.
+    assert np.allclose(eb.clearance_deficit(make_track(16), straight_wall_points(0.3, -0.3)), 0.2)
+
+
+def test_clearance_deficit_empty_cases() -> None:
+    assert len(eb.clearance_deficit(tr.no_track(), straight_wall_points())) == 0
+    assert len(eb.clearance_deficit(make_track(16), np.zeros((0, 2)))) == 0
+    far = make_track(16)
+    far.x_m = far.x_m + 5.0
+    assert len(eb.clearance_deficit(far, straight_wall_points())) == 0
+
+
+def test_summarise_reports_the_clearance_deficit() -> None:
+    deficit = np.array([0.0, 0.05, 0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0])
+    out = eb.summarise(np.array([0.1]), np.array([0.0]), np.array([16.0]), deficit=deficit)
+    assert out["clearance_deficit_stations"] == 10
+    assert abs(out["clearance_deficit_p50_m"] - 0.0) < 1e-12
+    assert abs(out["clearance_deficit_p90_m"] - float(np.percentile(deficit, 90))) < 1e-12
+    assert abs(out["clearance_deficit_share_over_0_15"] - 0.2) < 1e-12
+    none = eb.summarise(np.array([]), np.array([]), np.array([]), deficit=np.zeros(0))
+    assert math.isnan(none["clearance_deficit_p90_m"])
+    assert "clearance_deficit_p90_m" not in eb.summarise(np.array([]), np.array([]), np.array([]))
+
+
 def test_gate_verdict_thresholds() -> None:
     good = {
         "boundary_residual_median_m": 0.10,
@@ -104,6 +147,8 @@ def test_score_scans_two_backends(live: LiveVehicle) -> None:
     assert arrays[core.BACKEND_GEOMETRIC]["residual"].max() < 0.05
     pooled = eb.pool([arrays], core.BACKEND_GEOMETRIC)
     assert pooled["moving_scans"] == 3
+    assert pooled["clearance_deficit_stations"] > 0
+    assert pooled["clearance_deficit_p90_m"] < 0.05
     only_geo = eb.score_scans({core.BACKEND_GEOMETRIC: perceivers[core.BACKEND_GEOMETRIC]}, scans)
     assert all(math.isnan(d) for d in only_geo[2])
 

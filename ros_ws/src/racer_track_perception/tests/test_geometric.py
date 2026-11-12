@@ -139,8 +139,14 @@ def test_one_wall_keeps_the_last_known_half_width(live: LiveVehicle) -> None:
     t = run(pts, live)
     assert t.valid_count == 16
     # Past x = 1.5 the right wall is gone; the 0.4 half width carries on, not the 0.5 default.
-    assert np.abs(t.y_m).max() < 0.03
-    assert np.allclose(t.half_width_left_m, 0.4, atol=0.03)
+    # The one station where the last point of the right wall is still seen across the 0.27 m
+    # window (centre x 1.5 to 2.0) pairs it with the left wall at a slant and is up to 0.06 m off;
+    # v0 saw the end of the wall only across its 0.15 m strip. All others stay within 0.03 m, and
+    # the half width carried on afterwards is the 0.4 measured before the wall ended.
+    clear = (t.x_m < 1.5) | (t.x_m > 2.0)
+    assert np.abs(t.y_m[clear]).max() < 0.03
+    assert np.allclose(t.half_width_left_m[clear], 0.4, atol=0.03)
+    assert np.abs(t.y_m).max() < 0.06 and np.allclose(t.half_width_left_m, 0.4, atol=0.06)
 
 
 def test_an_implausibly_wide_pairing_uses_the_nearer_wall_only(live: LiveVehicle) -> None:

@@ -87,6 +87,8 @@ export function driveBlocked(status: Status | null, store: OpsStore, agentUp: bo
   if (d.state === "starting") return "Another drive is starting";
   if (d.state === "stopping") return "Stopping";
   if (d.state === "running") return `${d.mode} is running`;
+  const ext = status.drive.external ?? [];
+  if (ext.length) return `${ext[0].mode} is running from a terminal`;
   return "";
 }
 

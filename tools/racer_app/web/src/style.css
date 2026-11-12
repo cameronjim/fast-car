@@ -132,7 +132,10 @@ button, select, input { font: inherit; color: inherit; }
 }
 .btn:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
 .btn:active:not(:disabled) { transform: translateY(1px) scale(0.99); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn.primary:disabled { background: var(--line); border-color: var(--line-strong); color: var(--text-3); opacity: 1; }
+.btn.danger.solid:disabled { background: var(--line); border-color: var(--line-strong); color: var(--text-3); opacity: 1; }
+.btn.primary.is-pending:disabled { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); opacity: 0.85; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); }
 .btn.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, var(--line)); }

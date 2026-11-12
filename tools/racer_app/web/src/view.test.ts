@@ -109,6 +109,18 @@ describe("why a drive button is disabled", () => {
     car.driveMode = "gap_follow";
     expect(driveBlocked(car.status(), store, true)).toBe("gap_follow is running");
   });
+  it("blocks every other card while a drive runs or starts, app or terminal", () => {
+    const store = new OpsStore();
+    const car = running();
+    car.driveMode = "gap_follow";
+    expect(driveBlocked(car.status(), store, true)).toBe("gap_follow is running");
+    const starting = new OpsStore();
+    starting.begin({ kind: "drive-start", target: "pnp" }, never);
+    expect(driveBlocked(running().status(), starting, true)).toBe("Another drive is starting");
+    const ext = running().status();
+    ext.drive.external = [{ pid: 42, mode: "tracker", command: "ros2 launch" }];
+    expect(driveBlocked(ext, new OpsStore(), true)).toBe("tracker is running from a terminal");
+  });
   it("blocks while the stack is starting or stopping", () => {
     const a = new OpsStore();
     a.begin({ kind: "stack-start" }, never);

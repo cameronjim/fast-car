@@ -444,7 +444,8 @@ def save_map_script(container_base: str) -> str:
 
 def recorder_check_argv(container: str) -> list[str]:
     """`docker top` lists the container's processes from the host, no exec needed."""
-    return ["docker", "top", container, "-eo", "pid,args"]  # newer docker refuses a ps format with no pid
+    # Newer docker refuses a ps format without a pid column.
+    return ["docker", "top", container, "-eo", "pid,args"]
 
 
 def recorder_running(top_output: str) -> bool:

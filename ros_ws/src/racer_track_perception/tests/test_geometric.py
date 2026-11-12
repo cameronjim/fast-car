@@ -131,22 +131,26 @@ def test_one_wall_uses_the_default_half_width(live: LiveVehicle) -> None:
     assert np.abs(t.y_m).max() < 0.03 and t.valid_count == 16
 
 
-def test_one_wall_keeps_the_last_known_half_width(live: LiveVehicle) -> None:
+def test_one_wall_uses_the_smallest_two_wall_half_width_seen(live: LiveVehicle) -> None:
     centre = centreline_points("straight")
     both = walls(centre, 0.4, 0.4)  # a lane 0.8 m wide, both walls for x < 1.5
     left_only = walls(centre, 0.4, 0.4, right=False)
     pts = np.vstack([both[both[:, 0] < 1.5], left_only[left_only[:, 0] >= 1.5]])
     t = run(pts, live)
     assert t.valid_count == 16
-    # Past x = 1.5 the right wall is gone; the 0.4 half width carries on, not the 0.5 default.
-    # The one station where the last point of the right wall is still seen across the 0.27 m
-    # window (centre x 1.5 to 2.0) pairs it with the left wall at a slant and is up to 0.06 m off;
-    # v0 saw the end of the wall only across its 0.15 m strip. All others stay within 0.03 m, and
-    # the half width carried on afterwards is the 0.4 measured before the wall ended.
-    clear = (t.x_m < 1.5) | (t.x_m > 2.0)
-    assert np.abs(t.y_m[clear]).max() < 0.03
-    assert np.allclose(t.half_width_left_m[clear], 0.4, atol=0.03)
-    assert np.abs(t.y_m).max() < 0.06 and np.allclose(t.half_width_left_m, 0.4, atol=0.06)
+    # Every station, in either mode, lies its own half width from the left wall (y = 0.4).
+    assert np.allclose(0.4 - t.y_m, t.half_width_left_m, atol=0.01)
+    # One-wall stations carry the smallest two-wall half width measured so far (0.4, not the 0.5
+    # default and not an overestimate from the last point of the wall that ended).
+    tail = slice(11, 16)  # well past the end of the right wall: one wall only
+    assert np.allclose(t.sigma_m[tail], geo.SIGMA_ONE_WALL_M)
+    assert np.allclose(t.half_width_left_m[tail], 0.4, atol=0.03)
+    assert np.abs(t.y_m[tail]).max() < 0.03
+    # Two-wall stations measure the lane. The single station that still pairs the last point of
+    # the ended wall (inside the window, so a slanted pair) is the only one allowed to differ.
+    off = np.abs(t.half_width_left_m - 0.4) > 0.03
+    assert off.sum() <= 1
+    assert np.abs(t.y_m[~off]).max() < 0.03
 
 
 def test_an_implausibly_wide_pairing_uses_the_nearer_wall_only(live: LiveVehicle) -> None:

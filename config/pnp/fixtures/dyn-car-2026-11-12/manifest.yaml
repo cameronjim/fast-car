@@ -4,7 +4,7 @@ model_id: dyn-car-2026-11-12
 created_utc: '2026-11-12T00:00:00Z'
 git_sha: '0000000000000000000000000000000000000000'
 training_config_sha256: 987b15916974f5eb116ccb01ff77e15361a6ccf2fb1d84fc32d2f18462922517
-vehicle_params: {schema_version: 0.14.0, sysid_session_id: none-preliminary}
+vehicle_params: {schema_version: 0.15.0, sysid_session_id: none-preliminary}
 payload:
 - {file: residual_mlp.f32, sha256: aa8b81d746d258905bc11c22f78ed6b9fd538b6253f38b1adf2ad74004b4268a}
 - {file: golden_rollouts.csv, sha256: aa883c97dc038c553c528e8ef81fbf35fe59d2ec47a4c2da19f2e838de6b8405}

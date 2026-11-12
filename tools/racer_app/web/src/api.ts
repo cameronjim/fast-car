@@ -9,6 +9,13 @@ export interface Check {
   required: boolean;
 }
 
+/** A driving launch the app did not start (`docker exec ... ros2 launch` in a terminal). */
+export interface ExternalDrive {
+  pid: number;
+  mode: string;
+  command: string;
+}
+
 /** A feature that can be disabled on this car, with the reason shown next to its button. */
 export interface Capability {
   available: boolean;
@@ -20,7 +27,7 @@ export interface Status {
   checks: { overall: "green" | "amber" | "red"; ready: boolean; checks: Check[] };
   stack: { running: boolean; recorder: boolean; flags: Record<string, string> };
   cameras: { running: boolean };
-  drive: { mode: string | null; running: boolean };
+  drive: { mode: string | null; running: boolean; external?: ExternalDrive[] };
   containers: Record<string, string>;
   disk_free_gb: number | null;
   uptime_s: number | null;
@@ -41,6 +48,8 @@ export interface PnpOptions {
   backends: string[];
   speed_range: [number, number];
   default_speed: number;
+  /** Planner parameter files found under data/pnp/*.yaml (names only). */
+  params_files?: string[];
 }
 
 export interface Options {
@@ -49,6 +58,8 @@ export interface Options {
   maps: string[];
   racelines: string[];
   drive_modes: string[];
+  /** Gap follow's max speed bounds in m/s per profile (profile ceiling, vehicle_params cap). */
+  gap_follow_speed?: Record<string, { min: number; max: number }>;
   policy: { available: boolean; reason: string; valid: string[] };
   pnp?: PnpOptions;
   patrols?: string[];
@@ -87,6 +98,16 @@ export interface ActionReply {
   overridable?: boolean;
   failing?: string[];
   [k: string]: unknown;
+}
+
+/** What the login screen says for a failed token check. */
+export function loginError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "That token was not accepted. Check it and paste it again.";
+    if (err.status === 429) return "Too many wrong tokens from this computer. Wait a minute and try again.";
+    if (err.status === 0) return "Cannot reach the car. Check it is on and on the same Wi-Fi.";
+  }
+  return String(err);
 }
 
 export class ApiError extends Error {
@@ -152,9 +173,23 @@ export class Api {
     this.tokens.set(token.trim());
   }
 
-  private async call<T>(method: string, path: string, body?: unknown, auth = true): Promise<T> {
+  /**
+   * Ask the car whether `token` is accepted, without storing it and without the "unauthorized"
+   * callback. The login form uses it so a mistyped token never replaces a good saved one.
+   */
+  async verifyToken(token: string): Promise<void> {
+    await this.call<unknown>("GET", "/api/status", undefined, true, token.trim());
+  }
+
+  private async call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    auth = true,
+    tokenOverride?: string,
+  ): Promise<T> {
     const headers: Record<string, string> = {};
-    const token = this.tokens.get();
+    const token = tokenOverride ?? this.tokens.get();
     if (auth && token) headers["Authorization"] = `Bearer ${token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     let res: Response;
@@ -173,7 +208,7 @@ export class Api {
     } catch {
       /* not JSON */
     }
-    if (res.status === 401) this.onUnauthorized();
+    if (res.status === 401 && tokenOverride === undefined) this.onUnauthorized();
     if (!res.ok) {
       const reply = (json ?? null) as ActionReply | null;
       throw new ApiError(reply?.error ?? `HTTP ${res.status}`, res.status, reply);
@@ -211,6 +246,8 @@ export class Api {
     pnp_dynamics?: string;
     pnp_backend?: string;
     pnp_v_max_mps?: number;
+    pnp_params?: string;
+    max_speed_mps?: number;
   }) => this.call<ActionReply>("POST", "/api/drive/start", b);
   startPerception = (b: { mode: string; device: string }) =>
     this.call<ActionReply>("POST", "/api/perception/start", b);

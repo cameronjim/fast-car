@@ -134,7 +134,7 @@ jobs:
           retention-days: 14
 
       - name: ShellCheck the install and uninstall scripts
-        run: shellcheck tools/racer_app/deploy/install.sh tools/racer_app/deploy/uninstall.sh
+        run: shellcheck tools/racer_app/deploy/install.sh tools/racer_app/deploy/uninstall.sh tools/racer_app/deploy/build-web.sh
 
   l3-and-cpp:
     name: L3 node tests + C++ build (ros-dev)

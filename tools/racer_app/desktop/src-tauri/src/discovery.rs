@@ -226,6 +226,13 @@ pub struct State {
     pub cars: Vec<Car>,
 }
 
+/// The answer to "Search again": how many cars the search found, and the state after it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SearchOutcome {
+    pub found: usize,
+    pub state: State,
+}
+
 /// The discovery state machine. One `tick` is one round of probing and, if needed, searching.
 #[derive(Clone, Debug)]
 pub struct Tracker {
@@ -279,6 +286,25 @@ impl Tracker {
         self.phase = Phase::Searching;
     }
 
+    /// The result of a search the user asked for. The cars found replace the list (the car in use
+    /// stays in it, found or not, so it can still be picked again), and with nothing in use a
+    /// single car found is taken, as a background search would.
+    pub fn apply_search(&mut self, found: Vec<Car>) -> usize {
+        let count = found.len();
+        let mut cars = found;
+        if let Some(current) = &self.current {
+            if !cars.iter().any(|c| c.same_car(current)) {
+                cars.insert(0, current.clone());
+            }
+        }
+        self.cars = cars;
+        if self.current.is_none() && count == 1 {
+            self.current = Some(self.cars[0].clone());
+            self.phase = Phase::Connected;
+        }
+        count
+    }
+
     /// One round. Returns true if the state changed.
     pub fn tick(&mut self, net: &dyn Net) -> bool {
         let before = self.state();
@@ -298,7 +324,15 @@ impl Tracker {
                     up.hostname = h.hostname;
                 }
                 self.phase = Phase::Connected;
-                self.cars = vec![up.clone()];
+                // Keep what an earlier search found, with the car in use first and up to date.
+                let mut cars: Vec<Car> = self
+                    .cars
+                    .iter()
+                    .filter(|c| !c.same_car(&up))
+                    .cloned()
+                    .collect();
+                cars.insert(0, up.clone());
+                self.cars = cars;
                 self.current = Some(up);
                 return;
             }
@@ -338,6 +372,19 @@ pub fn step(shared: &Mutex<Tracker>, net: &dyn Net) -> Option<State> {
     }
     *guard = work;
     changed.then(|| guard.state())
+}
+
+/// A search the user asked for: run the full discovery now (no lock held during network I/O),
+/// fold the result into the tracker and say how many cars it found.
+pub fn search(shared: &Mutex<Tracker>, net: &dyn Net) -> Option<SearchOutcome> {
+    let port = shared.lock().ok()?.port;
+    let found = discover(net, port);
+    let mut guard = shared.lock().ok()?;
+    let count = guard.apply_search(found);
+    Some(SearchOutcome {
+        found: count,
+        state: guard.state(),
+    })
 }
 
 #[cfg(test)]
@@ -717,5 +764,69 @@ mod tests {
         assert!(!car("1.1.1.1", "x").same_car(&car("1.1.1.1", "y")));
         assert!(car("1.1.1.1", "").same_car(&car("1.1.1.1", "")));
         assert!(!car("1.1.1.1", "").same_car(&car("2.2.2.2", "")));
+    }
+
+    #[test]
+    fn a_search_that_finds_cars_reports_how_many_and_lists_them() {
+        let net = Fake {
+            mdns: vec![
+                cand("192.168.1.50", Source::Mdns),
+                cand("192.168.1.51", Source::Mdns),
+            ],
+            ..Fake::default()
+        }
+        .agent("192.168.1.50", 8080, "car-a")
+        .agent("192.168.1.51", 8080, "car-b");
+        let shared = Mutex::new(Tracker::new(None, 8080));
+        let out = search(&shared, &net).unwrap();
+        assert_eq!(out.found, 2);
+        assert_eq!(out.state.cars.len(), 2);
+        assert!(out.state.car.is_none(), "two cars: the user picks");
+    }
+
+    #[test]
+    fn a_search_that_finds_nothing_says_zero_and_keeps_the_car_in_use() {
+        let net = Fake::default();
+        let used = car("192.168.1.50", "car-a");
+        let shared = Mutex::new(Tracker::new(Some(used.clone()), 8080));
+        let out = search(&shared, &net).unwrap();
+        assert_eq!(out.found, 0);
+        assert_eq!(out.state.cars, vec![used.clone()]);
+        assert_eq!(out.state.car, Some(used));
+    }
+
+    #[test]
+    fn a_search_with_one_car_found_and_none_in_use_takes_it() {
+        let net = Fake {
+            mdns: vec![cand("192.168.1.50", Source::Mdns)],
+            ..Fake::default()
+        }
+        .agent("192.168.1.50", 8080, "car-a");
+        let shared = Mutex::new(Tracker::new(None, 8080));
+        let out = search(&shared, &net).unwrap();
+        assert_eq!(out.found, 1);
+        assert_eq!(out.state.phase, Phase::Connected);
+        assert_eq!(out.state.car.unwrap().host, "192.168.1.50");
+    }
+
+    #[test]
+    fn a_search_while_connected_keeps_other_cars_in_the_list_across_the_next_probe() {
+        let net = Fake {
+            mdns: vec![
+                cand("192.168.1.50", Source::Mdns),
+                cand("192.168.1.51", Source::Mdns),
+            ],
+            ..Fake::default()
+        }
+        .agent("192.168.1.50", 8080, "car-a")
+        .agent("192.168.1.51", 8080, "car-b");
+        let shared = Mutex::new(Tracker::new(Some(car("192.168.1.50", "car-a")), 8080));
+        assert_eq!(search(&shared, &net).unwrap().found, 2);
+        // the background loop probes the car in use: the other car must stay offered
+        step(&shared, &net);
+        let state = shared.lock().unwrap().state();
+        assert_eq!(state.phase, Phase::Connected);
+        assert_eq!(state.cars.len(), 2);
+        assert_eq!(state.cars[0].hostname, "car-a", "the car in use is first");
     }
 }

@@ -101,10 +101,11 @@ describe("the desktop build never publishes either", () => {
         "token_get",
         "token_set",
         "token_clear",
+        "token_storage",
         "discovery_state",
         "select_car",
         "add_manual",
-        "rescan",
+        "search_cars",
       ]),
     );
   });

@@ -4,10 +4,14 @@ import {
   carLabel,
   carTarget,
   loadPlatform,
+  runSearch,
+  searchText,
   type Car,
   type Desktop,
   type DiscoveryState,
   type Platform,
+  type SearchView,
+  type TokenStorageInfo,
 } from "./platform";
 
 /** Picks the right front: the plain dashboard in a browser, the car finder in the desktop app. */
@@ -24,6 +28,9 @@ export function Root() {
 function DesktopShell({ desktop }: { desktop: Desktop }) {
   const [state, setState] = useState<DiscoveryState | null>(null);
   const [choosing, setChoosing] = useState(false);
+  const [storage, setStorage] = useState<TokenStorageInfo | null>(desktop.tokenStorage.current());
+
+  useEffect(() => desktop.tokenStorage.subscribe(setStorage), [desktop]);
 
   useEffect(() => {
     let off: (() => void) | null = null;
@@ -70,7 +77,13 @@ function DesktopShell({ desktop }: { desktop: Desktop }) {
           comes back by itself.
         </p>
       )}
-      <App key={`${car.host}:${car.port}`} target={carTarget(car)} tokens={desktop.tokens} fetchImpl={desktop.fetch} />
+      <App
+        key={`${car.host}:${car.port}`}
+        target={carTarget(car)}
+        tokens={desktop.tokens}
+        fetchImpl={desktop.fetch}
+        tokenStorage={storage}
+      />
     </>
   );
 }
@@ -89,6 +102,8 @@ function Picker({
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState<SearchView>({ kind: "idle" });
+  const searching = search.kind === "searching";
 
   const pick = async (car: Car) => {
     setError("");
@@ -129,9 +144,14 @@ function Picker({
           </li>
         ))}
       </ul>
-      <button class="link" onClick={() => void desktop.rescan()}>
-        Search again
+      <button class="link" disabled={searching} onClick={() => void runSearch(desktop, setSearch)}>
+        {searching ? "Searching..." : "Search again"}
       </button>
+      {search.kind !== "idle" && (
+        <div class={search.kind === "none" || search.kind === "error" ? "warn" : "sub"} role="status">
+          {searchText(search)}
+        </div>
+      )}
       <form onSubmit={manual}>
         <label>
           Or enter the address (for example 192.168.1.50 or racer-car.local:8080)

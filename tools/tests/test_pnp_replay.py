@@ -1,0 +1,718 @@
+"""Tests for tools/pnp_replay.py: the metric functions on hand-made cases, the segment finder, the
+stream writer, the perception fidelity self-test on the 2026-11-12 fixture, and the planner replay
+end to end (skipped, with the reason, unless planner_replay_cli is built; the l3-and-cpp CI job
+builds it and sets PNP_REPLAY_REQUIRE_CLI=1 so there a missing binary is a failure).
+
+The fixture, tools/tests/fixtures/pnp_replay_2026-11-12.npz, is four cuts of the real bag:
+R0 (where the v0 car went to NO_TRACK), R1 (the corner approach and the stall), R3 (nose-in) and L (another
+driver's laps). tools/pnp_replay/cut_fixture.py regenerates it.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+from pnp_replay import bag, cut_fixture, metrics, perception, planner_stream, report, segments
+
+TESTS = Path(__file__).resolve().parent
+REPO_ROOT = TESTS.parents[1]
+FIXTURE = TESTS / "fixtures" / "pnp_replay_2026-11-12.npz"
+DYNAMICS_BUNDLE = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-nominal-v0"
+
+
+# --- metrics ---------------------------------------------------------------------------------
+
+
+def wall_points() -> np.ndarray:
+    """Dense points on two walls, y = +0.5 and y = -0.5, x from -1 to 4 (base_link)."""
+    x = np.arange(-1.0, 4.0, 0.01)
+    return np.concatenate(
+        [np.stack([x, np.full_like(x, 0.5)], axis=1), np.stack([x, np.full_like(x, -0.5)], axis=1)]
+    )
+
+
+def straight_track(y: float, half: float = 0.5) -> dict[str, np.ndarray]:
+    x = 0.2 * np.arange(16)
+    return {
+        "x": x,
+        "y": np.full(16, y),
+        "hl": np.full(16, half),
+        "hr": np.full(16, half),
+    }
+
+
+def test_clearance_deficit_of_a_centred_track_is_zero() -> None:
+    t = straight_track(0.0)
+    d = metrics.clearance_deficits(t["x"], t["y"], t["hl"], t["hr"], 16, wall_points())
+    assert len(d) == 11  # stations 0 .. 2.0 m: the ones within 2.0 m of the car
+    assert np.abs(d).max() < 0.011  # the point spacing
+
+
+def test_track_025_m_too_close_to_one_wall_has_deficit_025() -> None:
+    # the centreline runs 0.25 m off the middle, but the track claims 0.5 m to each side
+    t = straight_track(0.25)
+    d = metrics.clearance_deficits(t["x"], t["y"], t["hl"], t["hr"], 16, wall_points())
+    assert len(d) == 10
+    np.testing.assert_allclose(d, 0.25, atol=0.011)
+
+
+def test_clearance_deficit_ignores_invalid_and_far_stations_and_empty_scans() -> None:
+    t = straight_track(0.25)
+    d = metrics.clearance_deficits(t["x"], t["y"], t["hl"], t["hr"], 4, wall_points())
+    assert len(d) == 4  # only the first 4 stations are valid
+    assert len(metrics.clearance_deficits(t["x"], t["y"], t["hl"], t["hr"], 0, wall_points())) == 0
+    empty = np.zeros((0, 2))
+    assert len(metrics.clearance_deficits(t["x"], t["y"], t["hl"], t["hr"], 16, empty)) == 0
+    far = metrics.clearance_deficits(t["x"] + 5.0, t["y"], t["hl"], t["hr"], 16, wall_points())
+    assert len(far) == 0
+
+
+def test_perception_metrics_by_hand() -> None:
+    valid = np.array([16, 16, 5, 0, 16])
+    intr = np.array([0.0, 0.2, 0.05, math.nan, math.nan])
+    res = np.array([0.1, 0.3, 0.2, math.nan, math.nan])
+    deficits = np.array([0.0, 0.1, 0.2, 0.3])
+    m = metrics.perception_metrics(valid, intr, res, deficits)
+    assert m["scans"] == 5
+    assert m["scans_with_track"] == 4
+    assert m["intrusion_mean"] == pytest.approx((0.0 + 0.2 + 0.05) / 3)  # NaN and no-track skipped
+    assert m["intrusion_share_over_0.10"] == pytest.approx(1 / 3)
+    assert m["boundary_residual_p50_m"] == pytest.approx(0.2)
+    assert m["valid_count_share_under_6"] == pytest.approx(2 / 5)
+    assert m["clearance_deficit_share_over_0.15"] == pytest.approx(0.5)
+    assert m["clearance_deficit_p90_m"] == pytest.approx(np.percentile(deficits, 90))
+
+
+def test_perception_metrics_with_nothing_are_nan_not_errors() -> None:
+    m = metrics.perception_metrics(np.zeros(0, int), np.zeros(0), np.zeros(0), np.zeros(0))
+    assert m["scans"] == 0
+    assert math.isnan(m["intrusion_mean"])
+    assert math.isnan(m["clearance_deficit_p90_m"])
+
+
+def test_steering_change_stats_count_known_flips() -> None:
+    # changes +, -, +, -, +, -: every change after the first flips
+    steer = np.concatenate([[0.0], np.cumsum([0.01, -0.01, 0.01, -0.01, 0.01, -0.01])])
+    s = metrics.steering_change_stats(steer, 0.02)
+    assert s["sign_flips_per_s"] == pytest.approx(5 / (6 * 0.02))
+    assert s["std_rad"] == pytest.approx(0.01, rel=0.25)
+    assert s["p99_abs_rad"] == pytest.approx(0.01)
+    # a monotone ramp, and a held command, are not reversals
+    ramp = metrics.steering_change_stats(np.linspace(0, 0.1, 11), 0.02)
+    assert ramp["sign_flips_per_s"] == 0.0
+    held = metrics.steering_change_stats(np.array([0.0, 0.1, 0.1, 0.1, 0.2, 0.1]), 0.02)
+    assert held["sign_flips_per_s"] == pytest.approx(1 / (5 * 0.02))  # +, 0, 0, +, -
+    assert math.isnan(metrics.steering_change_stats(np.array([0.0, 1.0]), 0.02)["std_rad"])
+
+
+def test_eligible_ticks_need_a_fresh_scan_and_fresh_odometry() -> None:
+    now = np.arange(0, 1.0, 0.1)
+    scan_age = np.array([-1, -1, 0.1, 0.2, 0.34, 0.36, 0.1, 0.1, 0.1, 0.1])
+    odom_t = np.array([0.15, 0.25, 0.35, 0.45, 0.55])  # nothing after 0.55
+    ok = metrics.eligible_ticks(now, scan_age, odom_t)
+    # tick 0: no scan; 1: no scan; 2 (t 0.2): fresh both; 3 (0.3): ok; 4 (0.4): ok;
+    # 5 (0.5): scan 0.36 old; 6 (0.6): odom 0.05 old ok; 7 (0.7): odom 0.15 old
+    assert ok.tolist() == [False, False, True, True, True, False, True, False, False, False]
+
+
+def test_planner_metrics_state_counts_shares_and_agreement() -> None:
+    n = 100
+    now = 0.02 * np.arange(n)
+    state = np.where(np.arange(n) < 60, 1, 2)
+    speed = np.where(np.arange(n) < 20, 0.1, np.where(np.arange(n) < 60, 0.3, 0.0))
+    steer = np.where(np.arange(n) % 2 == 0, 0.05, -0.05).astype(float)
+    coll = np.full(n, 0.5)
+    solve = np.full(n, 0.002)
+    scan_age = np.full(n, 0.05)
+    scan_age[:10] = -1.0  # no scan yet: not eligible
+    odom_t = np.arange(0.0, 2.0, 0.02)
+    rec_state = np.where(np.arange(n) < 50, 1, 2)  # the recorded run stopped 10 ticks earlier
+    m = metrics.planner_metrics(
+        now, state, speed, steer, coll, solve, scan_age, odom_t,
+        dead_zone_mps=0.2, recorded_t=now, recorded_state=rec_state,
+    )  # fmt: skip
+    assert m["eligible_ticks"] == 90
+    assert m["state_counts"] == {"DRIVING": 50, "NO_TRACK": 40}
+    assert m["speed_zero_share"] == pytest.approx(40 / 90)
+    assert m["speed_below_dead_zone_share"] == pytest.approx(10 / 90)  # ticks 10..19
+    assert m["collision_fraction_mean"] == pytest.approx(0.5)
+    assert m["solve_time_ms_this_machine"]["p50"] == pytest.approx(2.0)
+    # alternating steering: a flip on every change
+    assert m["steering_change"]["sign_flips_per_s"] == pytest.approx(48 / (49 * 0.02))
+    assert m["agreement_with_recorded"]["share"] == pytest.approx(80 / 90)
+    assert m["agreement_with_recorded"]["replayed_to_recorded"] == {
+        "DRIVING->DRIVING": 40,
+        "DRIVING->NO_TRACK": 10,
+        "NO_TRACK->NO_TRACK": 40,
+    }
+
+
+def test_state_agreement_leaves_out_ticks_with_no_recorded_status_nearby() -> None:
+    t = np.array([0.0, 0.5, 1.0])
+    a = metrics.state_agreement(t, np.array([1, 1, 1]), np.array([0.0, 1.0]), np.array([1, 2]))
+    assert a["ticks_compared"] == 2  # the tick at 0.5 has none within 20 ms
+    assert a["share"] == pytest.approx(0.5)
+
+
+# --- segments --------------------------------------------------------------------------------
+
+
+def synthetic_bag_times() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Status at 50 Hz in three bursts (10-14 s, 20-24 s with a 1 s hole, 40-44 s), and odometry
+    at 10 Hz with a fast stretch of 15 s at 1 m/s (60-75 s), one of 5 s (90-95 s), and one of 12 s
+    during the second PnP burst."""
+    parts = [np.arange(10, 14, 0.02), np.arange(20, 22, 0.02), np.arange(23, 24, 0.02)]
+    parts.append(np.arange(40, 44, 0.02))
+    status_t = np.concatenate(parts)
+    odom_t = np.arange(0, 120, 0.1)
+    v = np.zeros_like(odom_t)
+    for a, b in ((60, 75), (90, 95), (15, 27)):
+        v[(odom_t >= a) & (odom_t < b)] = 1.0
+    return status_t, odom_t, v
+
+
+def test_segment_finder_names_pnp_runs_and_fast_laps() -> None:
+    status_t, odom_t, v = synthetic_bag_times()
+    found = segments.find_segments(status_t, odom_t, v)
+    names = [s.name for s in found]
+    # a 1 s hole is inside a run; 2 s is the limit
+    assert names == ["R0", "R1", "R2", "L"]
+    r1 = found[1]
+    assert (r1.t_from, r1.t_to) == pytest.approx((20.0, 23.98))
+    lap = found[-1]
+    assert lap.kind == "fast"
+    assert (lap.t_from, lap.t_to) == pytest.approx((60.0, 74.9))  # 5 s and PnP-time stretches out
+    assert not lap.has_planner_status
+
+
+def test_segment_finder_pnp_gap_is_two_seconds() -> None:
+    t = np.concatenate([np.arange(0, 1, 0.02), np.arange(3.5, 4, 0.02)])
+    assert [s.name for s in segments.find_segments(t, np.zeros(0), np.zeros(0))] == ["R0", "R1"]
+    t = np.concatenate([np.arange(0, 1, 0.02), np.arange(2.5, 3, 0.02)])
+    assert [s.name for s in segments.find_segments(t, np.zeros(0), np.zeros(0))] == ["R0"]
+
+
+def test_longest_fast_stretch_is_L() -> None:
+    odom_t = np.arange(0, 200, 0.1)
+    v = np.zeros_like(odom_t)
+    v[(odom_t >= 10) & (odom_t < 25)] = 1.0
+    v[(odom_t >= 100) & (odom_t < 160)] = 1.0
+    found = segments.find_segments(np.zeros(0), odom_t, v)
+    by = {s.name: s for s in found}
+    assert by["L"].t_from == pytest.approx(100.0)
+    assert by["L1"].t_from == pytest.approx(10.0)
+
+
+def test_select_by_name_by_window_and_the_error_lists_what_exists() -> None:
+    status_t, odom_t, v = synthetic_bag_times()
+    found = segments.find_segments(status_t, odom_t, v)
+    assert [s.name for s in segments.select(found, ["R2", "L"])] == ["R2", "L"]
+    assert len(segments.select(found, None)) == len(found)
+    w = segments.select(found, None, 5.0, 8.0)
+    assert (w[0].name, w[0].t_from, w[0].t_to) == ("W", 5.0, 8.0)
+    with pytest.raises(ValueError, match=r"no segment R9; the bag has: R0 10-14 s"):
+        segments.select(found, ["R9"])
+    with pytest.raises(ValueError, match="--from and --to"):
+        segments.select(found, None, 5.0, None)
+    with pytest.raises(ValueError, match="--from and --to"):
+        segments.select(found, None, 8.0, 5.0)
+
+
+# --- bag format and the stream ---------------------------------------------------------------
+
+
+def tiny_recording() -> bag.Recording:
+    n = 8
+    ranges = np.array(
+        [[1.0, 2.5, math.inf, 0.75, 3.14175, 0.5, math.inf, 1.25]] * 2, dtype=np.float32
+    )
+    q = np.stack([bag.quantise_ranges(r) for r in ranges])
+    return {
+        "t0_log_s": np.array(100.0),
+        "cache_version": np.array(bag.CACHE_VERSION),
+        "scan_t": np.array([10.10, 10.20]),
+        "scan_stamp": np.array([10.00, 10.10]),
+        "scan_angle_min": np.full(2, -math.pi),
+        "scan_angle_increment": np.full(2, 2 * math.pi / n),
+        "scan_range_min": np.full(2, 0.05),
+        "scan_range_max": np.full(2, 16.0),
+        "scan_q": q,
+        "odom_t": np.array([10.00, 10.05, 10.10, 10.15, 10.20]),
+        "odom_v": np.array([0.2, 0.4, 1.0, math.nan, 0.3]),
+        "trk_t": np.array([10.13]),
+        "trk_stamp": np.array([10.00]),
+        "trk_x": np.arange(16, dtype=np.float32)[None] * 0.2,
+        "trk_y": np.zeros((1, 16), np.float32),
+        "trk_hl": np.full((1, 16), 0.5, np.float32),
+        "trk_hr": np.full((1, 16), 0.5, np.float32),
+        "trk_sigma": np.full((1, 16), 0.02, np.float32),
+        "trk_valid": np.array([12]),
+        "trk_residual": np.array([math.nan]),
+        "trk_intrusion": np.array([0.125]),
+    }
+
+
+def parse_stream(lines: list[str]) -> list[tuple[str, list[float]]]:
+    out = []
+    for line in lines:
+        kind, *rest = line.split()
+        out.append((kind, [float(x) for x in rest]))
+    return out
+
+
+def test_ranges_round_trip_through_uint16_quarter_millimetres() -> None:
+    r = np.array([0.0, 0.05, 1.0, 3.14175, 16.0, math.inf], dtype=np.float32)
+    q = bag.quantise_ranges(r)
+    assert q.dtype == np.uint16
+    back = bag.dequantise_ranges(q)
+    assert back[1:5].tolist() == r[1:5].tolist()  # exact, not close
+    assert math.isinf(back[5])
+    assert math.isinf(back[0])  # 0 m is not a return
+
+
+def test_ranges_off_the_grid_are_refused_not_rounded() -> None:
+    with pytest.raises(ValueError, match="0.25 mm grid"):
+        bag.quantise_ranges(np.array([1.00013], dtype=np.float32))
+    with pytest.raises(ValueError, match="does not fit"):
+        bag.quantise_ranges(np.array([20.0], dtype=np.float32))
+
+
+def test_stream_has_every_event_in_arrival_order_and_ticks_from_the_start() -> None:
+    rec = tiny_recording()
+    lines = planner_stream.stream_lines(
+        rec, 10.10, 10.20, tracks_mode="recorded", preroll_s=0.1, tick_s=0.02
+    )
+    events = parse_stream(lines)
+    kinds = [k for k, _ in events]
+    assert kinds.count("K") == 6  # 10.10, 10.12, ... 10.20
+    assert kinds.count("S") == 2 and kinds.count("T") == 1
+    arrivals = [v[0] for _, v in events]
+    assert arrivals == sorted(arrivals)
+    # at the same instant an event comes before the tick: S (10.10) before K 10.10
+    first_k = kinds.index("K")
+    assert events[first_k][1][0] == pytest.approx(10.10)
+    assert "S" in kinds[:first_k]
+    scan = next(v for k, v in events if k == "S")
+    assert scan[1] == pytest.approx(10.00)  # the header stamp, not the arrival
+    assert int(scan[6]) == 8
+    assert np.array(scan[7:])[[2, 6]].tolist() == [math.inf, math.inf]
+    track = next(v for k, v in events if k == "T")
+    assert track[0] == pytest.approx(10.13) and track[1] == pytest.approx(10.00)
+    assert track[2] == 12 and math.isnan(track[3]) and track[4] == pytest.approx(0.125)
+    assert len(track) == 5 + 5 * 16
+    assert track[5 + 3] == pytest.approx(0.6)  # x of station 3
+    odom = [v for k, v in events if k == "O"]
+    assert any(math.isnan(v[1]) for v in odom)  # NaN is passed through for the CLI to drop
+
+
+def test_stream_scan_ranges_survive_the_text_round_trip_exactly() -> None:
+    rec = tiny_recording()
+    lines = planner_stream.stream_lines(rec, 10.10, 10.20, tracks_mode="none")
+    scan = next(v for k, v in parse_stream(lines) if k == "S")
+    expected = bag.dequantise_ranges(rec["scan_q"][0])
+    assert np.array(scan[7:], dtype=np.float32).tolist() == expected.tolist()
+
+
+def test_stream_tracks_modes_and_speed_clip() -> None:
+    rec = tiny_recording()
+    none = planner_stream.stream_lines(rec, 10.10, 10.20, tracks_mode="none")
+    assert "T" not in {k for k, _ in parse_stream(none)}
+    tracks = perception.Tracks(
+        scan_index=np.array([0, 1]),
+        x=np.zeros((2, 16), np.float32),
+        y=np.zeros((2, 16), np.float32),
+        hl=np.full((2, 16), 0.4, np.float32),
+        hr=np.full((2, 16), 0.4, np.float32),
+        sigma=np.full((2, 16), 0.01, np.float32),
+        valid=np.array([16, 3]),
+        residual=np.array([0.01, 0.02]),
+        intrusion=np.array([0.0, 0.5]),
+    )
+    replay = planner_stream.stream_lines(
+        rec, 10.10, 10.20, tracks_mode="replay", tracks=tracks, track_latency_s=0.03
+    )
+    ts = [v for k, v in parse_stream(replay) if k == "T"]
+    assert ts[0][0] == pytest.approx(10.13)  # scan arrival 10.10 + 0.03
+    assert ts[0][1] == pytest.approx(10.00)  # the scan's header stamp
+    assert len(ts) == 1  # the second track would arrive at 10.23, after the segment
+    with pytest.raises(ValueError, match="needs the replayed tracks"):
+        planner_stream.stream_lines(rec, 10.10, 10.20, tracks_mode="replay")
+    with pytest.raises(ValueError, match="tracks must be"):
+        planner_stream.stream_lines(rec, 10.10, 10.20, tracks_mode="bogus")
+    clipped = planner_stream.stream_lines(rec, 10.10, 10.20, tracks_mode="none", clip_speed_mps=0.4)
+    speeds = [v[1] for k, v in parse_stream(clipped) if k == "O" and not math.isnan(v[1])]
+    assert max(speeds) == pytest.approx(0.4) and min(speeds) == pytest.approx(0.2)
+
+
+def test_cli_command_native_and_in_docker(tmp_path: Path) -> None:
+    binary = tmp_path / "bin" / "planner_replay_cli"
+    binary.parent.mkdir()
+    binary.write_text("")
+    work = tmp_path / "work"
+    work.mkdir()
+    args = ["--bundle", str(DYNAMICS_BUNDLE), "--stream", str(work / "s.txt"), "--v-max", "0.4"]
+    assert planner_stream.Cli(binary).command(args) == [str(binary), *args]
+    cmd = planner_stream.Cli(binary, "ros-dev:local").command(args)
+    assert cmd[:3] == ["docker", "run", "--rm"]
+    assert f"{work}:{work}" in cmd and f"{binary.parent}:{binary.parent}" in cmd
+    assert cmd[-len(args) :] == args and "ros-dev:local" in cmd
+
+
+def test_set_args_are_sorted_and_booleans_spelled_for_the_cli() -> None:
+    args = planner_stream.set_args(
+        {"samples": 480, "laser_yaw_from_vehicle_params": False, "a": 0.1}
+    )
+    assert args == [
+        "--set", "a=0.1", "--set", "laser_yaw_from_vehicle_params=false", "--set", "samples=480"
+    ]  # fmt: skip
+
+
+# --- the report ------------------------------------------------------------------------------
+
+
+def test_report_flatten_table_compare_and_json(tmp_path: Path) -> None:
+    seg = {
+        "kind": "pnp",
+        "t_from": 1.0,
+        "t_to": 3.0,
+        "duration_s": 2.0,
+        "perception": metrics.perception_metrics(
+            np.array([16, 16]), np.array([0.1, 0.3]), np.array([0.1, 0.2]), np.array([0.0, 0.2])
+        ),
+        "planner": {
+            "eligible_ticks": 10,
+            "state_counts": {"DRIVING": 7, "NO_TRACK": 3},
+            "steering_change": {"std_rad": 0.02},
+            "agreement_with_recorded": {"share": math.nan},
+        },
+    }
+    flat = report.flatten(seg)
+    assert flat["perception.intrusion_mean"] == pytest.approx(0.2)
+    assert flat["planner.state_counts.DRIVING"] == 7
+    assert math.isnan(flat["planner.agreement_with_recorded.share"])
+    result = {"backend": "geometric", "tracks": "replay", "v_max_mps": 0.4, "segments": {"R1": seg}}
+    table = report.format_table(result)
+    assert "intrusion mean" in table and "DRIVING" in table
+    base = json.loads(json.dumps({"segments": {"R1": {**seg, "planner": {"eligible_ticks": 4}}}},
+                                 default=str))  # fmt: skip
+    compared = report.format_table(result, base)
+    assert "baseline" in compared and "10" in compared and "4" in compared
+    path = tmp_path / "out" / "r.json"
+    report.write_json(result, path)
+    loaded = json.loads(path.read_text())  # NaN became null: strict JSON
+    assert loaded["segments"]["R1"]["planner"]["agreement_with_recorded"]["share"] is None
+
+
+# --- the fixture -----------------------------------------------------------------------------
+
+
+def test_fixture_is_small_and_has_the_four_cuts() -> None:
+    assert FIXTURE.stat().st_size < 450_000
+    for name in ("R0", "R1", "R3", "L"):
+        rec, a, b = cut_fixture.load_cut(FIXTURE, name)
+        assert b > a
+        assert len(rec["scan_t"]) >= (b - a) * 9  # 10 Hz
+        assert len(rec["odom_t"]) >= (b - a) * 40
+        assert rec["scan_t"].min() >= a - planner_stream.PREROLL_S - 1e-9
+    r0, _, _ = cut_fixture.load_cut(FIXTURE, "R0")
+    assert len(r0["st_t"]) > 0 and len(r0["trk_t"]) > 0
+    lap, _, _ = cut_fixture.load_cut(FIXTURE, "L")
+    assert len(lap["st_t"]) == 0 and len(lap["trk_t"]) == 0  # not a PnP run
+
+
+def test_cut_windows_follow_the_segments() -> None:
+    found = [
+        segments.Segment("R0", "pnp", 472.6, 491.5),
+        segments.Segment("R1", "pnp", 1087.2, 1123.4),
+        segments.Segment("R3", "pnp", 1174.1, 1188.9),
+        segments.Segment("L", "fast", 1749.0, 1923.0),
+    ]
+    w = cut_fixture.windows(found)
+    assert w["R0"] == pytest.approx((475.6, 480.1))
+    assert w["R1"] == pytest.approx((1093.2, 1099.2))
+    assert w["R3"] == pytest.approx((1178.1, 1180.1))
+    assert w["L"] == (1760.0, 1770.0)
+    with pytest.raises(ValueError, match="does not hold"):
+        cut_fixture.windows([*found[:3], segments.Segment("L", "fast", 1800.0, 1900.0)])
+
+
+@pytest.fixture(scope="module")
+def perceiver() -> perception.Perceiver:
+    return perception.build_perceiver("geometric")
+
+
+def recorded_as_tracks(rec: bag.Recording, a: float, b: float) -> perception.Tracks:
+    """The recorded /pnp/local_track of [a, b] as a replay result, each on the scan of its header
+    stamp: a perfect replay, to test the fidelity check's pass path without any tracer."""
+    pairs = []
+    for k in np.nonzero((rec["trk_stamp"] >= a) & (rec["trk_stamp"] <= b))[0]:
+        i = int(np.argmin(np.abs(rec["scan_stamp"] - rec["trk_stamp"][k])))
+        assert abs(rec["scan_stamp"][i] - rec["trk_stamp"][k]) < 1e-3
+        pairs.append((i, int(k)))
+    idx = np.array([k for _, k in pairs])
+    return perception.Tracks(
+        scan_index=np.array([i for i, _ in pairs]),
+        x=rec["trk_x"][idx],
+        y=rec["trk_y"][idx],
+        hl=rec["trk_hl"][idx],
+        hr=rec["trk_hr"][idx],
+        sigma=rec["trk_sigma"][idx],
+        valid=rec["trk_valid"][idx],
+        residual=rec["trk_residual"][idx],
+        intrusion=rec["trk_intrusion"][idx],
+    )
+
+
+@pytest.mark.parametrize("name", ["R0", "R1", "R3"])
+def test_the_check_passes_for_a_perfect_replay_and_fails_for_a_changed_one(name: str) -> None:
+    rec, a, b = cut_fixture.load_cut(FIXTURE, name)
+    perfect = recorded_as_tracks(rec, a, b)
+    fid = perception.check_fidelity(rec, perfect, a, b)
+    assert fid.ok and fid.matched >= 15 and fid.max_centreline_diff_m == 0.0
+    assert fid.unmatched_recorded == 0
+    changed = perception.Tracks(**{**perfect.__dict__, "y": perfect.y + np.float32(1e-3)})
+    bad = perception.check_fidelity(rec, changed, a, b)
+    assert not bad.ok and bad.max_centreline_diff_m > 1e-4
+    other = perception.Tracks(**{**perfect.__dict__, "valid": perfect.valid - 1})
+    assert perception.check_fidelity(rec, other, a, b).valid_count_mismatches == fid.matched
+    # a replay of no scans matches nothing, which is a failure and not a pass
+    empty = perfect.subset(np.zeros(len(perfect), dtype=bool))
+    assert not perception.check_fidelity(rec, empty, a, b).ok
+
+
+@pytest.mark.parametrize("name", ["R0", "R1", "R3"])
+def test_replayed_tracks_line_up_with_the_recorded_ones_by_header_stamp(
+    name: str, perceiver: perception.Perceiver
+) -> None:
+    """Every recorded track has a replayed scan of its header stamp, the replay is repeatable and
+    well formed. When the tracer is the one that recorded the bag (PNP_REPLAY_PERCEPTION_SRC at
+    the 2026-11-12 checkout, geometric-v0) the tracks also have to be equal to 1e-5 m; main's
+    tracer is v1 now, so by default they only have to differ in a measured, reported way."""
+    rec, a, b = cut_fixture.load_cut(FIXTURE, name)
+    scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
+    tracks = perception.run_perceiver(perceiver, rec, scans)
+    again = perception.run_perceiver(perceiver, rec, scans)
+    assert tracks.x.tolist() == again.x.tolist() and tracks.valid.tolist() == again.valid.tolist()
+    assert np.isfinite(tracks.x).all() and (tracks.valid >= 0).all() and (tracks.valid <= 16).all()
+    fid = perception.check_fidelity(rec, tracks, a, b)
+    assert fid.matched >= 15 and fid.unmatched_recorded == 0, fid
+    if perceiver.model_id == "geometric-v0":
+        assert fid.ok, fid
+
+
+def test_fidelity_check_reports_the_v0_to_v1_difference(perceiver: perception.Perceiver) -> None:
+    if perceiver.model_id == "geometric-v0":
+        pytest.skip("the tracer is v0: the replay equals the recording (the test above)")
+    rec, a, b = cut_fixture.load_cut(FIXTURE, "R1")
+    scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
+    fid = perception.check_fidelity(rec, perception.run_perceiver(perceiver, rec, scans), a, b)
+    assert not fid.ok  # a different tracer is reported as different, never waved through
+
+
+def test_perception_summary_counts_only_moving_scans(perceiver: perception.Perceiver) -> None:
+    rec, a, b = cut_fixture.load_cut(FIXTURE, "L")
+    scans = planner_stream.scan_indices(rec, a, b)
+    tracks = perception.run_perceiver(perceiver, rec, scans)
+    summary, arrays = perception.perception_summary(rec, tracks)
+    assert summary["scans"] == len(scans)  # another driver's laps: moving throughout
+    assert len(arrays["valid"]) == summary["scans"]
+    stride, _ = perception.perception_summary(rec, tracks, stride=5)
+    assert stride["scans"] == math.ceil(len(scans) / 5)
+    still, _ = perception.perception_summary(rec, tracks, moving_threshold_mps=99.0)
+    assert still["scans"] == 0
+
+
+# --- the planner replay, end to end (needs planner_replay_cli) -------------------------------
+
+
+def _cli_or_skip() -> planner_stream.Cli:
+    try:
+        return planner_stream.find_cli()
+    except planner_stream.ReplayError as error:
+        if os.environ.get("PNP_REPLAY_REQUIRE_CLI"):
+            pytest.fail(f"planner_replay_cli is required here but not built: {error}")
+        pytest.skip(f"planner_replay_cli not built ({error})")
+
+
+# Deterministic: the sample budget halves a slow solve, and a loaded CI machine has slow solves.
+DETERMINISTIC = {"solve_halve_over_ms": 200.0}
+
+
+def replay_cut(
+    name: str,
+    tmp_path: Path,
+    tracks_mode: str,
+    params: dict[str, float | bool],
+    tracks: perception.Tracks | None = None,
+) -> tuple[dict, dict]:
+    cli = _cli_or_skip()
+    rec, a, b = cut_fixture.load_cut(FIXTURE, name)
+    lines = planner_stream.stream_lines(rec, a, b, tracks_mode=tracks_mode, tracks=tracks)
+    unique = len(list(tmp_path.iterdir()))  # a fresh file name per call
+    stream = tmp_path / f"{name}.{unique}.stream"
+    planner_stream.write_stream(lines, stream)
+    rows = planner_stream.run_cli(
+        cli, DYNAMICS_BUNDLE, 0.4, {**DETERMINISTIC, **params}, stream, tmp_path / f"{unique}.csv"
+    )
+    recorded = (rec["st_t"] >= a) & (rec["st_t"] <= b)
+    m = metrics.planner_metrics(
+        rows["now_s"], rows["state"], rows["cmd_speed_mps"], rows["cmd_steering_rad"],
+        rows["collision_fraction"], rows["solve_time_s"], rows["scan_age_s"], rec["odom_t"],
+        recorded_t=rec["st_t"][recorded] if recorded.any() else None,
+        recorded_state=rec["st_state"][recorded].astype(int) if recorded.any() else None,
+    )  # fmt: skip
+    return rows, m
+
+
+def test_planner_replay_r0_keeps_driving_where_the_v0_car_stopped(tmp_path: Path) -> None:
+    """R0 is where the 2026-11-12 v0 car went to NO_TRACK. The planner on main (v0.1) has no
+    NO_TRACK state: on the same recorded tracks it keeps driving, and the comparison with the
+    recorded status shows exactly the ticks where the v0 car stopped."""
+    rows, m = replay_cut("R0", tmp_path, "recorded", {})
+    assert len(rows["now_s"]) == pytest.approx((7.5 - 3.0) / 0.02, abs=2)
+    assert "NO_TRACK" not in m["state_counts"]
+    assert m["state_counts"]["DRIVING"] > 200
+    assert m["speed_zero_share"] < 0.05
+    confusion = m["agreement_with_recorded"]["replayed_to_recorded"]
+    assert confusion["DRIVING->NO_TRACK"] > 50  # the v0 car's stall, still in the recording
+    assert confusion["DRIVING->DRIVING"] > 100
+
+
+def test_planner_replay_r1_crawls_at_the_recorded_corner(tmp_path: Path) -> None:
+    _, m = replay_cut("R1", tmp_path, "recorded", {})
+    assert m["agreement_with_recorded"]["share"] >= 0.9
+    assert m["speed_below_dead_zone_share"] > 0.3  # commands under the plant's dead zone
+
+
+def test_planner_replay_r3_nose_in_crawls(tmp_path: Path) -> None:
+    _, m = replay_cut("R3", tmp_path, "recorded", {})
+    assert m["collision_fraction_mean"] > 0.05
+    assert m["speed_below_dead_zone_share"] > 0.9
+    assert m["agreement_with_recorded"]["share"] >= 0.9
+
+
+def test_planner_replay_drives_on_the_scan_alone_with_no_tracks(
+    tmp_path: Path, perceiver: perception.Perceiver
+) -> None:
+    rows, m = replay_cut("L", tmp_path, "none", {})
+    assert "NO_TRACK" not in set(rows["state_name"]) and 6 not in set(rows["state"])
+    assert m["state_counts"]["DRIVING"] > 400
+    assert max(rows["cmd_speed_mps"]) > 0.0
+    rec, a, b = cut_fixture.load_cut(FIXTURE, "L")
+    scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
+    tracks = perception.run_perceiver(perceiver, rec, scans)
+    rows, m = replay_cut("L", tmp_path, "replay", {}, tracks)
+    assert m["state_counts"].get("DRIVING", 0) > 400
+    assert float(np.nanmean(rows["track_confidence"])) > 0.0  # the replayed tracks are used
+    assert 6 not in set(rows["state"])  # no FAULT
+
+
+def test_planner_replay_is_repeatable(tmp_path: Path) -> None:
+    a, _ = replay_cut("R1", tmp_path, "recorded", {})
+    b, _ = replay_cut("R1", tmp_path, "recorded", {})
+    assert a["cmd_steering_rad"].tolist() == b["cmd_steering_rad"].tolist()
+    assert a["state"].tolist() == b["state"].tolist()
+
+
+def test_planner_replay_rejects_the_v0_parameters_that_no_longer_exist(tmp_path: Path) -> None:
+    cli = _cli_or_skip()
+    stream = tmp_path / "empty.stream"
+    stream.write_text("")
+    with pytest.raises(planner_stream.ReplayError, match="unknown parameter"):
+        planner_stream.run_cli(
+            cli, DYNAMICS_BUNDLE, 0.4, {"max_intrusion_fraction": 0.2}, stream, tmp_path / "o.csv"
+        )
+
+
+def test_planner_replay_refuses_a_bundle_that_fails_a_check(tmp_path: Path) -> None:
+    cli = _cli_or_skip()
+    bad = tmp_path / "bad_bundle"
+    bad.mkdir()
+    stream = tmp_path / "empty.stream"
+    stream.write_text("")
+    with pytest.raises(planner_stream.ReplayError, match="ManifestMissing"):
+        planner_stream.run_cli(cli, bad, 0.4, {}, stream, tmp_path / "o.csv")
+
+
+# --- the command line ------------------------------------------------------------------------
+
+
+def _script():
+    """tools/pnp_replay.py as a module (the package of the same name wins `import pnp_replay`)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "pnp_replay_script", REPO_ROOT / "tools" / "pnp_replay.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="module")
+def r1_recording(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, float, float]:
+    """The fixture's R1 cut saved as an ordinary recording .npz, the way a bag's cache is."""
+    rec, a, b = cut_fixture.load_cut(FIXTURE, "R1")
+    path = tmp_path_factory.mktemp("rec") / "r1.npz"
+    bag.save_recording(rec, path)
+    return path, a, b
+
+
+def test_cli_perception_only_run_writes_json_and_the_fidelity_exit_status_is_honest(
+    r1_recording: tuple[Path, float, float], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, a, b = r1_recording
+    out = tmp_path / "r1.json"
+    base = [str(path), "--from", str(a), "--to", str(b), "--no-planner"]
+    code = _script().main([*base, "--check-fidelity", "--out", str(out)])
+    seg = json.loads(out.read_text())["segments"]["W"]
+    # 0 only when the replay equals the recording (the tracer that recorded it); main's v1 tracer
+    # against a v0 recording is reported as a failure
+    assert code == (0 if seg["fidelity"]["ok"] else 1)
+    assert seg["fidelity"]["matched"] > 0
+    assert seg["perception"]["scans"] > 0 and "planner" not in seg
+    assert _script().main([*base, "--out", str(tmp_path / "plain.json")]) == 0
+    assert "intrusion mean" in capsys.readouterr().out
+
+
+def test_cli_usage_errors_exit_2_and_say_why(
+    r1_recording: tuple[Path, float, float], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, a, b = r1_recording
+    main = _script().main
+    out = ["--out", str(tmp_path / "x.json")]
+    assert main([str(path), "--segment", "R9", "--no-planner", *out]) == 2
+    assert "no segment R9" in capsys.readouterr().err
+    assert main([str(path), "--from", str(a), "--to", str(b), *out]) == 2  # no bundle
+    assert "--dynamics-bundle is required" in capsys.readouterr().err
+    code = main([str(path), "--from", str(a), "--to", str(b), "--no-planner", "--check-fidelity",
+                 "--backend", "net", *out])  # fmt: skip
+    assert code == 2
+    assert "--backend geometric" in capsys.readouterr().err
+    assert main([str(tmp_path / "missing.npz"), "--no-planner", *out]) == 2
+
+
+def test_cli_planner_run_compares_with_a_baseline(
+    r1_recording: tuple[Path, float, float], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _cli_or_skip()
+    path, a, b = r1_recording
+    main = _script().main
+    common = [str(path), "--from", str(a), "--to", str(b), "--tracks", "recorded",
+              "--dynamics-bundle", str(DYNAMICS_BUNDLE), "--v-max", "0.4",
+              "--set", "solve_halve_over_ms=200"]  # fmt: skip
+    first = tmp_path / "first.json"
+    assert main([*common, "--out", str(first)]) == 0
+    capsys.readouterr()
+    second = tmp_path / "second.json"
+    assert main([*common, "--out", str(second), "--compare", str(first)]) == 0
+    table = capsys.readouterr().out
+    assert "baseline" in table and "DRIVING" in table
+    planner = json.loads(second.read_text())["segments"]["W"]["planner"]
+    assert planner["state_counts"]["DRIVING"] > 100
+    assert planner["parameters"] == {"solve_halve_over_ms": 200.0}

@@ -75,6 +75,9 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from racer_gym_bridge import track_loader
 from racer_gym_bridge.conversions import (
+    CommandDelay,
+    FirstOrderLag,
+    apply_speed_deadband,
     build_occupancy_grid_fields,
     build_odom_fields,
     build_scan_fields,
@@ -468,8 +471,33 @@ class BridgeNode(Node):
         response.message = "sim reset"
         return response
 
+    def _plant_speed_target(self, requested: float) -> float:
+        """The speed target after the plant's gain and slew limits. The gym's speed controller
+        accelerates at 10 a_max / v_max per m/s of error, so a target 1 / that many seconds of the
+        limit away from the current speed asks for exactly the limit."""
+        up, down = self._plant_accel_max_mps2, self._plant_decel_max_mps2
+        if up <= 0.0 and down <= 0.0:
+            return requested
+        target = self._plant_speed_gain * requested
+        params = self.env.unwrapped.params
+        lead_s = float(params["v_max"]) / (10.0 * float(params["a_max"]))
+        speed = float(self.env.unwrapped.sim.agents[0].state[3])
+        if up > 0.0:
+            target = min(target, speed + up * lead_s)
+        if down > 0.0:
+            target = max(target, speed - down * lead_s)
+        return target
+
     def _on_timer(self) -> None:
-        longitudinal = self._latest_speed
+        # plant_command_delay_s (default 0): the /drive command acts this long after it arrived.
+        speed_command, steering_command = self._plant_command_delay.push(
+            (self._latest_speed, self._latest_steering_angle)
+        )
+        # plant_speed_deadband_mps (default 0): the drive train does not move for a smaller
+        # request; the dead band comes before the gain and the slew limits.
+        longitudinal = self._plant_speed_target(
+            apply_speed_deadband(speed_command, self._plant_speed_deadband_mps)
+        )
         if self._mirror_reverse_speed_control:
             params = self.env.unwrapped.params
             longitudinal = mirrored_speed_to_accel(
@@ -481,11 +509,16 @@ class BridgeNode(Node):
             )
         # steering_offset_rad (default 0): an uncalibrated servo trim. The wheels point this far
         # off what /drive asked for, and nothing downstream is told.
-        steering = self._latest_steering_angle + self._steering_offset_rad
+        side_gain = (
+            self._plant_steer_gain_left if steering_command >= 0.0 else self._plant_steer_gain_right
+        )
+        steering = side_gain * steering_command + self._steering_offset_rad
         if self._steering_limit_left_rad > 0.0:
             steering = min(steering, self._steering_limit_left_rad)
         if self._steering_limit_right_rad > 0.0:
             steering = max(steering, -self._steering_limit_right_rad)
+        # plant_steer_tau_s (default 0): the wheels follow the angle with a first order lag.
+        steering = self._plant_steer_lag.step(steering)
         action = drive_cmd_to_action(steering, longitudinal)
         obs, _reward, terminated, truncated, _info = self.env.step(action)
         if terminated or truncated:
@@ -502,6 +535,10 @@ class BridgeNode(Node):
     # -- helpers -----------------------------------------------------------
 
     def _reset_env(self) -> None:
+        # Plant realism state, stepped at the control period; a reset starts it at rest.
+        dt = 1.0 / self._step_rate_hz
+        self._plant_command_delay = CommandDelay(self._plant_command_delay_s, dt)
+        self._plant_steer_lag = FirstOrderLag(self._plant_steer_tau_s, dt)
         obs, _info = self.env.reset(seed=self._seed)
         self._warned_terminated = False
         self._publish(obs)
@@ -1104,6 +1141,51 @@ class BridgeNode(Node):
                     0.2,
                 ),
             ).value
+        )
+
+        # Plant realism (default off): the actuation of a fitted dynamics bundle. The wheels point
+        # gain * (/drive angle), per side, and the speed target is limited so the car cannot speed
+        # up faster than accel_max or slow faster than decel_max (the gym's own speed controller
+        # then tracks it). Lets a sim run use the plant the planner's model describes.
+        def plant(name: str, default: float, low: float, high: float, doc: str) -> float:
+            return float(self.declare_parameter(name, default, described(doc, low, high)).value)
+
+        self._plant_steer_gain_left = plant(
+            "plant_steer_gain_left", 1.0, 0.1, 3.0, "Road wheel angle per /drive angle, left."
+        )
+        self._plant_steer_gain_right = plant(
+            "plant_steer_gain_right", 1.0, 0.1, 3.0, "Road wheel angle per /drive angle, right."
+        )
+        self._plant_speed_gain = plant(
+            "plant_speed_gain", 1.0, 0.1, 3.0, "Steady state speed per /drive speed."
+        )
+        self._plant_accel_max_mps2 = plant(
+            "plant_accel_max_mps2", 0.0, 0.0, 20.0, "Speed-up limit (m/s^2); 0 is off."
+        )
+        self._plant_decel_max_mps2 = plant(
+            "plant_decel_max_mps2", 0.0, 0.0, 20.0, "Slow-down limit (m/s^2); 0 is off."
+        )
+        self._plant_speed_deadband_mps = plant(
+            "plant_speed_deadband_mps",
+            0.0,
+            0.0,
+            1.0,
+            "A /drive speed below this magnitude is a standstill (m/s); 0 is off.",
+        )
+        self._plant_steer_tau_s = plant(
+            "plant_steer_tau_s",
+            0.0,
+            0.0,
+            2.0,
+            "First order lag of the wheel angle, stepped at the control period (s); 0 is off.",
+        )
+        self._plant_command_delay_s = plant(
+            "plant_command_delay_s",
+            0.0,
+            0.0,
+            1.0,
+            "The /drive command acts this long after it arrives, rounded to control periods "
+            "(s); 0 is off.",
         )
 
     def _publish_map_once(self) -> None:

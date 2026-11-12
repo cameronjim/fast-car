@@ -1,0 +1,397 @@
+{
+  "heldout_windows": 747,
+  "heldout_horizons_s": [
+    0.5,
+    1.0,
+    1.5
+  ],
+  "heldout_errors": {
+    "placeholder_nominal": {
+      "0.5": {
+        "speed_rmse_mps": 0.04506355814893984,
+        "yaw_rmse_rad": 0.06837383733187005,
+        "pos_rmse_m": 0.04708619695638186
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.04754389670477858,
+        "yaw_rmse_rad": 0.14503774624977225,
+        "pos_rmse_m": 0.10115772647817298
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.051875359368582535,
+        "yaw_rmse_rad": 0.22310410335097317,
+        "pos_rmse_m": 0.15727468643253653
+      }
+    },
+    "fitted_nominal": {
+      "0.5": {
+        "speed_rmse_mps": 0.03282129874028425,
+        "yaw_rmse_rad": 0.023271174364636486,
+        "pos_rmse_m": 0.03934269803625048
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.027804865998383665,
+        "yaw_rmse_rad": 0.04205050511265337,
+        "pos_rmse_m": 0.07813687107350537
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.04097869348579498,
+        "yaw_rmse_rad": 0.05907121607544355,
+        "pos_rmse_m": 0.11634195155782012
+      }
+    },
+    "fitted_nominal_other_side_tying": {
+      "0.5": {
+        "speed_rmse_mps": 0.03282129874028425,
+        "yaw_rmse_rad": 0.07415769216251529,
+        "pos_rmse_m": 0.03941520450333929
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.027804865998383665,
+        "yaw_rmse_rad": 0.14654564950685262,
+        "pos_rmse_m": 0.08000447089818187
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.04097869348579498,
+        "yaw_rmse_rad": 0.21647388911617033,
+        "pos_rmse_m": 0.12338075539480156
+      }
+    },
+    "fitted_plus_residual_seed0": {
+      "0.5": {
+        "speed_rmse_mps": 0.04106046494008916,
+        "yaw_rmse_rad": 0.062297563426151434,
+        "pos_rmse_m": 0.04749438770723796
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.03845649190809439,
+        "yaw_rmse_rad": 0.12450933995637979,
+        "pos_rmse_m": 0.09726596564208331
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.04177198018665807,
+        "yaw_rmse_rad": 0.18562404349219083,
+        "pos_rmse_m": 0.14907298085079435
+      }
+    },
+    "fitted_plus_residual_seed1": {
+      "0.5": {
+        "speed_rmse_mps": 0.048117082160013126,
+        "yaw_rmse_rad": 0.06087741416787749,
+        "pos_rmse_m": 0.052180273372919916
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.04719121166627191,
+        "yaw_rmse_rad": 0.12349099456653359,
+        "pos_rmse_m": 0.10744581082503056
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.05057498859468543,
+        "yaw_rmse_rad": 0.18656400327085948,
+        "pos_rmse_m": 0.16383655904178115
+      }
+    },
+    "fitted_plus_residual_seed2": {
+      "0.5": {
+        "speed_rmse_mps": 0.035923305460843914,
+        "yaw_rmse_rad": 0.03483626588221381,
+        "pos_rmse_m": 0.045554681007335146
+      },
+      "1.0": {
+        "speed_rmse_mps": 0.03375737656284866,
+        "yaw_rmse_rad": 0.06611253418486239,
+        "pos_rmse_m": 0.09186273997968629
+      },
+      "1.5": {
+        "speed_rmse_mps": 0.03776199215193311,
+        "yaw_rmse_rad": 0.09536608653443933,
+        "pos_rmse_m": 0.13835465276148012
+      }
+    }
+  },
+  "heldout_errors_per_bag": {
+    "2026-11-11T03-54-11_car_teleop_cw": {
+      "placeholder_nominal": {
+        "0.5": {
+          "speed_rmse_mps": 0.043574517286682116,
+          "yaw_rmse_rad": 0.07069297346905815,
+          "pos_rmse_m": 0.04124605050144047
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.046531359788621225,
+          "yaw_rmse_rad": 0.14247896377782968,
+          "pos_rmse_m": 0.08766087866249757
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.04984645253377892,
+          "yaw_rmse_rad": 0.21251934539893017,
+          "pos_rmse_m": 0.13386882943908285
+        }
+      },
+      "fitted_nominal": {
+        "0.5": {
+          "speed_rmse_mps": 0.02910971830564422,
+          "yaw_rmse_rad": 0.027097252927146757,
+          "pos_rmse_m": 0.03270798627711248
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.03419707037840388,
+          "yaw_rmse_rad": 0.04827197227358088,
+          "pos_rmse_m": 0.06458191704688013
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.03506298819342154,
+          "yaw_rmse_rad": 0.06732267826083396,
+          "pos_rmse_m": 0.09624251825366338
+        }
+      },
+      "fitted_nominal_other_side_tying": {
+        "0.5": {
+          "speed_rmse_mps": 0.02910971830564422,
+          "yaw_rmse_rad": 0.04571665953790994,
+          "pos_rmse_m": 0.03271022530908363
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.03419707037840388,
+          "yaw_rmse_rad": 0.08828501413394005,
+          "pos_rmse_m": 0.0649597430644909
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.03506298819342154,
+          "yaw_rmse_rad": 0.1286458758039042,
+          "pos_rmse_m": 0.09778745040416512
+        }
+      }
+    },
+    "2026-11-11T04-20-19_car_teleop_v3": {
+      "placeholder_nominal": {
+        "0.5": {
+          "speed_rmse_mps": 0.04546097157742715,
+          "yaw_rmse_rad": 0.06772793352562982,
+          "pos_rmse_m": 0.048556387406266804
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.04781616785260824,
+          "yaw_rmse_rad": 0.14572740774654436,
+          "pos_rmse_m": 0.10453479991733054
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.05241476427391484,
+          "yaw_rmse_rad": 0.22590321769198532,
+          "pos_rmse_m": 0.1630728722887107
+        }
+      },
+      "fitted_nominal": {
+        "0.5": {
+          "speed_rmse_mps": 0.033762281841822,
+          "yaw_rmse_rad": 0.022113777569289537,
+          "pos_rmse_m": 0.04096519473154175
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.02578918789389442,
+          "yaw_rmse_rad": 0.0401880094138937,
+          "pos_rmse_m": 0.08144123426113678
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.04244840795437271,
+          "yaw_rmse_rad": 0.05661389779250934,
+          "pos_rmse_m": 0.12124398753224178
+        }
+      },
+      "fitted_nominal_other_side_tying": {
+        "0.5": {
+          "speed_rmse_mps": 0.033762281841822,
+          "yaw_rmse_rad": 0.08017891319116752,
+          "pos_rmse_m": 0.04105330955101239
+        },
+        "1.0": {
+          "speed_rmse_mps": 0.02578918789389442,
+          "yaw_rmse_rad": 0.1587601807736042,
+          "pos_rmse_m": 0.08363720084782095
+        },
+        "1.5": {
+          "speed_rmse_mps": 0.04244840795437271,
+          "yaw_rmse_rad": 0.2347827436420144,
+          "pos_rmse_m": 0.12948237924419534
+        }
+      }
+    }
+  },
+  "heldout_fitted_nominal_with_exported_limits": {
+    "0.5": {
+      "speed_rmse_mps": 0.03282129874028425,
+      "yaw_rmse_rad": 0.023271174364636486,
+      "pos_rmse_m": 0.03934269803625048
+    },
+    "1.0": {
+      "speed_rmse_mps": 0.027804865998383665,
+      "yaw_rmse_rad": 0.04205050511265337,
+      "pos_rmse_m": 0.07813687107350537
+    },
+    "1.5": {
+      "speed_rmse_mps": 0.04097869348579498,
+      "yaw_rmse_rad": 0.05907121607544355,
+      "pos_rmse_m": 0.11634195155782012
+    }
+  },
+  "heldout_zero_yaw_baseline_rad": {
+    "0.5": 0.16733880175288213,
+    "1.0": 0.3367296759550297,
+    "1.5": 0.5082051988395037
+  },
+  "residual_improvement_1s_per_seed": {
+    "0": {
+      "speed": -0.38308495751534694,
+      "yaw": -1.9609475468325313
+    },
+    "1": {
+      "speed": -0.6972285235618542,
+      "yaw": -1.9367303492716916
+    },
+    "2": {
+      "speed": -0.21408161308207793,
+      "yaw": -0.5722173611885709
+    }
+  },
+  "residual_median_improvement_1s": {
+    "speed": -0.38308495751534694,
+    "yaw": -1.9367303492716916
+  },
+  "residual_enabled": false,
+  "residual_shipped_seed": 1,
+  "residual_samples": {
+    "train": 1398,
+    "early_stopping": 350,
+    "early_stopping_from": "last 20% of the training samples (validation split too small)"
+  },
+  "fit": {
+    "flags": {
+      "speed_tau_s": "on a bound",
+      "accel_max_mps2": "on a bound",
+      "steer_tau_s": "on a bound",
+      "understeer_s2_per_m2": "on a bound",
+      "steer_gain_right": "tied to steer_gain_left: only 83 training intervals on one side (rule: fewer than 300)",
+      "steer_offset_rad": "fixed at 0 (one sided training data cannot separate it)",
+      "command_delay_s": "on the edge of the delay grid"
+    },
+    "speed_val_rmse_mps": null,
+    "yaw_val_rmse_rad": 0.016791043350334493,
+    "delay_selection": "4-fold cross-validation over training segments",
+    "yaw_training": "odom_only",
+    "sides_tied": true,
+    "yaw_cv_rmse_rad": {
+      "odom_only": 0.005251669422486098,
+      "all": 0.007064624347539885
+    },
+    "delay_curve_speed_val_rmse": {
+      "0.0": 0.04523231951927105,
+      "0.02": 0.045612414595866346,
+      "0.04": 0.04647373538229523,
+      "0.06": 0.047231989292373495,
+      "0.08": 0.047807934717143306,
+      "0.1": 0.048241563421120355,
+      "0.12": 0.048838976015518114,
+      "0.14": 0.04924833014264904,
+      "0.16": 0.049946460933126734,
+      "0.18": 0.05083361224001726,
+      "0.2": 0.05120517690609665,
+      "0.22": 0.06074571775643142,
+      "0.24": 0.05332679500839464,
+      "0.26": 0.0542000090611303,
+      "0.28": 0.055728794539673776,
+      "0.3": 0.05658180689145845
+    },
+    "counts": {
+      "speed_windows_train": 696,
+      "speed_windows_val": 0,
+      "yaw_intervals_train": 1748,
+      "yaw_intervals_val": 624,
+      "yaw_left_train": 1629,
+      "yaw_right_train": 83
+    }
+  },
+  "ground_speed_over_wheel_speed_by_steering": [
+    {
+      "steer_lo_rad": 0.0,
+      "steer_hi_rad": 0.05,
+      "n": 217,
+      "median_ratio": 0.9378156098912174,
+      "p25": 0.9153352822574129,
+      "p75": 0.9625552289013093
+    },
+    {
+      "steer_lo_rad": 0.05,
+      "steer_hi_rad": 0.1,
+      "n": 316,
+      "median_ratio": 0.9259369078083163,
+      "p25": 0.8959090089834211,
+      "p75": 0.9481583918171835
+    },
+    {
+      "steer_lo_rad": 0.1,
+      "steer_hi_rad": 0.2,
+      "n": 695,
+      "median_ratio": 0.9024924570633538,
+      "p25": 0.862366512011162,
+      "p75": 0.9382016141985081
+    },
+    {
+      "steer_lo_rad": 0.2,
+      "steer_hi_rad": 0.3,
+      "n": 398,
+      "median_ratio": 0.8723818698111263,
+      "p25": 0.8297310590351102,
+      "p75": 0.9173247645330657
+    },
+    {
+      "steer_lo_rad": 0.3,
+      "steer_hi_rad": 0.4,
+      "n": 388,
+      "median_ratio": 0.8380146095966675,
+      "p25": 0.7982674463780876,
+      "p75": 0.9002656636681166
+    },
+    {
+      "steer_lo_rad": 0.4,
+      "steer_hi_rad": 0.55,
+      "n": 2550,
+      "median_ratio": 0.799041101820745,
+      "p25": 0.7349864230530507,
+      "p75": 0.8559241680075111
+    }
+  ],
+  "seconds_by_bag": {
+    "2026-10-24T23-13-18_car_teleop": {
+      "train": 343.6,
+      "val": 62.9,
+      "heldout": 39.7
+    },
+    "2026-10-25T19-27-08_car_teleop": {
+      "train": 60.6,
+      "val": 3.3,
+      "heldout": 0.0
+    },
+    "2026-11-11T03-54-11_car_teleop_cw": {
+      "train": 189.3,
+      "val": 0.0,
+      "heldout": 60.0
+    },
+    "2026-11-11T04-20-19_car_teleop_v3": {
+      "train": 0.0,
+      "val": 0.0,
+      "heldout": 247.4
+    }
+  },
+  "driving_seconds": {
+    "train": 593.5394339561462,
+    "val": 66.2599368095398,
+    "heldout": 347.05966901779175
+  },
+  "held_out_bag": "2026-11-11T04-20-19_car_teleop_v3",
+  "train_segments": 44,
+  "dropped_nested_bags": [
+    "2026-11-11T03-54-11_car_teleop",
+    "2026-11-11T04-20-19_car_teleop",
+    "2026-11-11T04-20-19_car_teleop_latest"
+  ]
+}

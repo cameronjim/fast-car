@@ -76,7 +76,7 @@ Everything here is a command to type on the car. Stop at the first thing that do
    ```sh
    docker exec -it car-stack bash -lc '
      source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash
-     ros2 run racer_planner mppi_bench --dynamics-bundle /workspace/data/pnp/models/<dynamics model_id>'
+     ros2 run racer_planner mppi_bench --bundle /workspace/data/pnp/models/<dynamics model_id>'
    ```
 
    Write p50 and p99 in the table below. Over budget: stop. The planner halves its sample count
@@ -118,6 +118,24 @@ Everything here is a command to type on the car. Stop at the first thing that do
 | | | | | | | | |
 
 `mppi_bench` on the Orin: p50 ___ ms, p99 ___ ms.
+
+## Pre-flight with the fitted bundle (sim, 2026-11-12)
+
+`dyn-v0-2026-11-11` loads (golden max error 5e-9, vehicle_params 0.14.0). `mppi_bench --speed 0.5`
+on an Apple silicon Mac: p50 0.90 ms, p99 1.02 ms, max 1.04 ms. Closed loop, geometric backend,
+`v_max_mps` 0.5, stadium, island r 0.4 m, 3 laps, sim car actuating with the gym's own plant
+(steer gain 1, not the fitted 0.77):
+
+| Lane | Nominal fixture | Fitted bundle |
+|---|---|---|
+| 1.3 m | laps, 28.5 s, clearance 0.28 m | laps, 27.5 to 28.3 s, clearance 0.22 m |
+| 1.0 m | laps, 28.7 s, clearance 0.21 m | stalls before lap 1 (BLOCKED, safety brakes), no wall contact |
+| 0.85 m | stalls (BLOCKED) | stalls |
+
+With the sim car also actuating as the fitted bundle says (steer gain 0.77, accel 0.3 m/s2),
+the fitted bundle stalls at lane 1.3 m too, but laps lane 1.0 m with island r 0.8 m. So the
+fitted gain and acceleration limit make the island ends the hard part. Expect `BLOCKED` and a
+stationary car at the ends of a 1.0 m oval; it stops, it does not hit the wall.
 
 ## What is not verified
 

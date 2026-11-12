@@ -14,5 +14,8 @@ fi
 
 export PLANNER_REPLAY_CLI="$CLI"
 export PNP_REPLAY_REQUIRE_CLI=1
+# ROS's setup.bash puts its python3.10 site-packages (and pytest plugins) on PYTHONPATH, which
+# reaches the tools/ venv's interpreter and breaks it; the CMake gen_params step unsets it too.
+unset PYTHONPATH
 cd "${ROOT}/tools"
 uv run pytest tests/test_pnp_replay.py -v -rs

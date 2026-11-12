@@ -36,6 +36,6 @@ with the car-like plant (`tests/l5_pnp`).
 Two differences from the car, both visible in the numbers: the solver here runs 768 samples every
 tick (about 1 ms per solve on a laptop), while the car's sample budget halved to about 480 samples
 because its solves are slower, so recorded steering chatter is a little higher (std 0.024 rad
-against 0.019); and the replayed `K` ticks are exactly 0.02 s apart, the car's were 0.017 to 0.023 s.
+against 0.019; `--set samples=480` gives 0.024 on R1); and the replayed `K` ticks are exactly 0.02 s apart, the car's were 0.017 to 0.023 s.
 Segment `L` was driven by another driver at 1 m/s, above the planner's cap, so `--clip-speed-to-cap`
 feeds `min(wheel speed, v_max)` for it, and says so in the output.

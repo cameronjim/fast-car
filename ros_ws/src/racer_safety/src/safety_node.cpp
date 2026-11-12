@@ -114,6 +114,13 @@
 // steady clock. OPTIONAL: the simulator and every bag before 2026-11 have no /odom/wheel; without
 // it, or when it goes stale, the measured term is simply absent and the request and the output
 // bound still apply. It can only raise the TTC speed, never lower it below the request.
+//
+// JUDGED SPEED FROM THE MEASURED WHEEL SPEED (2026-11-12, schema 0.15.0,
+// docs/notes/safety-race-retune-2026-11-12.md). While /odom/wheel is fresh the TTC is divided by
+// max(measured, min(request, measured + actuation.peak_acceleration_mps2 *
+// actuation.stop_latency_s)) instead: the decaying bound is not used, and the judged speed is never
+// above what the rule above would judge, so it can only remove a trip. gate_logic.hpp has the
+// reasons and the numbers.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
 #include <atomic>
@@ -318,6 +325,12 @@ class SafetyNode : public rclcpp::Node {
     // The decaying output bound's deceleration (schema 0.13.0, required, so always set; see
     // gate_logic.hpp "SPEED FOR THE TTC").
     limits.speed_bound_deceleration_mps2 = VEHICLE_PARAMS.actuation.stop_deceleration_mps2;
+    // The measured-speed model (schema 0.15.0, required, so always set; used while /odom/wheel is
+    // fresh, see gate_logic.hpp "JUDGED SPEED FROM THE MEASURED WHEEL SPEED").
+    racer_safety::MeasuredSpeedModel measured_speed_model;
+    measured_speed_model.latency_s = VEHICLE_PARAMS.actuation.stop_latency_s;
+    measured_speed_model.peak_acceleration_mps2 = VEHICLE_PARAMS.actuation.peak_acceleration_mps2;
+    limits.measured_speed_model = measured_speed_model;
     limits.watchdog_missed_cycles = watchdog_missed_cycles;
     limits.control_period_s = control_period_s_;
     gate_limits_ = limits;

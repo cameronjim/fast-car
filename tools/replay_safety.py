@@ -222,6 +222,14 @@ def main(argv: list[str] | None = None) -> int:
         help="diagnostic: convert speeds but keep the recorded steering angles, i.e. the old "
         "(wrong) turning radius",
     )
+    parser.add_argument(
+        "--window",
+        nargs=2,
+        type=float,
+        metavar=("START", "END"),
+        help="read only this stretch of every bag, in seconds from its first message (an indexed "
+        "bag opens in a second; an unindexed one is read whole and the window ignored)",
+    )
     parser.add_argument("--min-clearance", type=float, default=0.04, help="pass line (m)")
     parser.add_argument("--table", action="store_true", help="print the per-brake table")
     args = parser.parse_args(argv)
@@ -237,7 +245,14 @@ def main(argv: list[str] | None = None) -> int:
             described = describe_cli(cli, after_rule)
             mount, body = geometry(described)
             prepared = [
-                prepare(path, Path(tmp), recorded, current, args.keep_recorded_steering)
+                prepare(
+                    path,
+                    Path(tmp),
+                    recorded,
+                    current,
+                    args.keep_recorded_steering,
+                    bag=read_bag(path, window_s=tuple(args.window)) if args.window else None,
+                )
                 for path in args.bags
             ]
             if recorded is not None:

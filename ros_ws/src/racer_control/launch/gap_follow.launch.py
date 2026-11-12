@@ -59,6 +59,9 @@ which is also a launch argument of its own and off (the old behaviour) everywher
 `stopping_margin_m`, `side_cap_distance_m`, `side_cap_min_speed_mps`, `apex_offset_m`,
 `track_out_offset_m`, `compute_on_scan` (command on scan arrival as well as on the timer) and
 `status_rate_hz` (/gap_follow/status, scan-to-command latency; on by default in every profile).
+`race-2026-11-13` (docs/notes/safety-race-retune-2026-11-12.md) is that profile plus
+`free_path_on_published_steering` (the stopping law measured along the shorter of the target arc
+and the arc of the steering the car is at) at a 1.3 m/s ceiling.
 The old profiles are untouched: `lane-2026-10-25` plus `lane_lookahead_m:=0.8
 outside_entry_offset_m:=0.25` is still the recommended pre-race setup and behaves as before.
 
@@ -188,11 +191,33 @@ argument overrides it), by two people with the RC kill, wheels off the ground fi
 (claude-docs/05-safety.md).
 """
 
+RACE_2026_11_13_PROFILE: dict[str, float | int | bool | str] = {
+    **RACE_2026_11_12_PROFILE,
+    # The winner of the 2026-11-12 retune on the WIDE tracks (docs/notes/safety-race-retune-2026-
+    # 11-12.md, rule in tools/race_tuning/selection_gate.py): the same profile with the stopping law
+    # on the arc the car is on, and a ceiling of 1.3 m/s. Nothing else moved: the other candidates
+    # (a larger stopping margin, a longer lookahead, a lower lateral limit) were slower, and the
+    # lookahead one is the way to 1.6 m/s with no brakes at all, see the note.
+    "max_speed_mps": 1.3,
+    "free_path_on_published_steering": True,
+}
+"""Race profile, 2026-11-13: race-2026-11-12 with the stopping law on the published steering arc.
+
+On the 2026-11-12 race bag (max_speed_mps 2.08) the follower's free path was measured along the arc
+it was about to steer while the car was still on the old one, so it asked for 1.1 to 1.5 m/s with a
+wall 0.7 m ahead and safety_node braked. `free_path_on_published_steering` measures the shorter of
+the two arcs. NOT driven on the floor: the first run should be at `max_speed_mps:=0.64`, two
+people, the RC kill in a hand, wheels off the ground first (claude-docs/05-safety.md). Nothing in
+it assumes the 2.08 m/s ceiling of the VESC's l_max_erpm 6000: max_speed_mps is explicit, and every
+speed here is a true speed.
+"""
+
 PROFILES: dict[str, dict[str, float | int | bool | str]] = {
     "none": {},
     "floor-2026-10-06": FLOOR_2026_10_06_PROFILE,
     "lane-2026-10-25": LANE_2026_10_25_PROFILE,
     "race-2026-11-12": RACE_2026_11_12_PROFILE,
+    "race-2026-11-13": RACE_2026_11_13_PROFILE,
 }
 
 # Launch arguments forwarded to the node only when set (empty = profile, params file or node
@@ -306,6 +331,11 @@ _OPTIONAL_BOOL_ARGS = {
         "along the swept path, side proximity cap) instead of the range law. Empty (default) "
         "leaves the profile value, the params file value or the node default (false)."
     ),
+    "free_path_on_published_steering": (
+        "true or false: the physics speed law's free path is measured along the shorter of the "
+        "target arc and the arc of the steering the car is at now (the low-passed command). Empty "
+        "(default) leaves the profile value, the params file value or the node default (false)."
+    ),
     "compute_on_scan": (
         "true or false: also publish a command the moment a scan has been processed, not only "
         "on the 50 Hz timer. Empty (default) leaves the profile value, the params file value or "
@@ -391,7 +421,8 @@ def generate_launch_description() -> LaunchDescription:
         description=(
             "Named parameter set: none (node defaults), floor-2026-10-06 (the first working "
             "floor laps, a checkpoint, not a tuned optimum), lane-2026-10-25 (lane-centre "
-            "target) or race-2026-11-12 (physics speed, racing line; not driven on the floor). "
+            "target), race-2026-11-12 (physics speed, racing line; not driven on the floor) or "
+            "race-2026-11-13 (the same with the stopping law on the published steering arc). "
             "Explicit launch arguments override it; it overrides params_file."
         ),
     )

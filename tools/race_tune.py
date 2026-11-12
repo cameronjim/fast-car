@@ -35,7 +35,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests" / "l5_reactive_bench"))
 
-from race_tuning import report, runs, selection, space, tracks
+from race_tuning import report, runs, selection, selection_gate, space, tracks
 
 BASELINE_NAME = "baseline"
 
@@ -142,7 +142,7 @@ def select_cmd(args: argparse.Namespace) -> int:
 
 def evaluate(args: argparse.Namespace) -> int:
     out = Path(args.out)
-    held_out = tracks.tuning_tracks() if args.tuning_tracks else tracks.held_out_tracks(args.tracks)
+    held_out = tracks.family_tracks(args.family, args.tuning_tracks, args.tracks)
     variants: dict[str, dict[str, Any]] = {
         BASELINE_NAME: {"params": space.BASELINE, "profile": runs.DEFAULT_PROFILE}
     }
@@ -177,12 +177,27 @@ def evaluate(args: argparse.Namespace) -> int:
     (out / "report.md").write_text(text + "\n")
     print(text)
     base_agg = selection.aggregate(records[BASELINE_NAME])
+    scored: dict[str, tuple[dict[str, Any], Any]] = {}
     for name, recs in records.items():
         if name == BASELINE_NAME:
             continue
         agg = selection.aggregate(recs, records[BASELINE_NAME])
-        ok, why = selection.admissible(agg, base_agg)
+        if args.rule == "gate":
+            ok, why = selection_gate.admissible(agg)
+            scored[name] = (variants[name].get("params", {}), agg)
+        else:
+            ok, why = selection.admissible(agg, base_agg)
         print(f"{name}: {'ADMISSIBLE' if ok else 'NOT admissible: ' + '; '.join(why)}")
+    if args.rule == "gate":
+        ranking = selection_gate.rank(scored)
+        print("ranking under tools/race_tuning/selection_gate.py:")
+        for place, (name, _p, agg) in enumerate(ranking, start=1):
+            print(
+                f"{place:2d}. {name}  ratio {agg.mean_ratio:.3f}  brakes/lap "
+                f"{agg.brakes_per_lap:.2f}  escapes/lap {agg.escapes_per_lap:.2f}"
+            )
+        if not ranking:
+            print("NO ADMISSIBLE CANDIDATE")
     return 0
 
 
@@ -226,6 +241,21 @@ def main(argv: list[str] | None = None) -> int:
                 "--tuning-tracks",
                 action="store_true",
                 help="run the TUNING tracks instead (for the tuning-set column of a report)",
+            )
+            p.add_argument(
+                "--family",
+                choices=("narrow", "wide"),
+                default="narrow",
+                help="track family: narrow (0.85 to 1.2 m lanes, the original) or wide (1.3 to 1.5 m, "
+                "the 2026-11-12 oval)",
+            )
+            p.add_argument(
+                "--rule",
+                choices=("baseline", "gate"),
+                default="baseline",
+                help="admissibility: baseline (selection.py, relative to the recommended profile) or "
+                "gate (selection_gate.py, absolute brakes per lap: the follower must not lean on "
+                "safety_node)",
             )
             p.add_argument(
                 "--variant",

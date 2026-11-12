@@ -42,6 +42,7 @@
 #define RACER_CONTROL_GAP_FOLLOW_HPP_
 
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -704,6 +705,14 @@ struct GapFollowConfig {
   // it.
   double free_path_horizon_m = 0.0;
   double free_path_margin_m = 0.0;
+  // true: the free path the speed law uses is the SHORTER of the free travel along the target arc
+  // (steering_rad) and along the arc of the steering the car is actually at (set with
+  // GapFollower::set_published_steering_rad, the low-passed command). 2026-11-12 race bag: at 5 of
+  // its 18 brakes the target steering was already -0.33 to -0.45 while the published steering was
+  // -0.04 to -0.2, so the free path along the target arc was 2 m (no limit, 1.5 to 1.9 m/s) and the
+  // car, still on nearly the straight arc, had a wall 0.7 m ahead: safety_node braked. false (the
+  // default) keeps the target arc alone.
+  bool free_path_on_published_steering = false;
   double rear_overhang_m = 0.0;
 };
 
@@ -754,11 +763,16 @@ class GapFollower {
   explicit GapFollower(GapFollowConfig config) : config_(config) {}
   GapFollowResult process(const ScanInput& scan);
   const GapFollowConfig& config() const { return config_; }
+  // The steering the car is at now (the low-passed command as last published): the second arc
+  // of GapFollowConfig::free_path_on_published_steering. A non-finite value (the default) means
+  // none is known and the target arc alone is measured.
+  void set_published_steering_rad(double steering_rad) { published_steering_rad_ = steering_rad; }
   // The last lane_centre trace (empty in the gap modes and before the first valid scan).
   const std::vector<LanePoint>& lane_trace() const { return lane_trace_; }
 
  private:
   GapFollowConfig config_;
+  double published_steering_rad_ = std::numeric_limits<double>::quiet_NaN();
   // Target bearing of the last scan that found a gap, for gap_switch_margin. Cleared when a
   // processed scan finds no gap; kept across scans process() rejects as unusable.
   std::optional<double> previous_target_vehicle_bearing_rad_;

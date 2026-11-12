@@ -125,6 +125,7 @@ const ParamSpec kParams[] = {
     {"a_lat_max_mps2", 2.0, 0.1, 20.0, false},
     {"stopping_margin_m", 0.05, 0.0, 1.0, false},
     {"side_cap_distance_m", 0.0, 0.0, 1.0, false},
+    {"free_path_on_published_steering", 0.0, 0.0, 1.0, true},
     {"k_speed_per_s", 0.71, 0.0, 100.0, false},
     {"k_steer", 0.5, 0.0, 1.0, false},
     {"speed_rate_limit_margin_fraction", 0.5, 0.01, 1.0, false},
@@ -516,6 +517,7 @@ int main(int argc, char** argv) {
         racer_control::free_path_horizon(max_speed, VEHICLE_PARAMS.actuation.stop_deceleration_mps2,
                                          VEHICLE_PARAMS.actuation.stop_latency_s, standoff);
     c.compute_side_clearance = get("side_cap_distance_m") > 0.0;
+    c.free_path_on_published_steering = get("free_path_on_published_steering") != 0.0;
   }
   racer_control::ReactiveSpeedConfig speed_config;
   speed_config.k_speed_per_s = get("k_speed_per_s");
@@ -587,6 +589,7 @@ int main(int argc, char** argv) {
   bool has_last_command_time = false;
   for (std::size_t k = 0; k < scans.size(); ++k) {
     const Scan& scan = scans[k];
+    follower.set_published_steering_rad(steering_filter.output());
     const racer_control::GapFollowResult result = follower.process(scan.input);
     if (result.valid) {
       latest = result;

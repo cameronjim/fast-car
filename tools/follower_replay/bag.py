@@ -176,8 +176,83 @@ def _records(stream: IO[bytes], data: BagData, name: str) -> Iterator[Any]:
         )
 
 
-def read_bag(path: str | Path) -> BagData:
-    """Decode the follower topics of an mcap bag (a file, or a directory of .mcap files)."""
+def bag_origin_s(path: str | Path) -> float:
+    """The log time (seconds, the recorder's clock) of the first message in a bag, from the chunk
+    index. 0.0 when the first file has no index."""
+    from mcap.reader import make_reader
+
+    with bag_files(Path(path))[0].open("rb") as stream:
+        try:
+            summary = make_reader(stream).get_summary()
+        except Exception:  # noqa: BLE001 - an unindexed file
+            return 0.0
+    if summary is None or summary.statistics is None:
+        return 0.0
+    return summary.statistics.message_start_time / 1e9
+
+
+def _store(data: BagData, topic: str, decoder: Any, payload: bytes, log_time_ns: int) -> None:
+    """Decode one wanted message into `data`; a bad message counts as a decode error."""
+    try:
+        msg = decoder(payload)
+        if topic == SCAN_TOPIC:
+            data.scans.append(_scan_record(msg, log_time_ns))
+        elif topic == DRIVE_RAW_TOPIC:
+            data.drive_raw.append(_drive_record(msg, log_time_ns))
+        elif topic == DRIVE_TOPIC:
+            data.drive.append(_drive_record(msg, log_time_ns))
+        elif topic == ODOM_TOPIC:
+            data.odom.append(_odom_record(msg, log_time_ns))
+        else:
+            data.events.append(_event_record(msg, log_time_ns))
+    except Exception:  # noqa: BLE001 - one bad message must not lose the bag
+        data.decode_errors += 1
+
+
+def _read_window(file: Path, window_s: tuple[float, float], data: BagData) -> bool:
+    """Decode the wanted topics of one file between two times (seconds from the first message),
+    seeking by the chunk index. False when the file has no summary (a recorder that was killed):
+    the caller then streams it from the front."""
+    from mcap.reader import make_reader
+    from mcap_ros2.decoder import DecoderFactory
+
+    factory = DecoderFactory()
+    decoders: dict[int, Any] = {}
+    with file.open("rb") as stream:
+        try:
+            reader = make_reader(stream)
+            summary = reader.get_summary()
+        except Exception:  # noqa: BLE001 - an unindexed file (the recorder was killed) cannot seek
+            return False
+        if summary is None or summary.statistics is None:
+            return False
+        origin_ns = summary.statistics.message_start_time
+        topics = [t for t in WANTED_TOPICS if any(c.topic == t for c in summary.channels.values())]
+        for schema, channel, message in reader.iter_messages(
+            topics=topics,
+            start_time=None,
+            end_time=None,
+            starting_at=origin_ns + int(window_s[0] * 1e9),
+            ending_before=origin_ns + int(window_s[1] * 1e9),
+        ):
+            decoder = decoders.get(channel.id)
+            if decoder is None:
+                decoder = factory.decoder_for(channel.message_encoding, schema)
+                if decoder is None:
+                    data.decode_errors += 1
+                    continue
+                decoders[channel.id] = decoder
+            data.topic_counts[channel.topic] = data.topic_counts.get(channel.topic, 0) + 1
+            _store(data, channel.topic, decoder, message.data, message.log_time)
+    return True
+
+
+def read_bag(path: str | Path, window_s: tuple[float, float] | None = None) -> BagData:
+    """Decode the follower topics of an mcap bag (a file, or a directory of .mcap files).
+
+    `window_s` = (start, end) in seconds from the first message reads only that stretch, seeking
+    by the chunk index (a 6 GB bag of 2000 s opens in a second); a file without an index is
+    streamed from the front and filtered. `topic_counts` then counts the decoded messages only."""
     from mcap.records import Channel, Footer, Message, Schema
     from mcap_ros2.decoder import DecoderFactory
 
@@ -185,6 +260,8 @@ def read_bag(path: str | Path) -> BagData:
     factory = DecoderFactory()
     for file in bag_files(Path(path)):
         data.files.append(str(file))
+        if window_s is not None and _read_window(file, window_s, data):
+            continue
         schemas: dict[int, Schema] = {}
         channels: dict[int, Channel] = {}
         decoders: dict[int, Any] = {}
@@ -213,20 +290,7 @@ def read_bag(path: str | Path) -> BagData:
                             data.decode_errors += 1
                             continue
                         decoders[record.channel_id] = decoder
-                    try:
-                        msg = decoder(record.data)
-                        if topic == SCAN_TOPIC:
-                            data.scans.append(_scan_record(msg, record.log_time))
-                        elif topic == DRIVE_RAW_TOPIC:
-                            data.drive_raw.append(_drive_record(msg, record.log_time))
-                        elif topic == DRIVE_TOPIC:
-                            data.drive.append(_drive_record(msg, record.log_time))
-                        elif topic == ODOM_TOPIC:
-                            data.odom.append(_odom_record(msg, record.log_time))
-                        else:
-                            data.events.append(_event_record(msg, record.log_time))
-                    except Exception:  # noqa: BLE001 - one bad message must not lose the bag
-                        data.decode_errors += 1
+                    _store(data, topic, decoder, record.data, record.log_time)
         if not saw_footer and not data.truncated:
             data.truncated = True
             data.truncation_note = f"{file.name}: no footer (the recorder was killed)"

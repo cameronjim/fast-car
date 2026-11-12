@@ -684,6 +684,19 @@ def test_current_units_are_replayed_as_recorded(scene_bag, tmp_path, monkeypatch
     assert not any(a.startswith("max_steering_rad") for a in after["args"])
 
 
+def test_window_reads_only_that_stretch_of_the_bag(scene_bag, tmp_path, monkeypatch, capsys):
+    cli = tmp_path / "safety_replay_cli"
+    cli.write_text(FAKE_CLI)
+    cli.chmod(cli.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("FAKE_CLI_LOG", str(tmp_path / "cli.log"))
+    whole = [str(scene_bag), "--cli", str(cli), "--recorded-with", "0.13.0"]
+    assert replay_safety.main([*whole, "--window", "0", "1000000"]) == 0
+    capsys.readouterr()
+    # A window with no scan in it is the same refusal as a bag with none.
+    assert replay_safety.main([*whole, "--window", "900000", "900001"]) == 2
+    assert "no /scan in the bag" in capsys.readouterr().err
+
+
 def test_the_recorded_with_flag_is_required(scene_bag):
     with pytest.raises(SystemExit) as raised:
         replay_safety.main([str(scene_bag)])

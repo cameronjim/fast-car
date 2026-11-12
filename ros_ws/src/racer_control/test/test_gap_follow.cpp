@@ -3063,6 +3063,47 @@ TEST(FollowerRaceOutputs, FreePathAndSideClearanceAreReportedOnlyWhenAsked) {
   EXPECT_NEAR(b.steering_rad, a.steering_rad, 1e-12);  // measuring it changes no steering
 }
 
+TEST(FollowerRaceOutputs, FreePathOnThePublishedSteeringIsTheShorterOfTheTwoArcs) {
+  // 2026-11-12 race bag: the target arc was open while the published steering, still near
+  // straight, had a wall 0.7 m ahead. Here the steering the car is at is a hard turn into the side
+  // wall of a lane with a wall across it, so its arc is the shorter one.
+  const ScanInput scan =
+      c1_scan_with({{-3.0, 0.5, 20.0, 0.5}, {-3.0, -0.5, 20.0, -0.5}, {1.0, -0.5, 1.0, 0.5}});
+  GapFollowConfig config = lane_config();
+  config.free_path_horizon_m = 2.0;
+  config.free_path_margin_m = 0.05;
+  config.rear_overhang_m = 0.14;
+
+  GapFollower target_only(config);
+  const GapFollowResult base = target_only.process(scan);
+  ASSERT_TRUE(base.valid && base.free_path_m.has_value());
+
+  // Flag off: whatever steering was published changes nothing.
+  GapFollower off(config);
+  off.set_published_steering_rad(-kFullLeft);
+  EXPECT_EQ(*off.process(scan).free_path_m, *base.free_path_m);
+
+  config.free_path_on_published_steering = true;
+  // Flag on, no published steering known (the default NaN): the target arc alone.
+  GapFollower unknown(config);
+  EXPECT_EQ(*unknown.process(scan).free_path_m, *base.free_path_m);
+  // The same steering as the target: the same arc.
+  GapFollower same(config);
+  same.set_published_steering_rad(base.steering_rad);
+  EXPECT_EQ(*same.process(scan).free_path_m, *base.free_path_m);
+  // A hard turn into the side wall: its arc is shorter and wins, and the steering is untouched.
+  GapFollower lagging(config);
+  lagging.set_published_steering_rad(-kFullLeft);
+  const GapFollowResult shorter = lagging.process(scan);
+  ASSERT_TRUE(shorter.free_path_m.has_value());
+  EXPECT_LT(*shorter.free_path_m, *base.free_path_m);
+  EXPECT_EQ(shorter.steering_rad, base.steering_rad);
+  // A published arc that is longer than the target's never lengthens it.
+  GapFollower longer(config);
+  longer.set_published_steering_rad(kFullLeft);
+  EXPECT_LE(*longer.process(scan).free_path_m, *base.free_path_m);
+}
+
 TEST(FollowerRaceOutputs, SideClearanceInTheGapModesNeedsTheSwitchAndNeverChangesSteering) {
   GapFollowConfig config = default_config();
   config.laser_yaw_offset_rad = kC1Yaw;

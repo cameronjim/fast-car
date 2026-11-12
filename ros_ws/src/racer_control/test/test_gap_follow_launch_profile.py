@@ -99,7 +99,13 @@ def test_profile_argument_defaults_to_none_with_both_choices():
     assert "profile" in args
     context = LaunchContext()
     assert "".join(s.perform(context) for s in args["profile"].default_value) == "none"
-    names = {"none", "floor-2026-10-06", "lane-2026-10-25", "race-2026-11-12"}
+    names = {
+        "none",
+        "floor-2026-10-06",
+        "lane-2026-10-25",
+        "race-2026-11-12",
+        "race-2026-11-13",
+    }
     assert set(args["profile"].choices) == names
     assert set(module.PROFILES) == names
 
@@ -231,6 +237,7 @@ _RACE_ONLY_PARAMETERS = {
     "apex_offset_m",
     "track_out_offset_m",
     "compute_on_scan",
+    "free_path_on_published_steering",
 }
 
 
@@ -284,7 +291,11 @@ def test_race_profile_reaches_the_node_with_the_right_types():
     for name, value in merged.items():
         if name in _INT_PARAMETERS:
             assert type(value) is int, name
-        elif name in _BOOL_PARAMETERS | {"physics_speed", "compute_on_scan"}:
+        elif name in _BOOL_PARAMETERS | {
+            "physics_speed",
+            "compute_on_scan",
+            "free_path_on_published_steering",
+        }:
             assert type(value) is bool, name
         elif name == "target_mode":
             assert type(value) is str
@@ -326,3 +337,34 @@ def test_physics_speed_and_compute_on_scan_must_be_true_or_false():
         with pytest.raises(ValueError, match=name):
             _node_parameters(**{name: "yes"})
     assert "physics_speed" not in _merged(_node_parameters())
+
+
+# race-2026-11-13 (docs/notes/safety-race-retune-2026-11-12.md): typed out again on purpose.
+_RACE_2026_11_13_OVER_RACE_2026_11_12 = {
+    "max_speed_mps": 1.3,
+    "free_path_on_published_steering": True,
+}
+
+
+def test_race_2026_11_13_is_the_earlier_race_profile_plus_the_published_arc_law():
+    module = _load_launch_module()
+    old = module.RACE_2026_11_12_PROFILE
+    new = module.RACE_2026_11_13_PROFILE
+    assert module.PROFILES["race-2026-11-13"] is new
+    assert new == {**old, **_RACE_2026_11_13_OVER_RACE_2026_11_12}
+    # The earlier profile is untouched (the 2026-11-12 run's profile reproduces).
+    assert old["max_speed_mps"] == 1.0 and "free_path_on_published_steering" not in old
+    for name in ("none", "floor-2026-10-06", "lane-2026-10-25", "race-2026-11-12"):
+        assert "free_path_on_published_steering" not in module.PROFILES[name], name
+
+
+def test_race_2026_11_13_reaches_the_node_with_the_right_types_and_the_argument_overrides_it():
+    merged = _merged(_node_parameters(profile="race-2026-11-13"))
+    assert merged["free_path_on_published_steering"] is True
+    assert merged["max_speed_mps"] == 1.3 and type(merged["max_speed_mps"]) is float
+    off = _merged(
+        _node_parameters(profile="race-2026-11-13", free_path_on_published_steering="false")
+    )
+    assert off["free_path_on_published_steering"] is False
+    with pytest.raises(ValueError, match="free_path_on_published_steering"):
+        _node_parameters(free_path_on_published_steering="maybe")

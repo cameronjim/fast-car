@@ -130,7 +130,10 @@ _TEMPLATE: dict[str, Any] = {
         # then 0.13.0 -> 0.14.0 on 2026-11-10 (the first real calibration: measured overhangs,
         # tyre radius, per-side steering table and limits, derived gear ratio and throttle scale,
         # re-tuned TTC thresholds; value-only, no field added).
-        "schema_version": "0.14.0",
+        # then 0.14.0 -> 0.15.0 on 2026-11-12 when the required actuation.peak_acceleration_mps2 and
+        # limits.stopping_margin_m were added (the stopping-distance gate) and the stopping model was
+        # measured.
+        "schema_version": "0.15.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

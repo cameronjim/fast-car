@@ -8,14 +8,15 @@ import json
 import shutil
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from . import export
-from .dataset import HELD_OUT_BAG, Segment, by_split, seconds
+from . import deadzone, export
+from .bags import Run
+from .dataset import TRAIN_FRACTION, Segment, by_split, seconds
 from .evaluate import (
     HORIZONS_S,
     compare_variants,
@@ -24,7 +25,10 @@ from .evaluate import (
     zero_yaw_rmse,
 )
 from .fit import FitResult, fit_nominal, yaw_rmse
+from .icp_motion import MotionSeries
+from .identify import steering_lag_s
 from .model import PLACEHOLDER_NOMINAL, Nominal, Residual, steering_target
+from .pnp_eval import PNP_RUNS_S, LegacyBundle, compare_on_runs
 from .residual import (
     SEEDS,
     Trainer,
@@ -36,10 +40,12 @@ from .residual import (
     train_residual,
 )
 from .vehicle import Vehicle
-from .windows import yaw_data
+from .windows import speed_rollout, speed_windows, yaw_data
 
 V_MAX_ROUND_MPS = 0.05
-V_MAX_FACTOR = 1.5
+V_MAX_FACTOR = 1.0  # brief 14: validity is the 99th percentile itself (v0 used 1.5 times it)
+STEERING_LAG_DISAGREEMENT_S = 0.05
+PROFILE_PNG = "profiles.png"
 
 
 def fit_vehicle_of(vehicle: Vehicle) -> Vehicle:
@@ -54,8 +60,8 @@ def fit_vehicle_of(vehicle: Vehicle) -> Vehicle:
 
 
 def v_max_of(train: Sequence[Segment], vehicle: Vehicle) -> float:
-    """1.5 times the 99th percentile of the true wheel speed in the real training data, rounded
-    down to 0.05 and never above the full scale speed."""
+    """The 99th percentile of the true wheel speed in the real training data (times V_MAX_FACTOR),
+    rounded down to 0.05 and never above the full scale speed."""
     speeds = []
     for seg in train:
         if seg.run.has_odom:
@@ -102,6 +108,57 @@ def seconds_by_bag(segments: Sequence[Segment]) -> dict[str, dict[str, float]]:
     return {k: {a: round(b, 1) for a, b in v.items()} for k, v in out.items()}
 
 
+@dataclass(frozen=True)
+class PnpRuns:
+    """The planner runs to score the new bundle against an old one on (see pnp_eval)."""
+
+    run: Run
+    motion: MotionSeries | None
+    t_ref_s: float  # stamp of "bag time 0" (the first /scan)
+    old: LegacyBundle
+    spans_s: Sequence[tuple[float, float]] = PNP_RUNS_S
+
+
+def dead_zone_report(
+    segments: Sequence[Segment], result: FitResult, vehicle: Vehicle
+) -> dict[str, Any]:
+    """Both direct estimates of the dead zone, the fitted value against them, and whether the
+    car keeps rolling below it."""
+    runs = list({id(s.run): s.run for s in segments if s.run.has_odom}.values())
+    delay = result.nominal.command_delay_s
+    launches = [x for r in runs for x in deadzone.find_launches(r, delay)]
+    bins = deadzone.steady_bins(runs)
+    brackets = deadzone.steady_brackets(bins)
+    fitted = result.nominal.speed_deadband_mps
+    lo, hi = brackets["largest_still_bin_hi_mps"], brackets["smallest_moving_bin_lo_mps"]
+    inside = (lo is None or fitted >= lo) and (hi is None or fitted <= hi)
+    odom = [s for s in segments if s.run.has_odom]
+    windows = speed_windows(odom, delay)
+    model_end = speed_rollout(windows, result.nominal, vehicle)[:, -1] if len(windows) else None
+    return {
+        "fitted_mps": fitted,
+        "launches_from_rest": deadzone.launch_summary(launches),
+        "launch_list": [
+            {
+                "bag": x.run_name,
+                "t_s": round(
+                    x.t_s - float(next(r for r in runs if r.name == x.run_name).t_s[0]), 1
+                ),
+                "cmd_launch_mps": x.cmd_launch_mps,
+                "cmd_rest_max_mps": x.cmd_rest_max_mps,
+            }
+            for x in launches
+        ],
+        "steady_state": brackets,
+        "steady_state_bins": bins,
+        "fitted_inside_steady_bracket": bool(inside),
+        "rolling_below_the_dead_zone": deadzone.rolling_below_the_dead_zone(
+            windows, fitted, model_end
+        ),
+        "choice": result.deadband_choice,
+    }
+
+
 def run_fit_and_export(
     segments: Sequence[Segment],
     vehicle: Vehicle,
@@ -115,6 +172,8 @@ def run_fit_and_export(
     data_lines: Sequence[str] = (),
     notes: dict[str, Any] | None = None,
     delays: Sequence[float] | None = None,
+    pnp: PnpRuns | None = None,
+    profile_png: bool = False,
 ) -> dict[str, Any]:
     """Everything after the segments exist. Returns the metrics dict that was exported."""
     fvehicle = fit_vehicle_of(vehicle)
@@ -172,8 +231,69 @@ def run_fit_and_export(
         "fitted_nominal"
     ]
     v_max = v_max_of(train, vehicle)
+    lag = steering_lag_s(segments)
+    fitted_lag = nominal.command_delay_s + nominal.steer_tau_s
+    lag_check: dict[str, Any] = {"available": lag is not None}
+    if lag is not None:
+        lag_check.update(
+            peak_lag_s=lag.lag_s,
+            peak_correlation=lag.peak_correlation,
+            intervals=lag.n_intervals,
+            fitted_delay_plus_steer_tau_s=fitted_lag,
+            difference_s=lag.lag_s - fitted_lag,
+            disagrees=abs(lag.lag_s - fitted_lag) > STEERING_LAG_DISAGREEMENT_S,
+            threshold_s=STEERING_LAG_DISAGREEMENT_S,
+            lags_s=list(lag.lags_s),
+            correlation=list(lag.correlation),
+        )
+    speeds_all = np.concatenate(
+        [
+            s.run.wheel_speed_mps[s.i0 : s.i1][np.isfinite(s.run.wheel_speed_mps[s.i0 : s.i1])]
+            for s in segments
+            if s.run.has_odom
+        ]
+    )
+    pnp_report: dict[str, Any] | None = None
+    if pnp is not None:
+        pnp_report = compare_on_runs(
+            pnp.run,
+            pnp.motion,
+            pnp.t_ref_s,
+            {
+                f"old_{pnp.old.model_id}": (pnp.old.nominal, pnp.old.residual),
+                "new_nominal": (nominal, None),
+                "new_shipped": (nominal, residual),
+            },
+            vehicle,
+            pnp.spans_s,
+        )
 
     metrics: dict[str, Any] = {
+        "dead_zone": dead_zone_report(segments, result, fvehicle),
+        "unidentified": result.unidentified,
+        "profiles": result.profiles,
+        "profile_notes": result.profile_notes,
+        "steering_lag_check": lag_check,
+        "validity": {
+            "v_max_mps": v_max,
+            "factor": V_MAX_FACTOR,
+            "p99_wheel_speed_train_mps": float(
+                np.percentile(
+                    np.concatenate(
+                        [
+                            s.run.wheel_speed_mps[s.i0 : s.i1][
+                                np.isfinite(s.run.wheel_speed_mps[s.i0 : s.i1])
+                            ]
+                            for s in train
+                            if s.run.has_odom
+                        ]
+                    ),
+                    99,
+                )
+            ),
+            "p99_wheel_speed_all_moving_data_mps": float(np.percentile(speeds_all, 99)),
+        },
+        **({"pnp_runs": pnp_report} if pnp_report is not None else {}),
         "heldout_windows": len(window_data),
         "heldout_horizons_s": list(HORIZONS_S),
         "heldout_errors": errors,
@@ -199,15 +319,15 @@ def run_fit_and_export(
         },
         "fit": {
             "flags": result.flags,
-            "speed_val_rmse_mps": result.speed_val_rmse_mps,
-            "yaw_val_rmse_rad": result.yaw_val_rmse_rad,
+            "speed_heldout_rmse_mps": result.speed_heldout_rmse_mps,
+            "yaw_heldout_rmse_rad": result.yaw_heldout_rmse_rad,
             "delay_selection": result.delay_selection,
             "yaw_target": "path_curvature_ground_speed",
             "accel_rule": result.accel_rule,
             "yaw_training": result.yaw_training,
             "sides_tied": result.sides_tied,
             "yaw_cv_rmse_rad": result.yaw_cv_rmse_rad,
-            "delay_curve_speed_val_rmse": {str(k): v for k, v in result.delay_curve.items()},
+            "delay_curve_speed_heldout_rmse": {str(k): v for k, v in result.delay_curve.items()},
             "counts": result.counts,
         },
         "ground_speed_over_wheel_speed_by_steering": ground_speed_ratio(
@@ -219,7 +339,7 @@ def run_fit_and_export(
             "val": seconds(val),
             "heldout": seconds(by_split(segments, "heldout")),
         },
-        "held_out_bag": HELD_OUT_BAG,
+        "split_rule": f"first {TRAIN_FRACTION:.0%} of each bag's moving data train, rest held out",
         **(notes or {}),
     }
     metrics = _json(metrics)
@@ -238,8 +358,15 @@ def run_fit_and_export(
         data=list(data_lines),
         metrics=metrics,
     )
+    if profile_png:
+        from .plots import plot_from_metrics
+
+        png = bundle_dir / PROFILE_PNG
+        plot_from_metrics(png, metrics, nominal.to_dict(), f"{model_id}: identification profiles")
     if pointer_dir is not None:
         pointer_dir.mkdir(parents=True, exist_ok=True)
+        if profile_png:
+            shutil.copy(bundle_dir / PROFILE_PNG, pointer_dir / PROFILE_PNG)
         shutil.copy(bundle_dir / export.MANIFEST_FILE, pointer_dir / export.MANIFEST_FILE)
         (pointer_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         (pointer_dir / "README.md").write_text(render_readme(manifest, metrics), encoding="utf-8")
@@ -256,64 +383,55 @@ def _row(label: str, errs: dict[Any, dict[str, float]]) -> str:
 
 FINDINGS = [
     (
-        "- The bags are nested copies of three recordings: `..._03-54-11_car_teleop` is the first "
-        "528 s of `..._cw`, and the `..._04-20-19` `_teleop` and `_latest` bags are prefixes of "
-        "`_v3` (identical messages). Only the longest of each group is used, otherwise the held-out "
-        "bag would leak into training."
+        "- Split (brief 14): within every bag the first 70 percent of its moving data trains and "
+        "the last 30 percent is held out; no bag is held out whole and there is no validation "
+        "split. The delay is therefore scored on the held-out part, which makes the held-out "
+        "numbers below in-sample for the delay and the dead zone profile. The bags are nested "
+        "copies of three recordings (only the longest of each group is used). The two 2026-11-12 "
+        "bags are in current units and are not converted; every older bag is converted once."
     ),
     (
-        "- Only one odometry recording is left for training (`..._cw`, first 70 percent, about "
-        "189 s of driving, almost all left turns). Its validation tenth holds no driving, so the "
-        "command delay is chosen by 4-fold blocked cross-validation over training segments and the "
-        "residual early-stops on the last 20 percent of its training samples."
+        "- Windows where every command was at least 0.5 m/s and the wheels never turned (the car "
+        "held, blocked, or the layers downstream of /drive not passing the command) are dropped "
+        "from the speed fit and the evaluation: a 1.75 m/s gap follow command with the car "
+        "standing was 90 percent of the squared speed error."
     ),
     (
-        "- The older floor bags (no odometry) were left out of the yaw fit: blocked "
-        "cross-validation on the 2026-11-11 training segments gave a lower yaw error without them "
-        "(CV numbers above)."
+        "- The dead zone shipped is the median command of the launches from rest (the "
+        "launch side value), not the argmin of a speed error curve: the held-out windows hold "
+        "almost no command inside the dead zone band, so held-out error cannot identify it (its "
+        "profile table moves with the refit, not with the dead zone), and the error over "
+        "windows that start at rest prefers 0.4 m/s because of windows where the car was held "
+        "still under 0.36 to 0.6 m/s. A launch whose command jumped from nothing gives only an "
+        "upper bound on the threshold, so the estimate leans high; launches with the car held "
+        "still under an already high command are left out. The launch table lists every launch. "
+        "The stiction varies between about 0.19 and 0.29 m/s within one bag; the planner adds "
+        "its own margin."
     ),
     (
-        "- Right turns are scarce in the training data (counts above). The two steering gains and "
-        "the offset cannot be told apart from one sided data, so below 300 turning intervals on a "
-        "side the gains are tied and the offset fixed at 0. THIS CHOICE WAS MADE AFTER SEEING A "
-        "FIRST HELD-OUT COMPARISON with separate gains (the row marked not shipped), which was worse "
-        "than the placeholder yaw on the clockwise-heavy bag. The tied rule is stated in terms of "
-        "training counts only, but the held-out yaw numbers of the shipped model are not a clean "
-        "pre-registered result. The pre-registered rule covers the residual only."
+        "- A parameter on a bound or with a flat profile is listed under unidentified and is "
+        "shipped as fitted, except the delay: an unidentified delay ships the grid minimum "
+        "(0.00 s). The speed time constant, delay and the accel limit are an effective "
+        "description of the drivetrain, not measured actuator constants."
     ),
     (
-        "- Windows with a reverse command or a wheel speed below -0.03 m/s are skipped (the model "
-        "has v >= 0). Converted steering reaches 0.504 rad to the left, beyond the planning limit: "
-        "the fit and these held-out numbers clamp at the physical stops, the exported bundle uses "
-        "the vehicle_params limits (held-out numbers with those limits are in metrics.json)."
-    ),
-    (
-        "- Speed behaves like an acceleration-limited tracker of the command with no visible lag "
-        "(speed time constant, delay and the accel limit sit on bounds, flagged above). Treat them "
-        "as an effective description, not as measured actuator constants. Ground speed falls to "
-        "about 0.8 of wheel speed at full lock (table below). The steering gain is fitted per "
-        "ground metre, so the planner's path radius matches the car; the model's speed state is "
-        "still wheel speed, so in a full-lock turn the model over-predicts distance and yaw rate "
-        "per second by the ground/wheel ratio (about 0.8), which is the conservative side "
+        "- The acceleration limit is kept at its start value unless the fitted value fits the "
+        "rolling windows (start speed and every command at least 0.15 m/s) better. The yaw step "
+        "is driven by ICP ground speed (steering gain = path curvature per command); ground "
+        "speed falls to about 0.8 of wheel speed at full lock (table below), so in a full-lock "
+        "turn the model over-predicts distance and yaw rate per second, the conservative side "
         "against walls."
     ),
     (
-        "- From rest the wheels do not turn until the command is about 0.2 to 0.27 m/s (the "
-        "contract model has no dead zone; not modelled). Fitting the acceleration limit on "
-        "windows that contain a launch gave 0.30 m/s2, a description of the dead zone and not of "
-        "the car (teleop commands are ramped, and once rolling the car accelerates at 1.0 to 1.4 "
-        "m/s2 or more)."
+        "- Windows with a reverse command or a wheel speed below -0.03 m/s are skipped (the model "
+        "has v >= 0). Converted steering reaches 0.504 rad to the left, beyond the planning "
+        "limit: the fit and the held-out numbers clamp at the physical stops, the exported "
+        "bundle uses the vehicle_params limits."
     ),
     (
-        "- Two rules were added to the fit AFTER a closed-loop sim pre-flight of dyn-v0-2026-11-11 "
-        "stalled on a 1.0 m lane, and after looking at held-out data: the yaw step is driven by "
-        "ICP ground speed (steering gain = path curvature per command), and accel_max is kept at "
-        "its start value unless the fitted value fits the rolling windows (start speed and every "
-        "command at least 0.15 m/s) better. Both rules are stated on training data only, but "
-        "the held-out numbers are not a clean pre-registered result. The held-out yaw-per-second "
-        "numbers below are worse than dyn-v0-2026-11-11 (about 0.098 rad against 0.042 rad at "
-        "1.0 s) and still better than the placeholder (0.145 rad): the price of a gain that is "
-        "right per ground metre while the model integrates wheel speed."
+        "- Gains are tied (one gain, offset 0) when a side has fewer than 300 training turning "
+        "intervals. The residual ships enabled only if the median of its relative improvement "
+        "over the fitted nominal at 1.0 s is at least 5 percent on both speed and yaw."
     ),
 ]
 
@@ -323,7 +441,7 @@ def _num(x: float | None, digits: int = 4) -> str:
 
 
 def _fit_summary(fit: dict[str, Any], delay_s: float) -> str:
-    curve = fit["delay_curve_speed_val_rmse"]
+    curve = fit["delay_curve_speed_heldout_rmse"]
     at = curve.get(str(delay_s)) or curve.get(f"{delay_s:.2f}")
     lines = [
         (
@@ -332,8 +450,8 @@ def _fit_summary(fit: dict[str, Any], delay_s: float) -> str:
         ),
         "",
         (
-            f"Validation split error: wheel speed {_num(fit['speed_val_rmse_mps'])} m/s, yaw "
-            f"change {_num(fit['yaw_val_rmse_rad'])} rad per 0.1 s (n/a means the split holds no "
+            f"Held-out error: wheel speed {_num(fit['speed_heldout_rmse_mps'])} m/s, yaw "
+            f"change {_num(fit['yaw_heldout_rmse_rad'])} rad per 0.1 s (n/a means the split holds no "
             "data of that kind)."
         ),
         "",
@@ -347,6 +465,135 @@ def _fit_summary(fit: dict[str, Any], delay_s: float) -> str:
         f"Training counts: {json.dumps(fit['counts'])}.",
     ]
     return "\n".join(lines)
+
+
+def _dead_zone_section(metrics: dict[str, Any]) -> list[str]:
+    dz = metrics["dead_zone"]
+    launches = dz["launches_from_rest"]["all"]
+    resolved = dz["launches_from_rest"]["resolved"]
+    steady = dz["steady_state"]
+    roll = dz["rolling_below_the_dead_zone"]
+    choice = dz["choice"]
+    lines = [
+        "## Dead zone",
+        "",
+        (
+            f"Shipped `speed_deadband_mps`: {dz['fitted_mps']:.2f} m/s "
+            f"({choice.get('rule', '')}; {choice.get('launches_used', 0)} used of "
+            f"{choice.get('launches', 0)} launches)."
+        ),
+        "",
+        (
+            "- (a) Launches from rest, command at which the wheel speed first exceeds "
+            f"{dz['launches_from_rest']['launch_speed_mps']} m/s: n {launches.get('n', 0)}, median "
+            f"{_num(launches.get('median_mps'), 3)}, 10th to 90th percentile "
+            f"{_num(launches.get('p10_mps'), 3)} to {_num(launches.get('p90_mps'), 3)} m/s. Launches "
+            f"whose command interval is resolved: n {resolved.get('n', 0)}, median "
+            f"{_num(resolved.get('median_mps'), 3)} m/s."
+        ),
+        (
+            f"- (b) Steady state: the largest command bin with the wheels still ends at "
+            f"{_num(steady['largest_still_bin_hi_mps'], 2)} m/s, the smallest bin with a wheel speed "
+            f"above {steady['moving_wheel_mps']} m/s starts at "
+            f"{_num(steady['smallest_moving_bin_lo_mps'], 2)} m/s (bins with at least "
+            f"{steady['min_bin_samples']} samples; teleop and gap follow hold no steady command in "
+            "between). Shipped value inside the bracket: "
+            f"{dz['fitted_inside_steady_bracket']}."
+        ),
+        (
+            "- Held-out speed RMSE over all windows is smallest at a dead zone of "
+            f"{_num(choice.get('heldout_all_windows_argmin_mps'), 2)} m/s "
+            f"({_num(choice.get('heldout_all_windows_rmse_min'), 4)} m/s) against "
+            f"{_num(choice.get('heldout_all_windows_rmse_at_fitted'), 4)} m/s at the shipped value."
+        ),
+        (
+            "- Rolling below the dead zone (windows that start at 0.15 m/s or more and are commanded "
+            f"between 0.02 m/s and the dead zone throughout): {roll.get('windows', 0)} windows, median "
+            f"start {_num(roll.get('median_start_speed_mps'), 3)} m/s, median end "
+            f"{_num(roll.get('median_end_speed_mps'), 3)} m/s, share still turning at the end "
+            f"{_num(roll.get('share_still_turning_at_end'), 2)}, model median end "
+            f"{_num(roll.get('model_median_end_speed_mps'), 3)} m/s."
+        ),
+        "",
+        "| bag | bag time (s) | command at launch (m/s) | highest command while still (m/s) |",
+        "|---|---|---|---|",
+        *[
+            f"| {x['bag'][:19]}{'..' if len(x['bag']) > 19 else ''} {x['bag'][-12:]} | "
+            f"{x['t_s']:.0f} | {x['cmd_launch_mps']:.3f} | {x['cmd_rest_max_mps']:.3f} |"
+            for x in dz["launch_list"]
+        ],
+        "",
+    ]
+    return lines
+
+
+def _identification_section(metrics: dict[str, Any]) -> list[str]:
+    lines = ["## Identification", ""]
+    if metrics["unidentified"]:
+        lines += ["Not identified by the data (shipped as fitted, delay at the grid minimum):", ""]
+        lines += [f"- {k}: {v}" for k, v in metrics["unidentified"].items()]
+    else:
+        lines += ["Every profiled parameter is identified."]
+    lag = metrics["steering_lag_check"]
+    if lag.get("available"):
+        lines += [
+            "",
+            (
+                "Steering lag cross-check (peak of the cross-correlation of the steering command with "
+                "ICP path curvature, speed over 0.4 m/s, independent of the fit): "
+                f"{lag['peak_lag_s']:.3f} s (correlation {lag['peak_correlation']:.2f}, "
+                f"{lag['intervals']} intervals) against fitted delay plus steer_tau "
+                f"{lag['fitted_delay_plus_steer_tau_s']:.3f} s; difference {lag['difference_s']:+.3f} s"
+                f"{', over the 0.05 s threshold' if lag['disagrees'] else ''}."
+            ),
+        ]
+    lines += [
+        "",
+        "Profiles (held-out RMSE against the parameter, the others refit): profiles.png.",
+        "",
+    ]
+    for name in ("command_delay_s", "speed_tau_s", "steer_tau_s", "speed_deadband_mps"):
+        rows = metrics["profiles"].get(name, [])
+        if not rows:
+            continue
+        lines += [
+            f"{name} ({metrics['profile_notes'].get(name, '')})",
+            "",
+            "| value | RMSE | over the minimum |",
+            "|---|---|---|",
+            *[f"| {r['value']:.3f} | {r['rmse']:.4f} | {r['over_min']:+.1%} |" for r in rows],
+            "",
+        ]
+    return lines
+
+
+def _pnp_section(metrics: dict[str, Any]) -> list[str]:
+    runs = metrics.get("pnp_runs")
+    if not runs:
+        return []
+    lines = [
+        "## Prediction error on the planner runs (bag 2026-11-12T03-04-56)",
+        "",
+        (
+            "Open loop from the recorded /drive commands, speed against the wheel, pose against "
+            "chained ICP; windows that start standing included. Cells: wheel speed RMSE (m/s) / yaw "
+            "RMSE (rad) / position RMSE (m)."
+        ),
+        "",
+        "| variant | windows | 0.5 s | 1.0 s | 1.5 s |",
+        "|---|---|---|---|---|",
+    ]
+    for name, rows in runs.items():
+        pooled = rows["pooled"]
+        cells = []
+        for h in ("0.5", "1.0", "1.5"):
+            e = pooled["errors"][h]
+            cells.append(
+                f"{e['speed_rmse_mps']:.3f} / {e['yaw_rmse_rad']:.3f} / {e['pos_rmse_m']:.3f}"
+            )
+        lines.append(f"| {name} | {pooled['windows']} | " + " | ".join(cells) + " |")
+    lines.append("")
+    return lines
 
 
 def render_readme(manifest: dict[str, Any], metrics: dict[str, Any]) -> str:
@@ -427,6 +674,9 @@ def render_readme(manifest: dict[str, Any], metrics: dict[str, Any]) -> str:
             "worse)."
         ),
         "",
+        *_dead_zone_section(metrics),
+        *_identification_section(metrics),
+        *_pnp_section(metrics),
         "## Residual verdict",
         "",
         (

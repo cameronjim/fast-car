@@ -288,3 +288,27 @@ TEST(BundleLoader, DynNominalV0FromTheDynamicsWorkstreamLoads) {
   EXPECT_FALSE(r.bundle->params.residual.enabled);
   EXPECT_LT(r.bundle->golden_max_abs_error, kGoldenTolerance);
 }
+
+// The fitted nominal of the car (brief 14), residual disabled, with a dead zone and golden
+// rollouts that cross it. Loading it is the proof that this step reproduces model.py there.
+TEST(BundleLoader, DynCar20261112WithADeadZoneLoadsAndReproducesTheGoldenRollouts) {
+  const std::string dir =
+      std::string(RACER_PLANNER_REPO_ROOT) + "/config/pnp/fixtures/dyn-car-2026-11-12";
+  const auto r = load_dynamics_bundle(dir, test::binding_geometry(), 0.5);
+  ASSERT_TRUE(r.ok()) << (r.refusal ? std::string(refusal_code_name(r.refusal->code)) + ": " +
+                                          r.refusal->message
+                                    : "");
+  EXPECT_EQ(r.bundle->model_id, "dyn-car-2026-11-12");
+  EXPECT_FALSE(r.bundle->params.residual.enabled);
+  EXPECT_GT(r.bundle->params.nominal.speed_deadband_mps, 0.0);
+  EXPECT_LT(r.bundle->golden_max_abs_error, kGoldenTolerance);
+  EXPECT_GT(r.bundle->params.v_max_mps, 0.94);
+  // The golden rollouts include three that cross the dead zone: the same parameters with the
+  // dead zone removed no longer reproduce them, so a match is not only the rest of the model.
+  DynamicsParams no_dead_zone = r.bundle->params;
+  no_dead_zone.nominal.speed_deadband_mps = 0.0;
+  const auto mismatch = verify_golden_rollouts(no_dead_zone, test::binding_geometry(),
+                                               dir + "/golden_rollouts.csv", nullptr);
+  ASSERT_TRUE(mismatch.has_value());
+  EXPECT_EQ(mismatch->code, RefusalCode::GoldenRolloutMismatch);
+}

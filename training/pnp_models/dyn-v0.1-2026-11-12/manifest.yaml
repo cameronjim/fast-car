@@ -1,0 +1,605 @@
+bundle_schema_version: 1.1.0
+kind: dynamics
+model_id: dyn-v0.1-2026-11-12
+created_utc: '2026-11-12T19:06:47Z'
+git_sha: a30635fe692feae3c5239d6935cc80821b161245
+training_config_sha256: 832f8952d7c648a522ebfb61d20c68c856698bbaef86fe0bfd48d28446e4844f
+vehicle_params: {schema_version: 0.14.0, sysid_session_id: none-preliminary}
+payload:
+- {file: residual_mlp.f32, sha256: aa8b81d746d258905bc11c22f78ed6b9fd538b6253f38b1adf2ad74004b4268a}
+- {file: golden_rollouts.csv, sha256: d12002f2fc1127d6e449ec1ad703f60f443d9cf7f53e44e2e33258fa6bb9c264}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9477262819711152, speed_deadband_mps: 0.16, speed_tau_s: 0.27542979927075345,
+    accel_max_mps2: 2.0, decel_max_mps2: 0.7528405444226376, steer_gain_left: 0.9166243626015708,
+    steer_gain_right: 1.0114633713998802, steer_offset_rad: 0.015222998571431204,
+    steer_tau_s: 0.02787697420940658, command_delay_s: 0.0, understeer_s2_per_m2: 0.10938200992093731}
+  residual:
+    enabled: false
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers:
+    - [4, 32]
+    - [32, 32]
+    - [32, 2]
+    activation: tanh
+    input_mean: [0.0, 0.0, 0.0, 0.0]
+    input_std: [1.0, 1.0, 1.0, 1.0]
+    output_scale: [1.0, 1.0]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['bag 2026-10-24T23-13-18_car_teleop: 806 s, odometry no', 'bag 2026-10-25T19-27-08_car_teleop:
+    409 s, odometry no', 'bag 2026-11-11T03-54-11_car_teleop_cw: 1020 s, odometry
+    yes', 'bag 2026-11-11T04-20-19_car_teleop_v3: 1557 s, odometry yes', 'bag 2026-11-12T02-57-50_car_teleop:
+    415 s, odometry yes', 'bag 2026-11-12T03-04-56_car_teleop: 1988 s, odometry yes',
+  'dropped as a nested copy of a longer bag: 2026-11-11T03-54-11_car_teleop', 'dropped
+    as a nested copy of a longer bag: 2026-11-11T04-20-19_car_teleop', 'dropped as
+    a nested copy of a longer bag: 2026-11-11T04-20-19_car_teleop_latest']
+metrics:
+  dead_zone:
+    fitted_mps: 0.16
+    launches_from_rest:
+      launch_speed_mps: 0.03
+      all: {n: 18, median_mps: 0.2496381774544716, p10_mps: 0.1361741566486779, p90_mps: 0.5886376159349397,
+        rest_max_median_mps: 0.06788008601047753, rest_max_p90_mps: 0.5886091324876327}
+      resolved: {n: 8, median_mps: 0.15612419888770723, p10_mps: 0.1361741566486779,
+        p90_mps: 0.5281373316011286, rest_max_median_mps: 0.07198004395056842, rest_max_p90_mps: 0.5278717909941582}
+      resolved_width_mps: 0.15
+    launch_list:
+    - {bag: 2026-11-11T03-54-11_car_teleop_cw, t_s: 221.9, cmd_launch_mps: 0.5716694243714947,
+      cmd_rest_max_mps: 0.5715752737084769}
+    - {bag: 2026-11-11T03-54-11_car_teleop_cw, t_s: 850.9, cmd_launch_mps: 0.5094807204138289,
+      cmd_rest_max_mps: 0.5091417269737358}
+    - {bag: 2026-11-11T03-54-11_car_teleop_cw, t_s: 914.5, cmd_launch_mps: 0.1493361934774863,
+      cmd_rest_max_mps: 0.06788008601047753}
+    - {bag: 2026-11-11T04-20-19_car_teleop_v3, t_s: 131.9, cmd_launch_mps: 0.1493361934774863,
+      cmd_rest_max_mps: 0.06788008601047753}
+    - {bag: 2026-11-11T04-20-19_car_teleop_v3, t_s: 656.2, cmd_launch_mps: 0.1493361934774863,
+      cmd_rest_max_mps: 0.06788008601047753}
+    - {bag: 2026-11-11T04-20-19_car_teleop_v3, t_s: 1251.0, cmd_launch_mps: 0.6282300629163111,
+      cmd_rest_max_mps: 0.6283548029723294}
+    - {bag: 2026-11-11T04-20-19_car_teleop_v3, t_s: 1377.0, cmd_launch_mps: 0.1629122042979282,
+      cmd_rest_max_mps: 0.0814561021489641}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 200.1, cmd_launch_mps: 0.18602877855300903,
+      cmd_rest_max_mps: 0.07608000189065933}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 297.1, cmd_launch_mps: 0.21618704497814178,
+      cmd_rest_max_mps: 0.0}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 475.3, cmd_launch_mps: 0.3303142189979553,
+      cmd_rest_max_mps: 0.0}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 1088.0, cmd_launch_mps: 0.23815305531024933,
+      cmd_rest_max_mps: 0.0}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 1098.4, cmd_launch_mps: 0.07160276174545288,
+      cmd_rest_max_mps: 0.08650463819503784}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 1115.3, cmd_launch_mps: 0.2630043029785156,
+      cmd_rest_max_mps: 0.28498566150665283}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 1132.2, cmd_launch_mps: 0.26512500643730164,
+      cmd_rest_max_mps: 0.0}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 1140.4, cmd_launch_mps: 0.10546273738145828,
+      cmd_rest_max_mps: 0.0}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 1174.9, cmd_launch_mps: 0.26112329959869385,
+      cmd_rest_max_mps: 0.0}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 1733.2, cmd_launch_mps: 0.36000001430511475,
+      cmd_rest_max_mps: 0.0}
+    - {bag: 2026-11-12T03-04-56_car_teleop, t_s: 1748.0, cmd_launch_mps: 1.7511907815933228,
+      cmd_rest_max_mps: 1.766144037246704}
+    steady_state: {largest_still_bin_hi_mps: 0.08, smallest_moving_bin_lo_mps: 0.38,
+      consistent: true, zero_wheel_mps: 0.02, moving_wheel_mps: 0.05, min_bin_samples: 20}
+    steady_state_bins:
+    - {cmd_lo_mps: 0.0, cmd_hi_mps: 0.01, n: 175290, median_wheel_mps: 0.0, share_still: 0.9999714758400365}
+    - {cmd_lo_mps: 0.01, cmd_hi_mps: 0.02, n: 7, median_wheel_mps: 0.0, share_still: 1.0}
+    - {cmd_lo_mps: 0.02, cmd_hi_mps: 0.03, n: 7, median_wheel_mps: 0.0, share_still: 1.0}
+    - {cmd_lo_mps: 0.05, cmd_hi_mps: 0.06, n: 31, median_wheel_mps: 0.0, share_still: 1.0}
+    - {cmd_lo_mps: 0.06, cmd_hi_mps: 0.07, n: 86, median_wheel_mps: 0.0, share_still: 1.0}
+    - {cmd_lo_mps: 0.07, cmd_hi_mps: 0.08, n: 85, median_wheel_mps: 0.0, share_still: 1.0}
+    - {cmd_lo_mps: 0.08, cmd_hi_mps: 0.09, n: 17, median_wheel_mps: 0.0, share_still: 1.0}
+    - {cmd_lo_mps: 0.36, cmd_hi_mps: 0.37, n: 311, median_wheel_mps: 0.0, share_still: 0.7877813504823151}
+    - {cmd_lo_mps: 0.38, cmd_hi_mps: 0.39, n: 3487, median_wheel_mps: 0.3621838071551884,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.39, cmd_hi_mps: 0.4, n: 665, median_wheel_mps: 0.35635927355003094,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.4, cmd_hi_mps: 0.41, n: 107, median_wheel_mps: 0.3648046077591657,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.41, cmd_hi_mps: 0.42, n: 78, median_wheel_mps: 0.3605089013564796,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.42, cmd_hi_mps: 0.43, n: 7, median_wheel_mps: 0.36723977948802133,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.43, cmd_hi_mps: 0.44, n: 1, median_wheel_mps: 0.41423020369107155,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.44, cmd_hi_mps: 0.45, n: 23, median_wheel_mps: 0.4337631237398715,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.45, cmd_hi_mps: 0.46, n: 21, median_wheel_mps: 0.4306047109927724,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.46, cmd_hi_mps: 0.47, n: 66, median_wheel_mps: 0.43259032941981174,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.47, cmd_hi_mps: 0.48, n: 40, median_wheel_mps: 0.4247449628015336,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.48, cmd_hi_mps: 0.49, n: 23, median_wheel_mps: 0.429028155411542,
+      share_still: 0.0}
+    - {cmd_lo_mps: 0.49, cmd_hi_mps: 0.5, n: 27, median_wheel_mps: 0.5028192591763198,
+      share_still: 0.2222222222222222}
+    fitted_inside_steady_bracket: true
+    rolling_below_the_dead_zone:
+      windows: 0
+      band_mps: [0.02, 0.16]
+    choice:
+      launches: 18
+      resolved_launches: 8
+      value_mps: 0.16
+      resolved_min_mps: 0.10546273738145828
+      resolved_max_mps: 0.5716694243714947
+      rule: median command at which the wheels turned over the resolved launches from
+        rest
+      fitted_mps: 0.16
+      heldout_all_windows_argmin_mps_others_fixed: 0.22
+      heldout_all_windows_rmse_at_fitted: 0.08313250202811842
+      heldout_all_windows_rmse_min_others_fixed: 0.083104543635257
+      heldout_all_windows_argmin_mps_refit: 0.08
+      heldout_all_windows_rmse_min_refit: 0.07894230588979399
+      heldout_windows_with_a_command_in_the_band: 3
+      heldout_windows: 867
+      grid_mps: [0.0, 0.4]
+  unidentified: {command_delay_s: on its lower bound 0, speed_deadband_mps: profile
+      flat within 2% of its minimum over 90% of its range (linear measure)}
+  profiles:
+    command_delay_s:
+    - {value: 0.0, rmse: 0.08376176176706962, over_min: 0.0}
+    - {value: 0.02, rmse: 0.08445174548603034, over_min: 0.0082374547096975}
+    - {value: 0.04, rmse: 0.10303675343331604, over_min: 0.23011683684313655}
+    - {value: 0.06, rmse: 0.10252464421594909, over_min: 0.22400295854636587}
+    - {value: 0.08, rmse: 0.10031004667344492, over_min: 0.19756371591602728}
+    - {value: 0.1, rmse: 0.09948430364161724, over_min: 0.18770548210614213}
+    - {value: 0.12, rmse: 0.092873329842293, over_min: 0.10877956579472925}
+    - {value: 0.14, rmse: 0.09348729673747015, over_min: 0.11610948439033497}
+    - {value: 0.16, rmse: 0.09401680181875943, over_min: 0.122431045328389}
+    - {value: 0.18, rmse: 0.09584874044259027, over_min: 0.14430186782762444}
+    - {value: 0.2, rmse: 0.09603857390137054, over_min: 0.14656821770823192}
+    - {value: 0.22, rmse: 0.09757727360740741, over_min: 0.16493817165351543}
+    - {value: 0.24, rmse: 0.09891520901168314, over_min: 0.18091127651724004}
+    - {value: 0.26, rmse: 0.10235627324154663, over_min: 0.22199284115090467}
+    - {value: 0.28, rmse: 0.10535793509389542, over_min: 0.2578285469553745}
+    - {value: 0.3, rmse: 0.10893881132981247, over_min: 0.300579274260693}
+    speed_deadband_mps:
+    - {value: 0.0, rmse: 0.08316164001856804, over_min: 0.0006870428596736922}
+    - {value: 0.01, rmse: 0.08316164001856804, over_min: 0.0006870428596736922}
+    - {value: 0.02, rmse: 0.08316164001856804, over_min: 0.0006870428596736922}
+    - {value: 0.03, rmse: 0.08316164001856804, over_min: 0.0006870428596736922}
+    - {value: 0.04, rmse: 0.08316164001856804, over_min: 0.0006870428596736922}
+    - {value: 0.05, rmse: 0.08315863342424751, over_min: 0.000650864400722817}
+    - {value: 0.06, rmse: 0.08315863342424751, over_min: 0.000650864400722817}
+    - {value: 0.07, rmse: 0.08315863342424751, over_min: 0.000650864400722817}
+    - {value: 0.08, rmse: 0.08315863342424751, over_min: 0.000650864400722817}
+    - {value: 0.09, rmse: 0.08315231969337263, over_min: 0.0005748910471767843}
+    - {value: 0.1, rmse: 0.08315231969337263, over_min: 0.0005748910471767843}
+    - {value: 0.11, rmse: 0.0831441174411475, over_min: 0.00047619304744861424}
+    - {value: 0.12, rmse: 0.0831441174411475, over_min: 0.00047619304744861424}
+    - {value: 0.13, rmse: 0.0831441174411475, over_min: 0.00047619304744861424}
+    - {value: 0.14, rmse: 0.0831441174411475, over_min: 0.00047619304744861424}
+    - {value: 0.15, rmse: 0.08313250202811842, over_min: 0.00033642435946856786}
+    - {value: 0.16, rmse: 0.08313250202811842, over_min: 0.00033642435946856786}
+    - {value: 0.17, rmse: 0.08313250202811842, over_min: 0.00033642435946856786}
+    - {value: 0.18, rmse: 0.08312095303875974, over_min: 0.00019745494993350654}
+    - {value: 0.19, rmse: 0.08312095303875974, over_min: 0.00019745494993350654}
+    - {value: 0.2, rmse: 0.08312095303875974, over_min: 0.00019745494993350654}
+    - {value: 0.21, rmse: 0.08312095303875974, over_min: 0.00019745494993350654}
+    - {value: 0.22, rmse: 0.083104543635257, over_min: 0.0}
+    - {value: 0.23, rmse: 0.083104543635257, over_min: 0.0}
+    - {value: 0.24, rmse: 0.083104543635257, over_min: 0.0}
+    - {value: 0.25, rmse: 0.08311329413650004, over_min: 0.0001052951001263569}
+    - {value: 0.26, rmse: 0.08311329413650004, over_min: 0.0001052951001263569}
+    - {value: 0.27, rmse: 0.08311329413650004, over_min: 0.0001052951001263569}
+    - {value: 0.28, rmse: 0.08311329413650004, over_min: 0.0001052951001263569}
+    - {value: 0.29, rmse: 0.08315910143539783, over_min: 0.000656495995938311}
+    - {value: 0.3, rmse: 0.0831112053003702, over_min: 8.016005890643108e-05}
+    - {value: 0.31, rmse: 0.0831112053003702, over_min: 8.016005890643108e-05}
+    - {value: 0.32, rmse: 0.08327926008335254, over_min: 0.0021023693826220935}
+    - {value: 0.33, rmse: 0.08331087647696409, over_min: 0.002482810598330998}
+    - {value: 0.34, rmse: 0.08336701713781923, over_min: 0.003158353214888221}
+    - {value: 0.35, rmse: 0.08344682392301445, over_min: 0.004118671167483878}
+    - {value: 0.36, rmse: 0.08358553233178365, over_min: 0.005787754501579201}
+    - {value: 0.37, rmse: 0.09730844964402584, over_min: 0.17091611827037156}
+    - {value: 0.38, rmse: 0.09736268508563872, over_min: 0.17156873531440375}
+    - {value: 0.39, rmse: 0.1484223439864375, over_min: 0.7859714703188563}
+    - {value: 0.4, rmse: 0.160720943388251, over_min: 0.9339609648017528}
+    speed_tau_s:
+    - {value: 0.005, rmse: 0.10541208692852023, over_min: 0.33790009132946097}
+    - {value: 0.01, rmse: 0.1054032657430944, over_min: 0.33778813201691227}
+    - {value: 0.02, rmse: 0.10483578464108362, over_min: 0.3305856086599579}
+    - {value: 0.05, rmse: 0.10140026961357596, over_min: 0.28698172979753633}
+    - {value: 0.1, rmse: 0.09587453862497872, over_min: 0.216848633966511}
+    - {value: 0.2, rmse: 0.08661226393074459, over_min: 0.0992909750640989}
+    - {value: 0.3, rmse: 0.07878920676638347, over_min: 0.0}
+    - {value: 0.5, rmse: 0.08793819964960799, over_min: 0.11611987553513559}
+    - {value: 0.75, rmse: 0.10234255162333998, over_min: 0.2989412614191449}
+    - {value: 1.0, rmse: 0.11410580714151643, over_min: 0.44824160344512176}
+    steer_tau_s:
+    - {value: 0.005, rmse: 0.0080171983953562, over_min: 0.0}
+    - {value: 0.01, rmse: 0.008018069211907685, over_min: 0.00010861856081656462}
+    - {value: 0.02, rmse: 0.008037396365644617, over_min: 0.0025193302313830657}
+    - {value: 0.05, rmse: 0.008426251742406668, over_min: 0.051021981355407586}
+    - {value: 0.1, rmse: 0.009960725507156173, over_min: 0.2424197351690487}
+    - {value: 0.2, rmse: 0.013690243409563815, over_min: 0.7076094084803501}
+    - {value: 0.3, rmse: 0.01655745895256022, over_min: 1.0652425119167304}
+    - {value: 0.5, rmse: 0.02006974290161355, over_min: 1.503336192009236}
+    - {value: 0.75, rmse: 0.022414438918617663, over_min: 1.7957944675038569}
+    - {value: 1.0, rmse: 0.02371927856062711, over_min: 1.9585495320118338}
+    speed_deadband_mps_refit:
+    - {value: 0.0, rmse: 0.08317548237685381, over_min: 0.0536236741420939}
+    - {value: 0.01, rmse: 0.07952707768440694, over_min: 0.007407584412714163}
+    - {value: 0.02, rmse: 0.07952772193476605, over_min: 0.007415745440592092}
+    - {value: 0.03, rmse: 0.0795289109287561, over_min: 0.007430806996960859}
+    - {value: 0.04, rmse: 0.07952660462462106, over_min: 0.007401591937823193}
+    - {value: 0.05, rmse: 0.07952232281951269, over_min: 0.007347352261642959}
+    - {value: 0.06, rmse: 0.0791521881991854, over_min: 0.0026586797411822793}
+    - {value: 0.07, rmse: 0.07903199063409291, over_min: 0.0011360796126747008}
+    - {value: 0.08, rmse: 0.07894230588979399, over_min: 0.0}
+    - {value: 0.09, rmse: 0.08376557972075259, over_min: 0.06109871983841009}
+    - {value: 0.1, rmse: 0.08374914437492981, over_min: 0.060890525440773446}
+    - {value: 0.11, rmse: 0.08305771723672133, over_min: 0.05213188670562241}
+    - {value: 0.12, rmse: 0.08312799913232412, over_min: 0.05302218114040769}
+    - {value: 0.13, rmse: 0.0837598028122549, over_min: 0.06102554097148216}
+    - {value: 0.14, rmse: 0.08311483799916881, over_min: 0.05285546276289188}
+    - {value: 0.15, rmse: 0.0831039757588773, over_min: 0.052717865562391}
+    - {value: 0.16, rmse: 0.08376176176706962, over_min: 0.06105035599040831}
+    - {value: 0.17, rmse: 0.08313250202811842, over_min: 0.05307922147820299}
+    - {value: 0.18, rmse: 0.0837889854630236, over_min: 0.06139521158649375}
+    - {value: 0.19, rmse: 0.08379143959686977, over_min: 0.061426299275388896}
+    - {value: 0.2, rmse: 0.08378893208757118, over_min: 0.06139453545407236}
+    - {value: 0.21, rmse: 0.08378358407184378, over_min: 0.061326789577294205}
+    - {value: 0.22, rmse: 0.08525461613300557, over_min: 0.0799610572818048}
+    - {value: 0.23, rmse: 0.08571284538521398, over_min: 0.08576566669932184}
+    - {value: 0.24, rmse: 0.08580664635702848, over_min: 0.08695388853750141}
+    - {value: 0.25, rmse: 0.08514002829312775, over_min: 0.07850951822950258}
+    - {value: 0.26, rmse: 0.08773129474321807, over_min: 0.11133433150146121}
+    - {value: 0.27, rmse: 0.09471645104146724, over_min: 0.19981865203803983}
+    - {value: 0.28, rmse: 0.09634930658558033, over_min: 0.22050281531029858}
+    - {value: 0.29, rmse: 0.09072288211304806, over_min: 0.14923020160698286}
+    - {value: 0.3, rmse: 0.08985025314114373, over_min: 0.138176192453481}
+    - {value: 0.31, rmse: 0.08952460415508874, over_min: 0.13405104076979946}
+    - {value: 0.32, rmse: 0.09001607498742734, over_min: 0.1402767372046705}
+    - {value: 0.33, rmse: 0.09008604485070874, over_min: 0.14116307897658542}
+    - {value: 0.34, rmse: 0.09080722980692965, over_min: 0.15029867424571397}
+    - {value: 0.35, rmse: 0.09187691985810405, over_min: 0.1638489504774181}
+    - {value: 0.36, rmse: 0.09430881659539755, over_min: 0.194654951263467}
+    - {value: 0.37, rmse: 0.1043359582569007, over_min: 0.32167355742758597}
+    - {value: 0.38, rmse: 0.10526767969032313, over_min: 0.33347611909487695}
+    - {value: 0.39, rmse: 0.11879279928068925, over_min: 0.5048052871235842}
+    - {value: 0.4, rmse: 0.12230237616429004, over_min: 0.5492627785034314}
+  profile_notes: {speed_deadband_mps: 'held-out RMSE over all windows with the dead
+      zone varied and every other parameter fixed at its shipped value; the shipped
+      value is the launch side median (deadband_choice), not this argmin', speed_deadband_mps_refit: 'the
+      same with the continuous speed parameters refit at each value: moves with the
+      local minimum of each refit more than with the dead zone', command_delay_s: 'dead
+      zone at its chosen value, continuous speed parameters refit', speed_tau_s: 'gain,
+      accel and decel refit; delay and dead zone at chosen values', steer_tau_s: yaw
+      gains and understeer refit (yaw RMSE per 0.1 s interval)}
+  steering_lag_check:
+    available: true
+    peak_lag_s: 0.05677040221726147
+    peak_correlation: 0.9896423891522492
+    intervals: 4742
+    fitted_delay_plus_steer_tau_s: 0.02787697420940658
+    difference_s: 0.02889342800785489
+    disagrees: false
+    threshold_s: 0.05
+    lags_s: [0.0, 0.02, 0.04, 0.06, 0.08, 0.1, 0.12, 0.14, 0.16, 0.18, 0.2, 0.22,
+      0.24, 0.26, 0.28, 0.3, 0.32, 0.34, 0.36, 0.38, 0.4, 0.42, 0.44, 0.46, 0.48,
+      0.5, 0.52, 0.54, 0.56, 0.58, 0.6]
+    correlation: [0.9864894247394915, 0.9885550159682164, 0.9893417066885687, 0.9896423891522492,
+      0.9890548453214448, 0.9870872839600077, 0.9834841158458233, 0.9794816723335485,
+      0.9763825559152678, 0.9723716586975656, 0.9665735039616212, 0.9592164201182312,
+      0.9521681308730295, 0.9465843906120746, 0.9401030870078535, 0.931676655064284,
+      0.921889002089051, 0.9127766923260795, 0.90607679077335, 0.8983953101802645,
+      0.8887726785496514, 0.878121417743216, 0.8682504052340398, 0.8613563871938679,
+      0.8536544779958041, 0.8441699367562425, 0.8338762227041491, 0.8245176939042882,
+      0.818365728689774, 0.8114635208182094, 0.8028304210910622]
+  validity: {v_max_mps: 1.3, factor: 1.0, p99_wheel_speed_train_mps: 1.300821521532053,
+    p99_wheel_speed_all_moving_data_mps: 1.3503102045484323}
+  pnp_runs:
+    old_dyn-v0-2026-11-12:
+      pooled:
+        windows: 122
+        errors:
+          '0.5': {speed_rmse_mps: 0.09824477509066352, yaw_rmse_rad: 0.025910708135544407,
+            pos_rmse_m: 0.045680494477678794}
+          '1.0': {speed_rmse_mps: 0.09437628868790009, yaw_rmse_rad: 0.05198117512956986,
+            pos_rmse_m: 0.09471497636242462}
+          '1.5': {speed_rmse_mps: 0.08792284386540587, yaw_rmse_rad: 0.07766981410013239,
+            pos_rmse_m: 0.14064000166323848}
+      run0:
+        windows: 6
+        errors:
+          '0.5': {speed_rmse_mps: 0.04992511100640659, yaw_rmse_rad: 0.0286761899092043,
+            pos_rmse_m: 0.03961007175950794}
+          '1.0': {speed_rmse_mps: 0.042491877830479814, yaw_rmse_rad: 0.051107220561774885,
+            pos_rmse_m: 0.07252881845193593}
+          '1.5': {speed_rmse_mps: 0.028486771798861926, yaw_rmse_rad: 0.08412165062120745,
+            pos_rmse_m: 0.11201187605284064}
+      run1:
+        windows: 76
+        errors:
+          '0.5': {speed_rmse_mps: 0.11453541749204436, yaw_rmse_rad: 0.02992541410435846,
+            pos_rmse_m: 0.05320247789503586}
+          '1.0': {speed_rmse_mps: 0.1102684237728616, yaw_rmse_rad: 0.06033906090162474,
+            pos_rmse_m: 0.11101391931063151}
+          '1.5': {speed_rmse_mps: 0.1011663941959742, yaw_rmse_rad: 0.08940401302495296,
+            pos_rmse_m: 0.1644510706323709}
+      run2:
+        windows: 0
+        errors:
+          '0.5': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+          '1.0': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+          '1.5': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+      run3:
+        windows: 40
+        errors:
+          '0.5': {speed_rmse_mps: 0.06434239853300086, yaw_rmse_rad: 0.01492669656022784,
+            pos_rmse_m: 0.027407252604312676}
+          '1.0': {speed_rmse_mps: 0.06158590590410249, yaw_rmse_rad: 0.030527255346364485,
+            pos_rmse_m: 0.056182654085772374}
+          '1.5': {speed_rmse_mps: 0.06332662647665371, yaw_rmse_rad: 0.04638011338110368,
+            pos_rmse_m: 0.08403521791079391}
+    new_nominal:
+      pooled:
+        windows: 122
+        errors:
+          '0.5': {speed_rmse_mps: 0.07451066529280603, yaw_rmse_rad: 0.02272833871551603,
+            pos_rmse_m: 0.03239180035207627}
+          '1.0': {speed_rmse_mps: 0.07691402417195912, yaw_rmse_rad: 0.046166440880772805,
+            pos_rmse_m: 0.07214601836324133}
+          '1.5': {speed_rmse_mps: 0.06984388455246163, yaw_rmse_rad: 0.0693644347957673,
+            pos_rmse_m: 0.1105918924485411}
+      run0:
+        windows: 6
+        errors:
+          '0.5': {speed_rmse_mps: 0.060300916335220923, yaw_rmse_rad: 0.029774525014501292,
+            pos_rmse_m: 0.04499184687995736}
+          '1.0': {speed_rmse_mps: 0.03975210638388757, yaw_rmse_rad: 0.05701743791165444,
+            pos_rmse_m: 0.08380753858579008}
+          '1.5': {speed_rmse_mps: 0.03647679910770376, yaw_rmse_rad: 0.09636309292011398,
+            pos_rmse_m: 0.12673517266567524}
+      run1:
+        windows: 76
+        errors:
+          '0.5': {speed_rmse_mps: 0.08944275469834506, yaw_rmse_rad: 0.02673035534925541,
+            pos_rmse_m: 0.03643564557493694}
+          '1.0': {speed_rmse_mps: 0.09662957551413082, yaw_rmse_rad: 0.05517762723486341,
+            pos_rmse_m: 0.085162221336613}
+          '1.5': {speed_rmse_mps: 0.08666693529831725, yaw_rmse_rad: 0.08257750931003861,
+            pos_rmse_m: 0.1322030454125553}
+      run2:
+        windows: 0
+        errors:
+          '0.5': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+          '1.0': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+          '1.5': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+      run3:
+        windows: 40
+        errors:
+          '0.5': {speed_rmse_mps: 0.03446255233386841, yaw_rmse_rad: 0.009220089797771691,
+            pos_rmse_m: 0.019342977374740236}
+          '1.0': {speed_rmse_mps: 0.008076692560626235, yaw_rmse_rad: 0.015108127953523292,
+            pos_rmse_m: 0.03227837162940106}
+          '1.5': {speed_rmse_mps: 0.020189847127329505, yaw_rmse_rad: 0.01804946673594332,
+            pos_rmse_m: 0.0410661886489831}
+    new_shipped:
+      pooled:
+        windows: 122
+        errors:
+          '0.5': {speed_rmse_mps: 0.07451066529280603, yaw_rmse_rad: 0.02272833871551603,
+            pos_rmse_m: 0.03239180035207627}
+          '1.0': {speed_rmse_mps: 0.07691402417195912, yaw_rmse_rad: 0.046166440880772805,
+            pos_rmse_m: 0.07214601836324133}
+          '1.5': {speed_rmse_mps: 0.06984388455246163, yaw_rmse_rad: 0.0693644347957673,
+            pos_rmse_m: 0.1105918924485411}
+      run0:
+        windows: 6
+        errors:
+          '0.5': {speed_rmse_mps: 0.060300916335220923, yaw_rmse_rad: 0.029774525014501292,
+            pos_rmse_m: 0.04499184687995736}
+          '1.0': {speed_rmse_mps: 0.03975210638388757, yaw_rmse_rad: 0.05701743791165444,
+            pos_rmse_m: 0.08380753858579008}
+          '1.5': {speed_rmse_mps: 0.03647679910770376, yaw_rmse_rad: 0.09636309292011398,
+            pos_rmse_m: 0.12673517266567524}
+      run1:
+        windows: 76
+        errors:
+          '0.5': {speed_rmse_mps: 0.08944275469834506, yaw_rmse_rad: 0.02673035534925541,
+            pos_rmse_m: 0.03643564557493694}
+          '1.0': {speed_rmse_mps: 0.09662957551413082, yaw_rmse_rad: 0.05517762723486341,
+            pos_rmse_m: 0.085162221336613}
+          '1.5': {speed_rmse_mps: 0.08666693529831725, yaw_rmse_rad: 0.08257750931003861,
+            pos_rmse_m: 0.1322030454125553}
+      run2:
+        windows: 0
+        errors:
+          '0.5': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+          '1.0': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+          '1.5': {speed_rmse_mps: null, yaw_rmse_rad: null, pos_rmse_m: null}
+      run3:
+        windows: 40
+        errors:
+          '0.5': {speed_rmse_mps: 0.03446255233386841, yaw_rmse_rad: 0.009220089797771691,
+            pos_rmse_m: 0.019342977374740236}
+          '1.0': {speed_rmse_mps: 0.008076692560626235, yaw_rmse_rad: 0.015108127953523292,
+            pos_rmse_m: 0.03227837162940106}
+          '1.5': {speed_rmse_mps: 0.020189847127329505, yaw_rmse_rad: 0.01804946673594332,
+            pos_rmse_m: 0.0410661886489831}
+  heldout_windows: 556
+  heldout_horizons_s: [0.5, 1.0, 1.5]
+  heldout_errors:
+    placeholder_nominal:
+      '0.5': {speed_rmse_mps: 0.06782051274557535, yaw_rmse_rad: 0.13902157110037636,
+        pos_rmse_m: 0.09694159708323806}
+      '1.0': {speed_rmse_mps: 0.07231089288397852, yaw_rmse_rad: 0.26072487448164955,
+        pos_rmse_m: 0.19299099367589148}
+      '1.5': {speed_rmse_mps: 0.07838185984429727, yaw_rmse_rad: 0.3688212466785147,
+        pos_rmse_m: 0.2885015112618576}
+    fitted_nominal:
+      '0.5': {speed_rmse_mps: 0.0704747301696029, yaw_rmse_rad: 0.08475045478002384,
+        pos_rmse_m: 0.09019867259881009}
+      '1.0': {speed_rmse_mps: 0.07256722253695462, yaw_rmse_rad: 0.16038420050177593,
+        pos_rmse_m: 0.1688100359084715}
+      '1.5': {speed_rmse_mps: 0.07768144722200764, yaw_rmse_rad: 0.22536786920026514,
+        pos_rmse_m: 0.23414801131458604}
+    fitted_nominal_other_side_tying:
+      '0.5': {speed_rmse_mps: 0.0704747301696029, yaw_rmse_rad: 0.0809905164216022,
+        pos_rmse_m: 0.09019610835443441}
+      '1.0': {speed_rmse_mps: 0.07256722253695462, yaw_rmse_rad: 0.15371968371664924,
+        pos_rmse_m: 0.16888956136603853}
+      '1.5': {speed_rmse_mps: 0.07768144722200764, yaw_rmse_rad: 0.21679819568161826,
+        pos_rmse_m: 0.2342778304609137}
+    fitted_plus_residual_seed0:
+      '0.5': {speed_rmse_mps: 0.07388471460522686, yaw_rmse_rad: 0.06967016313351061,
+        pos_rmse_m: 0.08975464625456574}
+      '1.0': {speed_rmse_mps: 0.07687174467818078, yaw_rmse_rad: 0.1270648107866131,
+        pos_rmse_m: 0.16741349200641195}
+      '1.5': {speed_rmse_mps: 0.0817586999056621, yaw_rmse_rad: 0.17156590574496122,
+        pos_rmse_m: 0.23131206970324886}
+    fitted_plus_residual_seed1:
+      '0.5': {speed_rmse_mps: 0.07165623896998721, yaw_rmse_rad: 0.07175482870146252,
+        pos_rmse_m: 0.09114395872611653}
+      '1.0': {speed_rmse_mps: 0.07416075513879641, yaw_rmse_rad: 0.13128449597733666,
+        pos_rmse_m: 0.17160691168963488}
+      '1.5': {speed_rmse_mps: 0.07951426611335678, yaw_rmse_rad: 0.17848460580649445,
+        pos_rmse_m: 0.23903655435146032}
+    fitted_plus_residual_seed2:
+      '0.5': {speed_rmse_mps: 0.07255034815067782, yaw_rmse_rad: 0.0724230451728412,
+        pos_rmse_m: 0.09306582501312323}
+      '1.0': {speed_rmse_mps: 0.07589187535102546, yaw_rmse_rad: 0.1346712986961574,
+        pos_rmse_m: 0.1770515228297359}
+      '1.5': {speed_rmse_mps: 0.0820982723125204, yaw_rmse_rad: 0.1841861113493594,
+        pos_rmse_m: 0.24762418770416045}
+  heldout_errors_per_bag:
+    2026-11-11T03-54-11_car_teleop_cw:
+      placeholder_nominal:
+        '0.5': {speed_rmse_mps: 0.04327008746229025, yaw_rmse_rad: 0.07052912474305735,
+          pos_rmse_m: 0.041830333192041845}
+        '1.0': {speed_rmse_mps: 0.046106004005890176, yaw_rmse_rad: 0.14343841837285157,
+          pos_rmse_m: 0.08945562163823374}
+        '1.5': {speed_rmse_mps: 0.04912561485750307, yaw_rmse_rad: 0.21558802024780907,
+          pos_rmse_m: 0.13725236146353462}
+      fitted_nominal:
+        '0.5': {speed_rmse_mps: 0.03398456112651951, yaw_rmse_rad: 0.04685172781242023,
+          pos_rmse_m: 0.035978937499592904}
+        '1.0': {speed_rmse_mps: 0.034305613898196904, yaw_rmse_rad: 0.09464123747398213,
+          pos_rmse_m: 0.07249772787738612}
+        '1.5': {speed_rmse_mps: 0.034714832777454525, yaw_rmse_rad: 0.14232416310100135,
+          pos_rmse_m: 0.10815322829947187}
+      fitted_nominal_other_side_tying:
+        '0.5': {speed_rmse_mps: 0.03398456112651951, yaw_rmse_rad: 0.04859390729735092,
+          pos_rmse_m: 0.0359918010574552}
+        '1.0': {speed_rmse_mps: 0.034305613898196904, yaw_rmse_rad: 0.09822683011942147,
+          pos_rmse_m: 0.07256729502456259}
+        '1.5': {speed_rmse_mps: 0.034714832777454525, yaw_rmse_rad: 0.1475685177812199,
+          pos_rmse_m: 0.10833343005390103}
+    2026-11-11T04-20-19_car_teleop_v3:
+      placeholder_nominal:
+        '0.5': {speed_rmse_mps: 0.04517847241927699, yaw_rmse_rad: 0.06933728353577645,
+          pos_rmse_m: 0.04961004389100258}
+        '1.0': {speed_rmse_mps: 0.04764346071977071, yaw_rmse_rad: 0.1498984443159922,
+          pos_rmse_m: 0.10688617515881103}
+        '1.5': {speed_rmse_mps: 0.05320708455426429, yaw_rmse_rad: 0.23295057257240548,
+          pos_rmse_m: 0.16743685974171277}
+      fitted_nominal:
+        '0.5': {speed_rmse_mps: 0.034727153335364414, yaw_rmse_rad: 0.058442276941122064,
+          pos_rmse_m: 0.04369221316545114}
+        '1.0': {speed_rmse_mps: 0.03325827146902366, yaw_rmse_rad: 0.12129673061535207,
+          pos_rmse_m: 0.08996525533394434}
+        '1.5': {speed_rmse_mps: 0.038052300765557184, yaw_rmse_rad: 0.18411317670306382,
+          pos_rmse_m: 0.1388321792013743}
+      fitted_nominal_other_side_tying:
+        '0.5': {speed_rmse_mps: 0.034727153335364414, yaw_rmse_rad: 0.05594945482513059,
+          pos_rmse_m: 0.043596677829397}
+        '1.0': {speed_rmse_mps: 0.03325827146902366, yaw_rmse_rad: 0.11606123715644616,
+          pos_rmse_m: 0.08956790366939775}
+        '1.5': {speed_rmse_mps: 0.038052300765557184, yaw_rmse_rad: 0.17608561247577234,
+          pos_rmse_m: 0.13798624414878577}
+    2026-11-12T03-04-56_car_teleop:
+      placeholder_nominal:
+        '0.5': {speed_rmse_mps: 0.0962960655441434, yaw_rmse_rad: 0.21170263363017086,
+          pos_rmse_m: 0.1493316727187466}
+        '1.0': {speed_rmse_mps: 0.102892393570045, yaw_rmse_rad: 0.3874104178538818,
+          pos_rmse_m: 0.2932276255535055}
+        '1.5': {speed_rmse_mps: 0.11125145493852648, yaw_rmse_rad: 0.536251582682268,
+          pos_rmse_m: 0.4349036755955719}
+      fitted_nominal:
+        '0.5': {speed_rmse_mps: 0.10796041455236222, yaw_rmse_rad: 0.12228344907699933,
+          pos_rmse_m: 0.14034214465467018}
+        '1.0': {speed_rmse_mps: 0.11201915944296183, yaw_rmse_rad: 0.22458421856484867,
+          pos_rmse_m: 0.25909444623365535}
+        '1.5': {speed_rmse_mps: 0.11982126509201765, yaw_rmse_rad: 0.3051464140880442,
+          pos_rmse_m: 0.3529172928357807}
+      fitted_nominal_other_side_tying:
+        '0.5': {speed_rmse_mps: 0.10796041455236222, yaw_rmse_rad: 0.11541148035590174,
+          pos_rmse_m: 0.14035984120984887}
+        '1.0': {speed_rmse_mps: 0.11201915944296183, yaw_rmse_rad: 0.21230087744967943,
+          pos_rmse_m: 0.2593369847485671}
+        '1.5': {speed_rmse_mps: 0.11982126509201765, yaw_rmse_rad: 0.2893111565432185,
+          pos_rmse_m: 0.35338694923987796}
+  heldout_fitted_nominal_with_exported_limits:
+    '0.5': {speed_rmse_mps: 0.0704747301696029, yaw_rmse_rad: 0.08344069415550906,
+      pos_rmse_m: 0.09019418239201919}
+    '1.0': {speed_rmse_mps: 0.07256722253695462, yaw_rmse_rad: 0.15741607653075138,
+      pos_rmse_m: 0.16877637638281195}
+    '1.5': {speed_rmse_mps: 0.07768144722200764, yaw_rmse_rad: 0.22046017833186388,
+      pos_rmse_m: 0.23403811081792725}
+  heldout_zero_yaw_baseline_rad: {'0.5': 0.2669070038144499, '1.0': 0.5104992921577189,
+    '1.5': 0.7367108260067348}
+  heldout_yaw_rmse_per_interval_rad: {ground_driven: 0.008621415754612328, wheel_driven: 0.017941439487013166}
+  planner_min_radius_m: {left: 0.7261318698118088, right: 0.7033511491534857, kinematic_at_limit: 0.6853148709094529}
+  residual_improvement_1s_per_seed:
+    '0': {speed: -0.059317719360612114, yaw: 0.2077473317877959}
+    '1': {speed: -0.021959399107913936, yaw: 0.18143747596956755}
+    '2': {speed: -0.0458148003718589, yaw: 0.1603206657836213}
+  residual_median_improvement_1s: {speed: -0.0458148003718589, yaw: 0.18143747596956755}
+  residual_enabled: false
+  residual_shipped_seed: 2
+  residual_samples: {train: 3875, early_stopping: 969, early_stopping_from: last 20%
+      of the training samples (validation split too small)}
+  fit:
+    flags: {accel_max_mps2: 'not supported while rolling (launch windows only), kept
+        at its start'}
+    speed_heldout_rmse_mps: 0.08313250202811842
+    yaw_heldout_rmse_rad: 0.008085961993571963
+    delay_selection: held-out windows
+    yaw_target: path_curvature_ground_speed
+    accel_rule: {rolling_windows: 1772, rmse_fitted: 0.04017561682578197, rmse_start: 0.039943659267508515,
+      kept_start: true, fitted_value: 0.7774792361632757}
+    yaw_training: odom_only
+    sides_tied: false
+    yaw_cv_rmse_rad: {odom_only: 0.006221863294060304, all: 0.006270418771007515}
+    delay_curve_speed_heldout_rmse: {'0.0': 0.08376176176706962, '0.02': 0.08445174548603034,
+      '0.04': 0.10303675343331604, '0.06': 0.10252464421594909, '0.08': 0.10031004667344492,
+      '0.1': 0.09948430364161724, '0.12': 0.092873329842293, '0.14': 0.09348729673747015,
+      '0.16': 0.09401680181875943, '0.18': 0.09584874044259027, '0.2': 0.09603857390137054,
+      '0.22': 0.09757727360740741, '0.24': 0.09891520901168314, '0.26': 0.10235627324154663,
+      '0.28': 0.10535793509389542, '0.3': 0.10893881132981247}
+    counts: {speed_windows_train: 2063, speed_windows_heldout: 867, yaw_intervals_train: 4844,
+      yaw_intervals_heldout: 3608, yaw_left_train: 2134, yaw_right_train: 2619}
+  ground_speed_over_wheel_speed_by_steering:
+  - {steer_lo_rad: 0.0, steer_hi_rad: 0.05, n: 317, median_ratio: 0.9352273542993564,
+    p25: 0.9044700846322757, p75: 0.9625552289013093}
+  - {steer_lo_rad: 0.05, steer_hi_rad: 0.1, n: 410, median_ratio: 0.9190505610899817,
+    p25: 0.885597197628813, p75: 0.948262588733151}
+  - {steer_lo_rad: 0.1, steer_hi_rad: 0.2, n: 981, median_ratio: 0.9002818349427363,
+    p25: 0.8537398987076275, p75: 0.940552417666445}
+  - {steer_lo_rad: 0.2, steer_hi_rad: 0.3, n: 888, median_ratio: 0.8575751004078414,
+    p25: 0.7831474042011477, p75: 0.91819147892296}
+  - {steer_lo_rad: 0.3, steer_hi_rad: 0.4, n: 860, median_ratio: 0.8199882632730575,
+    p25: 0.739749845474959, p75: 0.8879643702234906}
+  - {steer_lo_rad: 0.4, steer_hi_rad: 0.55, n: 3658, median_ratio: 0.7830949733172298,
+    p25: 0.6982888644803193, p75: 0.8448756855016447}
+  seconds_by_bag:
+    2026-10-24T23-13-18_car_teleop: {train: 313.5, val: 0.0, heldout: 132.8}
+    2026-10-25T19-27-08_car_teleop: {train: 44.8, val: 0.0, heldout: 16.4}
+    2026-11-11T03-54-11_car_teleop_cw: {train: 178.0, val: 0.0, heldout: 69.6}
+    2026-11-11T04-20-19_car_teleop_v3: {train: 175.1, val: 0.0, heldout: 71.2}
+    2026-11-12T03-04-56_car_teleop: {train: 223.1, val: 0.0, heldout: 97.4}
+  driving_seconds: {train: 934.4191088676453, val: 0.0, heldout: 387.43963050842285}
+  split_rule: first 70% of each bag's moving data train, rest held out
+  train_segments: 67
+  dropped_nested_bags: [2026-11-11T03-54-11_car_teleop, 2026-11-11T04-20-19_car_teleop,
+    2026-11-11T04-20-19_car_teleop_latest]

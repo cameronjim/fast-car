@@ -59,6 +59,23 @@ def forward_only(v_mps: np.ndarray, cmds: np.ndarray) -> np.ndarray:
         return (v_mps >= -REVERSE_TOLERANCE_MPS).all(axis=1) & (cmds[..., 0] >= 0.0).all(axis=1)
 
 
+UNRESPONSIVE_CMD_MPS = 0.5  # a command this high for the whole window is far above any dead zone
+UNRESPONSIVE_WHEEL_MPS = 0.02
+
+
+def unresponsive(v_mps: np.ndarray, cmds: np.ndarray) -> np.ndarray:
+    """Windows where the wheels never turned although every command was at least
+    UNRESPONSIVE_CMD_MPS: the car was held, blocked, or the layers downstream of /drive (the RC
+    mux, a stalled drivetrain) did not pass the command on, so the window says nothing about how
+    the drivetrain answers a command. Bag 2026-11-12T03-04-56 has several seconds of a 1.75 m/s
+    gap follow command with the car standing, which alone is 90 percent of the squared error of
+    the speed fit if it is kept. Commands below the threshold (the dead zone itself) stay."""
+    with np.errstate(invalid="ignore"):
+        return (np.nanmax(v_mps, axis=1) < UNRESPONSIVE_WHEEL_MPS) & (
+            np.nanmin(cmds[..., 0], axis=1) >= UNRESPONSIVE_CMD_MPS
+        )
+
+
 @dataclass(frozen=True)
 class SpeedWindows:
     v_mps: np.ndarray  # (W, n + 1) measured wheel speed at 0, dt, ..., n dt
@@ -89,12 +106,23 @@ def speed_windows(
         c = cmd_at(seg.run, times[:, :-1] - delay_s)
         ok = np.isfinite(v).all(axis=1) & np.isfinite(c).all(axis=(1, 2))
         ok &= forward_only(v, c)
+        ok &= ~unresponsive(v, c)
         v = np.maximum(v, 0.0)
         vs.append(v[ok])
         cs.append(c[ok])
     if not vs:
         return SpeedWindows(np.zeros((0, n + 1)), np.zeros((0, n, 2)))
     return SpeedWindows(np.concatenate(vs), np.concatenate(cs))
+
+
+REST_WINDOW_MPS = 0.03
+
+
+def at_rest(windows: SpeedWindows) -> SpeedWindows:
+    """The windows that start with the wheels still (the first 0.1 s below REST_WINDOW_MPS):
+    launches, which are where a dead zone shows."""
+    keep = windows.v_mps[:, :3].max(axis=1) < REST_WINDOW_MPS if len(windows) else np.zeros(0, bool)
+    return SpeedWindows(windows.v_mps[keep], windows.cmds[keep])
 
 
 def speed_rollout(

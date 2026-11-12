@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import yaml
 from racer_pnp_dynamics import evaluate, export, pipeline, residual, windows
-from racer_pnp_dynamics.dataset import HELD_OUT_BAG, by_split, make_segments
+from racer_pnp_dynamics.dataset import by_split, make_segments
 from racer_pnp_dynamics.model import MlpWeights, Nominal, rollout, zero_weights
 from synth import make_run
 from test_fit import TRUTH
@@ -29,7 +29,7 @@ def noisy_trainer(x, y, xv, yv, seed):
 def _segments(vehicle, seconds=500.0):
     a, ma = make_run(TRUTH, vehicle, seconds=seconds, seed=11, name="odom-a")
     old, mo = make_run(TRUTH, vehicle, seconds=seconds, seed=12, odom=False, name="old")
-    held, mh = make_run(TRUTH, vehicle, seconds=seconds, seed=13, name=HELD_OUT_BAG)
+    held, mh = make_run(TRUTH, vehicle, seconds=seconds, seed=13, name="odom-b")
     return [*make_segments(a, ma), *make_segments(old, mo), *make_segments(held, mh)]
 
 
@@ -157,9 +157,22 @@ def test_pipeline_writes_a_valid_bundle_pointer_and_honest_metrics(tmp_path, toy
     assert (pointer / "manifest.yaml").read_bytes() == (
         tmp_path / "models" / "dyn-v0-test" / "manifest.yaml"
     ).read_bytes()
-    assert HELD_OUT_BAG in metrics["seconds_by_bag"]
-    assert metrics["seconds_by_bag"][HELD_OUT_BAG]["train"] == 0.0
+    assert "odom-b" in metrics["seconds_by_bag"]
+    assert metrics["seconds_by_bag"]["odom-b"]["heldout"] > 0.0
+    assert metrics["seconds_by_bag"]["odom-b"]["val"] == 0.0
     assert metrics["fit"]["yaw_target"] == "path_curvature_ground_speed"
+    dz = metrics["dead_zone"]
+    assert dz["fitted_mps"] == 0.0 and set(dz) >= {
+        "launches_from_rest",
+        "steady_state",
+        "rolling_below_the_dead_zone",
+        "fitted_inside_steady_bracket",
+    }
+    assert set(metrics["profiles"]) >= {"command_delay_s", "speed_tau_s", "steer_tau_s"}
+    assert isinstance(metrics["unidentified"], dict)
+    assert metrics["validity"]["factor"] == 1.0 and metrics["validity"]["v_max_mps"] > 0.0
+    assert "available" in metrics["steering_lag_check"]
+    assert "pnp_runs" not in metrics  # no planner runs given
     rule = metrics["fit"]["accel_rule"]
     assert set(rule) == {
         "rolling_windows",
@@ -203,10 +216,47 @@ def test_v_max_rule(toy_vehicle):
     train = by_split(make_segments(run, motion), "train")
     v = pipeline.v_max_of(train, toy_vehicle)
     p99 = np.percentile(np.concatenate([s.run.wheel_speed_mps[s.i0 : s.i1] for s in train]), 99)
-    assert v <= 1.5 * p99 and v > 1.5 * p99 - 0.05 and v <= toy_vehicle.throttle_full_scale_mps
+    # validity is the 99th percentile itself (v0 used 1.5 times it), rounded down to 0.05
+    assert v <= p99 and v > p99 - 0.05 and v <= toy_vehicle.throttle_full_scale_mps
 
 
 def test_fit_vehicle_uses_the_physical_stops(toy_vehicle):
     fv = pipeline.fit_vehicle_of(toy_vehicle)
     assert fv.steer_max_rad == toy_vehicle.physical_lock_left_rad > toy_vehicle.steer_max_rad
     assert fv.steer_min_rad == toy_vehicle.physical_lock_right_rad
+
+
+def test_pipeline_scores_old_against_new_on_the_planner_runs(tmp_path, toy_vehicle, toy_nominal):
+    from racer_pnp_dynamics.pnp_eval import LegacyBundle
+
+    segs = _segments(toy_vehicle, 400.0)
+    run, motion = make_run(TRUTH, toy_vehicle, seconds=200.0, seed=41, name="planner-bag")
+    pnp = pipeline.PnpRuns(
+        run,
+        motion,
+        float(run.t_s[0]),
+        LegacyBundle("dyn-old", toy_nominal, residual.Residual.disabled(), 0.85),
+        spans_s=((20.0, 60.0), (100.0, 140.0)),
+    )
+    metrics = pipeline.run_fit_and_export(
+        segs,
+        toy_vehicle,
+        model_id="dyn-v0-test",
+        created_utc="2026-11-12T00:00:00Z",
+        git_sha="c" * 40,
+        bundle_dir=tmp_path / "b",
+        pointer_dir=tmp_path / "pointer",
+        trainer=zero_trainer,
+        delays=(0.10,),
+        pnp=pnp,
+    )
+    runs = metrics["pnp_runs"]
+    assert set(runs) == {"old_dyn-old", "new_nominal", "new_shipped"}
+    assert set(runs["new_nominal"]) == {"pooled", "run0", "run1"}
+    assert runs["new_nominal"]["pooled"]["windows"] > 20
+    new = runs["new_nominal"]["pooled"]["errors"]["1.0"]["speed_rmse_mps"]
+    old = runs["old_dyn-old"]["pooled"]["errors"]["1.0"]["speed_rmse_mps"]
+    assert new < old  # the fitted model is the truth here, the old one is the placeholder
+    readme = (tmp_path / "pointer" / "README.md").read_text()
+    assert "Prediction error on the planner runs" in readme and "Dead zone" in readme
+    assert "Identification" in readme and chr(0x2014) not in readme

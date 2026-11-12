@@ -19,7 +19,7 @@ from .dataset import Segment
 from .icp_motion import SCAN_DT_S, compose
 from .model import DT_S, Nominal, Residual, rollout
 from .vehicle import Vehicle
-from .windows import WARM_N, cmd_at, forward_only, warm_state, wheel_at
+from .windows import WARM_N, cmd_at, forward_only, unresponsive, warm_state, wheel_at
 
 HORIZONS_S = (0.5, 1.0, 1.5)
 MAX_DELAY_S = 0.30  # window selection must not depend on the variant's delay
@@ -69,6 +69,8 @@ def eval_data(
             if vw[-1] <= min_speed_mps:
                 continue
             if not (forward_only(vt[None], c[None]) & forward_only(vw[None], c[None]))[0]:
+                continue
+            if unresponsive(vt[None], c[None, WARM_N:])[0]:
                 continue
             vw, vt = np.maximum(vw, 0.0), np.maximum(vt, 0.0)
             out["t"].append(t)

@@ -2,8 +2,9 @@
 
 All bags up to 2026-11-11 were recorded under vehicle_params 0.13.0 (speeds 1.401 times the true
 speed, steering commands in the old scale). `run_from_bag_data` applies
-tools/safety_replay/calibration.py `convert_bag` exactly once, so everything downstream is in the
-units of the current config/vehicle_params.yaml.
+tools/safety_replay/calibration.py `convert_bag` exactly once to those, so everything downstream
+is in the units of the current config/vehicle_params.yaml. Bags recorded from 2026-11-12 on are
+already in current units and are NOT converted (`recordings.recorded_for` decides per bag).
 
 Commands come from /drive (what the safety gate let through, which is what the actuators
 received). Wheel speed comes from /odom/wheel where the bag has it.
@@ -83,12 +84,14 @@ def resample_linear(t_src: np.ndarray, values: np.ndarray, t_grid: np.ndarray) -
 def run_from_bag_data(
     name: str,
     bag: BagData,
-    recorded: calibration.Recorded = calibration.RECORDED_0_13_0,
+    recorded: calibration.Recorded | None = calibration.RECORDED_0_13_0,
     current: calibration.Current | None = None,
 ) -> Run:
-    """Convert a decoded bag to true units (exactly once) and resample to the 50 Hz grid."""
-    current = current or calibration.load_current()
-    bag = calibration.convert_bag(bag, recorded, current)
+    """Convert a decoded bag to true units (exactly once) and resample to the 50 Hz grid.
+    `recorded` is the calibration the bag was recorded under; None means it was recorded in the
+    units of the current vehicle_params (2026-11-12 bags on) and nothing is converted."""
+    if recorded is not None:
+        bag = calibration.convert_bag(bag, recorded, current or calibration.load_current())
     drive = sorted(bag.drive, key=lambda d: d.stamp_s)
     if not drive:
         raise ValueError(f"{name}: no /drive messages")
@@ -103,5 +106,7 @@ def run_from_bag_data(
     return Run(name, t_grid, speed, steer, wheel, sorted(bag.scans, key=lambda s: s.stamp_s))
 
 
-def load_run(bag_dir: Path) -> Run:  # pragma: no cover - thin wrapper over the bag reader
-    return run_from_bag_data(Path(bag_dir).name, read_bag(bag_dir))
+def load_run(
+    bag_dir: Path, recorded: calibration.Recorded | None = calibration.RECORDED_0_13_0
+) -> Run:  # pragma: no cover - thin wrapper over the bag reader
+    return run_from_bag_data(Path(bag_dir).name, read_bag(bag_dir), recorded)

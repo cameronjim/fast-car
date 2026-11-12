@@ -10,5 +10,5 @@ stop_deceleration_mps2: 1.0
 lidar_mount_x_m: 0.285
 lidar_mount_y_m: 0.0
 lidar_mount_yaw_rad: 3.141593
-schema_version: 0.15.0
+schema_version: 0.16.0
 sysid_session_id: none-preliminary

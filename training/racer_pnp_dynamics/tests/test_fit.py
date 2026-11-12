@@ -11,6 +11,7 @@ from synth import make_run
 
 TRUTH = Nominal(
     speed_gain=0.95,
+    speed_deadband_mps=0.0,
     speed_tau_s=0.30,
     accel_max_mps2=1.2,
     decel_max_mps2=0.8,

@@ -35,7 +35,7 @@ from .model import (
 )
 from .vehicle import Vehicle, repo_root
 
-BUNDLE_SCHEMA_VERSION = "1.0.0"
+BUNDLE_SCHEMA_VERSION = "1.1.0"
 KIND = "dynamics"
 SCHEMA_RELATIVE = Path("config") / "pnp" / "bundle.schema.json"
 RESIDUAL_FILE = "residual_mlp.f32"
@@ -101,9 +101,11 @@ def validate_manifest(manifest: dict[str, Any], schema: dict[str, Any] | None = 
 
 
 def golden_scenarios(v_max_mps: float, steer_limit_rad: float) -> list[dict[str, Any]]:
-    """Eight hand-designed rollouts: left, right, accelerating, braking, saturated both ways, an
-    S-curve and a hard steering reversal (which engages the steering rate limit). Initial states
-    and commands are short decimals so they survive the CSV exactly."""
+    """Twelve hand-designed rollouts: left, right, accelerating, braking, saturated both ways, an
+    S-curve and a hard steering reversal (which engages the steering rate limit), then three that
+    cross the speed dead zone: a command ramp 0 to 0.4 m/s and back, and a constant 0.1 m/s from
+    rest and from 0.4 m/s rolling. Initial states and commands are short decimals so they survive
+    the CSV exactly."""
     v_hi = round(0.9 * v_max_mps, 3)
     v_mid = round(0.5 * v_max_mps, 3)
     s_mid = round(0.6 * steer_limit_rad, 3)
@@ -121,6 +123,9 @@ def golden_scenarios(v_max_mps: float, steer_limit_rad: float) -> list[dict[str,
         [[v_hi if i < half else 0.0, s_mid * (i / n)] for i in range(n)], dtype=float
     )
     speed_steps[:, 1] = np.round(speed_steps[:, 1], 4)
+    ramp = np.array(
+        [[round(0.4 * (i / half if i < half else (n - i) / half), 4), 0.0] for i in range(n)]
+    )
     return [
         {"state0": [0.0, 0.0, 0.0, v_mid, 0.0], "controls": const(v_mid, s_mid)},
         {"state0": [0.0, 0.0, 0.0, v_mid, 0.0], "controls": const(v_mid, -s_mid)},
@@ -131,6 +136,9 @@ def golden_scenarios(v_max_mps: float, steer_limit_rad: float) -> list[dict[str,
         {"state0": [0.1, 0.2, -0.4, v_mid, 0.05], "controls": s_curve},
         {"state0": [0.0, 0.0, 0.0, v_mid, 0.1], "controls": reversal},
         {"state0": [0.0, 0.0, 0.2, v_hi, -0.1], "controls": speed_steps},
+        {"state0": [0.0, 0.0, 0.0, 0.0, 0.0], "controls": ramp},
+        {"state0": [0.0, 0.0, 0.0, 0.0, 0.0], "controls": const(0.1, 0.0)},
+        {"state0": [0.0, 0.0, 0.0, 0.4, 0.0], "controls": const(0.1, 0.0)},
     ]
 
 
@@ -307,8 +315,10 @@ def _golden_text(rows: list[list[float]]) -> str:
 
 
 def read_bundle(bundle_dir: Path) -> Bundle:
-    """Load a bundle written by write_bundle (checks checksums, not the vehicle_params)."""
+    """Load a bundle written by write_bundle: validates the manifest against the schema (raises
+    BundleInvalid) and checks checksums, not the vehicle_params."""
     manifest = yaml.safe_load((bundle_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
+    validate_manifest(manifest)  # a bundle without io.nominal.speed_deadband_mps is refused
     for item in manifest["payload"]:
         if sha256_file(bundle_dir / item["file"]) != item["sha256"]:
             raise ValueError(f"checksum mismatch for {item['file']}")

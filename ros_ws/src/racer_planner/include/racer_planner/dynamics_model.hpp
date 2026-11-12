@@ -27,6 +27,8 @@ struct Control {
 
 struct NominalParams {
   double speed_gain = 1.0;
+  // A speed command with |cmd| < speed_deadband_mps leaves the wheels still (steady state 0).
+  double speed_deadband_mps = 0.0;
   double speed_tau_s = 0.25;
   double accel_max_mps2 = 2.0;
   double decel_max_mps2 = 1.5;
@@ -84,7 +86,10 @@ class DynamicsModel {
     const double delta_target =
         clamp_double(g * u.steering_cmd + n.steer_offset_rad, d_min_, d_max_);
     const double d_delta = clamp_double(a_d_ * (delta_target - s.delta), -rate_dt_, rate_dt_);
-    double dv = clamp_double(a_v_ * (n.speed_gain * u.speed_cmd - s.v), -decel_dt_, accel_dt_);
+    // "Not below the dead zone", so a NaN command stays NaN (same as the Python reference).
+    const double target =
+        std::fabs(u.speed_cmd) < n.speed_deadband_mps ? 0.0 : n.speed_gain * u.speed_cmd;
+    double dv = clamp_double(a_v_ * (target - s.v), -decel_dt_, accel_dt_);
     double yaw_rate =
         s.v * std::tan(s.delta) / wheelbase_ / (1.0 + n.understeer_s2_per_m2 * s.v * s.v);
     if (residual_enabled_) {

@@ -88,13 +88,13 @@ TEST(BundleLoader, ManifestInvalidWhenTheRootIsNotAMapping) {
 
 TEST(BundleLoader, BundleSchemaVersionMismatch) {
   BundleCopy b;
-  b.edit_manifest("bundle_schema_version: \"1.0.0\"", "bundle_schema_version: \"2.0.0\"");
+  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"2.0.0\"");
   expect_refusal(load(b), RefusalCode::BundleSchemaVersionMismatch);
 }
 
 TEST(BundleLoader, MinorVersionBumpIsAccepted) {
   BundleCopy b;
-  b.edit_manifest("bundle_schema_version: \"1.0.0\"", "bundle_schema_version: \"1.3.0\"");
+  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"1.3.0\"");
   EXPECT_TRUE(load(b).ok());
 }
 
@@ -171,6 +171,38 @@ TEST(BundleLoader, IoContractMismatchMissingNominalField) {
   BundleCopy b;
   b.edit_manifest("    command_delay_s: 0.08\n", "");
   expect_refusal(load(b), RefusalCode::IoContractMismatch);
+}
+
+// Schema 1.1.0: io.nominal.speed_deadband_mps is required, whatever the version says. No default.
+TEST(BundleLoader, IoContractMismatchMissingDeadZoneFieldNamesIt) {
+  BundleCopy b;
+  b.edit_manifest("    speed_deadband_mps: 0.0\n", "");
+  const auto r = load(b);
+  expect_refusal(r, RefusalCode::IoContractMismatch);
+  EXPECT_NE(r.refusal->message.find("speed_deadband_mps"), std::string::npos) << r.refusal->message;
+}
+
+TEST(BundleLoader, MissingDeadZoneFieldIsRefusedEvenAtAnOldSchemaVersion) {
+  BundleCopy b;
+  b.edit_manifest("    speed_deadband_mps: 0.0\n", "");
+  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"1.0.0\"");
+  const auto r = load(b);
+  expect_refusal(r, RefusalCode::IoContractMismatch);
+  EXPECT_NE(r.refusal->message.find("speed_deadband_mps"), std::string::npos) << r.refusal->message;
+}
+
+TEST(BundleLoader, IoContractMismatchDeadZoneOutOfRange) {
+  for (const char* bad : {"-0.1", "1.5"}) {
+    BundleCopy b;
+    b.edit_manifest("speed_deadband_mps: 0.0", std::string("speed_deadband_mps: ") + bad);
+    expect_refusal(load(b), RefusalCode::IoContractMismatch);
+  }
+}
+
+TEST(BundleLoader, ADeadZoneTheGoldenRolloutsWereNotMadeWithIsRefused) {
+  BundleCopy b;
+  b.edit_manifest("speed_deadband_mps: 0.0", "speed_deadband_mps: 0.6");
+  expect_refusal(load(b), RefusalCode::GoldenRolloutMismatch);
 }
 
 TEST(BundleLoader, GoldenRolloutMismatchWithOneAlteredNumber) {

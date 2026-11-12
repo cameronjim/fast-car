@@ -38,6 +38,7 @@ def toy_vehicle() -> Vehicle:
 def toy_nominal() -> Nominal:
     return Nominal(
         speed_gain=1.0,
+        speed_deadband_mps=0.0,
         speed_tau_s=0.25,
         accel_max_mps2=2.0,
         decel_max_mps2=1.5,

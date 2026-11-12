@@ -29,6 +29,7 @@ LAYERS = [(4, 32), (32, 32), (32, 2)]
 
 NOMINAL = {
     "speed_gain": 1.0,
+    "speed_deadband_mps": 0.0,
     "speed_tau_s": 0.25,
     "accel_max_mps2": 2.0,
     "decel_max_mps2": 1.5,
@@ -119,8 +120,9 @@ def step(state, control, nom, veh, dt, residual=None):
     rate = veh["steering_max_rate_rad_per_s"] * dt
     delta_next = delta + min(max(a_d * (delta_target - delta), -rate), rate)
     a_v = 1.0 - math.exp(-dt / nom["speed_tau_s"])
+    target = nom["speed_gain"] * speed_cmd if abs(speed_cmd) >= nom["speed_deadband_mps"] else 0.0
     dv = min(
-        max(a_v * (nom["speed_gain"] * speed_cmd - v), -nom["decel_max_mps2"] * dt),
+        max(a_v * (target - v), -nom["decel_max_mps2"] * dt),
         nom["accel_max_mps2"] * dt,
     )
     yaw_rate = (
@@ -211,7 +213,7 @@ def make_bundle(
         return hashlib.sha256((out / name).read_bytes()).hexdigest()
 
     nom_lines = "\n".join(f"    {k}: {v}" for k, v in nominal.items())
-    manifest = f"""bundle_schema_version: "1.0.0"
+    manifest = f"""bundle_schema_version: "1.1.0"
 kind: dynamics
 model_id: "{model_id}"
 created_utc: "2026-11-12T00:00:00Z"

@@ -718,3 +718,239 @@ TEST(MppiSolver, SteeringCommandDoesNotChatterInAStaticScene) {
   EXPECT_LT(rms, 0.004);
   EXPECT_LT(flips, n / 10);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The blend of the track prior and the free-space field
+
+namespace {
+
+// The Env of the tests above with a scan of a 1 m corridor closed 5 m ahead and the free-space
+// field built from it.
+struct BlendEnv : Env {
+  FreespaceField fs{g};
+  std::vector<PointXY> pts;
+
+  explicit BlendEnv(int valid = kTrackStations, double hwl = 0.5, double hwr = 0.5)
+      : Env(valid, hwl, hwr) {
+    for (double x = -1.0; x <= 5.0; x += 0.02) {
+      pts.push_back({x, 0.5});
+      pts.push_back({x, -0.5});
+    }
+    for (double y = -0.5; y <= 0.5; y += 0.02) pts.push_back({5.0, y});
+    set_points(pts);
+    fs.build(field, pts.data(), pts.size(), nullptr);
+  }
+
+  SolveInput blend_input(double v, double c) {
+    SolveInput in = input(v);
+    in.confidence = c;
+    in.freespace = &fs;
+    return in;
+  }
+
+  double phi_front(double x, double y, double yaw) const {
+    return fs.phi(x + g.wheelbase_m * std::cos(yaw), y + g.wheelbase_m * std::sin(yaw));
+  }
+};
+
+}  // namespace
+
+TEST(MppiBlend, FieldIsValidOnTheTestScene) {
+  BlendEnv e;
+  ASSERT_TRUE(e.fs.valid());
+  EXPECT_GT(e.fs.goal().x, 3.5);
+}
+
+TEST(MppiBlend, ProgressIsTheBlendOfTrackProgressAndPhiDropAtCZeroHalfAndOne) {
+  BlendEnv e;
+  MppiParams p = only_weights();
+  p.w_progress = 10.0;
+  auto s = e.solver(p);
+  const auto seq = e.constant(0.5, 0.0);
+  SolveInput in = e.input(0.5);
+  in.freespace = &e.fs;
+  // the car moves 0.75 m along the corridor (x from 0 to about 0.75 at constant speed 0.5)
+  in.confidence = 1.0;
+  CostBreakdown one;
+  s.evaluate_sequence(in, seq.data(), &one);
+  const double ds = one.progress_m;
+  EXPECT_NEAR(ds, 0.75, 1e-9);
+  in.confidence = 0.0;
+  CostBreakdown zero;
+  s.evaluate_sequence(in, seq.data(), &zero);
+  // the free-space drop between the front axle points of the first and the last pose
+  const double dphi = e.phi_front(0.0, 0.0, 0.0) - e.phi_front(0.75, 0.0, 0.0);
+  EXPECT_NEAR(zero.progress_m, dphi, 1e-6);
+  EXPECT_GT(dphi, 0.5);
+  EXPECT_NEAR(zero.progress, -10.0 * dphi, 1e-5);
+  in.confidence = 0.5;
+  CostBreakdown half;
+  s.evaluate_sequence(in, seq.data(), &half);
+  EXPECT_NEAR(half.progress_m, 0.5 * ds + 0.5 * dphi, 1e-6);
+  EXPECT_NEAR(half.progress, -10.0 * half.progress_m, 1e-9);
+  EXPECT_NEAR(half.total, half.progress, 1e-12);
+  // c = 1 is the track alone, whatever the field says
+  EXPECT_NEAR(one.progress, -10.0 * ds, 1e-9);
+  // and without a field the free-space part is 0
+  SolveInput nofield = e.input(0.5);
+  nofield.confidence = 0.5;
+  CostBreakdown only_track;
+  s.evaluate_sequence(nofield, seq.data(), &only_track);
+  EXPECT_NEAR(only_track.progress_m, 0.5 * ds, 1e-9);
+}
+
+TEST(MppiBlend, NoTrackAtAllScoresFromTheFieldAlone) {
+  BlendEnv e;
+  MppiParams p = only_weights();
+  p.w_progress = 10.0;
+  auto s = e.solver(p);
+  const auto seq = e.constant(0.5, 0.0);
+  SolveInput in = e.input(0.5);
+  in.track = nullptr;   // no track message
+  in.confidence = 1.0;  // whatever it says, there is nothing to project on
+  in.freespace = &e.fs;
+  CostBreakdown bd;
+  s.evaluate_sequence(in, seq.data(), &bd);
+  const double dphi = e.phi_front(0.0, 0.0, 0.0) - e.phi_front(0.75, 0.0, 0.0);
+  EXPECT_NEAR(bd.progress_m, dphi, 1e-6);
+  EXPECT_EQ(bd.s_end_m, 0.0);  // the track was never projected
+}
+
+TEST(MppiBlend, BoundaryTermIsWeightedByTheConfidence) {
+  BlendEnv e(kTrackStations, 0.5, 0.3);
+  MppiParams p = only_weights();
+  p.w_bound = 200.0;
+  auto s = e.solver(p);
+  const auto seq = e.constant(0.0, 0.0);
+  SolveInput in = e.blend_input(0.0, 1.0);
+  in.x0.y = 0.4;
+  CostBreakdown one, half, zero;
+  s.evaluate_sequence(in, seq.data(), &one);
+  in.confidence = 0.5;
+  s.evaluate_sequence(in, seq.data(), &half);
+  in.confidence = 0.0;
+  s.evaluate_sequence(in, seq.data(), &zero);
+  ASSERT_GT(one.boundary, 0.0);
+  EXPECT_NEAR(half.boundary, 0.5 * one.boundary, 1e-9);
+  EXPECT_EQ(zero.boundary, 0.0);
+}
+
+TEST(MppiBlend, StopWithinSightUsesTheBlendOfTheTrackAndPhi) {
+  BlendEnv e(3);  // the track is visible to 0.4 m only
+  MppiParams p = only_weights();
+  p.w_term = 50.0;
+  auto s = e.solver(p);
+  const auto seq = e.constant(1.0, 0.0);
+  const double decel = e.g.stop_deceleration_mps2;
+  SolveInput in = e.blend_input(1.0, 1.0);
+  CostBreakdown one;
+  s.evaluate_sequence(in, seq.data(), &one);
+  const double need1 = one.v_end_mps * one.v_end_mps / (2.0 * decel) - (0.4 - one.s_end_m);
+  ASSERT_GT(need1, 0.0);
+  EXPECT_NEAR(one.terminal, 50.0 * need1 * need1, 1e-9);
+  // c = 0 far from the goal: plenty of room in sight, no cost
+  in.confidence = 0.0;
+  CostBreakdown zero;
+  s.evaluate_sequence(in, seq.data(), &zero);
+  EXPECT_EQ(zero.terminal, 0.0);
+  // c = 0 and ending 0.1 m short of the goal at 1 m/s: the need is v^2 / (2 decel) - Phi(end)
+  SolveInput close = e.blend_input(1.0, 0.0);
+  const double x_end_front = e.fs.goal().x - 0.1;
+  close.x0.x = x_end_front - e.g.wheelbase_m - 1.5;
+  close.x0.y = e.fs.goal().y;
+  CostBreakdown near;
+  s.evaluate_sequence(close, seq.data(), &near);
+  const double phi_e = e.phi_front(close.x0.x + 1.5, close.x0.y, 0.0);
+  const double need0 = 1.0 / (2.0 * decel) - phi_e;
+  ASSERT_GT(need0, 0.0);
+  EXPECT_NEAR(near.terminal, 50.0 * need0 * need0, 1e-6);
+  // c = 0.5: the sight is half the track's (nothing left of it at the end) and half Phi
+  close.confidence = 0.5;
+  CostBreakdown mixed;
+  s.evaluate_sequence(close, seq.data(), &mixed);
+  const double need_half = 1.0 / (2.0 * decel) - 0.5 * (0.4 - mixed.s_end_m) - 0.5 * phi_e;
+  ASSERT_GT(need_half, 0.0);
+  EXPECT_NEAR(mixed.terminal, 50.0 * need_half * need_half, 1e-6);
+}
+
+TEST(MppiBlend, TrackWithZeroConfidenceIsNotProjectedAndTheFieldDrivesTheSolve) {
+  BlendEnv e;
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 256;
+  p.speed_floor_mps = 0.0;
+  auto s = e.solver(p, 256);
+  SolveInput in = e.blend_input(0.3, 0.0);
+  in.track = nullptr;
+  in.v_cap_mps = 0.6;
+  SolveOutput out;
+  for (int i = 0; i < 20; ++i) out = s.solve(in);
+  EXPECT_FALSE(out.all_collide);
+  EXPECT_GT(out.cmd.speed_cmd, 0.3);
+  EXPECT_NEAR(out.cmd.steering_cmd, 0.0, 0.1);
+  EXPECT_GT(out.plan_progress_m, 0.3);
+  EXPECT_GT(out.plan_speed_mps, 0.3);
+}
+
+TEST(MppiBlend, FieldSteersTowardAGoalAroundACornerWithoutAnyTrack) {
+  // A room whose only exit (and so the farthest cell) is to the left of the car's heading.
+  VehicleGeometry g = test::binding_geometry();
+  DynamicsParams dyn = test::plain_dynamics();
+  DynamicsModel model(dyn, g, dyn.dt_s);
+  std::vector<PointXY> pts;
+  auto wall = [&](double x1, double y1, double x2, double y2) {
+    const int n = static_cast<int>(std::ceil(std::hypot(x2 - x1, y2 - y1) / 0.02));
+    for (int i = 0; i <= n; ++i) pts.push_back({x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n});
+  };
+  // a corridor ahead for 1.2 m, then it turns left
+  wall(-1.0, -0.5, 2.0, -0.5);
+  wall(2.0, -0.5, 2.0, 6.0);
+  wall(-1.0, 0.5, 1.0, 0.5);
+  wall(1.0, 0.5, 1.0, 6.0);
+  wall(-1.0, -0.5, -1.0, 0.5);
+  DistanceField field;
+  field.build(pts.data(), pts.size());
+  FreespaceField fs(g);
+  ASSERT_TRUE(fs.build(field, pts.data(), pts.size(), nullptr));
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 512;
+  MppiSolver solver(p, model, g, 768);
+  SolveInput in;
+  in.x0.v = 0.3;
+  in.x0.x = 0.4;
+  in.v_cap_mps = 0.5;
+  in.field = &field;
+  in.freespace = &fs;
+  in.confidence = 0.0;
+  in.prev_cmd = Control{0.3, 0.0};
+  SolveOutput out;
+  for (int i = 0; i < 15; ++i) out = solver.solve(in);
+  EXPECT_FALSE(out.all_collide);
+  EXPECT_GT(out.cmd.speed_cmd, 0.1);
+  EXPECT_GT(out.plan_progress_m, 0.1);
+}
+
+TEST(MppiSolver, RolloutPlanMatchesTheModelStepWithExactTrig) {
+  // The rollout rotates (cos, sin) by the yaw increment with a series instead of calling libm every
+  // step: over a hard turn it must still agree with the model integrated with exact trig.
+  Env e;
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 128;
+  auto s = e.solver(p, 128);
+  SolveInput in = e.input(0.5, 0.35, 0.9);
+  in.x0.yaw = 1.0;
+  in.x0.x = 0.2;
+  in.x0.y = -0.1;
+  s.solve(in);
+  const auto& u = s.mean_sequence();
+  const auto& plan = s.plan();
+  State st = in.x0;
+  for (int t = 0; t < kT; ++t) {
+    st = e.model.step(st, u[static_cast<std::size_t>(t)]);
+    EXPECT_NEAR(plan[static_cast<std::size_t>(t + 1)].x, st.x, 1e-9) << t;
+    EXPECT_NEAR(plan[static_cast<std::size_t>(t + 1)].y, st.y, 1e-9) << t;
+    EXPECT_NEAR(plan[static_cast<std::size_t>(t + 1)].yaw, st.yaw, 1e-12) << t;
+  }
+}

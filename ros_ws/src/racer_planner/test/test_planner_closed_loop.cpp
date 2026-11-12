@@ -124,3 +124,58 @@ TEST(PlannerClosedLoop, BendsAcrossSeeds) {
     }
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// v0.1: ovals at two lane widths in both directions, with and without a track, with a track that
+// is wrong the way the first tracer was, on a plant with a speed dead zone and a steering lag the
+// planner's model does not have. Two laps each, zero contact.
+
+namespace {
+
+constexpr double kDeadZone = 0.20;
+constexpr double kFloorMargin = 0.03;
+
+SimSetup oval_setup(const World& w, TrackMode mode) {
+  SimSetup s = base_setup(w);
+  s.track_mode = mode;
+  s.config.mppi.speed_floor_mps = kDeadZone + kFloorMargin;
+  s.plant_dead_zone_mps = kDeadZone;
+  s.plant_extra_steer_tau_s = 0.10;
+  s.start_x = 1.0;
+  s.max_time_s = 150.0;
+  const double two_laps = 2.0 * w.perimeter;
+  s.done = [two_laps](double, double, double progress) { return progress >= two_laps; };
+  return s;
+}
+
+void run_ovals(TrackMode mode, const char* name) {
+  for (double lane : {1.0, 1.3}) {
+    for (int dir = 0; dir < 2; ++dir) {
+      World w = oval(lane, 0.4, 2.0);
+      if (dir == 1) w.mirror_y();
+      SimSetup s = oval_setup(w, mode);
+      const SimResult r = run_closed_loop(s);
+      std::string label = std::string(name) + ", lane " + std::to_string(lane).substr(0, 3) +
+                          (dir == 0 ? ", ccw" : ", cw");
+      report(label.c_str(), r);
+      EXPECT_TRUE(r.finished) << label << ": did not finish two laps in time";
+      EXPECT_GE(r.min_body_clearance_m, 0.02) << label << ": too close to a wall";
+      EXPECT_EQ(r.ticks_blocked, 0) << label;
+      EXPECT_EQ(r.ticks_no_track, 0) << label;
+      EXPECT_GT(r.mean_speed_mps, 0.25) << label;
+      if (mode == TrackMode::None) {
+        EXPECT_EQ(r.ticks_no_track_conf, r.ticks_driving) << label << ": confidence should be 0";
+      }
+    }
+  }
+}
+
+}  // namespace
+
+TEST(PlannerClosedLoop, OvalsWithTheOracleTrack) { run_ovals(TrackMode::Oracle, "oracle track"); }
+
+TEST(PlannerClosedLoop, OvalsWithNoTrackAtAll) { run_ovals(TrackMode::None, "no track"); }
+
+TEST(PlannerClosedLoop, OvalsWithTheTrackPushedTowardTheOuterWallInCorners) {
+  run_ovals(TrackMode::Biased, "track pushed 0.25 m outward");
+}

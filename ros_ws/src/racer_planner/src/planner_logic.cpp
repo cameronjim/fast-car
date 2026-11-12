@@ -16,26 +16,46 @@ bool is_stale(double now_s, double stamp_s, double timeout_s) {
   return a > timeout_s || a < -timeout_s;
 }
 
-bool selfcheck_over_limits(double boundary_residual_m, double intrusion_fraction,
-                           const LogicParams& p) {
-  if (!std::isfinite(boundary_residual_m) || !std::isfinite(intrusion_fraction)) return true;
-  return boundary_residual_m > p.max_boundary_residual_m ||
-         intrusion_fraction > p.max_intrusion_fraction;
+double ramp_down(double x, double full, double zero) {
+  if (!std::isfinite(x)) return 0.0;
+  if (!(zero > full)) return x <= full ? 1.0 : 0.0;
+  if (x <= full) return 1.0;
+  if (x >= zero) return 0.0;
+  return (zero - x) / (zero - full);
 }
 
-bool SelfCheckHold::update(bool over, double now_s, double hold_s) {
-  if (!over || !std::isfinite(now_s)) {
-    over_since_valid_ = false;
-    return false;
-  }
-  if (!over_since_valid_) {
-    over_since_valid_ = true;
-    over_since_s_ = now_s;
-  }
-  return (now_s - over_since_s_) >= hold_s;
+double ramp_up(double x, double zero, double full) {
+  if (!std::isfinite(x)) return 0.0;
+  if (!(full > zero)) return x >= zero ? 1.0 : 0.0;
+  if (x <= zero) return 0.0;
+  if (x >= full) return 1.0;
+  return (x - zero) / (full - zero);
 }
 
-Gate evaluate_gate(const LogicInputs& in, const LogicParams& p, SelfCheckHold* hold) {
+double track_confidence_raw(const TrackSummary& t, double now_s, const LogicParams& p) {
+  if (!t.present || t.validity != TrackValidity::Ok) return 0.0;
+  if (!std::isfinite(t.intrusion_fraction) || !std::isfinite(t.boundary_residual_m)) return 0.0;
+  const double age = age_s(now_s, t.stamp_s);
+  if (!std::isfinite(age)) return 0.0;
+  if (age < -p.conf_age_zero_s) return 0.0;  // a timestamp jump into the future
+  const double c = std::min(
+      std::min(ramp_down(t.intrusion_fraction, p.conf_intrusion_full, p.conf_intrusion_zero),
+               ramp_down(t.boundary_residual_m, p.conf_residual_full_m, p.conf_residual_zero_m)),
+      std::min(ramp_up(static_cast<double>(t.valid_count), p.conf_valid_zero, p.conf_valid_full),
+               ramp_down(std::max(age, 0.0), p.conf_age_full_s, p.conf_age_zero_s)));
+  return std::min(std::max(c, 0.0), 1.0);
+}
+
+double track_confidence(double c_raw, double c_prev, double tick_s, double rise_per_s) {
+  const double raw = std::isfinite(c_raw) ? std::min(std::max(c_raw, 0.0), 1.0) : 0.0;
+  const double prev = std::isfinite(c_prev) ? std::min(std::max(c_prev, 0.0), 1.0) : 0.0;
+  const double rise = std::isfinite(tick_s) && std::isfinite(rise_per_s)
+                          ? std::max(0.0, rise_per_s) * std::max(0.0, tick_s)
+                          : 0.0;
+  return std::min(raw, prev + rise);
+}
+
+Gate evaluate_gate(const LogicInputs& in, const LogicParams& p) {
   Gate g;
   if (in.internal_error) {
     g.state = PlannerState::Fault;
@@ -49,34 +69,22 @@ Gate evaluate_gate(const LogicInputs& in, const LogicParams& p, SelfCheckHold* h
     g.state = PlannerState::NoScan;
     return g;
   }
-  const TrackSummary& t = in.track;
-  bool no_track = !t.present || is_stale(in.now_s, t.stamp_s, p.track_timeout_s) ||
-                  t.validity != TrackValidity::Ok || t.valid_count < p.min_valid_stations;
-  // The self-check is evaluated every tick a track is usable, so the hold timer sees continuous
-  // time; an unusable track resets it because the NO_TRACK state already covers that.
-  if (no_track) {
-    if (hold != nullptr) hold->reset();
-  } else if (hold != nullptr) {
-    const bool over = selfcheck_over_limits(t.boundary_residual_m, t.intrusion_fraction, p);
-    if (hold->update(over, in.now_s, p.selfcheck_hold_s)) no_track = true;
-  }
-  if (no_track) {
-    g.state = PlannerState::NoTrack;
-    return g;
-  }
   g.state = PlannerState::Driving;
   g.may_solve = true;
   return g;
 }
 
-double speed_cap(const LogicParams& p, const LogicInputs& in) {
+double speed_cap(const LogicParams& p, const LogicInputs& in, double confidence) {
   double cap = p.v_max_mps;
   if (p.use_lap_guidance && in.has_guidance && std::isfinite(in.guidance_v_cap_mps) &&
       !is_stale(in.now_s, in.guidance_stamp_s, p.guidance_timeout_s)) {
     cap = std::min(cap, in.guidance_v_cap_mps);
   }
   if (!std::isfinite(cap)) cap = 0.0;
-  return std::max(0.0, cap);
+  const double c = std::isfinite(confidence) ? std::min(std::max(confidence, 0.0), 1.0) : 0.0;
+  const double f = std::min(std::max(p.freespace_speed_fraction, 0.0), 1.0);
+  cap *= f + (1.0 - f) * c;
+  return std::min(std::max(0.0, cap), std::max(0.0, p.v_max_mps));
 }
 
 Command command_for_state(PlannerState state, const Command& solver_cmd, double last_steering_rad,
@@ -141,6 +149,44 @@ float float32_within(double x, double lo, double hi) {
   if (static_cast<double>(f) > hi) f = std::nextafter(f, -INFINITY);
   if (static_cast<double>(f) < lo) f = std::nextafter(f, INFINITY);
   return f;
+}
+
+BlockReason DrivabilityMonitor::update(const DrivabilityInputs& in, double now_s) {
+  now_s_ = now_s;
+  const double floor_eps = std::max(in.speed_floor_mps, 1e-3);
+  bool now[kReasons];
+  now[0] = !in.no_plan && in.all_collide;
+  now[1] = !now[0] && (in.no_plan || !(in.plan_speed_mps >= floor_eps));
+  now[2] = in.wheel_speed_mps < p_.stall_wheel_speed_mps && in.published_speed_mps >= floor_eps;
+  now[3] = in.gate_fresh && in.gated_speed_mps <= 0.0 && in.published_speed_mps > 0.0;
+  for (int i = 0; i < kReasons; ++i) {
+    if (now[i] && !active_[i]) since_s_[i] = now_s;
+    active_[i] = now[i] && std::isfinite(now_s);
+  }
+  if (active_[0]) return BlockReason::AllCollide;
+  if (active_[1]) return BlockReason::BelowSpeedFloor;
+  if (active_[2] && held_s(BlockReason::WheelStalled) >= p_.stall_hold_s) {
+    return BlockReason::WheelStalled;
+  }
+  if (active_[3] && held_s(BlockReason::GateRefusing) >= p_.gate_hold_s) {
+    return BlockReason::GateRefusing;
+  }
+  return BlockReason::None;
+}
+
+bool DrivabilityMonitor::active(BlockReason r) const {
+  const int i = static_cast<int>(r) - 1;
+  return i >= 0 && i < kReasons && active_[i];
+}
+
+double DrivabilityMonitor::held_s(BlockReason r) const {
+  const int i = static_cast<int>(r) - 1;
+  if (i < 0 || i >= kReasons || !active_[i]) return 0.0;
+  return std::max(0.0, now_s_ - since_s_[i]);
+}
+
+void DrivabilityMonitor::reset() {
+  for (int i = 0; i < kReasons; ++i) active_[i] = false;
 }
 
 SampleBudget::SampleBudget(const SampleBudgetParams& p)

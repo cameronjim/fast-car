@@ -27,6 +27,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <nav_msgs/msg/odometry.hpp>
@@ -46,6 +47,7 @@
 #include "binding_geometry.hpp"
 #include "racer_planner/bundle_loader.hpp"
 #include "racer_planner/distance_field.hpp"
+#include "racer_planner/freespace_field.hpp"
 #include "racer_planner/planner.hpp"
 
 namespace racer_planner {
@@ -57,6 +59,13 @@ using PlannerStatusMsg = racer_pnp_msgs::msg::PlannerStatus;
 
 constexpr double kBodyMarginM = 0.02;  // same rule as the perception input in the contract
 constexpr std::size_t kMaxScanPoints = 8192;
+
+// What one scan produces for the tick: the distance field and the free-space progress field.
+struct ScanProducts {
+  DistanceField field;
+  FreespaceField freespace;
+  explicit ScanProducts(const VehicleGeometry& g) : freespace(g) {}
+};
 
 }  // namespace
 
@@ -72,21 +81,33 @@ class MppiPlannerNode : public rclcpp::Node {
     lg.v_max_mps = declare_double(
         "v_max_mps", 0.5, 0.1, VEHICLE_PARAMS.limits.global_speed_cap_mps,
         "Speed cap (m/s). Above the bundle's validity v_max_mps the node refuses to start.");
-    lg.track_timeout_s = declare_double("track_timeout_s", 0.30, 0.05, 5.0,
-                                        "Local track older than this: NO_TRACK (s).");
     lg.scan_timeout_s =
         declare_double("scan_timeout_s", 0.35, 0.05, 5.0, "Scan older than this: NO_SCAN (s).");
     lg.odom_timeout_s = declare_double("odom_timeout_s", 0.10, 0.02, 5.0,
                                        "Wheel speed older than this: NO_ODOM (s).");
-    lg.min_valid_stations = static_cast<int>(declare_int(
-        "min_valid_stations", 6, 2, 16, "Fewer valid track stations than this: NO_TRACK."));
-    lg.max_boundary_residual_m =
-        declare_double("max_boundary_residual_m", 0.25, 0.0, 5.0,
-                       "Track self-check limit on boundary_residual_m (m).");
-    lg.max_intrusion_fraction = declare_double("max_intrusion_fraction", 0.10, 0.0, 1.0,
-                                               "Track self-check limit on intrusion_fraction.");
-    lg.selfcheck_hold_s = declare_double("selfcheck_hold_s", 0.5, 0.0, 10.0,
-                                         "Self-check over its limits for this long: NO_TRACK (s).");
+    lg.conf_intrusion_full = declare_double("conf_intrusion_full", lg.conf_intrusion_full, 0.0, 1.0,
+                                            "Track intrusion fraction up to this: full trust.");
+    lg.conf_intrusion_zero = declare_double("conf_intrusion_zero", lg.conf_intrusion_zero, 0.0, 1.0,
+                                            "Track intrusion fraction from this: no trust.");
+    lg.conf_residual_full_m =
+        declare_double("conf_residual_full_m", lg.conf_residual_full_m, 0.0, 5.0,
+                       "Track boundary residual up to this: full trust (m).");
+    lg.conf_residual_zero_m =
+        declare_double("conf_residual_zero_m", lg.conf_residual_zero_m, 0.0, 5.0,
+                       "Track boundary residual from this: no trust (m).");
+    lg.conf_valid_zero = declare_double("conf_valid_zero", lg.conf_valid_zero, 0.0, 16.0,
+                                        "Valid station count up to this: no trust.");
+    lg.conf_valid_full = declare_double("conf_valid_full", lg.conf_valid_full, 0.0, 16.0,
+                                        "Valid station count from this: full trust.");
+    lg.conf_age_full_s = declare_double("conf_age_full_s", lg.conf_age_full_s, 0.0, 5.0,
+                                        "Track age up to this: full trust (s).");
+    lg.conf_age_zero_s = declare_double("conf_age_zero_s", lg.conf_age_zero_s, 0.0, 5.0,
+                                        "Track age from this: no trust (s).");
+    lg.conf_rise_per_s = declare_double("conf_rise_per_s", lg.conf_rise_per_s, 0.01, 100.0,
+                                        "Track confidence rise limit (1/s); it falls at once.");
+    lg.freespace_speed_fraction =
+        declare_double("freespace_speed_fraction", lg.freespace_speed_fraction, 0.3, 1.0,
+                       "Share of the speed cap kept at track confidence 0.");
     lg.use_lap_guidance = declare_bool(
         "use_lap_guidance", false, "Cap the speed with /pnp/lap/guidance v_cap_mps when fresh.");
     const double rate_hz =
@@ -189,7 +210,7 @@ class MppiPlannerNode : public rclcpp::Node {
     const std::size_t horizon = static_cast<std::size_t>(planner_->horizon_steps()) + 1;
     path_.poses.resize(horizon);
     path_.header.frame_id = "base_link";
-    for (int i = 0; i < 3; ++i) pool_[i] = std::make_shared<DistanceField>();
+    for (int i = 0; i < 3; ++i) pool_[i] = std::make_shared<ScanProducts>(geometry_);
     points_.resize(kMaxScanPoints);
     status_.dynamics_model_id = model_id_;
 
@@ -276,7 +297,7 @@ class MppiPlannerNode : public rclcpp::Node {
         scan_to_points(msg->ranges.data(), msg->ranges.size(), msg->angle_min, msg->angle_increment,
                        msg->range_min, msg->range_max, laser_yaw_rad_, geometry_, kBodyMarginM,
                        points_.data(), points_.size());
-    std::shared_ptr<DistanceField> target;
+    std::shared_ptr<ScanProducts> target;
     {
       std::lock_guard<std::mutex> lock(field_mutex_);
       for (auto& p : pool_) {
@@ -287,7 +308,11 @@ class MppiPlannerNode : public rclcpp::Node {
       }
     }
     if (!target) return;  // cannot happen with a pool of three, but never write a buffer in use
-    target->build(points_.data(), n);
+    target->field.build(points_.data(), n);
+    target->freespace.build(target->field, points_.data(), n,
+                            have_prev_goal_ ? &prev_goal_ : nullptr);
+    have_prev_goal_ = target->freespace.valid();
+    if (have_prev_goal_) prev_goal_ = target->freespace.goal();
     const double stamp = stamp_or_now(msg->header.stamp);
     std::lock_guard<std::mutex> lock(field_mutex_);
     field_ = target;
@@ -331,14 +356,15 @@ class MppiPlannerNode : public rclcpp::Node {
     in.has_odom = has_odom_;
     in.odom_stamp_s = odom_stamp_s_;
     in.wheel_speed_mps = wheel_speed_mps_;
-    std::shared_ptr<DistanceField> field;
+    std::shared_ptr<ScanProducts> products;
     {
       std::lock_guard<std::mutex> lock(field_mutex_);
-      field = field_;
+      products = field_;
       in.scan_stamp_s = scan_stamp_s_;
     }
-    in.has_scan = field != nullptr;
-    in.field = field.get();
+    in.has_scan = products != nullptr;
+    in.field = products ? &products->field : nullptr;
+    in.freespace = products ? &products->freespace : nullptr;
     in.track = has_track_ ? &track_ : nullptr;
     in.has_guidance = has_guidance_;
     in.guidance_stamp_s = guidance_stamp_s_;
@@ -372,6 +398,15 @@ class MppiPlannerNode : public rclcpp::Node {
     status_.track_age_s = static_cast<float>(out.track_age_s);
     status_.scan_age_s = static_cast<float>(out.scan_age_s);
     status_.samples = static_cast<uint16_t>(out.samples);
+    status_.track_confidence = static_cast<float>(out.track_confidence);
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    status_.freespace_goal_x_m =
+        out.has_freespace_goal ? static_cast<float>(out.freespace_goal_x_m) : nan;
+    status_.freespace_goal_y_m =
+        out.has_freespace_goal ? static_cast<float>(out.freespace_goal_y_m) : nan;
+    status_.freespace_reach_m =
+        out.has_freespace_goal ? static_cast<float>(out.freespace_reach_m) : nan;
+    status_.block_reason = static_cast<uint8_t>(out.block_reason);
     status_.perception_model_id = perception_model_id_;
     status_pub_->publish(status_);
 
@@ -437,8 +472,10 @@ class MppiPlannerNode : public rclcpp::Node {
 
   // scan thread -> tick hand-off
   std::mutex field_mutex_;
-  std::array<std::shared_ptr<DistanceField>, 3> pool_;
-  std::shared_ptr<DistanceField> field_;
+  std::array<std::shared_ptr<ScanProducts>, 3> pool_;
+  std::shared_ptr<ScanProducts> field_;
+  bool have_prev_goal_ = false;  // scan thread only
+  PointXY prev_goal_{0.0, 0.0};
   double scan_stamp_s_ = 0.0;
   std::vector<PointXY> points_;
 

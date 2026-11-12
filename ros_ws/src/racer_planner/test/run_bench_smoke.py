@@ -27,7 +27,17 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="racer_planner_bench_") as tmp:
         bundle = common.make_bundle(Path(tmp), "bench")
         proc = subprocess.run(
-            [args.bench, "--bundle", str(bundle), "--solves", "200", "--budget-ms", "250"],
+            [
+                args.bench,
+                "--bundle",
+                str(bundle),
+                "--solves",
+                "200",
+                "--budget-ms",
+                "250",
+                "--field-budget-ms",
+                "250",
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -40,6 +50,10 @@ def main() -> int:
     if not re.search(r"p50 [0-9.]+\s+p90 [0-9.]+\s+p99 [0-9.]+\s+max [0-9.]+", proc.stdout):
         print("mppi_bench did not print p50 / p90 / p99 / max")
         return 1
+    for scene in ("track c=1.0", "field only c=0", "blend c=0.5", "free-space field build"):
+        if scene not in proc.stdout:
+            print(f"mppi_bench did not report the scene: {scene}")
+            return 1
     if "samples 512" not in proc.stdout:
         print("mppi_bench did not report the sample count")
         return 1
@@ -53,6 +67,8 @@ def main() -> int:
                 "--solves",
                 "100",
                 "--budget-ms",
+                "250",
+                "--field-budget-ms",
                 "250",
                 "--background-threads",
                 "2",

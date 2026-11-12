@@ -99,9 +99,7 @@ TickOutput Planner::run(const TickInput& in) {
   li.guidance_stamp_s = in.guidance_stamp_s;
   li.guidance_v_cap_mps = in.guidance_v_cap_mps;
 
-  const Gate gate = evaluate_gate(li, cfg_.logic, &hold_);
-  const double v_cap = speed_cap(cfg_.logic, li);
-  out.v_cap_mps = v_cap;
+  const Gate gate = evaluate_gate(li, cfg_.logic);
   out.est_speed_mps = est_.v;
   out.est_steering_rad = est_.delta;
   auto age_or_neg = [&](bool present, double stamp) {
@@ -114,13 +112,46 @@ TickOutput Planner::run(const TickInput& in) {
 
   PlannerState state = gate.state;
   Command wanted;
+  wanted.steering_rad = last_published_.steering_rad;
+  BlockReason reason = BlockReason::None;
   plan_valid_ = false;
+  const double floor_mps = cfg_.mppi.speed_floor_mps;
   if (gate.may_solve) {
-    const Pose2 frame_change = ego_.relative_pose(in.scan_stamp_s, in.track->stamp_s);
-    if (!projector_.build(*in.track, frame_change)) {
-      state = PlannerState::NoTrack;
+    // Track confidence: how far the track prior is trusted. A track that cannot be projected
+    // counts as none.
+    double c_raw = track_confidence_raw(li.track, in.now_s, cfg_.logic);
+    bool track_ok = false;
+    const Pose2 frame_change =
+        in.track != nullptr ? ego_.relative_pose(in.scan_stamp_s, in.track->stamp_s) : Pose2{};
+    if (c_raw > 0.0 && in.track != nullptr) track_ok = projector_.build(*in.track, frame_change);
+    if (!track_ok) c_raw = 0.0;
+    confidence_ = track_confidence(c_raw, confidence_, cfg_.tick_s, cfg_.logic.conf_rise_per_s);
+    if (!track_ok) confidence_ = 0.0;
+    const bool has_free = in.freespace != nullptr && in.freespace->valid();
+    ego_pose_ = ego_.relative_pose(in.scan_stamp_s, in.now_s);
+    if (has_free) {
+      const double cy = std::cos(-ego_pose_.yaw), sy = std::sin(-ego_pose_.yaw);
+      const double dx = in.freespace->goal().x - ego_pose_.x;
+      const double dy = in.freespace->goal().y - ego_pose_.y;
+      out.has_freespace_goal = true;
+      out.freespace_goal_x_m = cy * dx - sy * dy;
+      out.freespace_goal_y_m = sy * dx + cy * dy;
+      out.freespace_reach_m = in.freespace->reach_m();
+    }
+    const double v_cap = speed_cap(cfg_.logic, li, confidence_);
+    out.v_cap_mps = v_cap;
+    DrivabilityInputs di;
+    di.speed_floor_mps = floor_mps;
+    di.wheel_speed_mps = est_.v;
+    di.published_speed_mps = last_published_.speed_mps;
+    di.gate_fresh =
+        in.has_gated && !is_stale(in.now_s, in.gated_stamp_s, cfg_.logic.gated_timeout_s);
+    di.gated_speed_mps = in.gated_speed_mps;
+    if (!(confidence_ > 0.0 || has_free)) {
+      // No track weight and no free-space field: nothing to plan toward.
+      di.no_plan = true;
+      solver_.reset();
     } else {
-      ego_pose_ = ego_.relative_pose(in.scan_stamp_s, in.now_s);
       State x0;
       x0.x = ego_pose_.x;
       x0.y = ego_pose_.y;
@@ -134,8 +165,10 @@ TickOutput Planner::run(const TickInput& in) {
       si.x0 = x0;
       si.prev_cmd = Control{last_published_.speed_mps, last_published_.steering_rad};
       si.v_cap_mps = v_cap;
-      si.track = &projector_;
+      si.track = confidence_ > 0.0 ? &projector_ : nullptr;
       si.field = in.field;
+      si.confidence = confidence_;
+      si.freespace = has_free ? in.freespace : nullptr;
       const auto t0 = std::chrono::steady_clock::now();
       const SolveOutput so = solver_.solve(si);
       out.solve_time_s =
@@ -148,19 +181,27 @@ TickOutput Planner::run(const TickInput& in) {
       out.plan_progress_m = so.plan_progress_m;
       out.plan_min_clearance_m = so.plan_min_clearance_m;
       out.collision_fraction = so.collision_fraction;
-      state = so.all_collide ? PlannerState::Blocked : PlannerState::Driving;
       wanted = Command{so.cmd.speed_cmd, so.cmd.steering_cmd};
       plan_valid_ = true;
+      di.all_collide = so.all_collide;
+      di.plan_speed_mps = so.plan_speed_mps;
       bool halved = false;
       solver_.set_samples(budget_.update(out.solve_time_s, &halved));
       out.samples_halved = halved;
     }
+    reason = drivability_.update(di, in.now_s);
+    state = reason == BlockReason::None ? PlannerState::Driving : PlannerState::Blocked;
+  } else {
+    drivability_.reset();
+    out.v_cap_mps = speed_cap(cfg_.logic, li, confidence_);
   }
   if (!plan_valid_) solver_.reset();
+  out.track_confidence = confidence_;
+  out.block_reason = reason;
+  const double v_cap = out.v_cap_mps;
 
   Command c = command_for_state(state, wanted, last_published_.steering_rad, v_cap,
                                 geometry_.steering_min_rad, geometry_.steering_max_rad);
-  const double floor_mps = cfg_.mppi.speed_floor_mps;
   if (state == PlannerState::Driving) {
     // Low-pass the steering (the state restarts from the last published value on entering
     // Driving) and keep the speed in {0} U [floor, cap].

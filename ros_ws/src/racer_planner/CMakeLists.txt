@@ -32,6 +32,7 @@ add_library(racer_planner_core
   src/local_track.cpp
   src/distance_field.cpp
   src/footprint.cpp
+  src/freespace_field.cpp
   src/ego_motion.cpp
   src/mppi.cpp
   src/planner_logic.cpp
@@ -92,6 +93,7 @@ if(BUILD_TESTING)
     test/test_local_track.cpp
     test/test_distance_field.cpp
     test/test_footprint.cpp
+    test/test_freespace_field.cpp
     test/test_ego_motion.cpp
     test/test_rng.cpp
     test/test_mppi_costs.cpp
@@ -108,7 +110,7 @@ if(BUILD_TESTING)
   )
 
   # Closed loop on synthetic worlds with an oracle track (the L5 stand-in, no ROS).
-  ament_add_gtest(test_planner_closed_loop test/test_planner_closed_loop.cpp TIMEOUT 120)
+  ament_add_gtest(test_planner_closed_loop test/test_planner_closed_loop.cpp TIMEOUT 600)
   add_dependencies(test_planner_closed_loop racer_planner_generate_vehicle_params)
   target_include_directories(test_planner_closed_loop PRIVATE "${RACER_GENERATED_DIR}" src test)
   target_link_libraries(test_planner_closed_loop racer_planner_core)
@@ -125,7 +127,8 @@ if(BUILD_TESTING)
   )
 
   find_package(launch_testing_ament_cmake REQUIRED)
-  foreach(t test_planner_node_launch test_planner_node_silence_launch test_planner_node_refusal_launch)
+  foreach(t test_planner_node_launch test_planner_node_silence_launch test_planner_node_refusal_launch
+                 test_planner_node_params_file_launch)
     add_launch_test(test/${t}.py TARGET ${t} TIMEOUT 180)
   endforeach()
 endif()

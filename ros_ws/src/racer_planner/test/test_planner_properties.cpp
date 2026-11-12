@@ -7,6 +7,7 @@
 #include <limits>
 #include <random>
 
+#include "racer_planner/freespace_field.hpp"
 #include "racer_planner/planner.hpp"
 #include "test_support.hpp"
 
@@ -40,13 +41,20 @@ LocalTrackData good_track(double stamp) {
   return t;
 }
 
-DistanceField corridor_field() {
-  DistanceField f;
+// A 1 m wide corridor closed 5 m ahead, dense enough that every degree of the scan has a return.
+std::vector<PointXY> corridor_points() {
   std::vector<PointXY> pts;
-  for (double x = -1.0; x <= 4.0; x += 0.02) {
+  for (double x = -1.0; x <= 5.0; x += 0.02) {
     pts.push_back({x, 0.5});
     pts.push_back({x, -0.5});
   }
+  for (double y = -0.5; y <= 0.5; y += 0.02) pts.push_back({5.0, y});
+  return pts;
+}
+
+DistanceField corridor_field() {
+  DistanceField f;
+  const std::vector<PointXY> pts = corridor_points();
   f.build(pts.data(), pts.size());
   return f;
 }
@@ -75,12 +83,14 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
     cfg.mppi.speed_floor_mps = u01(rng) < 0.5 ? 0.2 : 0.0;
     Planner planner(cfg, test::plain_dynamics(), g);
     DistanceField field;
+    FreespaceField freespace(g);
     {
       std::vector<PointXY> pts;
       const int n = static_cast<int>(uni(0, 400));
       for (int i = 0; i < n; ++i) pts.push_back({weird(uni(-1.5, 4.5)), weird(uni(-3.0, 3.0))});
       if (u01(rng) < 0.2) pts.clear();
       field.build(pts.data(), pts.size());
+      if (u01(rng) < 0.7) freespace.build(field, pts.data(), pts.size(), nullptr);
     }
     double now = 1000.0;
     for (int tick = 0; tick < 25; ++tick, now += 0.02) {
@@ -106,6 +116,7 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
       in.has_scan = u01(rng) < 0.95;
       in.scan_stamp_s = u01(rng) < 0.7 ? now - 0.1 : weird(now - uni(0.0, 0.6));
       in.field = u01(rng) < 0.05 ? nullptr : &field;
+      in.freespace = u01(rng) < 0.9 ? &freespace : nullptr;
       in.track = u01(rng) < 0.05 ? nullptr : &track;
       in.has_guidance = u01(rng) < 0.5;
       in.guidance_stamp_s = now - uni(0.0, 3.0);
@@ -141,13 +152,24 @@ namespace {
 struct Rig {
   VehicleGeometry g = test::binding_geometry();
   DistanceField field = corridor_field();
+  FreespaceField freespace{g};
+  std::vector<PointXY> points = corridor_points();
   LocalTrackData track;
   Planner planner;
   double now = 50.0;
   double v = 0.3;
 
   explicit Rig(double v_max = 0.5, double floor_mps = 0.0)
-      : planner(small_config(v_max, floor_mps), test::plain_dynamics(), g) {}
+      : planner(small_config(v_max, floor_mps), test::plain_dynamics(), g) {
+    set_points(points);
+  }
+
+  // Replaces the scene (distance field and free-space field).
+  void set_points(const std::vector<PointXY>& pts) {
+    points = pts;
+    field.build(points.data(), points.size());
+    freespace.build(field, points.data(), points.size(), nullptr);
+  }
 
   TickOutput tick(bool odom = true, bool scan = true, bool trk = true) {
     TickInput in;
@@ -158,6 +180,7 @@ struct Rig {
     in.has_scan = scan;
     in.scan_stamp_s = now - 0.1;
     in.field = &field;
+    in.freespace = &freespace;
     track = good_track(now - 0.1);
     in.track = trk ? &track : nullptr;
     now += 0.02;
@@ -183,7 +206,7 @@ TEST(Planner, HealthyInputsDriveForwardUnderTheCap) {
   EXPECT_GE(out.track_age_s, 0.09);
 }
 
-TEST(Planner, SilenceOnEachInputGivesZeroSpeedAndTheMatchingState) {
+TEST(Planner, SilenceOnScanAndOdometryGivesZeroSpeedAndTheMatchingState) {
   {
     Rig r;
     for (int i = 0; i < 10; ++i) r.tick();
@@ -198,13 +221,24 @@ TEST(Planner, SilenceOnEachInputGivesZeroSpeedAndTheMatchingState) {
     EXPECT_EQ(out.state, PlannerState::NoScan);
     EXPECT_EQ(out.cmd.speed_mps, 0.0);
   }
-  {
-    Rig r;
-    for (int i = 0; i < 10; ++i) r.tick();
-    const TickOutput out = r.tick(true, true, false);
-    EXPECT_EQ(out.state, PlannerState::NoTrack);
-    EXPECT_EQ(out.cmd.speed_mps, 0.0);
-  }
+}
+
+TEST(Planner, SilenceOnTheTrackKeepsDrivingOnTheScanAtZeroConfidence) {
+  Rig r(0.5);
+  TickOutput with_track;
+  for (int i = 0; i < 80; ++i) with_track = r.tick();
+  EXPECT_EQ(with_track.state, PlannerState::Driving);
+  EXPECT_NEAR(with_track.track_confidence, 1.0, 1e-9);
+  TickOutput out;
+  for (int i = 0; i < 80; ++i) out = r.tick(true, true, false);
+  EXPECT_EQ(out.state, PlannerState::Driving);
+  EXPECT_DOUBLE_EQ(out.track_confidence, 0.0);
+  EXPECT_GT(out.cmd.speed_mps, 0.1);
+  EXPECT_NEAR(out.v_cap_mps, 0.5 * 0.7, 1e-12);  // the free-space speed fraction
+  EXPECT_EQ(out.block_reason, BlockReason::None);
+  EXPECT_TRUE(out.has_freespace_goal);
+  EXPECT_GT(out.freespace_goal_x_m, 2.0);
+  EXPECT_GT(out.freespace_reach_m, 2.0);
 }
 
 TEST(Planner, StaleWheelSpeedStopsTheCar) {
@@ -223,17 +257,39 @@ TEST(Planner, StaleWheelSpeedStopsTheCar) {
   EXPECT_EQ(r.planner.tick(in).state, PlannerState::NoOdom);
 }
 
-TEST(Planner, NoTrackKeepsTheLastSteeringAndRecoversWhenTheTrackReturns) {
+TEST(Planner, TheConfidenceFallsAtOnceWhenTheTrackGoesAndRisesSlowlyWhenItReturns) {
   Rig r;
-  TickOutput last;
-  for (int i = 0; i < 20; ++i) last = r.tick();
-  const TickOutput held = r.tick(true, true, false);
-  EXPECT_EQ(held.state, PlannerState::NoTrack);
-  EXPECT_DOUBLE_EQ(held.cmd.steering_rad, last.cmd.steering_rad);
-  TickOutput back;
-  for (int i = 0; i < 10; ++i) back = r.tick();
-  EXPECT_EQ(back.state, PlannerState::Driving);
-  EXPECT_GT(back.cmd.speed_mps, 0.0);
+  for (int i = 0; i < 80; ++i) r.tick();
+  const TickOutput gone = r.tick(true, true, false);
+  EXPECT_DOUBLE_EQ(gone.track_confidence, 0.0);  // at once
+  const TickOutput back = r.tick();
+  EXPECT_NEAR(back.track_confidence, 0.02, 1e-9);  // 1 per second at 50 Hz
+  TickOutput later;
+  for (int i = 0; i < 10; ++i) later = r.tick();
+  EXPECT_NEAR(later.track_confidence, 0.22, 1e-9);
+  EXPECT_EQ(later.state, PlannerState::Driving);
+  EXPECT_GT(later.cmd.speed_mps, 0.0);
+}
+
+TEST(Planner, NoTrackAndNoFreeSpaceFieldIsBlockedForWantOfAPlan) {
+  Rig r;
+  for (int i = 0; i < 10; ++i) r.tick();
+  TickInput in;
+  in.now_s = r.now;
+  in.has_odom = true;
+  in.odom_stamp_s = r.now;
+  in.wheel_speed_mps = 0.3;
+  in.has_scan = true;
+  in.scan_stamp_s = r.now - 0.1;
+  in.field = &r.field;
+  in.freespace = nullptr;
+  in.track = nullptr;
+  const TickOutput out = r.planner.tick(in);
+  EXPECT_EQ(out.state, PlannerState::Blocked);
+  EXPECT_EQ(out.block_reason, BlockReason::BelowSpeedFloor);
+  EXPECT_EQ(out.cmd.speed_mps, 0.0);
+  EXPECT_FALSE(out.has_freespace_goal);
+  EXPECT_FALSE(r.planner.plan_valid());
 }
 
 TEST(Planner, SpeedRampIsLimitedByTheVehicleAcceleration) {
@@ -247,17 +303,18 @@ TEST(Planner, WheelBlockedByAWallReportsBlockedWithZeroSpeed) {
   Rig r;
   std::vector<PointXY> wall;
   for (double y = -1.0; y <= 1.0; y += 0.02) wall.push_back({0.1, y});
-  r.field.build(wall.data(), wall.size());
+  r.set_points(wall);
   TickOutput out;
   for (int i = 0; i < 5; ++i) out = r.tick();
   EXPECT_EQ(out.state, PlannerState::Blocked);
+  EXPECT_EQ(out.block_reason, BlockReason::AllCollide);
   EXPECT_EQ(out.cmd.speed_mps, 0.0);
   EXPECT_DOUBLE_EQ(out.collision_fraction, 1.0);
 }
 
-TEST(Planner, TrackOlderThanTheTimeoutIsNoTrack) {
+TEST(Planner, TrackOlderThanTheAgeRampDropsToZeroConfidenceButStillDrives) {
   Rig r;
-  for (int i = 0; i < 5; ++i) r.tick();
+  for (int i = 0; i < 80; ++i) r.tick();
   TickInput in;
   in.now_s = r.now;
   in.has_odom = true;
@@ -266,9 +323,40 @@ TEST(Planner, TrackOlderThanTheTimeoutIsNoTrack) {
   in.has_scan = true;
   in.scan_stamp_s = r.now - 0.1;
   in.field = &r.field;
-  r.track = good_track(r.now - 0.31);
+  in.freespace = &r.freespace;
+  r.track = good_track(r.now - 0.7);
   in.track = &r.track;
-  EXPECT_EQ(r.planner.tick(in).state, PlannerState::NoTrack);
+  const TickOutput out = r.planner.tick(in);
+  EXPECT_EQ(out.state, PlannerState::Driving);
+  EXPECT_DOUBLE_EQ(out.track_confidence, 0.0);
+}
+
+TEST(Planner, ABadSelfCheckLowersTheConfidenceInsteadOfStopping) {
+  Rig r;
+  for (int i = 0; i < 80; ++i) r.tick();
+  TickInput in;
+  in.now_s = r.now;
+  in.has_odom = true;
+  in.odom_stamp_s = r.now;
+  in.wheel_speed_mps = 0.3;
+  in.has_scan = true;
+  in.scan_stamp_s = r.now - 0.1;
+  in.field = &r.field;
+  in.freespace = &r.freespace;
+  r.track = good_track(r.now - 0.1);
+  r.track.intrusion_fraction = 0.09;  // half trust
+  in.track = &r.track;
+  TickOutput out;
+  for (int i = 0; i < 3; ++i) {
+    in.now_s = r.now += 0.02;
+    in.odom_stamp_s = in.now_s;
+    in.scan_stamp_s = in.now_s - 0.1;
+    r.track.stamp_s = in.now_s - 0.1;
+    out = r.planner.tick(in);
+  }
+  EXPECT_EQ(out.state, PlannerState::Driving);
+  EXPECT_NEAR(out.track_confidence, 0.5, 1e-9);
+  EXPECT_NEAR(out.v_cap_mps, 0.5 * (0.7 + 0.3 * 0.5), 1e-12);
 }
 
 TEST(Planner, DelayTicksComeFromTheBundleCommandDelay) {

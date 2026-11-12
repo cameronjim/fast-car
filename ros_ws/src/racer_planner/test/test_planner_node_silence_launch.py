@@ -1,8 +1,11 @@
-"""L3: silence on each input in turn gives speed 0 and the matching state, while /drive_raw keeps
-coming at its rate (so safety_node's watchdog only fires when the planner dies)."""
+"""L3: silence on the scan or on the wheel odometry gives speed 0 and the matching state, while
+/drive_raw keeps coming at its rate (so safety_node's watchdog only fires when the planner dies).
+Silence on /pnp/local_track no longer stops the car (it did before planner v0.1, as NO_TRACK): the
+planner keeps driving on the scan with track_confidence 0."""
 
 from __future__ import annotations
 
+import math
 import os
 
 os.environ.setdefault("ROS_DOMAIN_ID", "151")
@@ -107,21 +110,46 @@ class TestPlannerNodeSilence(unittest.TestCase):
         self.feeder.track_on = True
         self._check_silence("scan_on", PlannerStatus.STATE_NO_SCAN, "scan")
 
-    def test_c_track_silence(self):
-        self._check_silence("track_on", PlannerStatus.STATE_NO_TRACK, "track")
+    def test_c_track_silence_keeps_driving_at_zero_confidence(self):
+        # Replaces the NO_TRACK expectation of planner v0: the track only weighs the cost.
+        self.feeder.track_on = True
+        self.feeder.pump(2.5)
+        self.assertEqual(self.status[-1].state, PlannerStatus.STATE_DRIVING)
+        self.assertGreater(self.status[-1].track_confidence, 0.9)
+        self.feeder.track_on = False
+        self.feeder.pump(1.0)  # longer than the age ramp
+        self.drive.clear()
+        self.status.clear()
+        self.feeder.pump(0.5)
+        self.assertGreater(len(self.drive), 15, "/drive_raw stopped coming")
+        self.assertEqual({s.state for s in self.status}, {PlannerStatus.STATE_DRIVING})
+        self.assertTrue(all(s.track_confidence == 0.0 for s in self.status))
+        self.assertTrue(all(s.block_reason == PlannerStatus.BLOCK_NONE for s in self.status))
+        self.assertGreater(self.drive[-1].drive.speed, 0.05, "not driving on the scan alone")
+        self.assertTrue(all(not math.isnan(s.freespace_goal_x_m) for s in self.status))
+        self.assertTrue(all(s.freespace_goal_x_m > 1.5 for s in self.status))
+        # the cap is scaled down with no track
+        self.assertLess(self.status[-1].v_cap_mps, 0.5 - 1e-6)
+        self.feeder.track_on = True
+        self.feeder.pump(2.5)
+        self.assertEqual(self.status[-1].state, PlannerStatus.STATE_DRIVING)
+        self.assertGreater(self.status[-1].track_confidence, 0.9)
 
-    def test_d_too_few_valid_stations_is_no_track(self):
-        self.feeder.pump(2.0)
+    def test_d_too_few_valid_stations_lowers_the_confidence(self):
+        self.feeder.track_on = True
+        self.feeder.pump(2.5)
         self.feeder.track_valid_count = 3
         self.feeder.pump(0.5)
         self.status.clear()
         self.drive.clear()
         self.feeder.pump(0.4)
-        self.assertEqual({s.state for s in self.status}, {PlannerStatus.STATE_NO_TRACK})
-        self.assertTrue(all(m.drive.speed == 0.0 for m in self.drive))
+        self.assertEqual({s.state for s in self.status}, {PlannerStatus.STATE_DRIVING})
+        self.assertTrue(all(s.track_confidence == 0.0 for s in self.status))
+        self.assertTrue(any(m.drive.speed > 0.05 for m in self.drive))
         self.feeder.track_valid_count = 16
-        self.feeder.pump(1.5)
+        self.feeder.pump(2.5)
         self.assertEqual(self.status[-1].state, PlannerStatus.STATE_DRIVING)
+        self.assertGreater(self.status[-1].track_confidence, 0.9)
 
 
 @launch_testing.post_shutdown_test()

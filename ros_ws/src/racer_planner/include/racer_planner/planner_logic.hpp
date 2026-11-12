@@ -13,7 +13,7 @@ namespace racer_planner {
 enum class PlannerState : std::uint8_t {
   Starting = 0,
   Driving = 1,
-  NoTrack = 2,
+  NoTrack = 2,  // not produced since v0.1: a distrusted track lowers the confidence instead
   NoScan = 3,
   NoOdom = 4,
   Blocked = 5,
@@ -22,20 +22,29 @@ enum class PlannerState : std::uint8_t {
 
 struct LogicParams {
   double v_max_mps = 0.5;
-  double track_timeout_s = 0.30;
   double scan_timeout_s = 0.35;
   double odom_timeout_s = 0.10;
-  int min_valid_stations = 6;
-  double max_boundary_residual_m = 0.25;
-  double max_intrusion_fraction = 0.10;
-  double selfcheck_hold_s = 0.5;
   bool use_lap_guidance = false;
   double guidance_timeout_s = 2.0;
+  double gated_timeout_s = 0.2;  // the gated /drive older than this never counts
   // Output shaping of a driving command (Planner): first-order low-pass time constant on the
   // steering, and the share of the vehicle's steering rate and acceleration limits the planner's
   // own rate limit may use (safety_node limits at the full values, so the planner stays inside).
   double steer_output_tau_s = 0.04;
   double rate_limit_fraction = 0.45;
+  // Track confidence (see track_confidence_raw): the ends of the four ramps and how fast it may
+  // rise. It falls at once.
+  double conf_intrusion_full = 0.03;
+  double conf_intrusion_zero = 0.15;
+  double conf_residual_full_m = 0.10;
+  double conf_residual_zero_m = 0.30;
+  double conf_valid_zero = 3.0;
+  double conf_valid_full = 8.0;
+  double conf_age_full_s = 0.25;
+  double conf_age_zero_s = 0.60;
+  double conf_rise_per_s = 1.0;
+  // Share of the speed cap kept at track confidence 0: cap * (f + (1 - f) * c).
+  double freespace_speed_fraction = 0.7;
 };
 
 struct TrackSummary {
@@ -67,34 +76,38 @@ double age_s(double now_s, double stamp_s);
 // timestamp jump), or its time is not finite.
 bool is_stale(double now_s, double stamp_s, double timeout_s);
 
-// True when the label free self-check is outside its limits. NaN in either number counts as over
-// the limit (fail closed: an unverifiable track is not trusted for more than selfcheck_hold_s).
-bool selfcheck_over_limits(double boundary_residual_m, double intrusion_fraction,
-                           const LogicParams& p);
+// 1 for x <= full, 0 for x >= zero, linear between. A non finite x gives 0. Degenerate ends
+// (zero <= full) make a step at `full`.
+double ramp_down(double x, double full, double zero);
+// 0 for x <= zero, 1 for x >= full, linear between. A non finite x gives 0. Degenerate ends
+// (full <= zero) make a step at `zero`.
+double ramp_up(double x, double zero, double full);
 
-// Remembers since when the self-check has been continuously over its limits.
-class SelfCheckHold {
- public:
-  // Returns true when `over` has held continuously for at least hold_s.
-  bool update(bool over, double now_s, double hold_s);
-  void reset() { over_since_valid_ = false; }
+// How far the track is trusted before the rise limit, 0 to 1:
+//   0 when the track is missing, fails the contract, or any of intrusion fraction, boundary
+//   residual, track age (or a timestamp from the future by more than the age ramp's zero end) is
+//   not finite; otherwise the minimum of
+//   ramp_down(intrusion, full, zero), ramp_down(residual, full, zero),
+//   ramp_up(valid_count, zero, full), ramp_down(age, full, zero).
+double track_confidence_raw(const TrackSummary& t, double now_s, const LogicParams& p);
 
- private:
-  bool over_since_valid_ = false;
-  double over_since_s_ = 0.0;
-};
+// c = min(c_raw, c_prev + rise_per_s * tick_s): falls at once, rises slowly. A non finite
+// c_prev counts as 0. The result is within [0, 1].
+double track_confidence(double c_raw, double c_prev, double tick_s, double rise_per_s);
 
 struct Gate {
   PlannerState state = PlannerState::Starting;
-  bool may_solve = false;  // true only for Driving (the solver may still report Blocked)
+  bool may_solve = false;  // true only for Driving (the planner may still report Blocked)
 };
 
-// The decision table, checked in order: FAULT, NO_ODOM, NO_SCAN, NO_TRACK, otherwise solve.
-Gate evaluate_gate(const LogicInputs& in, const LogicParams& p, SelfCheckHold* hold);
+// The first rows of the decision table, checked in order: FAULT, NO_ODOM, NO_SCAN, otherwise the
+// planner may solve (it then decides between DRIVING and BLOCKED). The track never gates.
+Gate evaluate_gate(const LogicInputs& in, const LogicParams& p);
 
-// v_max_mps, or min(v_max_mps, guidance cap) with a fresh guidance message when enabled. Never
-// below 0, never above v_max_mps, NaN guidance ignored.
-double speed_cap(const LogicParams& p, const LogicInputs& in);
+// min(v_max_mps, guidance cap with a fresh guidance message when enabled) scaled by
+// (f + (1 - f) * confidence) with f = freespace_speed_fraction. Never below 0, never above
+// v_max_mps, NaN guidance ignored, a NaN confidence counts as 0.
+double speed_cap(const LogicParams& p, const LogicInputs& in, double confidence = 1.0);
 
 struct Command {
   double speed_mps = 0.0;
@@ -102,8 +115,8 @@ struct Command {
 };
 
 // What goes on /drive_raw for a state. For Driving the solver command is sanitised (finite,
-// speed in [0, v_cap], steering in [steer_min, steer_max]); Blocked takes the solver's steering
-// with speed 0; Fault is 0, 0; the NO_* states are speed 0 with the last steering.
+// speed in [0, v_cap], steering in [steer_min, steer_max]); Blocked takes the given steering with
+// speed 0; Fault is 0, 0; the NO_* states are speed 0 with the last steering.
 Command command_for_state(PlannerState state, const Command& solver_cmd, double last_steering_rad,
                           double v_cap_mps, double steer_min_rad, double steer_max_rad);
 
@@ -122,6 +135,63 @@ double lowpass_step(double previous, double wanted, double tick_s, double tau_s)
 // A double rounded to float32 that never lies outside [lo, hi] (0.449f is above 0.449). Non
 // finite input gives 0.
 float float32_within(double x, double lo, double hi);
+
+// Why the planner has nothing drivable (values match PlannerStatus.block_reason).
+enum class BlockReason : std::uint8_t {
+  None = 0,
+  AllCollide = 1,
+  BelowSpeedFloor = 2,
+  WheelStalled = 3,
+  GateRefusing = 4,
+  RecoveryExhausted = 5,
+};
+
+struct DrivabilityParams {
+  double stall_wheel_speed_mps = 0.03;  // wheel speed under this ...
+  double stall_hold_s = 1.5;            // ... for this long while the published speed was at least
+                                        // the floor: WheelStalled
+  double gate_hold_s = 1.0;             // gated /drive speed 0 for this long while the published
+                                        // speed was positive: GateRefusing
+};
+
+struct DrivabilityInputs {
+  bool no_plan = false;  // nothing to plan toward (no track weight and no free-space field)
+  bool all_collide = false;
+  double plan_speed_mps = 0.0;  // mean speed command of the plan over its first 0.5 s
+  double speed_floor_mps = 0.0;
+  double wheel_speed_mps = 0.0;
+  double published_speed_mps = 0.0;  // last published, before this tick
+  bool gate_fresh = false;           // a fresh /drive was seen; a stale one never counts
+  double gated_speed_mps = 0.0;
+};
+
+// Nothing drivable, as the decision table needs it (claude-docs section 3.6):
+//   1 AllCollide: every sample collides (immediate).
+//   2 BelowSpeedFloor: there is no plan, or its mean speed over the first 0.5 s is under the
+//     floor (immediate).
+//   3 WheelStalled: wheel speed under 0.03 m/s for stall_hold_s while the published speed was at
+//     least the floor.
+//   4 GateRefusing: the gated /drive speed is 0 for gate_hold_s while the published speed was
+//     positive.
+// The monitor keeps how long each condition has held continuously, which recovery also uses.
+class DrivabilityMonitor {
+ public:
+  explicit DrivabilityMonitor(const DrivabilityParams& p = DrivabilityParams{}) : p_(p) {}
+  // Updates the timers with this tick and returns the reason that makes it "nothing drivable"
+  // (first of 1 to 4 in order), or None.
+  BlockReason update(const DrivabilityInputs& in, double now_s);
+  // How long reason r (1 to 4) has held continuously as of the last update, 0 when not.
+  double held_s(BlockReason r) const;
+  bool active(BlockReason r) const;
+  void reset();
+
+ private:
+  static constexpr int kReasons = 4;
+  DrivabilityParams p_;
+  bool active_[kReasons] = {false, false, false, false};
+  double since_s_[kReasons] = {0.0, 0.0, 0.0, 0.0};
+  double now_s_ = 0.0;
+};
 
 struct SampleBudgetParams {
   int max_samples = 768;

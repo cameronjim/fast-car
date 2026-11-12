@@ -15,13 +15,13 @@ invariant 1, `claude-docs/05-safety.md`, `claude-docs/11-hardware.md`).
 |---|---|
 | The six command subscriptions (`commands/motor/{duty_cycle,current,brake,speed,position}`, `commands/servo/position`) and the servo "sensor" publisher are removed | the driver offers no command interface at all, so nothing in the ROS graph can reach the VESC through it |
 | `VescInterface::setDutyCycle/setCurrent/setBrake/setSpeed/setPosition/setServo` are no-ops | second, independent line: even if a subscription were added back, no set-command frame is ever written to the serial port |
-| The IMU poll is dropped | the car's IMU is the dedicated one at the CG, never the VESC's; also halves UART traffic |
+| The IMU poll is off unless the `poll_imu` parameter is true (launch argument `poll_imu`, car_teleop `vesc_imu:=true`) | upstream always sends COMM_GET_IMU_DATA, a read request. Until 2026-11-12 the patch dropped it, so /vesc/sensors/imu and /imu/raw were advertised and silent. Default stays off (halves UART traffic); it is on only to measure whether this board has a usable IMU (docs/notes/vesc-imu-2026-11-12.md) |
 | `temp_fet` / `temp_motor` are copied into `VescState` | upstream parses them and leaves the message fields at 0 |
 | `baud` parameter (default 115200) | upstream hard-codes 115200 |
 | Serial flow control `NONE` (was `HARDWARE`) | upstream targets the VESC's USB CDC port; on the Jetson's 3-wire UART hardware flow control would wait on a CTS line that is not connected |
 
 What the patched driver still sends: `COMM_FW_VERSION` (at start-up and on shutdown) and
-`COMM_GET_VALUES` (50 Hz). Verified 2026-10-07 in the ros-dev container against a fake VESC on
+`COMM_GET_VALUES` (50 Hz), and with `poll_imu` also `COMM_GET_IMU_DATA` (50 Hz, a read request). Verified 2026-10-07 in the ros-dev container against a fake VESC on
 a pseudo-terminal: with publishers running on every upstream command topic, the fake VESC
 received only those two command ids.
 

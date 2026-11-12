@@ -69,6 +69,15 @@ LAUNCH_ARGUMENTS = {
         "115200",
         "UART baud rate. Must equal VESC Tool App Settings > UART > Baudrate (app_uart_baudrate).",
     ),
+    "poll_imu": (
+        "false",
+        (
+            "true: also send COMM_GET_IMU_DATA (a read request) at 50 Hz, so the driver "
+            "publishes /vesc/sensors/imu and /vesc/sensors/imu/raw. Off by default: without it "
+            "those topics are advertised and silent. Gyro is in deg/s and accel in g as the "
+            "driver publishes them, NOT SI; see docs/notes/vesc-imu-2026-11-12.md."
+        ),
+    ),
 }
 
 
@@ -85,6 +94,8 @@ def vesc_nodes() -> list[Node]:
                 "port": LaunchConfiguration("serial_port"),
                 # The patch declares `baud` as an integer parameter.
                 "baud": ParameterValue(LaunchConfiguration("baud"), value_type=int),
+                # Declared by the patch too: a read request only, off by default.
+                "poll_imu": ParameterValue(LaunchConfiguration("poll_imu"), value_type=bool),
             }
         ],
         # Deliberately NO remappings: see the module docstring. In particular nothing maps

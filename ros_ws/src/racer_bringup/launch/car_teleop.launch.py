@@ -205,6 +205,9 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:   /telemetry/vesc/.* VESC volts, amps, temperatures, ERPM, fault, with vesc:=true. Already
 #:                     matched by /telemetry/.*; named on its own so narrowing that pattern
 #:                     can never silently drop the VESC's temperatures and faults.
+#:   /vesc/sensors/imu, /vesc/sensors/imu/raw
+#:                     the VESC's own IMU (vesc_msgs/VescImuStamped, sensor_msgs/Imu; gyro in
+#:                     deg/s, accel in g), only with vesc:=true vesc_imu:=true (2026-11-12)
 #:   /vesc/sensors/core the driver's raw VescStateStamped, so /odom/wheel can be re-derived
 #:                     from the bag if gear_ratio or the tyre radius is re-measured later
 #:   /park_node/status park_node's one-line state (phase, stage, dead-reckoned pose, request),
@@ -247,7 +250,7 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:                     copy (localization:=true); about 1 Hz, a few hundred kB each
 _RECORDED_TOPIC_REGEX = (
     r"^(/drive_raw|/drive|/safety/events|/teleop/cmd_vel|/telemetry/.*|/scan"
-    r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core|/park_node/status"
+    r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core|/vesc/sensors/imu|/vesc/sensors/imu/raw|/park_node/status"
     r"|/gap_follow/status|/tracker/command|/policy/status|/policy/events"
     r"|/camera/[^/]+/record/compressed|/rosout|/parameter_events"
     r"|/odom|/odom/wheel_twist|/pose|/tf|/tf_static|/map"
@@ -629,6 +632,15 @@ def generate_launch_description() -> LaunchDescription:
             "as serial_port. /dev/ttyTHS1 = Jetson 40-pin header pins 8 (TXD) / 10 (RXD)."
         ),
     )
+    vesc_imu_arg = DeclareLaunchArgument(
+        "vesc_imu",
+        default_value="false",
+        description=(
+            "With vesc:=true, also poll the VESC's IMU (a read request) so /vesc/sensors/imu and "
+            "/vesc/sensors/imu/raw are published and recorded. Default false. For measuring "
+            "whether the board has a usable IMU: docs/notes/vesc-imu-2026-11-12.md."
+        ),
+    )
     cameras_arg = DeclareLaunchArgument(
         "cameras",
         default_value="false",
@@ -770,7 +782,10 @@ def generate_launch_description() -> LaunchDescription:
     )
     vesc_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(_VESC_LAUNCH_FILE),
-        launch_arguments={"serial_port": LaunchConfiguration("vesc_serial_port")}.items(),
+        launch_arguments={
+            "serial_port": LaunchConfiguration("vesc_serial_port"),
+            "poll_imu": LaunchConfiguration("vesc_imu"),
+        }.items(),
         condition=IfCondition(LaunchConfiguration("vesc")),
     )
     cameras_launch = IncludeLaunchDescription(
@@ -812,6 +827,7 @@ def generate_launch_description() -> LaunchDescription:
             lidar_serial_port_arg,
             vesc_arg,
             vesc_serial_port_arg,
+            vesc_imu_arg,
             cameras_arg,
             camera_usb_device_arg,
             mapping_arg,

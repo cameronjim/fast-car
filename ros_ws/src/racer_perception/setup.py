@@ -25,6 +25,7 @@ setup(
             "detector_node = racer_perception.detector_node:main",
             "fusion_node = racer_perception.fusion_node:main",
             "lap_counter_node = racer_perception.lap_counter_node:main",
+            "camera_record_node = racer_perception.camera_record_node:main",
         ],
     },
 )

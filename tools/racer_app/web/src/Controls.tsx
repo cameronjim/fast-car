@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { fmtBagSize, fmtGrowth, recordingSummary } from "./model";
 import { ApiError, type Api, type ActionReply, type BagInfo, type LogEntry, type Options, type Status } from "./api";
 
 export type Notify = (text: string, kind?: "ok" | "error") => void;
@@ -131,6 +132,7 @@ export function Controls(p: Props) {
           <button class="danger" disabled={!stackUp} onClick={() => window.confirm("Stop the stack? Recording stops and the bag is closed.") && act(() => api.stopStack())}>Stop stack</button>
         </div>
         <div class="sub">Starts car-stack with the recorder. Running now: {stackUp ? Object.entries(status?.stack.flags ?? {}).map(([k, v]) => `${k}=${v}`).join(" ") || "default" : "nothing"}.</div>
+        {recordingSummary(p.bags) && <div class="sub" aria-label="Current bag">{recordingSummary(p.bags)}</div>}
         <div class="row">
           <input placeholder="map name" value={mapName} onInput={(e) => setMapName(e.currentTarget.value)} aria-label="Map name" />
           <button disabled={!stackUp || status?.stack.flags.mapping !== "true" || !mapName} onClick={() => act(() => api.saveMap(mapName))}>Save map</button>
@@ -143,7 +145,7 @@ export function Controls(p: Props) {
           <button disabled={status?.cameras.running} onClick={() => act(() => api.startCameras())}>Start cameras</button>
           <button disabled={!status?.cameras.running} onClick={() => act(() => api.stopCameras())}>Stop cameras</button>
         </div>
-        <div class="sub">About 6 MB/s per camera into the bag. Needs {status?.thresholds.cameras_min_free_gb ?? 10} GiB free; the disk guard stops them when space runs low.</div>
+        <div class="sub">The bag takes a small 5 Hz stream per camera, only while a drive is running (about 0.25 MB/s per camera while driving, nothing while idle); the live view stays full rate. Needs {status?.thresholds.cameras_min_free_gb ?? 10} GiB free; the disk guard stops them when space runs low.</div>
       </section>
 
       <section class="card" aria-label="Perception">
@@ -313,11 +315,12 @@ export function Controls(p: Props) {
 
       <section class="card" aria-label="Bags">
         <h3>Bags <span class="muted">{p.bags.length} folders</span></h3>
+        {recordingSummary(p.bags) && <div class="sub">{recordingSummary(p.bags)}</div>}
         <ul class="bags">
           {p.bags.map((b) => (
             <li key={b.name}>
               <span>{b.name}</span>
-              <span class="muted">{b.size_mb >= 1000 ? `${(b.size_mb / 1000).toFixed(1)} GB` : `${b.size_mb.toFixed(0)} MB`}{b.active ? " recording" : ""}</span>
+              <span class="muted">{fmtBagSize(b.size_mb)}{b.active ? ` recording ${fmtGrowth(b.growth_mb_s)}` : ""}</span>
               <button disabled={b.active} onClick={() => window.confirm(`Delete ${b.name}? This cannot be undone.`) && act(() => api.deleteBag(b.name))}>Delete</button>
             </li>
           ))}

@@ -19,6 +19,7 @@ import logging
 import shutil
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,8 @@ log = logging.getLogger(__name__)
 
 SNAPSHOT_TTL_S = 2.0  # a status poll costs about five docker CLI calls; share them
 HEARTBEAT_UNIT = "racer-heartbeat.service"
+GROWTH_WINDOW_S = 30.0  # the bag growth rate is averaged over this long
+GROWTH_MIN_SPAN_S = 2.0  # and is not reported until the samples are this far apart
 
 
 class ActionError(Exception):
@@ -83,6 +86,9 @@ class Controller:
         self._stop_generation = 0
         self._snap_lock = threading.Lock()
         self._snap: tuple[float, Snapshot] | None = None
+        self._growth_lock = threading.Lock()
+        self._growth_bag: str | None = None
+        self._growth_samples: deque[tuple[float, int]] = deque()
 
     @staticmethod
     def _timer_defer(delay: float, fn: Callable[[], None]) -> None:
@@ -1019,6 +1025,31 @@ class Controller:
                 continue
         return total
 
+    def _growth_mb_s(self, name: str | None, size_bytes: int) -> float | None:
+        """How fast the recording bag is growing, MB/s, over the last GROWTH_WINDOW_S seconds.
+
+        None when nothing is recording, or until two samples at least GROWTH_MIN_SPAN_S apart
+        exist (the first poll after the recorder starts, or after the agent restarts).
+        """
+        now = self._clock()
+        with self._growth_lock:
+            if name is None or name != self._growth_bag:
+                self._growth_bag = name
+                self._growth_samples.clear()
+            if name is None:
+                return None
+            samples = self._growth_samples
+            if samples and now - samples[-1][0] > GROWTH_WINDOW_S:
+                samples.clear()  # a long gap (agent idle, clock jump): do not average across it
+            if not samples or now - samples[-1][0] >= 1.0:  # two web clients must not skew it
+                samples.append((now, size_bytes))
+            while len(samples) > 2 and now - samples[0][0] > GROWTH_WINDOW_S:
+                samples.popleft()
+            (t0, b0), (t1, b1) = samples[0], samples[-1]
+            if t1 - t0 < GROWTH_MIN_SPAN_S:
+                return None
+            return round(max(b1 - b0, 0) / (t1 - t0) / 1e6, 2)
+
     def list_bags(self) -> list[dict[str, Any]]:
         base = self.s.bags
         if not base.is_dir():
@@ -1027,15 +1058,20 @@ class Controller:
         bags.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         recording = self.snapshot().recorder_running
         out = []
-        for i, p in enumerate(bags):
-            out.append(
-                {
-                    "name": p.name,
-                    "size_mb": round(self._dir_size(p) / 1e6, 1),
-                    "mtime": p.stat().st_mtime,
-                    "active": bool(recording and i == 0),
-                }
-            )
+        active_name = bags[0].name if recording and bags else None
+        for p in bags:
+            size = self._dir_size(p)
+            entry: dict[str, Any] = {
+                "name": p.name,
+                "size_mb": round(size / 1e6, 1),
+                "mtime": p.stat().st_mtime,
+                "active": p.name == active_name,
+            }
+            if entry["active"]:
+                entry["growth_mb_s"] = self._growth_mb_s(p.name, size)
+            out.append(entry)
+        if active_name is None:
+            self._growth_mb_s(None, 0)
         return out
 
     def delete_bag(self, name: str, confirm: str, actor: str = "") -> dict[str, Any]:

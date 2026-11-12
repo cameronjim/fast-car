@@ -280,3 +280,31 @@ export function fmtDuration(seconds: number | null): string {
   if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
   return `${(seconds / 3600).toFixed(1)} h`;
 }
+
+// -- bags --------------------------------------------------------------------------------------
+
+export interface BagLike {
+  name: string;
+  size_mb: number;
+  active: boolean;
+  growth_mb_s?: number | null;
+}
+
+export function fmtBagSize(sizeMb: number): string {
+  return sizeMb >= 1000 ? `${(sizeMb / 1000).toFixed(1)} GB` : `${sizeMb.toFixed(0)} MB`;
+}
+
+/** "+0.52 MB/s", "+120 kB/s" (below 0.1 MB/s), "no growth", or "measuring" before two samples. */
+export function fmtGrowth(mbPerS: number | null | undefined): string {
+  if (mbPerS === null || mbPerS === undefined || !Number.isFinite(mbPerS)) return "measuring";
+  if (mbPerS <= 0) return "no growth";
+  if (mbPerS < 0.1) return `+${Math.max(Math.round(mbPerS * 1000), 1)} kB/s`;
+  return `+${mbPerS.toFixed(2)} MB/s`;
+}
+
+/** The one-line "current bag" summary for the Stack and Bags cards, or null when none records. */
+export function recordingSummary(bags: BagLike[]): string | null {
+  const bag = bags.find((b) => b.active);
+  if (!bag) return null;
+  return `Recording ${bag.name}: ${fmtBagSize(bag.size_mb)}, ${fmtGrowth(bag.growth_mb_s)}`;
+}

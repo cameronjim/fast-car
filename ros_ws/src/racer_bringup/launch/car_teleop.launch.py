@@ -96,9 +96,10 @@ The preferred way to run them is their own container, car-camera, with cameras.l
 (docker/car/README.md "Cameras"): the CSI camera needs the NVIDIA runtime and the host's Argus
 socket, which car-stack is deliberately started without. `cameras:=true` includes
 cameras.launch.py HERE instead, for a car-stack started with the camera docker flags. Either
-way the recorder's regex takes /camera/.*/compressed (about 5 to 10 MB/s per camera at 720p60,
-ESTIMATED, see the runbook) and leaves the raw images out: rgb8 at 1280x720x60 is about
-166 MB/s per camera, more than a bag should take.
+way the recorder's regex takes /camera/<name>/record/compressed (camera_record_node's small,
+drive-only 5 Hz stream, see _RECORDED_TOPIC_REGEX) and leaves the full-rate topics out: the
+compressed ones are about 6 MB/s per camera and the raw rgb8 ones about 166 MB/s, more than a
+bag should take, and the idle car must not record them at all.
 
 MAPPING AND LOCALISATION ARE OFF BY DEFAULT (2026-11-03, docs/notes/localization-2026-11-03.md).
 `mapping:=true` includes mapping.launch.py (racer_state's wheel_twist_node, the
@@ -209,10 +210,15 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:   /park_node/status park_node's one-line state (phase, stage, dead-reckoned pose, request),
 #:                     when racer_control's park.launch.py runs next to this (roadmap 2.9); its
 #:                     transitions are also in /rosout
-#:   /camera/.../compressed
-#:                     JPEG frames of every camera (optional, cameras:=true or the
-#:                     car-camera container). Only the compressed sub-topic: raw rgb8
-#:                     image_raw is about 166 MB/s per camera at 720p60 and is NOT recorded.
+#:   /camera/<name>/record/compressed
+#:                     JPEG frames of every camera (optional, cameras:=true or the car-camera
+#:                     container), from racer_perception's camera_record_node: at most 5 Hz,
+#:                     fitted inside 640 x 360, and published ONLY while /drive_raw is being
+#:                     published (a driving launch is up), so cameras on and the car idle record
+#:                     nothing. NOT the full-rate /camera/<name>/image_raw/compressed (about
+#:                     6 MB/s per camera, 9 GB in 25 idle minutes on 2026-11-11) and not the raw
+#:                     rgb8 image_raw (about 166 MB/s per camera at 720p60); those stay live for
+#:                     Foxglove, the racer app and the lap counter.
 #:   /gap_follow/status
 #:                     gap_follow_node's 1 Hz JSON: scan-to-command latency (p50, p99, max over the
 #:                     last 200 scans), the CPU cost of each scan's perception half, the speed
@@ -243,7 +249,7 @@ _RECORDED_TOPIC_REGEX = (
     r"^(/drive_raw|/drive|/safety/events|/teleop/cmd_vel|/telemetry/.*|/scan"
     r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core|/park_node/status"
     r"|/gap_follow/status|/tracker/command|/policy/status|/policy/events"
-    r"|/camera/.*/compressed|/rosout|/parameter_events"
+    r"|/camera/[^/]+/record/compressed|/rosout|/parameter_events"
     r"|/odom|/odom/wheel_twist|/pose|/tf|/tf_static|/map"
     r"|/perception/(objects|target|poses|detections)|/spiderbot/(alert|state|patrol_cmd)"
     r"|/lap/(event|status)|/pnp/.*)$"
@@ -631,7 +637,7 @@ def generate_launch_description() -> LaunchDescription:
             "/camera/csi0/*; optional, outside the thesis). Only for a car-stack container "
             "started with the camera docker flags; the preferred setup runs the cameras in "
             "their own car-camera container instead (docker/car/README.md). Either way "
-            "/camera/.*/compressed is recorded and raw images are not."
+            "/camera/<name>/record/compressed is recorded; the full-rate and raw images are not."
         ),
     )
     camera_usb_device_arg = DeclareLaunchArgument(

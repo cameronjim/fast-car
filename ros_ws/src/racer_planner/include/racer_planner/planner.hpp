@@ -92,6 +92,8 @@ class Planner {
   std::array<Control, 32> ring_{};  // commands published but not yet acting
   int ring_head_ = 0;
   Command last_published_;
+  double steer_lp_ = 0.0;  // output low-pass state, valid while driving
+  bool steer_lp_valid_ = false;
   Pose2 ego_pose_;
   bool plan_valid_ = false;
 };

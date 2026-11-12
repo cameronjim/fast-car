@@ -465,3 +465,38 @@ TEST(Staleness, AgeAndStaleHelpers) {
   EXPECT_TRUE(is_stale(10.0, 10.3, 0.2));
   EXPECT_FALSE(is_stale(10.0, 10.1, 0.2));  // slightly ahead of now is clock skew, not stale
 }
+
+TEST(RateLimit, SpeedFloorJumpsOutOfTheDeadBandOnlyWhenTheWantedSpeedIsAtLeastTheFloor) {
+  const Command rest{0.0, 0.0};
+  // from rest toward 0.5 with a 0.086 step: would land at 0.086, inside (0, 0.23): jump
+  EXPECT_NEAR(rate_limit(Command{0.5, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.23, 1e-12);
+  // the wanted speed is exactly the floor: the same
+  EXPECT_NEAR(rate_limit(Command{0.23, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.23, 1e-12);
+  // an unsnapped wanted speed below the floor is not lifted, only limited as before
+  EXPECT_NEAR(rate_limit(Command{0.1, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.086, 1e-12);
+  EXPECT_NEAR(rate_limit(Command{0.05, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.05, 1e-12);
+  // above the floor the ordinary step applies
+  EXPECT_NEAR(rate_limit(Command{0.9, 0.0}, Command{0.3, 0.0}, 0.064, 0.086, 0.23).speed_mps, 0.386,
+              1e-12);
+  // slowing is never limited, and 0 stays 0
+  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, Command{0.4, 0.0}, 0.064, 0.086, 0.23).speed_mps, 0.0);
+  EXPECT_EQ(rate_limit(Command{0.0, 0.0}, rest, 0.064, 0.086, 0.23).speed_mps, 0.0);
+  // floor 0 is the old rule
+  EXPECT_NEAR(rate_limit(Command{0.5, 0.0}, rest, 0.064, 0.086, 0.0).speed_mps, 0.086, 1e-12);
+}
+
+TEST(LowPass, FirstOrderStepAndEdgeCases) {
+  const double a = 1.0 - std::exp(-0.02 / 0.04);
+  EXPECT_NEAR(lowpass_step(0.0, 1.0, 0.02, 0.04), a, 1e-12);
+  EXPECT_NEAR(lowpass_step(1.0, 1.0, 0.02, 0.04), 1.0, 1e-12);
+  // repeated steps converge to the input
+  double y = 0.0;
+  for (int i = 0; i < 50; ++i) y = lowpass_step(y, 0.3, 0.02, 0.04);
+  EXPECT_NEAR(y, 0.3, 1e-6);
+  // tau 0 (off) and bad tick pass the wanted value
+  EXPECT_DOUBLE_EQ(lowpass_step(0.0, 0.7, 0.02, 0.0), 0.7);
+  EXPECT_DOUBLE_EQ(lowpass_step(0.0, 0.7, 0.0, 0.04), 0.7);
+  // NaN wanted keeps the previous value, NaN previous takes the wanted one
+  EXPECT_DOUBLE_EQ(lowpass_step(0.2, std::nan(""), 0.02, 0.04), 0.2);
+  EXPECT_DOUBLE_EQ(lowpass_step(std::nan(""), 0.7, 0.02, 0.04), 0.7);
+}

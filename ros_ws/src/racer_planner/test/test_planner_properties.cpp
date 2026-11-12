@@ -14,8 +14,9 @@ using namespace racer_planner;
 
 namespace {
 
-PlannerConfig small_config(double v_max) {
+PlannerConfig small_config(double v_max, double floor_mps = 0.0) {
   PlannerConfig c;
+  c.mppi.speed_floor_mps = floor_mps;
   c.logic.v_max_mps = v_max;
   c.mppi.samples = 128;
   c.max_samples = 128;
@@ -71,6 +72,7 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
   for (int scenario = 0; scenario < 120; ++scenario) {
     PlannerConfig cfg = small_config(uni(0.1, 0.9));
     cfg.logic.use_lap_guidance = u01(rng) < 0.3;
+    cfg.mppi.speed_floor_mps = u01(rng) < 0.5 ? 0.2 : 0.0;
     Planner planner(cfg, test::plain_dynamics(), g);
     DistanceField field;
     {
@@ -112,6 +114,8 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
       ASSERT_TRUE(std::isfinite(out.cmd.speed_mps)) << scenario << "/" << tick;
       ASSERT_TRUE(std::isfinite(out.cmd.steering_rad)) << scenario << "/" << tick;
       ASSERT_GE(out.cmd.speed_mps, 0.0);
+      ASSERT_TRUE(out.cmd.speed_mps == 0.0 || out.cmd.speed_mps >= cfg.mppi.speed_floor_mps - 1e-12)
+          << "speed " << out.cmd.speed_mps << " floor " << cfg.mppi.speed_floor_mps;
       ASSERT_LE(out.cmd.speed_mps, std::max(0.0, out.v_cap_mps) + 1e-12);
       ASSERT_LE(out.v_cap_mps, cfg.logic.v_max_mps + 1e-12);
       ASSERT_GE(out.cmd.steering_rad, g.steering_min_rad);
@@ -142,7 +146,8 @@ struct Rig {
   double now = 50.0;
   double v = 0.3;
 
-  explicit Rig(double v_max = 0.5) : planner(small_config(v_max), test::plain_dynamics(), g) {}
+  explicit Rig(double v_max = 0.5, double floor_mps = 0.0)
+      : planner(small_config(v_max, floor_mps), test::plain_dynamics(), g) {}
 
   TickOutput tick(bool odom = true, bool scan = true, bool trk = true) {
     TickInput in;
@@ -269,4 +274,50 @@ TEST(Planner, TrackOlderThanTheTimeoutIsNoTrack) {
 TEST(Planner, DelayTicksComeFromTheBundleCommandDelay) {
   Rig r;
   EXPECT_EQ(r.planner.delay_ticks(), 4);  // 0.08 s at 50 Hz
+}
+
+TEST(Planner, SteeringIsLowPassedAndStaysInsideTheRateLimit) {
+  Rig r(0.5);
+  for (int i = 0; i < 30; ++i) r.tick();
+  // Put a wall right ahead: the solver now wants a hard steering change.
+  std::vector<PointXY> wall;
+  for (double y = -1.0; y <= 1.0; y += 0.02) wall.push_back({0.75, y});
+  r.field.build(wall.data(), wall.size());
+  const double max_step = 0.45 * r.g.steering_max_rate_rad_per_s * 0.02;
+  double prev = r.tick().cmd.steering_rad;
+  double biggest = 0.0;
+  for (int i = 0; i < 60; ++i) {
+    const double cur = r.tick().cmd.steering_rad;
+    biggest = std::max(biggest, std::fabs(cur - prev));
+    EXPECT_LE(std::fabs(cur - prev), max_step + 1e-12);
+    prev = cur;
+  }
+  EXPECT_GT(biggest, 0.0);
+}
+
+TEST(Planner, LeavingDrivingRestartsTheLowPassFromTheLastPublishedSteering) {
+  Rig r(0.5);
+  TickOutput last;
+  for (int i = 0; i < 30; ++i) last = r.tick();
+  const TickOutput stopped = r.tick(true, false, true);  // no scan: held steering, speed 0
+  EXPECT_EQ(stopped.state, PlannerState::NoScan);
+  EXPECT_DOUBLE_EQ(stopped.cmd.steering_rad, last.cmd.steering_rad);
+  const TickOutput back = r.tick();
+  EXPECT_EQ(back.state, PlannerState::Driving);
+  EXPECT_LE(std::fabs(back.cmd.steering_rad - stopped.cmd.steering_rad),
+            0.45 * r.g.steering_max_rate_rad_per_s * 0.02 + 1e-12);
+}
+
+TEST(Planner, FromRestTheFirstDrivingCommandIsTheSpeedFloorNotAnInBetweenValue) {
+  Rig r(0.6, 0.23);
+  r.v = 0.0;
+  TickOutput out;
+  std::vector<double> speeds;
+  for (int i = 0; i < 40; ++i) {
+    out = r.tick();
+    speeds.push_back(out.cmd.speed_mps);
+  }
+  EXPECT_EQ(out.state, PlannerState::Driving);
+  for (double v : speeds) EXPECT_TRUE(v == 0.0 || v >= 0.23 - 1e-12) << v;
+  EXPECT_GE(speeds.back(), 0.23 - 1e-12);
 }

@@ -7,23 +7,37 @@
 
 namespace racer_planner {
 
+namespace {
+// The solver's parameters with what only the planner knows filled in.
+MppiParams solver_params(const PlannerConfig& c) {
+  MppiParams m = c.mppi;
+  m.tick_s = c.tick_s;
+  // BRIEF 14 (one line): speed floor = dynamics.nominal.speed_deadband_mps + a margin. Until the
+  // bundle carries the dead zone the floor is whatever the config says (0.0 by default: off).
+  m.speed_floor_mps = std::max(0.0, c.mppi.speed_floor_mps);
+  return m;
+}
+}  // namespace
+
 Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
                  const VehicleGeometry& geometry)
     : cfg_(config),
       geometry_(geometry),
       model_tick_(dynamics, geometry, config.tick_s),
       ego_(geometry.wheelbase_m, dynamics.nominal.understeer_s2_per_m2),
-      solver_(config.mppi, DynamicsModel(dynamics, geometry, dynamics.dt_s), geometry,
-              config.max_samples),
+      solver_(solver_params(config), DynamicsModel(dynamics, geometry, dynamics.dt_s), geometry,
+              std::max(config.max_samples, config.mppi.samples)),
       budget_([&] {
         SampleBudgetParams b = config.budget;
-        b.max_samples = std::min(std::max(config.max_samples, kMinSamples), kMaxSamples);
+        b.max_samples = std::min(
+            std::max(std::min(config.max_samples, config.mppi.samples), kMinSamples), kMaxSamples);
         return b;
       }()),
       horizon_(std::max(2, config.mppi.horizon_steps)),
       delay_ticks_(std::min(
           25, std::max(0, static_cast<int>(
                               std::lround(dynamics.nominal.command_delay_s / config.tick_s))))) {
+  cfg_.mppi = solver_params(config);
   cfg_.max_samples = std::min(std::max(config.max_samples, kMinSamples), kMaxSamples);
   solver_.set_samples(std::min(cfg_.max_samples, cfg_.mppi.samples));
 }
@@ -146,9 +160,24 @@ TickOutput Planner::run(const TickInput& in) {
 
   Command c = command_for_state(state, wanted, last_published_.steering_rad, v_cap,
                                 geometry_.steering_min_rad, geometry_.steering_max_rad);
+  const double floor_mps = cfg_.mppi.speed_floor_mps;
+  if (state == PlannerState::Driving) {
+    // Low-pass the steering (the state restarts from the last published value on entering
+    // Driving) and keep the speed in {0} U [floor, cap].
+    if (!steer_lp_valid_) {
+      steer_lp_ = last_published_.steering_rad;
+      steer_lp_valid_ = true;
+    }
+    steer_lp_ = lowpass_step(steer_lp_, c.steering_rad, cfg_.tick_s, cfg_.logic.steer_output_tau_s);
+    c.steering_rad = steer_lp_;
+    c.speed_mps = snap_speed(c.speed_mps, floor_mps, v_cap);
+  } else {
+    steer_lp_valid_ = false;
+  }
   if (state == PlannerState::Driving || state == PlannerState::Blocked) {
-    c = rate_limit(c, last_published_, geometry_.steering_max_rate_rad_per_s * cfg_.tick_s,
-                   geometry_.max_acceleration_mps2 * cfg_.tick_s);
+    const double f = cfg_.logic.rate_limit_fraction;
+    c = rate_limit(c, last_published_, f * geometry_.steering_max_rate_rad_per_s * cfg_.tick_s,
+                   f * geometry_.max_acceleration_mps2 * cfg_.tick_s, floor_mps);
   }
   out.state = state;
   out.cmd = c;

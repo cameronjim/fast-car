@@ -222,7 +222,7 @@ def test_csi_declares_arguments_with_defaults():
 
 def test_csi_pipeline_for_the_defaults():
     module = _load("camera_csi.launch.py")
-    assert module.argus_pipeline(0, 1280, 720, 60, 0) == _DEFAULT_PIPELINE
+    assert module.argus_pipeline(0, 1280, 720, 60, 2) == _DEFAULT_PIPELINE
 
 
 def test_csi_pipeline_follows_its_arguments():

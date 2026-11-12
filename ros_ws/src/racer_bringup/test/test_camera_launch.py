@@ -194,14 +194,14 @@ _CSI_DEFAULTS = {
     "width": "1280",
     "height": "720",
     "fps": "60",
-    "flip_method": "0",
+    "flip_method": "2",
     "jpeg_quality": "80",
 }
 
 _DEFAULT_PIPELINE = (
     "nvarguscamerasrc sensor-id=0 ! "
     "video/x-raw(memory:NVMM),width=1280,height=720,framerate=60/1,format=NV12 ! "
-    "nvvidconv flip-method=0 ! "
+    "nvvidconv flip-method=2 ! "
     "video/x-raw,width=1280,height=720,format=BGRx ! "
     "videoconvert"
 )

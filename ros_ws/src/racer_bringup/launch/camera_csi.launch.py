@@ -80,7 +80,7 @@ LAUNCH_ARGUMENTS = {
     "height": ("720", "Capture height, pixels."),
     "fps": ("60", "Capture frame rate, frames per second."),
     "flip_method": (
-        "0",
+        "2",  # the car's CSI camera is mounted upside down (2026-11-12)
         (
             "nvvidconv flip-method, 0..7 (0 none, 2 rotate 180 for an upside-down mount, "
             "4 horizontal flip, 6 vertical flip)."

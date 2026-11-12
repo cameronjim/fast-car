@@ -365,6 +365,13 @@ class GapFollowNode : public rclcpp::Node {
         *this, "stopping_margin_m", 0.05, 0.0, 1.0,
         "physics_speed: the free path is measured with the body inflated by this (m), and the "
         "stopping point is limits.min_forward_clearance_m plus this short of the return.");
+    c.free_path_on_published_steering = declare_described_bool(
+        *this, "free_path_on_published_steering", false,
+        "physics_speed: measure the free path along the shorter of the target arc and the arc of "
+        "the "
+        "steering the car is at now (the low-passed command), not the target arc alone: while the "
+        "steering lags the target the car is still on the old arc. false (default) = target arc "
+        "only.");
     declare_ranged_double(
         *this, "side_cap_distance_m", 0.0, 0.0, 1.0,
         "physics_speed: cap the speed while a lane wall is closer than this to the BODY beside "
@@ -707,6 +714,12 @@ class GapFollowNode : public rclcpp::Node {
     scan_.angle_increment = msg->angle_increment;
     scan_.range_min = msg->range_min;
     scan_.range_max = msg->range_max;
+    {
+      // The steering the car is at now, for free_path_on_published_steering (the command half
+      // writes it under the same mutex).
+      const std::lock_guard<std::mutex> lock(shared_mutex_);
+      follower_.set_published_steering_rad(published_steering_rad_);
+    }
     const GapFollowResult result = follower_.process(scan_);
     if (!result.valid) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
@@ -888,6 +901,10 @@ class GapFollowNode : public rclcpp::Node {
                                   std::min(speed_command_.config().max_speed_mps,
                                            VEHICLE_PARAMS.limits.global_speed_cap_mps));
     drive_pub_->publish(drive_msg);
+    {
+      const std::lock_guard<std::mutex> lock(shared_mutex_);
+      published_steering_rad_ = static_cast<double>(drive_msg.drive.steering_angle);
+    }
     last_published_speed_mps_ = static_cast<double>(drive_msg.drive.speed);
     const rclcpp::Time published = steady_clock_.now();
     last_publish_steady_ = published;
@@ -988,6 +1005,8 @@ class GapFollowNode : public rclcpp::Node {
   // forward-path flag, the target range and its median, and the scan freshness below).
   std::mutex shared_mutex_;
   GapFollowResult latest_;
+  // The steering last published (rad), for free_path_on_published_steering. Behind shared_mutex_.
+  double published_steering_rad_ = 0.0;
 
   // Reverse escape (empty unless reverse_escape is true).
   std::optional<ReverseEscape> escape_;

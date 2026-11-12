@@ -47,6 +47,8 @@ class TrackPerceiver:
         vehicle: LiveVehicle,
         sigma_max_m: float = 0.25,
         default_half_width_m: float = 0.5,
+        hw_min_m: float = geometric.DEFAULT_HW_MIN_M,
+        hw_max_m: float = geometric.DEFAULT_HW_MAX_M,
         net: CircConv1dV0 | None = None,
         model_id: str | None = None,
     ) -> None:
@@ -59,7 +61,9 @@ class TrackPerceiver:
         self.sigma_max_m = sigma_max_m
         self.net = net
         self.model_id = (model_id or "unknown") if backend == BACKEND_NET else GEOMETRIC_MODEL_ID
-        self._geo_cfg = geometric.GeometricConfig(default_half_width_m=default_half_width_m)
+        self._geo_cfg = geometric.GeometricConfig(
+            default_half_width_m=default_half_width_m, hw_min_m=hw_min_m, hw_max_m=hw_max_m
+        )
 
     def process(
         self,

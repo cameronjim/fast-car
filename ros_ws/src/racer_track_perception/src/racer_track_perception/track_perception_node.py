@@ -33,7 +33,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
-from racer_track_perception import core
+from racer_track_perception import core, geometric
 from racer_track_perception import track as tr
 from racer_track_perception.bundle import KIND, load_bundle
 from racer_track_perception.errors import BundleRefused
@@ -81,6 +81,16 @@ class TrackPerceptionNode(Node):
             "default_half_width_m",
             0.5,
             _ranged(0.1, 1.0, 0.0, "geometric: half width used before any is measured (m)"),
+        ).value
+        hw_min_m = self.declare_parameter(
+            "lane_half_width_min_m",
+            geometric.DEFAULT_HW_MIN_M,
+            _ranged(0.05, 1.0, 0.0, "geometric: smallest plausible lane half width (m)"),
+        ).value
+        hw_max_m = self.declare_parameter(
+            "lane_half_width_max_m",
+            geometric.DEFAULT_HW_MAX_M,
+            _ranged(0.2, 2.0, 0.0, "geometric: largest plausible lane half width (m)"),
         ).value
         yaw_from_vp = self.declare_parameter(
             "laser_yaw_from_vehicle_params",
@@ -139,6 +149,8 @@ class TrackPerceptionNode(Node):
             working,
             sigma_max_m=float(sigma_max_m),
             default_half_width_m=float(default_half_width_m),
+            hw_min_m=float(hw_min_m),
+            hw_max_m=float(hw_max_m),
             net=net,
             model_id=model_id,
         )

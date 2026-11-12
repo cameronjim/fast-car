@@ -114,7 +114,7 @@ def test_finalize_writes_metrics_pointer_and_fixture(tmp_path: Path, live: LiveV
     stored = json.loads((pointer / "metrics.json").read_text())
     assert stored["verdict"].startswith("net fails") and stored["median"] is None
     readme = (pointer / "README.md").read_text()
-    assert "net fails, use backend:=geometric tonight" in readme and "—" not in readme
+    assert "net fails, use backend:=geometric tonight" in readme and chr(0x2014) not in readme
     manifest = yaml.safe_load((bundle / "manifest.yaml").read_text())
     assert manifest["metrics"]["a"] == 1.5
     release = repo / "ros_ws/src/racer_track_perception/test/fixtures/bundle_release"
@@ -122,6 +122,33 @@ def test_finalize_writes_metrics_pointer_and_fixture(tmp_path: Path, live: LiveV
     load_bundle(release, "track_perception", live)
     export.finalize(bundle, {"verdict": "net passes"}, repo, copy_fixture=False, live=live)
     assert "net passes" in (pointer / "README.md").read_text()
+
+
+def test_compose_metrics_and_readme_tables() -> None:
+    net = {
+        "centreline_err_median_stations_0_7_m": 0.01,
+        "centreline_err_median_stations_8_15_m": 0.03,
+        "half_width_err_median_m": 0.01,
+    }
+    sim = {
+        "in_distribution": {"net_raw": net, "geometric_valid": net, "samples": 5},
+        "held_out": {"t1": {"net_raw": net, "geometric_valid": net, "samples": 5}},
+        "held_out_acceptance": {"all_ok": True},
+    }
+    row = {
+        "boundary_residual_median_m": 0.2,
+        "boundary_residual_p90_m": 0.3,
+        "intrusion_fraction_mean": float("nan"),
+        "share_valid_count_under_6": 0.0,
+    }
+    bags = {"verdict": "net fails, use backend:=geometric tonight", "gate_pooled": {"net": row}}
+    metrics = export.compose_metrics(sim, bags, [{"epoch": 3}])
+    assert metrics["verdict"].startswith("net fails") and metrics["final_val"] == {"epoch": 3}
+    assert set(metrics["sim_held_out"]["t1"]) == {"net_raw", "geometric_valid"}
+    text = export.readme_text("trackperc-v0-x", export._clean(metrics))
+    assert "| net | 0.200 | 0.300 | n/a | 0.000 |" in text
+    assert "| t1 | 0.010 | 0.030 | 0.010 |" in text
+    assert export.compose_metrics(sim, {}, None)["verdict"] == "no real-bag verdict"
 
 
 def test_default_model_id_and_clean() -> None:

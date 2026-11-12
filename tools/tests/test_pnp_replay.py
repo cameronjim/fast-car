@@ -4,7 +4,7 @@ end to end (skipped, with the reason, unless planner_replay_cli is built; the l3
 builds it and sets PNP_REPLAY_REQUIRE_CLI=1 so there a missing binary is a failure).
 
 The fixture, tools/tests/fixtures/pnp_replay_2026-11-12.npz, is four cuts of the real bag:
-R0 (the NO_TRACK onset), R1 (the corner approach and the stall), R3 (nose-in) and L (another
+R0 (where the v0 car went to NO_TRACK), R1 (the corner approach and the stall), R3 (nose-in) and L (another
 driver's laps). tools/pnp_replay/cut_fixture.py regenerates it.
 """
 
@@ -446,33 +446,72 @@ def perceiver() -> perception.Perceiver:
     return perception.build_perceiver("geometric")
 
 
+def recorded_as_tracks(rec: bag.Recording, a: float, b: float) -> perception.Tracks:
+    """The recorded /pnp/local_track of [a, b] as a replay result, each on the scan of its header
+    stamp: a perfect replay, to test the fidelity check's pass path without any tracer."""
+    pairs = []
+    for k in np.nonzero((rec["trk_stamp"] >= a) & (rec["trk_stamp"] <= b))[0]:
+        i = int(np.argmin(np.abs(rec["scan_stamp"] - rec["trk_stamp"][k])))
+        assert abs(rec["scan_stamp"][i] - rec["trk_stamp"][k]) < 1e-3
+        pairs.append((i, int(k)))
+    idx = np.array([k for _, k in pairs])
+    return perception.Tracks(
+        scan_index=np.array([i for i, _ in pairs]),
+        x=rec["trk_x"][idx],
+        y=rec["trk_y"][idx],
+        hl=rec["trk_hl"][idx],
+        hr=rec["trk_hr"][idx],
+        sigma=rec["trk_sigma"][idx],
+        valid=rec["trk_valid"][idx],
+        residual=rec["trk_residual"][idx],
+        intrusion=rec["trk_intrusion"][idx],
+    )
+
+
 @pytest.mark.parametrize("name", ["R0", "R1", "R3"])
-def test_replayed_v0_tracer_equals_the_recorded_track(
+def test_the_check_passes_for_a_perfect_replay_and_fails_for_a_changed_one(name: str) -> None:
+    rec, a, b = cut_fixture.load_cut(FIXTURE, name)
+    perfect = recorded_as_tracks(rec, a, b)
+    fid = perception.check_fidelity(rec, perfect, a, b)
+    assert fid.ok and fid.matched >= 15 and fid.max_centreline_diff_m == 0.0
+    assert fid.unmatched_recorded == 0
+    changed = perception.Tracks(**{**perfect.__dict__, "y": perfect.y + np.float32(1e-3)})
+    bad = perception.check_fidelity(rec, changed, a, b)
+    assert not bad.ok and bad.max_centreline_diff_m > 1e-4
+    other = perception.Tracks(**{**perfect.__dict__, "valid": perfect.valid - 1})
+    assert perception.check_fidelity(rec, other, a, b).valid_count_mismatches == fid.matched
+    # a replay of no scans matches nothing, which is a failure and not a pass
+    empty = perfect.subset(np.zeros(len(perfect), dtype=bool))
+    assert not perception.check_fidelity(rec, empty, a, b).ok
+
+
+@pytest.mark.parametrize("name", ["R0", "R1", "R3"])
+def test_replayed_tracks_line_up_with_the_recorded_ones_by_header_stamp(
     name: str, perceiver: perception.Perceiver
 ) -> None:
-    """The harness self-test: the replayed geometric tracer gives the recorded /pnp/local_track,
-    matched by header stamp, to 1e-5 m (on this bag the difference is exactly 0)."""
+    """Every recorded track has a replayed scan of its header stamp, the replay is repeatable and
+    well formed. When the tracer is the one that recorded the bag (PNP_REPLAY_PERCEPTION_SRC at
+    the 2026-11-12 checkout, geometric-v0) the tracks also have to be equal to 1e-5 m; main's
+    tracer is v1 now, so by default they only have to differ in a measured, reported way."""
     rec, a, b = cut_fixture.load_cut(FIXTURE, name)
     scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
     tracks = perception.run_perceiver(perceiver, rec, scans)
+    again = perception.run_perceiver(perceiver, rec, scans)
+    assert tracks.x.tolist() == again.x.tolist() and tracks.valid.tolist() == again.valid.tolist()
+    assert np.isfinite(tracks.x).all() and (tracks.valid >= 0).all() and (tracks.valid <= 16).all()
     fid = perception.check_fidelity(rec, tracks, a, b)
-    assert fid.matched >= 15, fid
-    assert fid.valid_count_mismatches == 0
-    assert fid.max_centreline_diff_m <= 1e-5
-    assert fid.max_width_diff_m <= 1e-5
-    assert fid.ok
+    assert fid.matched >= 15 and fid.unmatched_recorded == 0, fid
+    if perceiver.model_id == "geometric-v0":
+        assert fid.ok, fid
 
 
-def test_fidelity_check_fails_on_a_changed_track(perceiver: perception.Perceiver) -> None:
+def test_fidelity_check_reports_the_v0_to_v1_difference(perceiver: perception.Perceiver) -> None:
+    if perceiver.model_id == "geometric-v0":
+        pytest.skip("the tracer is v0: the replay equals the recording (the test above)")
     rec, a, b = cut_fixture.load_cut(FIXTURE, "R1")
     scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
-    tracks = perception.run_perceiver(perceiver, rec, scans)
-    tampered = {**rec, "trk_y": rec["trk_y"] + np.float32(1e-3)}
-    fid = perception.check_fidelity(tampered, tracks, a, b)
-    assert not fid.ok and fid.max_centreline_diff_m > 1e-4
-    # a replay of the wrong scans matches nothing, which is a failure and not a pass
-    nothing = perception.run_perceiver(perceiver, rec, scans[:0])
-    assert not perception.check_fidelity(rec, nothing, a, b).ok
+    fid = perception.check_fidelity(rec, perception.run_perceiver(perceiver, rec, scans), a, b)
+    assert not fid.ok  # a different tracer is reported as different, never waved through
 
 
 def test_perception_summary_counts_only_moving_scans(perceiver: perception.Perceiver) -> None:
@@ -530,48 +569,64 @@ def replay_cut(
     return rows, m
 
 
-def test_planner_replay_r0_goes_to_no_track_where_the_car_did(tmp_path: Path) -> None:
-    rows, m = replay_cut("R0", tmp_path, "recorded", {"max_intrusion_fraction": 0.10})
+def test_planner_replay_r0_keeps_driving_where_the_v0_car_stopped(tmp_path: Path) -> None:
+    """R0 is where the 2026-11-12 v0 car went to NO_TRACK. The planner on main (v0.1) has no
+    NO_TRACK state: on the same recorded tracks it keeps driving, and the comparison with the
+    recorded status shows exactly the ticks where the v0 car stopped."""
+    rows, m = replay_cut("R0", tmp_path, "recorded", {})
     assert len(rows["now_s"]) == pytest.approx((7.5 - 3.0) / 0.02, abs=2)
-    assert m["state_counts"]["DRIVING"] > 50 and m["state_counts"]["NO_TRACK"] > 50
-    assert m["agreement_with_recorded"]["share"] >= 0.95
-    assert m["speed_zero_share"] > 0.3
+    assert "NO_TRACK" not in m["state_counts"]
+    assert m["state_counts"]["DRIVING"] > 200
+    assert m["speed_zero_share"] < 0.05
+    confusion = m["agreement_with_recorded"]["replayed_to_recorded"]
+    assert confusion["DRIVING->NO_TRACK"] > 50  # the v0 car's stall, still in the recording
+    assert confusion["DRIVING->DRIVING"] > 100
 
 
 def test_planner_replay_r1_crawls_at_the_recorded_corner(tmp_path: Path) -> None:
-    _, m = replay_cut("R1", tmp_path, "recorded", {"max_intrusion_fraction": 0.20})
+    _, m = replay_cut("R1", tmp_path, "recorded", {})
     assert m["agreement_with_recorded"]["share"] >= 0.9
     assert m["speed_below_dead_zone_share"] > 0.3  # commands under the plant's dead zone
-    assert m["collision_fraction_mean"] > 0.1
 
 
-def test_planner_replay_r3_nose_in_has_no_free_forward_arc(tmp_path: Path) -> None:
-    _, m = replay_cut("R3", tmp_path, "recorded", {"max_intrusion_fraction": 0.20})
-    assert m["collision_fraction_mean"] > 0.4
+def test_planner_replay_r3_nose_in_crawls(tmp_path: Path) -> None:
+    _, m = replay_cut("R3", tmp_path, "recorded", {})
+    assert m["collision_fraction_mean"] > 0.05
     assert m["speed_below_dead_zone_share"] > 0.9
     assert m["agreement_with_recorded"]["share"] >= 0.9
 
 
-def test_planner_replay_without_tracks_never_drives_and_with_replayed_tracks_does(
+def test_planner_replay_drives_on_the_scan_alone_with_no_tracks(
     tmp_path: Path, perceiver: perception.Perceiver
 ) -> None:
     rows, m = replay_cut("L", tmp_path, "none", {})
-    assert set(rows["state_name"]) == {"NO_TRACK"}
-    assert m["speed_zero_share"] == 1.0
+    assert "NO_TRACK" not in set(rows["state_name"]) and 6 not in set(rows["state"])
+    assert m["state_counts"]["DRIVING"] > 400
+    assert max(rows["cmd_speed_mps"]) > 0.0
     rec, a, b = cut_fixture.load_cut(FIXTURE, "L")
     scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
     tracks = perception.run_perceiver(perceiver, rec, scans)
     rows, m = replay_cut("L", tmp_path, "replay", {}, tracks)
-    assert m["state_counts"].get("DRIVING", 0) > 100
-    assert max(rows["cmd_speed_mps"]) > 0.0
+    assert m["state_counts"].get("DRIVING", 0) > 400
+    assert float(np.nanmean(rows["track_confidence"])) > 0.0  # the replayed tracks are used
     assert 6 not in set(rows["state"])  # no FAULT
 
 
 def test_planner_replay_is_repeatable(tmp_path: Path) -> None:
-    a, _ = replay_cut("R1", tmp_path, "recorded", {"max_intrusion_fraction": 0.20})
-    b, _ = replay_cut("R1", tmp_path, "recorded", {"max_intrusion_fraction": 0.20})
+    a, _ = replay_cut("R1", tmp_path, "recorded", {})
+    b, _ = replay_cut("R1", tmp_path, "recorded", {})
     assert a["cmd_steering_rad"].tolist() == b["cmd_steering_rad"].tolist()
     assert a["state"].tolist() == b["state"].tolist()
+
+
+def test_planner_replay_rejects_the_v0_parameters_that_no_longer_exist(tmp_path: Path) -> None:
+    cli = _cli_or_skip()
+    stream = tmp_path / "empty.stream"
+    stream.write_text("")
+    with pytest.raises(planner_stream.ReplayError, match="unknown parameter"):
+        planner_stream.run_cli(
+            cli, DYNAMICS_BUNDLE, 0.4, {"max_intrusion_fraction": 0.2}, stream, tmp_path / "o.csv"
+        )
 
 
 def test_planner_replay_refuses_a_bundle_that_fails_a_check(tmp_path: Path) -> None:
@@ -608,20 +663,20 @@ def r1_recording(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, float,
     return path, a, b
 
 
-def test_cli_perception_only_run_writes_json_and_passes_the_fidelity_check(
+def test_cli_perception_only_run_writes_json_and_the_fidelity_exit_status_is_honest(
     r1_recording: tuple[Path, float, float], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path, a, b = r1_recording
     out = tmp_path / "r1.json"
-    code = _script().main(
-        [str(path), "--from", str(a), "--to", str(b), "--no-planner", "--check-fidelity",
-         "--out", str(out)]
-    )  # fmt: skip
-    assert code == 0
-    result = json.loads(out.read_text())
-    seg = result["segments"]["W"]
-    assert seg["fidelity"]["ok"] and seg["fidelity"]["max_centreline_diff_m"] <= 1e-5
+    base = [str(path), "--from", str(a), "--to", str(b), "--no-planner"]
+    code = _script().main([*base, "--check-fidelity", "--out", str(out)])
+    seg = json.loads(out.read_text())["segments"]["W"]
+    # 0 only when the replay equals the recording (the tracer that recorded it); main's v1 tracer
+    # against a v0 recording is reported as a failure
+    assert code == (0 if seg["fidelity"]["ok"] else 1)
+    assert seg["fidelity"]["matched"] > 0
     assert seg["perception"]["scans"] > 0 and "planner" not in seg
+    assert _script().main([*base, "--out", str(tmp_path / "plain.json")]) == 0
     assert "intrusion mean" in capsys.readouterr().out
 
 

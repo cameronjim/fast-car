@@ -240,6 +240,8 @@ def run_segment(
         dead_zone_mps=args.dead_zone_mps,
         recorded_t=recorded[0] if recorded else None,
         recorded_state=recorded[1] if recorded else None,
+        track_confidence=rows.get("track_confidence"),
+        block_reason=rows.get("block_reason"),
     )
     result["planner"]["parameters"] = {k: v for k, v in sorted(params.items())}
     if recorded:

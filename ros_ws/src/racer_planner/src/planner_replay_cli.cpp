@@ -37,6 +37,7 @@
 #include "binding_geometry.hpp"
 #include "racer_planner/bundle_loader.hpp"
 #include "racer_planner/distance_field.hpp"
+#include "racer_planner/freespace_field.hpp"
 #include "racer_planner/planner.hpp"
 
 using namespace racer_planner;
@@ -71,20 +72,27 @@ std::map<std::string, Param> default_params() {
   auto d = [&](const char* n, double v, double lo, double hi) { p[n] = {v, lo, hi, false}; };
   auto i = [&](const char* n, double v, double lo, double hi) { p[n] = {v, lo, hi, true}; };
   d("v_max_mps", 0.5, 0.1, VEHICLE_PARAMS.limits.global_speed_cap_mps);
-  d("track_timeout_s", lg.track_timeout_s, 0.05, 5.0);
   d("scan_timeout_s", lg.scan_timeout_s, 0.05, 5.0);
   d("odom_timeout_s", lg.odom_timeout_s, 0.02, 5.0);
-  i("min_valid_stations", lg.min_valid_stations, 2, 16);
-  d("max_boundary_residual_m", lg.max_boundary_residual_m, 0.0, 5.0);
-  d("max_intrusion_fraction", lg.max_intrusion_fraction, 0.0, 1.0);
-  d("selfcheck_hold_s", lg.selfcheck_hold_s, 0.0, 10.0);
+  d("conf_intrusion_full", lg.conf_intrusion_full, 0.0, 1.0);
+  d("conf_intrusion_zero", lg.conf_intrusion_zero, 0.0, 1.0);
+  d("conf_residual_full_m", lg.conf_residual_full_m, 0.0, 5.0);
+  d("conf_residual_zero_m", lg.conf_residual_zero_m, 0.0, 5.0);
+  d("conf_valid_zero", lg.conf_valid_zero, 0.0, 16.0);
+  d("conf_valid_full", lg.conf_valid_full, 0.0, 16.0);
+  d("conf_age_full_s", lg.conf_age_full_s, 0.0, 5.0);
+  d("conf_age_zero_s", lg.conf_age_zero_s, 0.0, 5.0);
+  d("conf_rise_per_s", lg.conf_rise_per_s, 0.01, 100.0);
+  d("freespace_speed_fraction", lg.freespace_speed_fraction, 0.3, 1.0);
   d("control_rate_hz", 50.0, 20.0, 100.0);
   i("horizon_steps", mp.horizon_steps, 5, 100);
   i("samples", mp.samples, kMinSamples, kMaxSamples);
+  i("max_samples", cfg.max_samples, kMinSamples, kMaxSamples);
   d("sigma_speed_mps", mp.sigma_speed_mps, 0.0, 2.0);
   d("sigma_steering_rad", mp.sigma_steering_rad, 0.0, 1.0);
   d("noise_beta", mp.beta, 0.0, 0.99);
   d("lambda", mp.lambda, 1e-3, 1e3);
+  d("cost_scale_floor", mp.cost_scale_floor, 1e-3, 1e3);
   i("seed", 1, 0, 2147483647);
   d("w_progress", mp.w_progress, 0.0, 1e3);
   d("c_collision", mp.c_collision, 0.0, 1e9);
@@ -97,6 +105,10 @@ std::map<std::string, Param> default_params() {
   d("w_lat", mp.w_lat, 0.0, 1e4);
   d("a_lat_max_mps2", mp.a_lat_max_mps2, 0.1, 50.0);
   d("w_du", mp.w_du, 0.0, 1e4);
+  d("w_steer_rate", mp.w_steer_rate, 0.0, 1e4);
+  d("corner_radius_m", mp.corner_radius_m, 0.005, 0.2);
+  d("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5);
+  d("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0);
   d("w_term", mp.w_term, 0.0, 1e5);
   d("solve_halve_over_ms", 15.0, 1.0, 200.0);
   d("solve_restore_under_ms", 6.0, 0.5, 200.0);
@@ -142,24 +154,31 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   PlannerConfig cfg;
   LogicParams& lg = cfg.logic;
   lg.v_max_mps = v("v_max_mps");
-  lg.track_timeout_s = v("track_timeout_s");
   lg.scan_timeout_s = v("scan_timeout_s");
   lg.odom_timeout_s = v("odom_timeout_s");
-  lg.min_valid_stations = static_cast<int>(v("min_valid_stations"));
-  lg.max_boundary_residual_m = v("max_boundary_residual_m");
-  lg.max_intrusion_fraction = v("max_intrusion_fraction");
-  lg.selfcheck_hold_s = v("selfcheck_hold_s");
+  lg.conf_intrusion_full = v("conf_intrusion_full");
+  lg.conf_intrusion_zero = v("conf_intrusion_zero");
+  lg.conf_residual_full_m = v("conf_residual_full_m");
+  lg.conf_residual_zero_m = v("conf_residual_zero_m");
+  lg.conf_valid_zero = v("conf_valid_zero");
+  lg.conf_valid_full = v("conf_valid_full");
+  lg.conf_age_full_s = v("conf_age_full_s");
+  lg.conf_age_zero_s = v("conf_age_zero_s");
+  lg.conf_rise_per_s = v("conf_rise_per_s");
+  lg.freespace_speed_fraction = v("freespace_speed_fraction");
   lg.use_lap_guidance = false;
+  lg.steer_output_tau_s = v("steer_output_tau_s");
+  lg.rate_limit_fraction = v("rate_limit_fraction");
   cfg.tick_s = 1.0 / v("control_rate_hz");
   MppiParams& mp = cfg.mppi;
   mp.horizon_steps = static_cast<int>(v("horizon_steps"));
-  const int samples = static_cast<int>(v("samples"));
-  mp.samples = samples;
-  cfg.max_samples = samples;
+  mp.samples = static_cast<int>(v("samples"));
+  cfg.max_samples = static_cast<int>(v("max_samples"));
   mp.sigma_speed_mps = v("sigma_speed_mps");
   mp.sigma_steering_rad = v("sigma_steering_rad");
   mp.beta = v("noise_beta");
   mp.lambda = v("lambda");
+  mp.cost_scale_floor = v("cost_scale_floor");
   mp.seed = static_cast<std::uint64_t>(v("seed"));
   mp.w_progress = v("w_progress");
   mp.c_collision = v("c_collision");
@@ -172,6 +191,8 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   mp.w_lat = v("w_lat");
   mp.a_lat_max_mps2 = v("a_lat_max_mps2");
   mp.w_du = v("w_du");
+  mp.w_steer_rate = v("w_steer_rate");
+  mp.corner_radius_m = v("corner_radius_m");
   mp.w_term = v("w_term");
   cfg.budget.halve_over_s = v("solve_halve_over_ms") * 1e-3;
   cfg.budget.restore_under_s = v("solve_restore_under_ms") * 1e-3;
@@ -317,10 +338,14 @@ int main(int argc, char** argv) {
   std::ostream& csv = out_path.empty() ? std::cout : csv_file;
   csv << "now_s,state,state_name,cmd_speed_mps,cmd_steering_rad,solve_time_s,est_speed_mps,"
          "est_steering_rad,v_cap_mps,best_cost,plan_progress_m,plan_min_clearance_m,"
-         "collision_fraction,track_age_s,scan_age_s,samples,samples_halved\n";
+         "collision_fraction,track_age_s,scan_age_s,samples,samples_halved,track_confidence,"
+         "freespace_goal_x_m,freespace_goal_y_m,freespace_reach_m,block_reason\n";
 
   std::vector<PointXY> points(kMaxScanPoints);
   DistanceField field;
+  FreespaceField freespace(*geometry);
+  bool have_prev_goal = false;
+  PointXY prev_goal{0.0, 0.0};
   bool has_scan = false;
   double scan_stamp_s = 0.0;
   LocalTrackData track;
@@ -358,6 +383,10 @@ int main(int argc, char** argv) {
           scan_to_points(ranges.data(), ranges.size(), amin, ainc, rmin, rmax, laser_yaw_rad,
                          *geometry, kBodyMarginM, points.data(), points.size());
       field.build(points.data(), count);
+      // As the node's scan callback: the free-space field with the previous scan's goal.
+      freespace.build(field, points.data(), count, have_prev_goal ? &prev_goal : nullptr);
+      have_prev_goal = freespace.valid();
+      if (have_prev_goal) prev_goal = freespace.goal();
       has_scan = true;
       scan_stamp_s = stamp;
     } else if (kind == 'O') {
@@ -399,6 +428,7 @@ int main(int argc, char** argv) {
       ti.has_scan = has_scan;
       ti.scan_stamp_s = scan_stamp_s;
       ti.field = has_scan ? &field : nullptr;
+      ti.freespace = has_scan ? &freespace : nullptr;
       ti.track = has_track ? &track : nullptr;
       const TickOutput o = planner.tick(ti);
       csv << csv_number(now) << ',' << static_cast<int>(o.state) << ',' << state_name(o.state)
@@ -408,7 +438,10 @@ int main(int argc, char** argv) {
           << csv_number(o.best_cost) << ',' << csv_number(o.plan_progress_m) << ','
           << csv_number(o.plan_min_clearance_m) << ',' << csv_number(o.collision_fraction) << ','
           << csv_number(o.track_age_s) << ',' << csv_number(o.scan_age_s) << ',' << o.samples << ','
-          << (o.samples_halved ? 1 : 0) << '\n';
+          << (o.samples_halved ? 1 : 0) << ',' << csv_number(o.track_confidence) << ','
+          << csv_number(o.has_freespace_goal ? o.freespace_goal_x_m : NAN) << ','
+          << csv_number(o.has_freespace_goal ? o.freespace_goal_y_m : NAN) << ','
+          << csv_number(o.freespace_reach_m) << ',' << static_cast<int>(o.block_reason) << '\n';
     } else {
       die(2, "stream line " + std::to_string(line_no) + ": unknown event '" + std::string(1, kind) +
                  "'");

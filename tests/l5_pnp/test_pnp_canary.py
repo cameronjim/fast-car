@@ -142,14 +142,15 @@ def test_pnp_laps_the_track_through_the_real_command_path(
 # with island radius 0.4 m and straight 2.0 m, lane 1.0 m and 1.3 m, both ways, geometric
 # backend, 0.5 m/s, and the scan-only fault case. Same pass criteria as above.
 #
-# Measured on unmodified main (2026-11-12, v0 driver, car `params`, seed 11), per case:
+# Measured on the v0 driver (main at 8766bec, 2026-11-12, car `params`, seed 11), per case:
 #   lane 1.0 ccw  passes in 6 of 7 runs (0 to 2 safety brakes); the seventh stalled after one lap
-#                 (94 brakes, BLOCKED and NO_ODOM), so this case can fail on a loaded machine
-#   lane 1.0 cw   3 laps, 0 brakes, 0 contacts
-#   lane 1.3 ccw  3 laps, 0 brakes, 0 contacts
-#   lane 1.3 cw   3 laps, 0 brakes, 0 contacts
+#                 (94 brakes, BLOCKED and NO_ODOM)
+#   lane 1.0 cw, lane 1.3 ccw, lane 1.3 cw   3 laps, 0 brakes, 0 contacts
 #   lane 1.3 ccw with --no-perception: 0 laps, planner_states NO_TRACK about 600 ticks (and NO_ODOM
-#                 at the start), stalled
+#                 at the start), stalled; this case was a strict xfail until the planner drove on
+#                 the scan alone
+# With the planner v0.1 of main (free-space field, no NO_TRACK state) all five pass: 3 laps,
+# 0 brakes, 0 contacts, laps of about 20 s (about 28 s for the scan-only case).
 CAR_LIKE_V_MAX_MPS = 0.5
 CAR_LIKE_PLANT = [
     "--plant-bundle",
@@ -168,23 +169,12 @@ def stadium(lane_width_m: float) -> tuple[str, dict]:
     )
 
 
-V0_NO_PERCEPTION = (
-    "v0: without track_perception_node no track ever arrives, the planner stays in NO_TRACK and "
-    "the car never moves (measured: 0 laps, NO_TRACK about 600 ticks, stalled)"
-)
-
 CAR_LIKE_CASES = [
     pytest.param(stadium(1.0), False, True, id="car-like-stadium-lane1.0-ccw"),
     pytest.param(stadium(1.0), True, True, id="car-like-stadium-lane1.0-cw"),
     pytest.param(stadium(1.3), False, True, id="car-like-stadium-lane1.3-ccw"),
     pytest.param(stadium(1.3), True, True, id="car-like-stadium-lane1.3-cw"),
-    pytest.param(
-        stadium(1.3),
-        False,
-        False,
-        id="car-like-stadium-lane1.3-ccw-no-perception",
-        marks=pytest.mark.xfail(strict=True, reason=V0_NO_PERCEPTION),
-    ),
+    pytest.param(stadium(1.3), False, False, id="car-like-stadium-lane1.3-ccw-no-perception"),
 ]
 
 

@@ -46,6 +46,14 @@ STATE_NAMES = {
     6: "FAULT",
 }
 STATE_DRIVING = 1
+# racer_pnp_msgs/PlannerStatus block_reason (planner v0.1 on; 0 is none).
+BLOCK_REASONS = {
+    1: "ALL_COLLIDE",
+    2: "BELOW_SPEED_FLOOR",
+    3: "WHEEL_STALLED",
+    4: "GATE_REFUSING",
+    5: "RECOVERY_EXHAUSTED",
+}
 STATE_BLOCKED = 5
 
 
@@ -177,6 +185,8 @@ def planner_metrics(
     dead_zone_mps: float = DEFAULT_DEAD_ZONE_MPS,
     recorded_t: NDArray[np.float64] | None = None,
     recorded_state: NDArray[np.integer] | None = None,
+    track_confidence: NDArray[np.float64] | None = None,
+    block_reason: NDArray[np.integer] | None = None,
 ) -> dict[str, Any]:
     """Planner numbers over the eligible ticks of a replay (see the module docstring)."""
     ok = eligible_ticks(now_s, scan_age_s, odom_t)
@@ -203,6 +213,15 @@ def planner_metrics(
             "p99": _stat(np.percentile, solve_time_s[ok][solved] * 1e3, 99),
         },
     }
+    if track_confidence is not None and n:
+        out["track_confidence_mean"] = _stat(np.mean, track_confidence[ok])
+    if block_reason is not None and n:
+        reasons = np.asarray(block_reason)[ok]
+        out["block_reason_counts"] = {
+            BLOCK_REASONS.get(int(k), str(int(k))): int((reasons == k).sum())
+            for k in np.unique(reasons)
+            if k != 0
+        }
     if recorded_t is not None and recorded_state is not None and len(recorded_t) and n:
         out["agreement_with_recorded"] = state_agreement(t, st, recorded_t, recorded_state)
     return out

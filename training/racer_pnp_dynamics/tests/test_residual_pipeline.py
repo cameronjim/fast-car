@@ -119,9 +119,9 @@ def test_evaluate_prefers_the_truth_over_a_wrong_model(toy_vehicle):
 
 def test_ground_speed_ratio_bins(toy_vehicle):
     segs = _segments(toy_vehicle, 300.0)
-    # synthetic ICP motion has dx = dy = 0, so the ratio is 0: only the binning is checked
+    # synthetic ground speed equals wheel speed, so every bin's ratio is about 1
     rows = evaluate.ground_speed_ratio(segs, 0.1)
-    assert rows and all(r["median_ratio"] == 0.0 and r["n"] >= 5 for r in rows)
+    assert rows and all(abs(r["median_ratio"] - 1.0) < 0.05 and r["n"] >= 5 for r in rows)
     assert evaluate.ground_speed_ratio([], 0.1) == []
 
 
@@ -159,6 +159,25 @@ def test_pipeline_writes_a_valid_bundle_pointer_and_honest_metrics(tmp_path, toy
     ).read_bytes()
     assert HELD_OUT_BAG in metrics["seconds_by_bag"]
     assert metrics["seconds_by_bag"][HELD_OUT_BAG]["train"] == 0.0
+    assert metrics["fit"]["yaw_target"] == "path_curvature_ground_speed"
+    rule = metrics["fit"]["accel_rule"]
+    assert set(rule) == {
+        "rolling_windows",
+        "rmse_fitted",
+        "rmse_start",
+        "kept_start",
+        "fitted_value",
+    }
+    held = metrics["heldout_yaw_rmse_per_interval_rad"]
+    assert set(held) == {"ground_driven", "wheel_driven"}
+    assert all(np.isfinite(v) and v >= 0.0 for v in held.values())
+    radius = metrics["planner_min_radius_m"]
+    assert set(radius) == {"left", "right", "kinematic_at_limit"}
+    assert all(np.isfinite(v) and v > 0.0 for v in radius.values())
+    assert radius["kinematic_at_limit"] == pytest.approx(
+        toy_vehicle.wheelbase_m / np.tan(toy_vehicle.steer_max_rad)
+    )
+    assert "Planner geometry" in readme and "Acceleration limit rule" in readme
 
 
 def test_pipeline_enabled_path_writes_the_chosen_weights(tmp_path, toy_vehicle, monkeypatch):

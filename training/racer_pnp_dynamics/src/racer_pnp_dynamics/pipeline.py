@@ -23,8 +23,8 @@ from .evaluate import (
     ground_speed_ratio,
     zero_yaw_rmse,
 )
-from .fit import FitResult, fit_nominal
-from .model import PLACEHOLDER_NOMINAL, Nominal, Residual
+from .fit import FitResult, fit_nominal, yaw_rmse
+from .model import PLACEHOLDER_NOMINAL, Nominal, Residual, steering_target
 from .residual import (
     SEEDS,
     Trainer,
@@ -36,6 +36,7 @@ from .residual import (
     train_residual,
 )
 from .vehicle import Vehicle
+from .windows import yaw_data
 
 V_MAX_ROUND_MPS = 0.05
 V_MAX_FACTOR = 1.5
@@ -64,6 +65,18 @@ def v_max_of(train: Sequence[Segment], vehicle: Vehicle) -> float:
     raw = V_MAX_FACTOR * p99
     rounded = np.floor(raw / V_MAX_ROUND_MPS + 1e-9) * V_MAX_ROUND_MPS
     return round(float(min(rounded, vehicle.throttle_full_scale_mps)), 2)
+
+
+def planner_min_radius(nominal: Nominal, vehicle: Vehicle) -> dict[str, float]:
+    """Tightest path radius (m) the planner's model can plan at the command limits, from the
+    exported vehicle, and the kinematic radius at the steering limit for reference."""
+    left = steering_target(np.array(vehicle.steer_max_rad), nominal, vehicle)
+    right = steering_target(np.array(vehicle.steer_min_rad), nominal, vehicle)
+    return {
+        "left": float(vehicle.wheelbase_m / np.tan(abs(left))),
+        "right": float(vehicle.wheelbase_m / np.tan(abs(right))),
+        "kinematic_at_limit": float(vehicle.wheelbase_m / np.tan(vehicle.steer_max_rad)),
+    }
 
 
 def _json(obj: Any) -> Any:
@@ -154,6 +167,7 @@ def run_fit_and_export(
             {k: v for k, v in variants.items() if not k.endswith(("seed0", "seed1", "seed2"))},
         )
     window_data = eval_data(heldout, nominal.command_delay_s)
+    held_yaw = yaw_data(heldout, nominal.command_delay_s)
     exported_limits = compare_variants(heldout, vehicle, {"fitted_nominal": (nominal, None)})[
         "fitted_nominal"
     ]
@@ -166,6 +180,11 @@ def run_fit_and_export(
         "heldout_errors_per_bag": per_bag,
         "heldout_fitted_nominal_with_exported_limits": exported_limits,
         "heldout_zero_yaw_baseline_rad": zero_yaw_rmse(window_data),
+        "heldout_yaw_rmse_per_interval_rad": {
+            "ground_driven": yaw_rmse(held_yaw, nominal, fvehicle, speed="ground"),
+            "wheel_driven": yaw_rmse(held_yaw, nominal, fvehicle, speed="wheel"),
+        },
+        "planner_min_radius_m": planner_min_radius(nominal, vehicle),
         "residual_improvement_1s_per_seed": {
             str(seed): {"speed": a, "yaw": b}
             for seed, (a, b) in zip(SEEDS, improvements, strict=True)
@@ -183,6 +202,8 @@ def run_fit_and_export(
             "speed_val_rmse_mps": result.speed_val_rmse_mps,
             "yaw_val_rmse_rad": result.yaw_val_rmse_rad,
             "delay_selection": result.delay_selection,
+            "yaw_target": "path_curvature_ground_speed",
+            "accel_rule": result.accel_rule,
             "yaw_training": result.yaw_training,
             "sides_tied": result.sides_tied,
             "yaw_cv_rmse_rad": result.yaw_cv_rmse_rad,
@@ -270,8 +291,29 @@ FINDINGS = [
         "- Speed behaves like an acceleration-limited tracker of the command with no visible lag "
         "(speed time constant, delay and the accel limit sit on bounds, flagged above). Treat them "
         "as an effective description, not as measured actuator constants. Ground speed falls to "
-        "about 0.8 of wheel speed at full lock (table below); the model keeps wheel speed and absorbs "
-        "this in the yaw gain."
+        "about 0.8 of wheel speed at full lock (table below). The steering gain is fitted per "
+        "ground metre, so the planner's path radius matches the car; the model's speed state is "
+        "still wheel speed, so in a full-lock turn the model over-predicts distance and yaw rate "
+        "per second by the ground/wheel ratio (about 0.8), which is the conservative side "
+        "against walls."
+    ),
+    (
+        "- From rest the wheels do not turn until the command is about 0.2 to 0.27 m/s (the "
+        "contract model has no dead zone; not modelled). Fitting the acceleration limit on "
+        "windows that contain a launch gave 0.30 m/s2, a description of the dead zone and not of "
+        "the car (teleop commands are ramped, and once rolling the car accelerates at 1.0 to 1.4 "
+        "m/s2 or more)."
+    ),
+    (
+        "- Two rules were added to the fit AFTER a closed-loop sim pre-flight of dyn-v0-2026-11-11 "
+        "stalled on a 1.0 m lane, and after looking at held-out data: the yaw step is driven by "
+        "ICP ground speed (steering gain = path curvature per command), and accel_max is kept at "
+        "its start value unless the fitted value fits the rolling windows (start speed and every "
+        "command at least 0.15 m/s) better. Both rules are stated on training data only, but "
+        "the held-out numbers are not a clean pre-registered result. The held-out yaw-per-second "
+        "numbers below are worse than dyn-v0-2026-11-11 (about 0.098 rad against 0.042 rad at "
+        "1.0 s) and still better than the placeholder (0.145 rad): the price of a gain that is "
+        "right per ground metre while the model integrates wheel speed."
     ),
 ]
 
@@ -362,6 +404,28 @@ def render_readme(manifest: dict[str, Any], metrics: dict[str, Any]) -> str:
             _row(f"fitted + residual (seed {s})", errors[f"fitted_plus_residual_seed{s}"])
             for s in SEEDS
         ],
+        "",
+        "## Planner geometry",
+        "",
+        (
+            f"Minimum path radius at the command limits (exported vehicle): left "
+            f"{metrics['planner_min_radius_m']['left']:.3f} m, right "
+            f"{metrics['planner_min_radius_m']['right']:.3f} m; kinematic at the steering limit "
+            f"{metrics['planner_min_radius_m']['kinematic_at_limit']:.3f} m."
+        ),
+        "",
+        (
+            "Held-out yaw RMSE per 0.1 s interval, shipped nominal: driven by ICP ground speed "
+            f"{metrics['heldout_yaw_rmse_per_interval_rad']['ground_driven']:.4f} rad, driven by "
+            f"wheel speed {metrics['heldout_yaw_rmse_per_interval_rad']['wheel_driven']:.4f} rad."
+        ),
+        "",
+        (
+            "Acceleration limit rule: "
+            f"{json.dumps(metrics['fit']['accel_rule'])} (speed RMSE on the rolling windows with "
+            "the fitted value and with the start value; the start value is kept when it is not "
+            "worse)."
+        ),
         "",
         "## Residual verdict",
         "",

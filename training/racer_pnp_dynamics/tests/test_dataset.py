@@ -91,3 +91,30 @@ def test_synthetic_run_segments_have_motion(toy_vehicle):
     run, motion = make_run(PLACEHOLDER_NOMINAL, toy_vehicle, seconds=200.0)
     segs = dataset.make_segments(run, motion)
     assert all(s.motion is motion for s in segs) and dataset.seconds(segs) > 100.0
+
+
+def test_yaw_data_ground_speed_is_the_icp_speed_of_the_interval(toy_vehicle):
+    from racer_pnp_dynamics.bags import GRID_DT_S, Run
+    from racer_pnp_dynamics.icp_motion import MotionSeries
+    from racer_pnp_dynamics.windows import yaw_data
+
+    n = 500
+    t = 1000.0 + np.arange(n) * GRID_DT_S
+    run = Run("hand", t, np.full(n, 0.5), np.zeros(n), np.full(n, 0.5), [])
+    t_scan = np.array([t[100], t[105], t[110], t[115]])
+    motion = MotionSeries(
+        t_s=t_scan,
+        dt_s=np.array([0.1, 0.1, 0.2, 0.1]),
+        dx_m=np.array([0.03, 0.0, 0.08, 0.05]),
+        dy_m=np.array([0.04, 0.0, 0.06, 0.0]),
+        dyaw_rad=np.zeros(4),
+        rms_m=np.zeros(4),
+        inlier_share=np.ones(4),
+        ok=np.array([True, True, True, False]),
+    )
+    seg = dataset.Segment(run=run, motion=motion, i0=0, i1=n, split="train")
+    data = yaw_data([seg], 0.0)
+    assert data.ground_mps.shape == (len(data),) == data.dyaw_rad.shape
+    # interval 1 is standing still (wheel speed 0.5 here, so only the ICP speed matters): 0 m/s
+    np.testing.assert_allclose(sorted(data.ground_mps), [0.0, 0.5, 0.5], atol=1e-12)
+    assert len(yaw_data([], 0.0).ground_mps) == 0

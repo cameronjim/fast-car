@@ -231,6 +231,7 @@ _RACE_ONLY_PARAMETERS = {
     "apex_offset_m",
     "track_out_offset_m",
     "compute_on_scan",
+    "free_path_on_published_steering",
 }
 
 
@@ -284,7 +285,11 @@ def test_race_profile_reaches_the_node_with_the_right_types():
     for name, value in merged.items():
         if name in _INT_PARAMETERS:
             assert type(value) is int, name
-        elif name in _BOOL_PARAMETERS | {"physics_speed", "compute_on_scan"}:
+        elif name in _BOOL_PARAMETERS | {
+            "physics_speed",
+            "compute_on_scan",
+            "free_path_on_published_steering",
+        }:
             assert type(value) is bool, name
         elif name == "target_mode":
             assert type(value) is str

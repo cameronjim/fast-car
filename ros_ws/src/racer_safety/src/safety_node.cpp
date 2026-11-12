@@ -114,6 +114,13 @@
 // steady clock. OPTIONAL: the simulator and every bag before 2026-11 have no /odom/wheel; without
 // it, or when it goes stale, the measured term is simply absent and the request and the output
 // bound still apply. It can only raise the TTC speed, never lower it below the request.
+//
+// JUDGED SPEED FROM THE MEASURED WHEEL SPEED (2026-11-12, schema 0.15.0,
+// docs/notes/safety-race-retune-2026-11-12.md). While /odom/wheel is fresh the TTC is divided by
+// max(measured, min(request, measured + actuation.peak_acceleration_mps2 *
+// actuation.stop_latency_s)) instead: the decaying bound is not used, and the judged speed is never
+// above what the rule above would judge, so it can only remove a trip. gate_logic.hpp has the
+// reasons and the numbers.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
 #include <atomic>

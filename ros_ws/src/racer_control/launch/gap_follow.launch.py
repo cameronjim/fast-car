@@ -306,6 +306,11 @@ _OPTIONAL_BOOL_ARGS = {
         "along the swept path, side proximity cap) instead of the range law. Empty (default) "
         "leaves the profile value, the params file value or the node default (false)."
     ),
+    "free_path_on_published_steering": (
+        "true or false: the physics speed law's free path is measured along the shorter of the "
+        "target arc and the arc of the steering the car is at now (the low-passed command). Empty "
+        "(default) leaves the profile value, the params file value or the node default (false)."
+    ),
     "compute_on_scan": (
         "true or false: also publish a command the moment a scan has been processed, not only "
         "on the 50 Hz timer. Empty (default) leaves the profile value, the params file value or "

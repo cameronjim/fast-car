@@ -621,7 +621,8 @@ actuation:
   #   * LATENCY, 0.20 -> 0.26 s. Counted from the scan's stamp: the scan is 0.100 s old when the gate
   #     sees it (log time minus stamp, median 0.1005, p90 0.102, max 0.15 over 2901 scans), the gate
   #     cycle adds up to 0.02 s, and the wheel speed starts to fall 0.10 to 0.14 s after the command
-  #     drops (17 hard slow-downs from 0.9 m/s or more: median 0.11, p90 0.14). 0.10 + 0.02 + 0.14.
+  #     drops (17 hard slow-downs from 0.9 m/s or more: 14 within 0.10 to 0.14 s, median 0.12, two at
+  #     0.46 and 0.50 s where the car was already slowing). 0.10 + 0.02 + 0.14.
   #   * DECELERATION, 1.0 KEPT. Wheel-speed deceleration after the command goes to zero is 3.0 to 3.6
   #     m/s^2 mean (peak 5 to 6), but the wheel speed overstates the car's: scan matching gives the
   #     true speed as 0.64 of the wheel speed at full lock and 0.89 on a straight. The 9 clean stops to
@@ -630,8 +631,8 @@ actuation:
   #     (the last is the watchdog stop at the end of the run: 0.79 m/s true, 0.47 m of travel). Full
   #     lock scrubs the front tyres, a straight stop does not, so the slowest measured, 0.8 to 1.0,
   #     is what the model must cover; the 2026-11-02 value stays. Against the measured scan-matched
-  #     travel the model (0.26 s, 1.0 m/s^2) overstates it by 1.5 to 3.6 times at full lock and is
-  #     within 8 per cent on the straight stop.
+  #     travel the model (0.26 s, 1.0 m/s^2) overstates it by 1.9 to 2.9 times at full lock and is
+  #     within 10 per cent on the straight stop.
   #   * PEAK ACCELERATION (new, 2.2 m/s^2): the most the wheel speed gained over 0.2 s windows is
   #     2.71 m/s^2 (one wheelspin burst), 99.9 per cent of windows are below 2.13 on the race run
   #     and 1.78 over the whole 1990 s bag, 99 per cent below 1.67. Used only as a bound on how far

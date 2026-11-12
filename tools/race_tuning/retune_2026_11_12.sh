@@ -61,7 +61,12 @@ if [ "$MODE" = heldout ]; then
   args+=(--variant "$(variant "ref10" 1.0 "")")
   args+=(--variant "$(variant "ref16" 1.6 "")")
   args+=(--variant "$(variant "$winner" "$v" "$(extra "$k")")")
-  exec tools/race_tune_docker.sh evaluate --family wide --rule gate --repeats 3 \
+  # An extra, disclosed in the note and not chosen by the rule: the fastest candidate that braked
+  # not at all on the tuning tracks.
+  if [ "$winner" != C_v1.6 ]; then
+    args+=(--variant "$(variant "C_v1.6" 1.6 "$(extra C)")")
+  fi
+  exec tools/race_tune_docker.sh evaluate --family wide --rule gate --repeats 3 --tracks 8 \
     --out "$OUT_ROOT/heldout" --laps 3 --jobs "$JOBS" "${args[@]}"
 fi
 echo "mode must be tuning or heldout" >&2

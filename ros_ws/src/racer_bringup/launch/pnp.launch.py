@@ -230,9 +230,12 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "backend",
-                default_value="net",
+                default_value="geometric",
                 choices=list(BACKENDS),
-                description="Track perception backend: net or geometric.",
+                description=(
+                    "Track perception backend: geometric (default: the net failed the real-bag "
+                    "gate, 2026-11-11) or net (needs perception_bundle)."
+                ),
             ),
             DeclareLaunchArgument(
                 "v_max_mps",

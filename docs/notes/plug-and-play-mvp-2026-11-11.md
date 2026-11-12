@@ -35,7 +35,7 @@ CI runs the same cases in the `l5-pnp` job and prints the same fields.
 | stadium, lane 1.0 m, straight 2.0 m, island r 0.4 m | ccw | geometric | 3 | 23.39, 23.33, 23.20 | 0 | 0 | 0.232 | DRIVING 3498, NO_ODOM 302 |
 | stadium, same | cw | geometric | 3 | 23.28, 23.22, 23.12 | 0 | 0 | 0.230 | DRIVING 3483, NO_ODOM 277 |
 | rounded_rect, lane 1.0 m, 3.0 x 2.0 m island, r 0.4 m | ccw | geometric | 3 | 30.12, 30.12, 30.07 | 0 | 0 | 0.235 | DRIVING 4518, NO_ODOM 275 |
-| stadium, same as row 1 | ccw | net | NET_ROW | | | | | |
+| stadium, same as row 1 | ccw | net | 3 | 23.26, 23.25, 23.09 | 0 | 0 | 0.232 | DRIVING 3481, NO_ODOM 208 |
 
 State counts are ticks at 50 Hz counted from process start, so the `NO_ODOM` ticks are the
 start-up before the first wheel speed arrives, not driving. No `FAULT` state in any run. `/drive_raw` had one publisher (`mppi_planner_node`) and `/drive` one (`safety_node`).
@@ -57,7 +57,7 @@ Everything here is a command to type on the car. Stop at the first thing that do
    rsync -a /Users/cameronjim/code/car-data/pnp/models/<dynamics model_id> jetson:~/car/data/pnp/models/
    ```
 
-   The dynamics bundle is a fit on real bags. `config/pnp/fixtures/dyn-nominal-v0/` is a test
+   Tonight is geometric, so only the dynamics bundle is needed on the car. The dynamics bundle is a fit on real bags. `config/pnp/fixtures/dyn-nominal-v0/` is a test
    fixture, not a fit: do not drive on it.
 
 2. Build, inside the `car-stack` container:
@@ -90,9 +90,8 @@ Everything here is a command to type on the car. Stop at the first thing that do
    docker exec -it car-stack bash -lc '
      source /opt/ros/humble/setup.bash && source /workspace/ros_ws/install/setup.bash
      exec ros2 launch racer_bringup pnp.launch.py \
-       perception_bundle:=/workspace/data/pnp/models/<perception model_id> \
        dynamics_bundle:=/workspace/data/pnp/models/<dynamics model_id> \
-       backend:=<net|geometric> v_max_mps:=0.4'
+       backend:=geometric v_max_mps:=0.4'
    ```
 
    The launch refuses to start with "refusing to drive: no rosbag recorder in the graph" if the
@@ -104,8 +103,8 @@ Everything here is a command to type on the car. Stop at the first thing that do
    - Ctrl-C the launch: the wheels must stop within the safety watchdog time.
    - Check the kill knob.
 
-5. Floor. Two people, kill knob in hand, `v_max_mps:=0.5`, `backend` as decided by the real bag
-   gate of the perception work (net only if it passed, otherwise `geometric`). Raise the cap in
+5. Floor. Two people, kill knob in hand, `v_max_mps:=0.5`, `backend:=geometric` (the default).
+   The net failed the real-bag gate, so it stays off the car; `backend:=net` remains selectable. Raise the cap in
    steps of 0.1 only after a clean run, never above the dynamics bundle's
    `io.validity.v_max_mps`.
 
@@ -128,8 +127,8 @@ Everything here is a command to type on the car. Stop at the first thing that do
   has not been checked here; its validity range bounds the speed cap.
 - Solve time on the Orin is unmeasured (`mppi_bench` step above). The Mac numbers say nothing
   about it.
-- The perception net on real scans: whether it passes the label-free gate on the 2026-11-11 bags
-  is decided in the perception work, not here. Until it does, run `backend:=geometric`.
+- The perception net failed the label-free gate on the real 2026-11-11 bags, so it does not
+  drive the car. It passes the sim canary above only. `backend:=net` stays selectable.
 - The geometric tracer and the net were only run on two track families (stadium, rounded
   rectangle). The real foam oval has 0.8 to 1.3 m lanes, narrower than the sim lane of 1.0 m in
   places.

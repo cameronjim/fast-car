@@ -87,7 +87,7 @@ def test_argument_defaults() -> None:
     assert defaults == {
         "perception_bundle": "",
         "dynamics_bundle": "",
-        "backend": "net",
+        "backend": "geometric",
         "v_max_mps": "0.5",
         "require_recorder": "true",
         "laser_yaw_from_vehicle_params": "true",

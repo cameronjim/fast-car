@@ -15,6 +15,8 @@ import type { Channel, IWebSocket, MessageData } from "@foxglove/ws-protocol";
 import { parse } from "@foxglove/rosmsg";
 import { MessageReader } from "@foxglove/rosmsg2-serialization";
 
+export const SDK_SUBPROTOCOL = "foxglove.sdk.v1";
+
 export type SocketFactory = (url: string, protocols: string[]) => IWebSocket;
 export type Unsubscribe = () => void;
 
@@ -85,7 +87,9 @@ export class RosLink {
   }
 
   private open(): void {
-    const ws = this.makeSocket(this.url, [FoxgloveClient.SUPPORTED_SUBPROTOCOL]);
+    // foxglove_bridge 3.x only accepts foxglove.sdk.v1 (same wire format); older bridges take the
+    // websocket.v1 name. Offer both, newest first.
+    const ws = this.makeSocket(this.url, [SDK_SUBPROTOCOL, FoxgloveClient.SUPPORTED_SUBPROTOCOL]);
     const client = new FoxgloveClient({ ws });
     this.client = client;
     client.on("open", () => {

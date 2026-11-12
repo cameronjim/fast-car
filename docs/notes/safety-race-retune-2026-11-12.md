@@ -323,6 +323,25 @@ By the rule the winner is **A at 1.3 m/s: `race-2026-11-13`** (`gap_follow.launc
 brakes at all; it was not chosen by the rule (it is slower than A at 1.3) and is run on the held-out
 tracks as a disclosed extra, below.
 
+**Held-out result** (8 wide tracks the search never saw, both directions, 3 laps, three repeats
+pooled: 48 runs per row, real time factor at least 0.99, completed 48 of 48 and no wall contact in
+every row):
+
+| variant | min clearance (m) | brakes per lap (95% CI) | lap time (s) | lap ratio vs the lane profile at 0.64 m/s | gate rule |
+|---|---|---|---|---|---|
+| baseline (lane profile, 0.64 m/s) | 0.307 | 0.00 | 20.85 | 1.000 | reference |
+| ref10 (race-2026-11-12, 1.0 m/s) | 0.188 | 0.00 | 11.62 | 0.557 | yes |
+| ref16 (the same at 1.6 m/s) | 0.189 | 0.67 [0.38, 0.97] | 10.44 | 0.502 | no |
+| **A at 1.3 = race-2026-11-13** | 0.207 | 0.05 [0.00, 0.12] | 11.10 | 0.534 | **yes** |
+| C at 1.6 (disclosed extra) | 0.304 | 0.00 | 11.40 | 0.551 | yes |
+
+The winner generalises: 0.05 brakes per lap against 0.67 for the shipped profile at 1.6, 4 per cent
+faster than the shipped profile at its own 1.0 m/s. C at 1.6 m/s is 0.00 brakes in 48 runs and 3 per
+cent slower than A at 1.3; it is the setting for the top of the range, not chosen by the rule. The
+real floor braked 0.7 times per lap with the old law at 2.08 m/s; the sim says 1.9. The difference
+between the sim's brake count and the floor's is not explained (the floor's are mostly the oval's
+end corner, which the sim lanes do not reproduce, section 7).
+
 **Lateral acceleration, measured.** From scan matching (true speed times true yaw rate, 1492 usable
 pairs of the race run): median 0.53 m/s^2, 90th percentile 0.91, 99th 1.15, maximum 1.34, with no sign
 of the limit in the bag (no slide, the curvature ratio 1.04 at full lock). `/odom` cannot give it (its
@@ -331,3 +350,58 @@ speed, which reads 1.12 to 1.56 times the truth: the profile's 1.5 means a TRUE 
 (R 0.69 m) and about 0.95 at 0.2 rad. So the measured cornering says the law is well inside what the
 car did, not at its limit. Raising it was not in the candidate list (the sim's tyre model is not the
 floor's and nothing here measured the limit), lowering it (D) bought nothing, so it stays 1.5.
+
+## 6. If l_max_erpm goes above 6000
+
+Nothing in this change assumes the 2.08 m/s ceiling. `actuation.throttle_full_scale_mps` (2.08, from
+`l_max_erpm` 6000) is untouched and is the request-to-pulse scale of `racer_drivers`; it must move with
+`l_max_erpm` (`tools/tests/test_vehicle_params_calibration.py` fails until both agree). Every speed
+tuned here is a true speed with its own explicit ceiling: the gate has none (it judges the measured
+speed), `race-2026-11-13` has `max_speed_mps 1.3`, the 1.6 m/s variant is a launch argument, and the
+`ref208` row above is only the owner's run reproduced as a reference. What WOULD change with a higher
+ERPM cap: `peak_acceleration_mps2` and `stop_latency_s` were measured at 6000 ERPM and 30 A, and the
+stopping travel was measured up to a true 1.1 m/s (0.93 on a straight); above that is a model.
+Re-run `tools/audit_brakes.py` on the first bag at the new cap before trusting 1.6 m/s and up.
+
+## 7. What was not done, and what to check on the car
+
+- **The corner at the end of the oval is not fixed.** 11 of the 18 brakes are the car at full lock
+  3 to 5 cm from the outer wall, one lap in one. The gate is right to hold there. The follower reaches
+  that corner too wide and too late for a 0.69 m turning radius in a 1.3 to 1.5 m lane; the wide sim
+  tracks (round ends, island radius 0 to 0.6 m) do not reproduce it (0 brakes at 1.0 m/s), so this
+  retune could not tune it. The next thing is the real oval: map the bag with `tools/track_session`
+  and run the family on that geometry.
+- The classification rests on one scan and the follower's recorded request. Four brakes sit between
+  necessary and marginal under a bracketing plant. A brake the audit calls a false alarm is one the car
+  would have cleared by at least 10 cm IF the follower did what it recorded.
+- No stop from a true speed above 0.93 m/s on a straight exists in the bag. The model above that is
+  an extrapolation, the deceleration being the slowest measured.
+- The sim's wheel speed is the true speed (no slip), its tyres are not the floor's; the sim result
+  says the law now holds the brakes down at 1.3 m/s on wide lanes, not what the floor will do.
+- The schema bump invalidates every bundle pinned to 0.14.0 (see the top). The trained bundles were
+  not touched.
+- `test_gap_follow_node_event_launch` failed once under a load average of 50 on this machine (80 Hz
+  of `/drive_raw` against a limit of 36, and publishing after scan silence) and passed on the next
+  run with the machine quiet; it is timing-based. Not investigated further.
+
+Next floor session (two people, the RC kill in a hand, wheels off the ground first): `ros2 launch
+racer_control gap_follow.launch.py profile:=race-2026-11-13 max_speed_mps:=0.64`, then 1.0, then 1.3.
+For 1.6 m/s add `stopping_margin_m:=0.2 lane_lookahead_m:=0.8` (the C candidate, held-out result
+above). After each run: `uv run --project tools python tools/audit_brakes.py <bag> --window START END
+--cli <safety_replay_cli>`; the brake count, the classes and the stop table are the thing to compare.
+
+## Reproduce
+
+```sh
+# the audit (about 70 s, needs a safety_replay_cli build for the vehicle numbers)
+uv run --project tools python tools/audit_brakes.py /Users/cameronjim/code/car-data/bags/2026-11-12T03-04-56_car_teleop \
+  --window 1733 1925 --cli <safety_replay_cli> --json audit.json
+# the gate replay, before (as driven) and after, on the race run
+uv run --project tools python tools/replay_safety.py --recorded-with current --cli <safety_replay_cli> \
+  --before-rule 0.13.0 --before-set ttc_brake_s=0.6 --before-set ttc_warning_s=0.71 \
+  --before-set min_forward_clearance_m=0.1 --before-set measured_speed_judging=false \
+  --window 1733 1925 /Users/cameronjim/code/car-data/bags/2026-11-12T03-04-56_car_teleop
+# the retune (docker, ros-dev image with vesc_msgs)
+tools/race_tuning/retune_2026_11_12.sh tuning
+tools/race_tuning/retune_2026_11_12.sh heldout A_v1.3
+```

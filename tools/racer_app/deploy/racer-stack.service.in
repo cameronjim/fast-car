@@ -21,6 +21,11 @@ WorkingDirectory=@REPO@
 # it does not start any driving launch: arming still needs the RC kill knob.
 ExecStart=@REPO@/tools/racer_app/agent/.venv/bin/racer-agent autostart
 TimeoutStartSec=240
+# On `systemctl stop` and at shutdown (this unit stops before docker.service does): SIGINT the
+# stack and wait for the bag to close, instead of docker's SIGTERM and SIGKILL after 10 s, which
+# leaves a bag with no footer. The agent waits up to stop_timeout_stack_s (600 s) for the clean exit.
+ExecStop=@REPO@/tools/racer_app/agent/.venv/bin/racer-agent stop-stack
+TimeoutStopSec=720
 StandardOutput=journal
 StandardError=journal
 

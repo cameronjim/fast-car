@@ -504,7 +504,7 @@ def test_status_summarises_the_car(car):
         "recorder": True,
         "flags": {"lidar": "true", "vesc": "true"},
     }
-    assert status["drive"] == {"mode": "wall_follow", "running": True}
+    assert status["drive"] == {"mode": "wall_follow", "running": True, "external": []}
     assert status["checks"]["ready"] is True
     assert status["policy"]["available"] is False
     assert status["autostart"] is False and status["ros_connected"] is True
@@ -600,7 +600,9 @@ def test_pnp_lists_bundles_by_kind_and_ignores_the_rest(car):
 
 def test_pnp_starts_with_the_geometric_backend_and_needs_no_pose(car):
     wire_pnp(car)
-    result = car.controller.start_drive("pnp", pnp_backend="geometric", pnp_v_max_mps=0.4)
+    result = car.controller.start_drive(
+        "pnp", pnp_backend="geometric", pnp_v_max_mps=0.4, pnp_dynamics="dyn-v0-2026-11-12"
+    )
     assert result["mode"] == "pnp:geometric"
     command = detached_execs(car)[0][-1]
     assert "ros2 launch racer_bringup pnp.launch.py" in command
@@ -612,7 +614,12 @@ def test_pnp_starts_with_the_geometric_backend_and_needs_no_pose(car):
 
 def test_pnp_net_backend_names_both_bundles(car):
     wire_pnp(car)
-    car.controller.start_drive("pnp", pnp_backend="net")
+    car.controller.start_drive(
+        "pnp",
+        pnp_backend="net",
+        pnp_dynamics="dyn-v0-2026-11-12",
+        pnp_perception="trackperc-v0-2026-11-12",
+    )
     command = detached_execs(car)[0][-1]
     assert "perception_bundle:=/workspace/data/pnp/models/trackperc-v0-2026-11-12" in command
     assert "backend:=net v_max_mps:=0.50" in command
@@ -621,15 +628,15 @@ def test_pnp_net_backend_names_both_bundles(car):
 def test_pnp_net_backend_without_a_perception_bundle_is_refused(car):
     wire_pnp(car, perception=())
     with pytest.raises(ActionError, match="needs a perception bundle") as exc:
-        car.controller.start_drive("pnp", pnp_backend="net")
+        car.controller.start_drive("pnp", pnp_backend="net", pnp_dynamics="dyn-v0-2026-11-12")
     assert exc.value.status == 400 and not detached_execs(car)
 
 
 def test_pnp_with_several_bundles_must_be_told_which_and_only_accepts_listed_ones(car):
     wire_pnp(car, dynamics=("dyn-a", "dyn-b"), perception=("tp-a", "tp-b"))
-    with pytest.raises(ActionError, match="choose a dynamics bundle"):
+    with pytest.raises(ActionError, match="no dynamics bundle in the request"):
         car.controller.start_drive("pnp", pnp_backend="geometric")
-    with pytest.raises(ActionError, match="choose a dynamics bundle"):
+    with pytest.raises(ActionError, match="unknown dynamics bundle"):
         car.controller.start_drive("pnp", pnp_dynamics="../../etc", pnp_backend="geometric")
     with pytest.raises(ActionError, match="needs a perception bundle"):
         car.controller.start_drive("pnp", pnp_dynamics="dyn-b", pnp_backend="net")
@@ -644,11 +651,16 @@ def test_pnp_with_several_bundles_must_be_told_which_and_only_accepts_listed_one
 def test_pnp_refuses_a_bad_backend_or_speed_before_anything_starts(car):
     wire_pnp(car)
     with pytest.raises(ActionError, match="backend must be one of") as exc:
-        car.controller.start_drive("pnp", pnp_backend="classical")
+        car.controller.start_drive("pnp", pnp_backend="classical", pnp_dynamics="dyn-v0-2026-11-12")
     assert exc.value.status == 400
     for speed in (0.1, 2.0):
         with pytest.raises(ActionError, match="speed cap") as exc:
-            car.controller.start_drive("pnp", pnp_backend="geometric", pnp_v_max_mps=speed)
+            car.controller.start_drive(
+                "pnp",
+                pnp_backend="geometric",
+                pnp_v_max_mps=speed,
+                pnp_dynamics="dyn-v0-2026-11-12",
+            )
         assert exc.value.status == 400
     assert not detached_execs(car)
 
@@ -658,7 +670,11 @@ def test_pnp_goes_through_the_same_pre_drive_gate_and_recorder_check(car):
     car.world.recorder = False
     with pytest.raises(ActionError, match="invariant 5") as exc:
         car.controller.start_drive(
-            "pnp", pnp_backend="geometric", override=True, override_reason="in a hurry"
+            "pnp",
+            pnp_backend="geometric",
+            pnp_dynamics="dyn-v0-2026-11-12",
+            override=True,
+            override_reason="in a hurry",
         )
     assert exc.value.data["overridable"] is False
     assert not detached_execs(car)
@@ -666,9 +682,9 @@ def test_pnp_goes_through_the_same_pre_drive_gate_and_recorder_check(car):
 
 def test_pnp_one_launch_at_a_time_and_stop_all_stops_it(car):
     wire_pnp(car)
-    car.controller.start_drive("pnp", pnp_backend="geometric")
+    car.controller.start_drive("pnp", pnp_backend="geometric", pnp_dynamics="dyn-v0-2026-11-12")
     with pytest.raises(ActionError, match="already running"):
-        car.controller.start_drive("pnp", pnp_backend="geometric")
+        car.controller.start_drive("pnp", pnp_backend="geometric", pnp_dynamics="dyn-v0-2026-11-12")
     with pytest.raises(ActionError, match="already running"):
         car.controller.start_drive("gap_follow")
     car.controller.stop_all()

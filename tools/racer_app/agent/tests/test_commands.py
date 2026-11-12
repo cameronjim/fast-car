@@ -223,7 +223,7 @@ def test_save_map_script_shape():
 def test_recorder_detection_reads_docker_top():
     assert cmd.recorder_running("ARGS\nros2 bag record -o x\n")
     assert not cmd.recorder_running("ARGS\nros2 launch racer_bringup car_teleop\n")
-    assert cmd.recorder_check_argv("car-stack") == ["docker", "top", "car-stack", "-eo", "args"]
+    assert cmd.recorder_check_argv("car-stack") == ["docker", "top", "car-stack", "-eo", "pid,args"]
 
 
 def test_parse_launch_flags():

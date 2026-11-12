@@ -30,7 +30,6 @@ GROUP_NAME="$(id -gn "$USER_NAME")"
 AGENT_BIN="${RACER_AGENT_BIN:-$APP_DIR/agent/.venv/bin/racer-agent}"
 CONFIG="$ETC/racer-app/config.json"
 UV_VERSION="0.12.5"
-NODE_IMAGE="node:22.12.0-bookworm-slim"
 AUTOSTART_DEFAULT=1
 
 for arg in "$@"; do
@@ -66,17 +65,9 @@ if [ -z "${RACER_SKIP_BUILD:-}" ]; then
   say "building the agent environment from uv.lock"
   (cd "$APP_DIR/agent" && UV_PYTHON_DOWNLOADS=never uv sync --frozen --no-dev)
 
-  if [ -f "$APP_DIR/web/dist/index.html" ] && [ -z "${RACER_REBUILD_WEB:-}" ] \
-    && [ -z "$(find "$APP_DIR/web/src" "$APP_DIR/web/package-lock.json" -newer "$APP_DIR/web/dist/index.html" 2> /dev/null | head -1)" ]; then
-    say "web UI is already built and current"
-  elif command -v npm > /dev/null; then
-    say "building the web UI with local npm"
-    (cd "$APP_DIR/web" && npm ci && npm run build)
-  else
-    say "building the web UI in a pinned node container ($NODE_IMAGE)"
-    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$APP_DIR/web":/app -w /app "$NODE_IMAGE" \
-      sh -c 'npm ci && npm run build'
-  fi
+  # No npm needed on the host: build-web.sh uses a pinned node container, keeps node_modules
+  # between runs, and replaces dist/ only after a successful build (see its header).
+  "$APP_DIR/deploy/build-web.sh"
   [ -f "$APP_DIR/web/dist/index.html" ] || die "web UI build produced no dist/index.html"
 fi
 

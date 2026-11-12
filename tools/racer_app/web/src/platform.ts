@@ -27,6 +27,30 @@ export interface Car {
 
 export type Phase = "searching" | "connected" | "lost";
 
+/** Where the desktop app keeps the agent token. `memory`: it could not be saved anywhere. */
+export interface TokenStorageInfo {
+  storage: "keychain" | "file" | "memory";
+  /** The technical reason when it is not the keychain (shown small, for the owner). */
+  note: string;
+}
+
+/** What the UI says about where the token lives, or null when the keychain is fine. */
+export function describeTokenStorage(info: TokenStorageInfo | null): string | null {
+  if (!info || info.storage === "keychain") return null;
+  if (info.storage === "file") {
+    return (
+      "The macOS keychain refused access, so the token is kept in the app's own data folder " +
+      "(a file only you can read) and survives reinstalls." +
+      (info.note ? ` (${info.note})` : "")
+    );
+  }
+  return (
+    "The token could not be saved anywhere, so it is kept until you quit the app and you will " +
+    "be asked again next time." +
+    (info.note ? ` (${info.note})` : "")
+  );
+}
+
 /** What the Rust discovery loop reports. `car` is the one the app is using. */
 export interface DiscoveryState {
   phase: Phase;
@@ -65,13 +89,18 @@ export function getTauri(scope: object = globalThis): TauriGlobal | null {
  */
 export function cachedTokenStore(
   initial: string | null,
-  persist: (token: string | null) => Promise<void>,
+  persist: (token: string | null) => Promise<TokenStorageInfo | void>,
   onError: (e: unknown) => void = () => undefined,
+  onSaved: (info: TokenStorageInfo) => void = () => undefined,
 ): TokenStore {
   let value = initial;
   const write = (t: string | null) => {
     value = t;
-    persist(t).catch(onError);
+    persist(t)
+      .then((info) => {
+        if (info && t !== null) onSaved(info);
+      })
+      .catch(onError);
   };
   return { get: () => value, set: (t) => write(t), clear: () => write(null) };
 }
@@ -83,7 +112,55 @@ export interface Desktop {
   onState(cb: (s: DiscoveryState) => void): Promise<() => void>;
   selectCar(car: Car): Promise<DiscoveryState>;
   addManual(address: string): Promise<DiscoveryState>;
-  rescan(): Promise<void>;
+  /** Run a full search now (mDNS, then a subnet scan) and say how many cars it found. */
+  search(): Promise<SearchOutcome>;
+  /** Where the token is kept, now and whenever it changes. */
+  tokenStorage: {
+    current(): TokenStorageInfo | null;
+    subscribe(cb: (info: TokenStorageInfo | null) => void): () => void;
+  };
+}
+
+export interface SearchOutcome {
+  found: number;
+  state: DiscoveryState;
+}
+
+/** What the Search again button shows. */
+export type SearchView =
+  | { kind: "idle" }
+  | { kind: "searching" }
+  | { kind: "found"; count: number }
+  | { kind: "none" }
+  | { kind: "error"; message: string };
+
+export function searchText(v: SearchView): string {
+  switch (v.kind) {
+    case "idle":
+      return "";
+    case "searching":
+      return "Searching the network (about 5 seconds)...";
+    case "found":
+      return v.count === 1 ? "Found 1 car." : `Found ${v.count} cars.`;
+    case "none":
+      return "No car found on this network. Check that the car is on and on the same Wi-Fi, or enter its address below.";
+    case "error":
+      return `The search failed: ${v.message}`;
+  }
+}
+
+/** Run a search and report each step to `show`: searching, then found or none (or error). */
+export async function runSearch(
+  desktop: Pick<Desktop, "search">,
+  show: (v: SearchView) => void,
+): Promise<void> {
+  show({ kind: "searching" });
+  try {
+    const out = await desktop.search();
+    show(out.found > 0 ? { kind: "found", count: out.found } : { kind: "none" });
+  } catch (e) {
+    show({ kind: "error", message: String(e) });
+  }
 }
 
 export async function loadDesktop(t: TauriGlobal): Promise<Desktop> {
@@ -92,18 +169,42 @@ export async function loadDesktop(t: TauriGlobal): Promise<Desktop> {
   try {
     initial = await invoke<string | null>("token_get");
   } catch {
-    /* no keychain on this machine: the token is asked for on each launch */
+    /* nowhere to read it from: the token is asked for on this launch */
   }
+  let storage: TokenStorageInfo | null = null;
+  try {
+    storage = await invoke<TokenStorageInfo>("token_storage");
+  } catch {
+    /* an older native side: say nothing about where the token lives */
+  }
+  const listeners = new Set<(info: TokenStorageInfo | null) => void>();
+  const setStorage = (info: TokenStorageInfo | null) => {
+    storage = info;
+    listeners.forEach((cb) => cb(info));
+  };
   return {
-    tokens: cachedTokenStore(initial, (tok) =>
-      tok === null ? invoke("token_clear") : invoke("token_set", { token: tok }),
+    tokens: cachedTokenStore(
+      initial,
+      (tok) =>
+        tok === null
+          ? invoke<void>("token_clear")
+          : invoke<TokenStorageInfo>("token_set", { token: tok }),
+      (e) => setStorage({ storage: "memory", note: String(e) }),
+      setStorage,
     ),
+    tokenStorage: {
+      current: () => storage,
+      subscribe: (cb) => {
+        listeners.add(cb);
+        return () => listeners.delete(cb);
+      },
+    },
     fetch: (url, init) => t.http.fetch(url, init),
     state: () => invoke<DiscoveryState>("discovery_state"),
     onState: (cb) => t.event.listen<DiscoveryState>("racer://state", (e) => cb(e.payload)),
     selectCar: (car) => invoke<DiscoveryState>("select_car", { car }),
     addManual: (address) => invoke<DiscoveryState>("add_manual", { address }),
-    rescan: () => invoke<void>("rescan"),
+    search: () => invoke<SearchOutcome>("search_cars"),
   };
 }
 

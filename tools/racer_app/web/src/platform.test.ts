@@ -4,21 +4,28 @@ import {
   cachedTokenStore,
   carLabel,
   carTarget,
+  describeTokenStorage,
   getTauri,
   loadDesktop,
   loadPlatform,
+  runSearch,
+  searchText,
   webTarget,
   type Car,
+  type SearchView,
   type TauriGlobal,
 } from "./platform";
 
 const car: Car = { host: "192.168.1.50", port: 8080, hostname: "racer-car", source: "mdns" };
 
-function fakeTauri(token: string | null = null) {
+function fakeTauri(token: string | null = null, setReply: unknown = undefined) {
   const calls: Array<[string, unknown]> = [];
   const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
     calls.push([cmd, args]);
     if (cmd === "token_get") return token;
+    if (cmd === "token_storage") return { storage: "keychain", note: "" };
+    if (cmd === "token_set") return setReply ?? { storage: "keychain", note: "" };
+    if (cmd === "search_cars") return { found: 0, state: { phase: "searching", car: null, cars: [] } };
     return null;
   });
   const listen = vi.fn(async () => () => undefined);
@@ -132,11 +139,11 @@ describe("desktop bridge", () => {
     const d = await loadDesktop(t);
     await d.selectCar(car);
     await d.addManual("192.168.1.9");
-    await d.rescan();
+    await d.search();
     await d.fetch("http://192.168.1.50:8080/api/status", { method: "GET" });
     expect(calls).toContainEqual(["select_car", { car }]);
     expect(calls).toContainEqual(["add_manual", { address: "192.168.1.9" }]);
-    expect(calls.map((c) => c[0])).toContain("rescan");
+    expect(calls.map((c) => c[0])).toContain("search_cars");
     expect(fetch).toHaveBeenCalledOnce();
   });
 
@@ -145,5 +152,96 @@ describe("desktop bridge", () => {
     const d = await loadDesktop(t);
     await d.onState(() => undefined);
     expect(listen).toHaveBeenCalledWith("racer://state", expect.any(Function));
+  });
+});
+
+describe("where the token lives", () => {
+  it("says nothing while the keychain works", () => {
+    expect(describeTokenStorage(null)).toBeNull();
+    expect(describeTokenStorage({ storage: "keychain", note: "" })).toBeNull();
+  });
+
+  it("says so when the keychain was refused and the token is in the data folder", () => {
+    const text = describeTokenStorage({ storage: "file", note: "keychain read refused: denied" });
+    expect(text).toContain("keychain refused");
+    expect(text).toContain("data folder");
+    expect(text).toContain("denied");
+  });
+
+  it("says so when the token could not be saved at all", () => {
+    expect(describeTokenStorage({ storage: "memory", note: "disk full" })).toContain("could not be saved");
+  });
+
+  it("the desktop bridge reports the storage at start and when saving falls back to the file", async () => {
+    const { t } = fakeTauri(null, { storage: "file", note: "denied" });
+    const d = await loadDesktop(t);
+    expect(d.tokenStorage.current()).toEqual({ storage: "keychain", note: "" });
+    const seen: unknown[] = [];
+    d.tokenStorage.subscribe((info) => seen.push(info));
+    d.tokens.set("abc");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual([{ storage: "file", note: "denied" }]);
+    expect(d.tokenStorage.current()?.storage).toBe("file");
+  });
+
+  it("the bridge reports an unsaved token as memory only", async () => {
+    const { t, invoke } = fakeTauri();
+    const d = await loadDesktop(t);
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "token_set") throw new Error("nowhere to write");
+      return null;
+    });
+    d.tokens.set("abc");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(d.tokens.get()).toBe("abc");
+    expect(d.tokenStorage.current()?.storage).toBe("memory");
+  });
+
+  it("an older native side without token_storage just says nothing", async () => {
+    const { t, invoke } = fakeTauri();
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "token_storage") throw new Error("unknown command");
+      return null;
+    });
+    const d = await loadDesktop(t);
+    expect(d.tokenStorage.current()).toBeNull();
+  });
+});
+
+describe("Search again feedback", () => {
+  const state = { phase: "searching" as const, car: null, cars: [] };
+
+  it("shows searching, then found", async () => {
+    const seen: SearchView[] = [];
+    await runSearch({ search: async () => ({ found: 2, state }) }, (v) => seen.push(v));
+    expect(seen).toEqual([{ kind: "searching" }, { kind: "found", count: 2 }]);
+    expect(searchText(seen[0])).toContain("Searching");
+    expect(searchText(seen[1])).toBe("Found 2 cars.");
+  });
+
+  it("shows searching, then not found", async () => {
+    const seen: SearchView[] = [];
+    await runSearch({ search: async () => ({ found: 0, state }) }, (v) => seen.push(v));
+    expect(seen).toEqual([{ kind: "searching" }, { kind: "none" }]);
+    expect(searchText(seen[1])).toContain("No car found");
+  });
+
+  it("is searching for the whole time the native search runs", async () => {
+    let finish: (v: { found: number; state: typeof state }) => void = () => undefined;
+    const pending = new Promise<{ found: number; state: typeof state }>((r) => (finish = r));
+    const seen: SearchView[] = [];
+    const done = runSearch({ search: () => pending }, (v) => seen.push(v));
+    expect(seen).toEqual([{ kind: "searching" }]);
+    finish({ found: 1, state });
+    await done;
+    expect(seen.at(-1)).toEqual({ kind: "found", count: 1 });
+    expect(searchText({ kind: "found", count: 1 })).toBe("Found 1 car.");
+  });
+
+  it("reports a failed search instead of staying silent", async () => {
+    const seen: SearchView[] = [];
+    await runSearch({ search: async () => Promise.reject(new Error("no network")) }, (v) => seen.push(v));
+    expect(seen.at(-1)).toEqual({ kind: "error", message: "Error: no network" });
+    expect(searchText({ kind: "idle" })).toBe("");
   });
 });

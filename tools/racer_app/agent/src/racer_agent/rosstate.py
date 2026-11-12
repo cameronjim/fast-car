@@ -29,6 +29,8 @@ import websockets
 log = logging.getLogger(__name__)
 
 SUBPROTOCOL = "foxglove.websocket.v1"
+#: foxglove_bridge 3.x only accepts this name (same wire format). Offer both, newest first.
+SDK_SUBPROTOCOL = "foxglove.sdk.v1"
 OP_MESSAGE_DATA = 0x01
 
 #: Topics whose values the checks need. Decoded.
@@ -215,7 +217,10 @@ class FoxgloveClient:
         assert self._stop is not None
         async with websockets.connect(
             self.url,
-            subprotocols=[websockets.Subprotocol(SUBPROTOCOL)],
+            subprotocols=[
+                websockets.Subprotocol(SDK_SUBPROTOCOL),
+                websockets.Subprotocol(SUBPROTOCOL),
+            ],
             open_timeout=5,
             max_size=None,
             ping_interval=10,

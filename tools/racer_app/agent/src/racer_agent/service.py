@@ -67,6 +67,8 @@ class DriveBody(Body):
     pnp_dynamics: str = ""
     pnp_backend: str = "net"
     pnp_v_max_mps: float = 0.5
+    pnp_params: str = ""
+    max_speed_mps: float | None = None
 
 
 class PerceptionBody(Body):

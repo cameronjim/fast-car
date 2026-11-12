@@ -1,4 +1,11 @@
 import { useState } from "preact/hooks";
+import {
+  externalDriveText,
+  gapSpeed,
+  pnpSelectionText,
+  selectedBundle,
+  selectedParamsFile,
+} from "./drivePick";
 import { fmtBagSize, fmtGrowth, recordingSummary } from "./model";
 import { ApiError, type Api, type ActionReply, type BagInfo, type LogEntry, type Options, type Status } from "./api";
 
@@ -33,6 +40,35 @@ export async function run(
   }
 }
 
+/**
+ * A button that asks for a second click instead of window.confirm, which the desktop app's
+ * webview does not show (the click silently did nothing). The first click arms it for a few
+ * seconds and shows the question; the second click runs the action.
+ */
+export function ConfirmButton(p: {
+  label: string;
+  question: string;
+  onConfirm: () => void;
+  disabled?: boolean;
+  class?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  const click = () => {
+    if (armed) {
+      setArmed(false);
+      p.onConfirm();
+      return;
+    }
+    setArmed(true);
+    setTimeout(() => setArmed(false), 4000);
+  };
+  return (
+    <button class={p.class} disabled={p.disabled} title={p.question} onClick={click}>
+      {armed ? `${p.question} Click again` : p.label}
+    </button>
+  );
+}
+
 export function Controls(p: Props) {
   const { api, status, options, notify, refresh } = p;
   const stackUp = status?.stack.running ?? false;
@@ -46,13 +82,16 @@ export function Controls(p: Props) {
 
   // driving
   const [gapProfile, setGapProfile] = useState("lane-2026-10-25");
+  const [gapSpeedText, setGapSpeedText] = useState("");
   const [parkProfile, setParkProfile] = useState("floor-2026-10-07");
   const [raceline, setRaceline] = useState("");
   const [policyName, setPolicyName] = useState("");
   const [pnpBackend, setPnpBackend] = useState("geometric");
   const [pnpDynamics, setPnpDynamics] = useState("");
   const [pnpPerception, setPnpPerception] = useState("");
+  const [pnpParams, setPnpParams] = useState("");
   const [pnpSpeed, setPnpSpeed] = useState(0.5);
+  const [busy, setBusy] = useState<string | null>(null);
   const [override, setOverride] = useState(false);
   const [reason, setReason] = useState("");
   const [needsOverride, setNeedsOverride] = useState<string | null>(null);
@@ -64,6 +103,16 @@ export function Controls(p: Props) {
   const [patrolSpeed, setPatrolSpeed] = useState(0.5);
 
   const act = (fn: () => Promise<ActionReply>) => run(fn, notify, refresh);
+  // Stopping the stack waits for the recorder to close the bag, which takes minutes for a big
+  // one: show that it is working instead of a button that looks dead.
+  const slow = async (what: string, fn: () => Promise<ActionReply>) => {
+    setBusy(what);
+    try {
+      await act(fn);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const drive = async (body: {
     mode: string;
@@ -77,6 +126,8 @@ export function Controls(p: Props) {
     pnp_dynamics?: string;
     pnp_backend?: string;
     pnp_v_max_mps?: number;
+    pnp_params?: string;
+    max_speed_mps?: number;
   }) => {
     const err = await act(() =>
       api.startDrive({ ...body, override, override_reason: override ? reason : "" }),
@@ -93,14 +144,21 @@ export function Controls(p: Props) {
   const pnp = options?.pnp ?? null;
   const pnpRange = pnp?.speed_range ?? [0.2, 1.5];
   const pnpNeedsPerception = pnpBackend === "net";
+  // The request always names the bundle: the selection is worked out here, shown, and sent.
+  const dynChoice = selectedBundle(pnpDynamics, pnp?.dynamics);
+  const percChoice = pnpNeedsPerception ? selectedBundle(pnpPerception, pnp?.perception) : "";
+  const paramsChoice = selectedParamsFile(pnpParams, pnp?.params_files);
   const pnpReady =
     !!pnp?.available &&
     stackUp &&
     !driving &&
-    (pnp.dynamics.length === 1 || !!pnpDynamics) &&
-    (!pnpNeedsPerception || pnp.perception.length === 1 || !!pnpPerception) &&
+    !!dynChoice &&
+    (!pnpNeedsPerception || !!percChoice) &&
     pnpSpeed >= pnpRange[0] &&
     pnpSpeed <= pnpRange[1];
+  const gapBounds = options?.gap_follow_speed?.[gapProfile];
+  const gapCap = gapSpeed(gapSpeedText, gapBounds);
+  const external = externalDriveText(status?.drive.external);
   const perception = status?.perception ?? options?.perception ?? null;
   const spiderbot = status?.spiderbot ?? options?.spiderbot ?? null;
   const speedRange = options?.spiderbot_speed_range ?? [0.1, 1.0];
@@ -127,10 +185,11 @@ export function Controls(p: Props) {
           </div>
         )}
         <div class="row">
-          <button disabled={stackUp} onClick={() => act(() => api.startStack({ lidar, vesc, mapping: mode === "mapping", localization: mode === "localization", map: mode === "localization" ? map : "" }))}>Start stack</button>
-          <button disabled={!stackUp} onClick={() => act(() => api.restartStack())}>Restart</button>
-          <button class="danger" disabled={!stackUp} onClick={() => window.confirm("Stop the stack? Recording stops and the bag is closed.") && act(() => api.stopStack())}>Stop stack</button>
+          <button disabled={stackUp || !!busy} onClick={() => act(() => api.startStack({ lidar, vesc, mapping: mode === "mapping", localization: mode === "localization", map: mode === "localization" ? map : "" }))}>Start stack</button>
+          <button disabled={!stackUp || !!busy} onClick={() => void slow("Restarting the stack, closing the bag first", () => api.restartStack())}>Restart</button>
+          <ConfirmButton class="danger" disabled={!stackUp || !!busy} label="Stop stack" question="Stop the stack? Recording stops." onConfirm={() => void slow("Stopping the stack, closing the bag", () => api.stopStack())} />
         </div>
+        {busy && <div class="sub" role="status">{busy}. A big bag takes a few minutes to close: do not unplug anything.</div>}
         <div class="sub">Starts car-stack with the recorder. Running now: {stackUp ? Object.entries(status?.stack.flags ?? {}).map(([k, v]) => `${k}=${v}`).join(" ") || "default" : "nothing"}.</div>
         {recordingSummary(p.bags) && <div class="sub" aria-label="Current bag">{recordingSummary(p.bags)}</div>}
         <div class="row">
@@ -168,6 +227,7 @@ export function Controls(p: Props) {
 
       <section class="card" aria-label="Driving">
         <h3>Driving <span class={`pill ${driving ? "lvl-amber" : "lvl-green"}`}>{driving ?? "idle"}</span></h3>
+        {external && <div class="warn" role="alert">{external}</div>}
         <div class="warn">
           This is a software stop only. Wi-Fi can drop. Arming still needs the RC kill knob, and the knob is the stop that always works. Keep a hand on it.
         </div>
@@ -175,7 +235,28 @@ export function Controls(p: Props) {
           <select value={gapProfile} onChange={(e) => setGapProfile(e.currentTarget.value)} aria-label="Gap follow profile">
             {options?.gap_follow_profiles.map((x) => <option key={x}>{x}</option>)}
           </select>
-          <button disabled={!stackUp || !!driving} onClick={() => drive({ mode: "gap_follow", profile: gapProfile })}>Gap follow</button>
+          <input
+            type="number"
+            aria-label="Gap follow max speed in metres per second"
+            placeholder={gapBounds ? `max speed (profile, up to ${gapBounds.max})` : "max speed"}
+            min={gapBounds?.min}
+            max={gapBounds?.max}
+            step={0.05}
+            value={gapSpeedText}
+            onInput={(e) => setGapSpeedText(e.currentTarget.value)}
+          />
+          <button
+            disabled={!stackUp || !!driving || !!gapCap.error}
+            title={gapCap.error || undefined}
+            onClick={() => drive({ mode: "gap_follow", profile: gapProfile, max_speed_mps: gapCap.value })}
+          >Gap follow</button>
+        </div>
+        <div class="sub">
+          {gapCap.error
+            ? gapCap.error
+            : gapCap.value === undefined
+              ? "Max speed: the profile's own."
+              : `Max speed ${gapCap.value.toFixed(2)} m/s${gapBounds ? ` (this profile allows ${gapBounds.min} to ${gapBounds.max})` : ""}.`}
         </div>
         <div class="row">
           <button disabled={!stackUp || !!driving} onClick={() => drive({ mode: "wall_follow" })}>Wall follow</button>
@@ -249,16 +330,20 @@ export function Controls(p: Props) {
           <select value={pnpBackend} onChange={(e) => setPnpBackend(e.currentTarget.value)} aria-label="Plug-and-Play perception backend" disabled={!pnp?.available}>
             {(pnp?.backends ?? ["geometric", "net"]).map((x) => <option key={x}>{x}</option>)}
           </select>
-          <select value={pnpDynamics} onChange={(e) => setPnpDynamics(e.currentTarget.value)} aria-label="Plug-and-Play dynamics bundle" disabled={!pnp?.available}>
-            <option value="">{pnp?.dynamics.length === 1 ? pnp.dynamics[0] : "dynamics bundle"}</option>
-            {pnp?.dynamics.map((x) => <option key={x}>{x}</option>)}
+          <select value={dynChoice} onChange={(e) => setPnpDynamics(e.currentTarget.value)} aria-label="Plug-and-Play dynamics bundle" disabled={!pnp?.available}>
+            {!dynChoice && <option value="">choose a dynamics bundle</option>}
+            {pnp?.dynamics.map((x) => <option key={x} value={x}>{x}</option>)}
           </select>
           {pnpNeedsPerception && (
-            <select value={pnpPerception} onChange={(e) => setPnpPerception(e.currentTarget.value)} aria-label="Plug-and-Play perception bundle" disabled={!pnp?.available}>
-              <option value="">{pnp?.perception.length === 1 ? pnp.perception[0] : "perception bundle"}</option>
-              {pnp?.perception.map((x) => <option key={x}>{x}</option>)}
+            <select value={percChoice} onChange={(e) => setPnpPerception(e.currentTarget.value)} aria-label="Plug-and-Play perception bundle" disabled={!pnp?.available}>
+              {!percChoice && <option value="">choose a perception bundle</option>}
+              {pnp?.perception.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
           )}
+          <select value={paramsChoice} onChange={(e) => setPnpParams(e.currentTarget.value)} aria-label="Plug-and-Play planner params file" disabled={!pnp?.available}>
+            <option value="">planner file: default</option>
+            {(pnp?.params_files ?? []).map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
         </div>
         <div class="row">
           <label>
@@ -282,13 +367,19 @@ export function Controls(p: Props) {
               drive({
                 mode: "pnp",
                 pnp_backend: pnpBackend,
-                pnp_dynamics: pnpDynamics,
-                pnp_perception: pnpNeedsPerception ? pnpPerception : "",
+                pnp_dynamics: dynChoice,
+                pnp_perception: percChoice,
+                pnp_params: paramsChoice,
                 pnp_v_max_mps: pnpSpeed,
               })
             }
           >Plug-and-Play</button>
         </div>
+        {pnp?.available && (
+          <div class="sub" aria-label="Plug-and-Play selection">
+            {pnpSelectionText({ backend: pnpBackend, dynamics: dynChoice, perception: percChoice, paramsFile: paramsChoice, speed: pnpSpeed })}
+          </div>
+        )}
         <div id="pnp-reason" class="sub">
           {pnp?.available
             ? "Drives a track it has never seen: no map, no pose. Needs only the stack and its recorder. The nodes refuse any bundle that does not match this car. Start at a low cap, wheels off the ground first, hand on the knob."
@@ -308,8 +399,8 @@ export function Controls(p: Props) {
         <h3>System</h3>
         <label class="row"><input type="checkbox" checked={status?.autostart ?? false} onChange={(e) => act(() => api.setAutostart(e.currentTarget.checked))} /> Start the stack at boot (LiDAR and VESC, no cameras)</label>
         <div class="row">
-          <button class="danger" onClick={() => window.confirm("Reboot the Jetson? The stack is stopped cleanly first.") && act(() => api.power("reboot"))}>Reboot</button>
-          <button class="danger" onClick={() => window.confirm("Shut the Jetson down? You will need to power it on by hand.") && act(() => api.power("shutdown"))}>Shut down</button>
+          <ConfirmButton class="danger" label="Reboot" question="Reboot the Jetson?" onConfirm={() => act(() => api.power("reboot"))} />
+          <ConfirmButton class="danger" label="Shut down" question="Shut the Jetson down?" onConfirm={() => act(() => api.power("shutdown"))} />
         </div>
       </section>
 
@@ -321,7 +412,7 @@ export function Controls(p: Props) {
             <li key={b.name}>
               <span>{b.name}</span>
               <span class="muted">{fmtBagSize(b.size_mb)}{b.active ? ` recording ${fmtGrowth(b.growth_mb_s)}` : ""}</span>
-              <button disabled={b.active} onClick={() => window.confirm(`Delete ${b.name}? This cannot be undone.`) && act(() => api.deleteBag(b.name))}>Delete</button>
+              <ConfirmButton disabled={b.active} label="Delete" question="Delete for good?" onConfirm={() => act(() => api.deleteBag(b.name))} />
             </li>
           ))}
           {p.bags.length === 0 && <li class="muted">No bags yet.</li>}

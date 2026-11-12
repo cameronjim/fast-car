@@ -13,7 +13,8 @@ pins:
   * cameras.launch.py: both includes, their on/off conditions, and that its forwarded defaults
     equal the child files' own defaults;
   * car_teleop.launch.py: `cameras` defaults to false and includes cameras.launch.py only when
-    true; the recorder regex takes /camera/.*/compressed and NOT the raw images.
+    true; the recorder regex takes /camera/<name>/record/compressed and NOT the full-rate or
+    raw images.
 
 No camera publishes a transform: mount poses are not part of this bring-up.
 """
@@ -362,7 +363,7 @@ def test_cameras_includes_both_with_conditions_and_forwarding():
 
 
 def _lap_node(entities) -> Node:
-    nodes = [e for e in entities if isinstance(e, Node)]
+    nodes = [e for e in entities if isinstance(e, Node) and e.node_executable == "lap_counter_node"]
     assert len(nodes) == 1
     return nodes[0]
 
@@ -399,6 +400,95 @@ def test_cameras_lap_counter_forwards_its_thresholds_with_types():
     }
 
 
+def _record_nodes(entities) -> dict[str, Node]:
+    return {
+        _perform(e._Node__node_name, LaunchContext()): e
+        for e in entities
+        if isinstance(e, Node) and e.node_executable == "camera_record_node"
+    }
+
+
+def test_cameras_record_streams_are_on_by_default_one_node_per_camera():
+    module = _load("cameras.launch.py")
+    entities = module.generate_launch_description().entities
+    defaults = _defaults(entities)
+    assert defaults["record_streams"] == "true"
+    assert defaults["record_gate"] == "true"
+    for name, (_param, default, _desc, _type) in module.RECORD_FORWARDED.items():
+        assert defaults[name] == default, name
+    nodes = _record_nodes(entities)
+    assert set(nodes) == {"camera_record_usb", "camera_record_csi0"}
+    for node in nodes.values():
+        assert node.node_package == "racer_perception"
+
+
+def test_cameras_record_streams_read_the_full_rate_topic_and_write_the_record_topic():
+    entities = _load("cameras.launch.py").generate_launch_description().entities
+    nodes = _record_nodes(entities)
+    context = _context(
+        record_gate="true",
+        record_rate_hz="5.0",
+        record_max_width_px="640",
+        record_max_height_px="360",
+        record_jpeg_quality="60",
+        record_gate_hold_s="5.0",
+    )
+    usb = _node_parameters(nodes["camera_record_usb"], context)
+    csi = _node_parameters(nodes["camera_record_csi0"], context)
+    assert usb["image_topic"] == "/camera/usb/image_raw/compressed"
+    assert usb["output_topic"] == "/camera/usb/record/compressed"
+    assert csi["image_topic"] == "/camera/csi0/image_raw/compressed"
+    assert csi["output_topic"] == "/camera/csi0/record/compressed"
+    for params in (usb, csi):
+        assert params["rate_hz"] == 5.0
+        assert (params["max_width_px"], params["max_height_px"]) == (640, 360)
+        assert params["jpeg_quality"] == 60
+        assert params["gate_hold_s"] == 5.0
+        assert params["gate_topic"] == "/drive_raw"
+
+
+def test_cameras_record_gate_false_empties_the_gate_topic():
+    nodes = _record_nodes(_load("cameras.launch.py").generate_launch_description().entities)
+    context = _context(
+        record_gate="false",
+        record_rate_hz="5.0",
+        record_max_width_px="640",
+        record_max_height_px="360",
+        record_jpeg_quality="60",
+        record_gate_hold_s="5.0",
+    )
+    assert _node_parameters(nodes["camera_record_usb"], context)["gate_topic"] == ""
+
+
+def test_cameras_record_nodes_follow_the_camera_and_record_switches():
+    nodes = _record_nodes(_load("cameras.launch.py").generate_launch_description().entities)
+    usb, csi = nodes["camera_record_usb"], nodes["camera_record_csi0"]
+    on = {"usb": "true", "csi": "true", "record_streams": "true"}
+    assert usb.condition.evaluate(_context(**on)) is True
+    assert csi.condition.evaluate(_context(**on)) is True
+    assert usb.condition.evaluate(_context(**{**on, "usb": "false"})) is False
+    assert csi.condition.evaluate(_context(**{**on, "usb": "false"})) is True
+    assert csi.condition.evaluate(_context(**{**on, "csi": "false"})) is False
+    for node in (usb, csi):
+        assert node.condition.evaluate(_context(**{**on, "record_streams": "false"})) is False
+
+
+def test_cameras_record_nodes_never_touch_the_command_topics():
+    nodes = _record_nodes(_load("cameras.launch.py").generate_launch_description().entities)
+    context = _context(
+        record_gate="true",
+        record_rate_hz="5.0",
+        record_max_width_px="640",
+        record_max_height_px="360",
+        record_jpeg_quality="60",
+        record_gate_hold_s="5.0",
+    )
+    for node in nodes.values():
+        params = _node_parameters(node, context)
+        assert params["output_topic"] not in ("/drive", "/drive_raw")
+        assert not any(dst in ("/drive", "/drive_raw") for _src, dst in _remaps(node, context))
+
+
 # --- car_teleop.launch.py `cameras` argument and the recorder regex -----------------------
 
 
@@ -420,9 +510,9 @@ def test_car_teleop_includes_cameras_launch_only_when_asked():
 
 
 _RECORDED = [
-    "/camera/usb/image_raw/compressed",
-    "/camera/csi0/image_raw/compressed",
-    "/camera/csi1/image_raw/compressed",
+    "/camera/usb/record/compressed",
+    "/camera/csi0/record/compressed",
+    "/camera/csi1/record/compressed",
     # What the detector saw and what the spiderbot decided (roadmap 5.1, 5.3).
     "/perception/objects",
     "/perception/target",
@@ -446,6 +536,15 @@ _RECORDED = [
 ]
 
 _NOT_RECORDED = [
+    # The full-rate streams (about 6 MB/s per camera) stay live but are not recorded.
+    "/camera/usb/image_raw/compressed",
+    "/camera/csi0/image_raw/compressed",
+    "/camera/csi1/image_raw/compressed",
+    "/camera/usb/record",
+    "/camera/usb/record/compressedDepth",
+    "/camera/usb/record/theora",
+    "/camera/record/compressed",
+    "/camera/usb/extra/record/compressed",
     "/perception/debug_image/compressed",
     "/perception/objects/extra",
     "/lap/event/extra",

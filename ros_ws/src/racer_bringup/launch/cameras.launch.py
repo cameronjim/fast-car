@@ -28,10 +28,19 @@ the USB camera), publishing /lap/event and /lap/status. The run's recorder takes
 thresholds are forwarded as lap_* arguments; every other parameter keeps the node's default (see
 racer_perception/launch/lap_counter.launch.py and docs/notes/lap-counter-2026-11-12.md).
 
-Recording is NOT started here: the run's bag belongs to car_teleop.launch.py's recorder,
-whose regex takes /camera/.*/compressed and leaves the raw images out. To collect camera data
-without the drive stack, record by hand (docs/notes/first-boot-runbook.md "Cameras first
-power-up").
+RECORDING STREAMS (`record_streams:=true`, default): one racer_perception camera_record_node per
+camera makes /camera/<name>/record/compressed, a small (640 x 360 max, JPEG 60) 5 Hz copy of the
+full-rate image_raw/compressed that is published ONLY while /drive_raw is being published (a
+driving launch is up). That is the camera topic car_teleop.launch.py's recorder takes; its regex
+no longer takes the full-rate image_raw/compressed (about 6 MB/s per camera, 9 GB in 25 idle
+minutes), so cameras on and the car idle record nothing, and driving records a few hundred kB/s.
+The full-rate topics stay for Foxglove, the racer app thumbnails and lap_counter_node. The
+`record_*` arguments below tune the stream; `record_gate:=false` publishes it all the time (bench
+checks with no drive running). `record_streams:=false` leaves the cameras out of the bag.
+
+Recording is NOT started here: the run's bag belongs to car_teleop.launch.py's recorder. To
+collect full-rate camera data without the drive stack, record by hand (docs/notes/first-boot-
+runbook.md "Cameras first power-up").
 
 No physical constants, and camera mount poses are not needed for this bring-up.
 """
@@ -44,7 +53,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -107,6 +116,48 @@ LAP_FORWARDED = {
 }
 
 
+#: This file's argument -> (camera_record_node parameter, default, description, type). The
+#: defaults equal the node's own (racer_perception's test pins that).
+RECORD_FORWARDED = {
+    "record_rate_hz": (
+        "rate_hz",
+        "5.0",
+        "Recording stream: frames per second (the full-rate topics are untouched).",
+        float,
+    ),
+    "record_max_width_px": (
+        "max_width_px",
+        "640",
+        "Recording stream: frames are fitted inside this width, never upscaled.",
+        int,
+    ),
+    "record_max_height_px": (
+        "max_height_px",
+        "360",
+        "Recording stream: frames are fitted inside this height, never upscaled.",
+        int,
+    ),
+    "record_jpeg_quality": (
+        "jpeg_quality",
+        "60",
+        "Recording stream: JPEG quality 1-100.",
+        int,
+    ),
+    "record_gate_hold_s": (
+        "gate_hold_s",
+        "5.0",
+        "Recording stream: seconds to keep publishing after the last /drive_raw message.",
+        float,
+    ),
+}
+
+#: (camera key, enabling argument, full-rate topic, recording topic).
+RECORD_CAMERAS = (
+    ("usb", "usb", "/camera/usb/image_raw/compressed", "/camera/usb/record/compressed"),
+    ("csi0", "csi", "/camera/csi0/image_raw/compressed", "/camera/csi0/record/compressed"),
+)
+
+
 def _declare(table: dict) -> list[DeclareLaunchArgument]:
     return [
         DeclareLaunchArgument(name, default_value=default, description=description)
@@ -164,16 +215,80 @@ def generate_launch_description() -> LaunchDescription:
         ],
         condition=IfCondition(LaunchConfiguration("lap_counter")),
     )
+    record_arg = DeclareLaunchArgument(
+        "record_streams",
+        default_value="true",
+        description=(
+            "Start a camera_record_node per camera: /camera/<name>/record/compressed, the small, "
+            "drive-only stream the run's recorder takes instead of the full-rate topics."
+        ),
+    )
+    record_gate_arg = DeclareLaunchArgument(
+        "record_gate",
+        default_value="true",
+        description=(
+            "Publish the recording streams only while /drive_raw is being published. false: "
+            "publish all the time (bench checks only; it brings the idle bag growth back)."
+        ),
+    )
+    record_args = [
+        DeclareLaunchArgument(name, default_value=default, description=description)
+        for name, (_param, default, description, _type) in RECORD_FORWARDED.items()
+    ]
+    record_nodes = [
+        Node(
+            package="racer_perception",
+            executable="camera_record_node",
+            name=f"camera_record_{key}",
+            output="screen",
+            parameters=[
+                {
+                    "image_topic": image_topic,
+                    "output_topic": record_topic,
+                    "gate_topic": ParameterValue(
+                        PythonExpression(
+                            [
+                                "'/drive_raw' if '",
+                                LaunchConfiguration("record_gate"),
+                                "' == 'true' else ''",
+                            ]
+                        ),
+                        value_type=str,
+                    ),
+                    **{
+                        param: ParameterValue(LaunchConfiguration(name), value_type=value_type)
+                        for name, (param, _d, _desc, value_type) in RECORD_FORWARDED.items()
+                    },
+                }
+            ],
+            condition=IfCondition(
+                PythonExpression(
+                    [
+                        "'",
+                        LaunchConfiguration(enable_arg),
+                        "' == 'true' and '",
+                        LaunchConfiguration("record_streams"),
+                        "' == 'true'",
+                    ]
+                )
+            ),
+        )
+        for key, enable_arg, image_topic, record_topic in RECORD_CAMERAS
+    ]
     return LaunchDescription(
         [
             usb_arg,
             csi_arg,
             lap_arg,
+            record_arg,
+            record_gate_arg,
             *_declare(USB_FORWARDED),
             *_declare(CSI_FORWARDED),
             *lap_args,
+            *record_args,
             usb_camera,
             csi_camera,
+            *record_nodes,
             lap_counter,
         ]
     )

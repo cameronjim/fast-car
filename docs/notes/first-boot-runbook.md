@@ -1034,8 +1034,8 @@ immutable).
 waited for: `/drive_raw`, `/drive`, `/safety/events`, `/teleop/cmd_vel`, everything under
 `/telemetry/` (the rail volts and amps), `/scan` when the launch runs with `lidar:=true`
 (see "LiDAR first power-up" below), `/odom/wheel`, `/telemetry/vesc/*` and `/vesc/sensors/core`
-when it runs with `vesc:=true` (see "VESC telemetry" below), `/camera/*/compressed` (never
-the raw images) when cameras run (see "Cameras first power-up" below), plus `/rosout` and
+when it runs with `vesc:=true` (see "VESC telemetry" below), `/camera/<name>/record/compressed` (the
+small drive-only stream, never the full-rate or raw images) when cameras run (see "Cameras first power-up" below), plus `/rosout` and
 `/parameter_events`.
 
 **Format: mcap on the car, sqlite3 elsewhere.** `bag_storage:=auto` (the default) picks mcap
@@ -1741,9 +1741,18 @@ running, start a bridge in car-camera the way LiDAR step L5 does
 
 ### C8. Recording and bag growth
 
-Every car-stack run already records the cameras: `car_teleop.launch.py`'s recorder regex
-takes `/camera/.*/compressed` and NOT `image_raw`, wherever the cameras run. Expected growth
-at 720p60, **an estimate until measured**: a 1280x720 JPEG at `jpeg_quality` 80 is roughly 80
+**Lean bags (2026-11-11).** The bag no longer takes the full-rate camera topics. Each camera has a
+`camera_record_node` (started by `cameras.launch.py`, `record_streams:=true`) that publishes
+`/camera/<name>/record/compressed`: at most 5 Hz, fitted inside 640 x 360, JPEG 60, and published
+only while `/drive_raw` is being published (a driving launch is up, plus 5 s). `car_teleop.launch.py`'s
+recorder regex takes that topic and NOT `image_raw/compressed`. Cameras on with the car idle record no
+camera data at all; driving records a few hundred kB/s per camera. The full-rate topics stay live for
+Foxglove, the racer app and the lap counter. Tune with `record_rate_hz`, `record_max_width_px`,
+`record_max_height_px`, `record_jpeg_quality`, `record_gate_hold_s`; `record_gate:=false` publishes
+the stream all the time (bench only). The numbers below are the FULL-RATE topics, which you only get
+now by recording them by hand (`ros2 bag record -s mcap --regex "^/camera/.*/image_raw/compressed$"`).
+
+Full-rate growth at 720p60, **an estimate until measured**: a 1280x720 JPEG at `jpeg_quality` 80 is roughly 80
 to 170 kB for an indoor scene, so 60 fps is about **5 to 10 MB/s per camera (17 to 37 GB per
 hour)**, about 10 to 20 MB/s (35 to 75 GB per hour) with both. The raw images would be
 1280 x 720 x 3 bytes x 60 = 166 MB/s per camera, which is why they are left out. Replace the
@@ -1931,7 +1940,7 @@ the car, STOP ALL is still a software stop, and the knob is still the stop that 
    uptime are shown but never gate. Amber or red on a required check means the Driving card asks
    for an override and a typed reason, which goes in the action log. A missing stack, a missing
    recorder or a disk under 5 GiB cannot be overridden.
-3. **Cameras (optional).** Start cameras. They add roughly 6 MB/s each to the bag, need 10 GiB free
+3. **Cameras (optional).** Start cameras. They add a few hundred kB/s each to the bag while a drive runs and nothing while idle (the bag stream is 5 Hz, 640 x 360), need 10 GiB free
    to start, and the disk guard stops them below 7 GiB. The thumbnails refresh about once a second.
 4. **Drive.** Pick gap follow (profile `lane-2026-10-25`), wall follow, tracker (needs the stack
    started with localisation, a live pose, and a raceline in that map's frame) or park. The

@@ -152,9 +152,11 @@ is `--privileged`, and car-camera should never need it.
 includes the cameras in car-stack itself. That only works if car-stack is started with the
 camera flags above, which widens the one container that drives the car; prefer car-camera.
 
-**Recording.** car-stack's recorder takes `/camera/.*/compressed` and leaves the raw images
-out, wherever the cameras run. Expected bag growth at 720p60 is in the runbook ("Cameras first
-power-up"): roughly 5 to 10 MB/s per camera, an estimate until `camera_check` measures it.
+**Recording.** car-stack's recorder takes `/camera/<name>/record/compressed` and leaves the
+full-rate compressed and raw images out, wherever the cameras run. That topic comes from
+`camera_record_node` (started by `cameras.launch.py`): 5 Hz, at most 640 x 360, JPEG 60, published
+only while `/drive_raw` is being published, so idle cameras add nothing to the bag. The full-rate
+growth (roughly 5 to 10 MB/s per camera at 720p60) is in the runbook ("Cameras first power-up").
 
 ## Perception (added 2026-10-23, built 2026-11-11; OPTIONAL, outside the thesis)
 

@@ -673,3 +673,89 @@ def test_pnp_one_launch_at_a_time_and_stop_all_stops_it(car):
         car.controller.start_drive("gap_follow")
     car.controller.stop_all()
     assert car.controller.drive_mode() is None
+
+
+# ---- bag growth rate (lean bags: the app shows how fast the recording bag is growing) ------
+
+
+def grow(folder, extra: int):
+    with open(folder / "a.mcap", "ab") as fh:
+        fh.write(b"x" * extra)
+
+
+def test_growth_rate_is_none_on_the_first_poll_then_megabytes_per_second(car):
+    folder = make_bag(car, "run", size=1_000_000, age=10)
+    first = car.controller.list_bags()[0]
+    assert first["active"] is True and first["growth_mb_s"] is None
+    car.now += 10.0
+    grow(folder, 5_000_000)
+    second = car.controller.list_bags()[0]
+    assert second["growth_mb_s"] == 0.5
+    assert second["size_mb"] == 6.0
+
+
+def test_growth_rate_is_zero_for_an_idle_bag(car):
+    make_bag(car, "run", size=1_000_000, age=10)
+    car.controller.list_bags()
+    car.now += 6.0
+    assert car.controller.list_bags()[0]["growth_mb_s"] == 0.0
+
+
+def test_growth_rate_averages_over_the_window_not_just_the_last_poll(car):
+    folder = make_bag(car, "run", size=0, age=10)
+    car.controller.list_bags()
+    for _ in range(4):  # 6 MB per 6 s poll: 1 MB/s
+        car.now += 6.0
+        grow(folder, 6_000_000)
+        rate = car.controller.list_bags()[0]["growth_mb_s"]
+    assert rate == 1.0
+    car.now += 6.0  # then the recorder goes quiet for one poll
+    assert car.controller.list_bags()[0]["growth_mb_s"] == pytest.approx(0.8, abs=0.01)
+
+
+def test_two_polls_within_a_second_do_not_skew_the_rate(car):
+    folder = make_bag(car, "run", size=0, age=10)
+    car.controller.list_bags()
+    car.now += 10.0
+    grow(folder, 10_000_000)
+    car.controller.list_bags()
+    car.now += 0.2
+    assert car.controller.list_bags()[0]["growth_mb_s"] == 1.0
+
+
+def test_growth_rate_does_not_average_across_a_long_gap(car):
+    folder = make_bag(car, "run", size=0, age=10)
+    car.controller.list_bags()
+    car.now += 3600.0
+    grow(folder, 3_600_000)
+    assert car.controller.list_bags()[0]["growth_mb_s"] is None  # starts over
+    car.now += 6.0
+    grow(folder, 6_000_000)
+    assert car.controller.list_bags()[0]["growth_mb_s"] == 1.0
+
+
+def test_growth_rate_starts_over_for_a_new_bag_and_only_the_active_bag_has_one(car):
+    make_bag(car, "old", size=1_000_000, age=1000)
+    folder = make_bag(car, "new", size=1_000_000, age=10)
+    car.controller.list_bags()
+    car.now += 10.0
+    grow(folder, 10_000_000)
+    bags = car.controller.list_bags()
+    assert bags[0]["growth_mb_s"] == 1.0
+    assert "growth_mb_s" not in bags[1]
+    make_bag(car, "newer", size=0, age=0)
+    assert car.controller.list_bags()[0]["growth_mb_s"] is None
+
+
+def test_growth_state_is_forgotten_when_nothing_is_recording(env):
+    make_bag(env, "run", size=1_000_000, age=10)
+    assert "growth_mb_s" not in env.controller.list_bags()[0]
+    env.running_car()
+    env.controller._invalidate()
+    env.controller.list_bags()
+    env.now += 10.0
+    assert env.controller.list_bags()[0]["growth_mb_s"] == 0.0
+    env.world.containers["car-stack"]["state"] = "exited"
+    env.controller._invalidate()
+    assert env.controller.list_bags()[0]["active"] is False
+    assert env.controller._growth_samples == type(env.controller._growth_samples)()

@@ -66,6 +66,8 @@ export interface BagInfo {
   size_mb: number;
   mtime: number;
   active: boolean;
+  /** MB/s over the last 30 s; only on the active bag, null until two samples exist. */
+  growth_mb_s?: number | null;
 }
 
 export interface LogEntry {

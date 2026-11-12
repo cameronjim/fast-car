@@ -5,13 +5,16 @@ import {
   bytesToBlobUrl,
   eventLine,
   fmt,
+  fmtBagSize,
   fmtDuration,
+  fmtGrowth,
   lapSubline,
   occupancyToImage,
   parseLapStatus,
   poseOf,
   pushEvent,
   quatToYaw,
+  recordingSummary,
   scanToPoints,
   speedFromOdom,
   steeringFromDrive,
@@ -293,5 +296,34 @@ describe("small formatters", () => {
     } finally {
       URL.createObjectURL = orig;
     }
+  });
+});
+
+describe("bag size and growth", () => {
+  it("fmtBagSize switches to GB at 1000 MB", () => {
+    expect(fmtBagSize(0)).toBe("0 MB");
+    expect(fmtBagSize(999.4)).toBe("999 MB");
+    expect(fmtBagSize(9100)).toBe("9.1 GB");
+  });
+  it("fmtGrowth", () => {
+    expect(fmtGrowth(null)).toBe("measuring");
+    expect(fmtGrowth(undefined)).toBe("measuring");
+    expect(fmtGrowth(Number.NaN)).toBe("measuring");
+    expect(fmtGrowth(0)).toBe("no growth");
+    expect(fmtGrowth(-1)).toBe("no growth");
+    expect(fmtGrowth(0.004)).toBe("+4 kB/s");
+    expect(fmtGrowth(0.0001)).toBe("+1 kB/s");
+    expect(fmtGrowth(0.5)).toBe("+0.50 MB/s");
+    expect(fmtGrowth(13.4)).toBe("+13.40 MB/s");
+  });
+  it("recordingSummary names the active bag, its size and growth", () => {
+    const bags = [
+      { name: "new", size_mb: 12.4, active: true, growth_mb_s: 0.5 },
+      { name: "old", size_mb: 9100, active: false },
+    ];
+    expect(recordingSummary(bags)).toBe("Recording new: 12 MB, +0.50 MB/s");
+    expect(recordingSummary([{ ...bags[0], growth_mb_s: null }])).toBe("Recording new: 12 MB, measuring");
+    expect(recordingSummary([bags[1]])).toBeNull();
+    expect(recordingSummary([])).toBeNull();
   });
 });

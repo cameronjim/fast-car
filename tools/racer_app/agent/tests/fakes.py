@@ -180,7 +180,7 @@ class World:
             return (0, self._scan())
         m = re.fullmatch(
             r"for p in ([0-9 ]+); do grep -aq ros2 /proc/\$p/cmdline 2>/dev/null && "
-            r"kill -(INT|TERM|KILL) \$p; done",
+            r"\{ pkill -(INT|TERM|KILL) -P \$p; kill -\2 \$p; \}; done",
             script,
         )
         if m:
@@ -192,7 +192,7 @@ class World:
             if APP_DRIVE_PID in pids:
                 self.drive_label = None
             return (0, "")
-        m = re.search(r"kill -(INT|TERM|KILL) \$p$", script)
+        m = re.search(r"\{ pkill -(INT|TERM|KILL) -P \$p; kill -\1 \$p; \}$", script)
         if m:
             if self.drive_label is None:
                 return (1, "")

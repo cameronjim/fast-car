@@ -137,7 +137,7 @@ def test_parse_ignores_wrappers_the_stack_the_recorder_and_junk():
 def test_the_scan_script_reads_proc_and_the_signal_script_is_pid_only():
     assert "/proc/" in cmd.DRIVE_SCAN_SCRIPT and "docker" not in cmd.DRIVE_SCAN_SCRIPT
     script = cmd.drive_pids_signal_script([30, 31], "INT")
-    assert script.startswith("for p in 30 31; do") and "kill -INT $p" in script
+    assert script.startswith("for p in 30 31; do") and "{ pkill -INT -P $p; kill -INT $p; }" in script
     for bad in ([], [0], [1], ["30; reboot"]):
         with pytest.raises((cmd.CommandError, ValueError)):
             cmd.drive_pids_signal_script(bad, "INT")

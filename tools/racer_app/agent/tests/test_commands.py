@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -200,7 +204,8 @@ def test_drive_launch_script_records_pid_mode_and_execs():
 
 
 def test_signal_scripts_only_accept_known_signals():
-    assert cmd.drive_signal_script("INT").endswith("kill -INT $p")
+    script = cmd.drive_signal_script("INT")
+    assert script.endswith("{ pkill -INT -P $p; kill -INT $p; }")
     with pytest.raises(cmd.CommandError):
         cmd.drive_signal_script("STOP; reboot")
 
@@ -348,3 +353,45 @@ def test_pnp_net_backend_needs_a_perception_bundle_under_the_models_dir():
             pnp_perception_container_path="/workspace/data/x",
             pnp_backend="net",
         )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or shutil.which("pkill") is None,
+    reason="needs /proc and pkill (the car and CI are Linux)",
+)
+def test_the_signal_script_stops_the_node_a_ros2_run_started(tmp_path):
+    """2026-11-13: `ros2 run` does not forward SIGINT, so the tracker node kept driving after
+    STOP. A parent whose command line says ros2, with a child that ignores nothing: both die."""
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess,sys; subprocess.Popen(['sleep','300']).wait()",
+            "ros2",
+        ],
+    )
+    try:
+        child_pid = None
+        for _ in range(50):
+            out = subprocess.run(
+                ["pgrep", "-P", str(parent.pid)], capture_output=True, text=True, check=False
+            )
+            if out.stdout.strip():
+                child_pid = int(out.stdout.split()[0])
+                break
+            time.sleep(0.05)
+        assert child_pid is not None
+        script = cmd.drive_signal_script("TERM").replace(cmd.DRIVE_PID_FILE, str(tmp_path / "pid"))
+        (tmp_path / "pid").write_text(f"{parent.pid}\n")
+        subprocess.run(["bash", "-c", script], check=True)
+        parent.wait(timeout=5)
+        for _ in range(50):
+            stat = Path(f"/proc/{child_pid}/stat")
+            if not stat.exists() or stat.read_text().split()[2] == "Z":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("the child of the ros2 process is still running")
+    finally:
+        if parent.poll() is None:
+            parent.kill()

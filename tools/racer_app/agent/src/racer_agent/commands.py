@@ -478,9 +478,14 @@ DRIVE_STATUS_SCRIPT = (
 def drive_signal_script(signal: str) -> str:
     if signal not in ("INT", "TERM", "KILL"):
         raise CommandError("bad signal")
+    # The children first, then the ros2 process: `ros2 run` (the tracker) does not pass a signal
+    # on to the node it started, so killing only the ros2 process left the node driving
+    # (2026-11-13). A terminal Ctrl-C reaches the whole process group; this does the same for the
+    # one level a ros2 command has. `ros2 launch` nodes get it twice, as with Ctrl-C.
     return (
         f'p=$(cat {DRIVE_PID_FILE} 2>/dev/null) && [ -n "$p" ] && '
-        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && kill -{signal} $p"
+        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && "
+        f"{{ pkill -{signal} -P $p; kill -{signal} $p; }}"
     )
 
 
@@ -566,7 +571,8 @@ def drive_pids_signal_script(pids: Sequence[int], signal: str) -> str:
     pid_list = " ".join(str(p) for p in clean)
     return (
         f"for p in {pid_list}; do "
-        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && kill -{signal} $p; done"
+        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && "
+        f"{{ pkill -{signal} -P $p; kill -{signal} $p; }}; done"
     )
 
 

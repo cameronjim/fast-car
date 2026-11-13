@@ -5,7 +5,7 @@ created_utc: '2026-11-11T23:38:02Z'
 git_sha: 44e8c05e68f2720f847ff96af265b59526e87e13
 training_config_sha256: e86a8d154d30ae1f0763e37a5bce19e61d0512e6d2b74d8d13f9e6f906c8fa66
 vehicle_params:
-  schema_version: 0.16.0
+  schema_version: 0.17.0
   sysid_session_id: none-preliminary
 payload:
 - file: weights.npz

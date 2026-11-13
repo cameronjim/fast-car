@@ -73,10 +73,18 @@ def test_the_throttle_full_scale_is_the_vesc_cap_at_the_wheel():
     ) / 60.0
     derived = 2.0 * math.pi * PARAMS["tires"]["nominal_radius_m"] * wheel_rps
     assert PARAMS["actuation"]["throttle_full_scale_mps"] == pytest.approx(derived, rel=0.005)
-    # and it is the old 2.91 m/s divided by the push-test ratio
+    # and it is the old 2.91 m/s (derived at the 6000 ERPM cap of the time) divided by the
+    # push-test ratio, scaled by the ERPM cap now committed (6000 -> 9000 on 2026-11-13)
     assert PARAMS["actuation"]["throttle_full_scale_mps"] == pytest.approx(
-        2.91 / push_ratio(), rel=0.005
+        2.91 / push_ratio() * vesc_l_max_erpm() / 6000.0, rel=0.005
     )
+
+
+def test_the_ppm_full_scale_matches_the_motor_erpm_cap():
+    """The throttle full scale assumes the PPM speed loop's full pulse is the motor's ERPM cap."""
+    newest = max((REPO / "config" / "vesc").glob("*-fsesc67-app.xml"))
+    pid_max = float(ET.parse(newest).getroot().find(".//app_ppm_conf.pid_max_erpm").text)
+    assert pid_max == vesc_l_max_erpm()
 
 
 def test_the_steering_table_is_the_measured_per_side_calibration():
@@ -145,8 +153,10 @@ def test_the_slowest_speed_the_vesc_acts_on_is_computed_not_remembered():
 
 def test_converted_speeds_are_the_old_ones_over_the_pulse_ratio():
     """Pulse-preserving conversion: a request r maps to r / full_scale of the forward range, so
-    the old request over the old full scale (2.91) must equal the new one over the new (2.08)."""
-    new_scale = PARAMS["actuation"]["throttle_full_scale_mps"]
+    the old request over the old full scale (2.91) must equal the new one over the new (2.08).
+    Both were at the 6000 ERPM cap of the time; the committed full scale is for the committed cap
+    (9000 since 2026-11-13), so it is taken back to 6000 ERPM for this 2026-11-10 conversion."""
+    new_scale = PARAMS["actuation"]["throttle_full_scale_mps"] * 6000.0 / vesc_l_max_erpm()
     for old, new in (
         (0.5, 0.36),  # gap_follow min_speed_mps, escape speed magnitude, wall_follow min
         (0.9, 0.64),  # floor profile max_speed_mps

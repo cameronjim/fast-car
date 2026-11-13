@@ -134,8 +134,10 @@ _TEMPLATE: dict[str, Any] = {
         # limits.stopping_margin_m were added (the stopping-distance gate) and the stopping model was
         # measured,
         # then 0.15.0 -> 0.16.0 on 2026-11-12 when the required steering.yaw_rate_gain_table was
-        # added (wheel odometry yaw).
-        "schema_version": "0.16.0",
+        # added (wheel odometry yaw),
+        # then 0.16.0 -> 0.17.0 on 2026-11-13 when throttle_full_scale_mps was re-derived for the
+        # 9000 ERPM VESC cap (value-only).
+        "schema_version": "0.17.0",
         "sysid_session_id": "none-preliminary",
     },
     "training": {

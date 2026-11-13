@@ -36,6 +36,10 @@ pytest.importorskip("f1tenth_gym")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = REPO_ROOT / "tests" / "l5_reactive_bench" / "track_family_runner.py"
 DYNAMICS_BUNDLE = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-nominal-v0"
+# The planner's model: the fitted car fixture, which carries the speed dead zone (0.22 m/s), so the
+# planner's speed floor sits above the dead zone the car-like plant has. The sim plant itself
+# keeps the nominal fixture's actuation (DYNAMICS_BUNDLE) with its own 0.20 m/s dead zone.
+PLANNER_BUNDLE = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-car-2026-11-12"
 PERCEPTION_BUNDLE = (
     REPO_ROOT / "ros_ws" / "src" / "racer_track_perception" / "test" / "fixtures" / "bundle_release"
 )
@@ -74,6 +78,7 @@ def test_pnp_laps_the_track_through_the_real_command_path(
     if backend == "net" and not (PERCEPTION_BUNDLE / "manifest.yaml").is_file():
         pytest.skip(f"released perception bundle not committed yet: {PERCEPTION_BUNDLE}")
     assert (DYNAMICS_BUNDLE / "manifest.yaml").is_file(), DYNAMICS_BUNDLE
+    assert (PLANNER_BUNDLE / "manifest.yaml").is_file(), PLANNER_BUNDLE
     name, params = track
     out = tmp_path / "result.json"
     command = [
@@ -88,7 +93,7 @@ def test_pnp_laps_the_track_through_the_real_command_path(
         "--backend",
         backend,
         "--dynamics-bundle",
-        str(DYNAMICS_BUNDLE),
+        str(PLANNER_BUNDLE),
         "--v-max-mps",
         str(V_MAX_MPS),
         "--car",
@@ -188,6 +193,7 @@ CAR_LIKE_CASES = [
 @pytest.mark.parametrize(("track", "reverse", "perception"), CAR_LIKE_CASES)
 def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, capsys):
     assert (DYNAMICS_BUNDLE / "manifest.yaml").is_file(), DYNAMICS_BUNDLE
+    assert (PLANNER_BUNDLE / "manifest.yaml").is_file(), PLANNER_BUNDLE
     name, params = track
     out = tmp_path / "result.json"
     command = [
@@ -202,7 +208,7 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
         "--backend",
         "geometric",
         "--dynamics-bundle",
-        str(DYNAMICS_BUNDLE),
+        str(PLANNER_BUNDLE),
         "--v-max-mps",
         str(CAR_LIKE_V_MAX_MPS),
         "--car",

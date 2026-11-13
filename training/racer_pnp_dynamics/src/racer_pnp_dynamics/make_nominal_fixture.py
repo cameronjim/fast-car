@@ -1,6 +1,5 @@
 """Write config/pnp/fixtures/dyn-nominal-v0/, the committed dynamics bundle that is NOT fitted:
-the contract's placeholder nominal values plus the car's measured speed dead zone (0.20 m/s, the
-value the L5 canary's car-like plant uses), residual disabled, validity up to 1.0 m/s. The sim
+the contract's placeholder nominal values, residual disabled, validity up to 1.0 m/s. The sim
 canary and the planner's tests run on it.
 
     uv run python -m racer_pnp_dynamics.make_nominal_fixture
@@ -25,8 +24,6 @@ MODEL_ID = "dyn-nominal-v0"
 CREATED_UTC = "2026-11-12T00:00:00Z"  # fixed so regeneration is byte for byte reproducible
 GIT_SHA = "0" * 40  # not built from a commit
 V_MAX_MPS = 1.0
-DEAD_ZONE_MPS = 0.20  # the car's measured dead zone: a /drive speed under it leaves it standing
-NOMINAL = PLACEHOLDER_NOMINAL.replace(speed_deadband_mps=DEAD_ZONE_MPS)
 FIXTURE_RELATIVE = Path("config") / "pnp" / "fixtures" / MODEL_ID
 DATA = ["not fitted: nominal defaults for simulation and tests"]
 
@@ -38,10 +35,10 @@ def make_fixture(out_dir: Path, vehicle: Vehicle) -> dict:
         created_utc=CREATED_UTC,
         git_sha=GIT_SHA,
         training_config_sha256=config_sha256(
-            {"model_id": MODEL_ID, "nominal": NOMINAL.to_dict(), "v_max": V_MAX_MPS}
+            {"model_id": MODEL_ID, "nominal": PLACEHOLDER_NOMINAL.to_dict(), "v_max": V_MAX_MPS}
         ),
         vehicle=vehicle,
-        nominal=NOMINAL,
+        nominal=PLACEHOLDER_NOMINAL,
         residual=Residual.disabled(),
         v_max_mps=V_MAX_MPS,
         data=DATA,

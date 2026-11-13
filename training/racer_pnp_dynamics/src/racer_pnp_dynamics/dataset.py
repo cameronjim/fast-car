@@ -1,13 +1,14 @@
 """Recordings, segments of continuous driving, and the time split.
 
-Split rule (fixed in the brief): within each bag, by time, the first 70 percent is train, the next
-10 percent validation and the last 20 percent held out. The bag `HELD_OUT_BAG` is held out
-entirely.
+Split rule (brief 14): within each bag, by time, the first 70 percent of the bag's MOVING data
+(samples of `driving_mask`) is train and the last 30 percent is held out; there is no validation
+split (the delay and the dead zone are chosen by blocked cross-validation over the training
+segments, and the held-out part scores them). No bag is held out entirely any more.
 
 Finding that shapes this module: the bags under car-data/bags are NESTED COPIES of three
 recordings, not independent ones. `..._03-54-11_car_teleop` is the first 528 s of
 `..._03-54-11_car_teleop_cw` (messages identical), and `..._04-20-19_car_teleop` and `_latest` are
-prefixes of `_v3`. Using them all would leak the held-out bag into training, so `drop_nested`
+prefixes of `_v3`. Using them all would leak the held-out part into training, so `drop_nested`
 keeps only the longest bag of each group of overlapping time spans.
 """
 
@@ -22,9 +23,8 @@ import numpy as np
 from .bags import Run
 from .icp_motion import MotionSeries
 
-HELD_OUT_BAG = "2026-11-11T04-20-19_car_teleop_v3"
-TRAIN_FRACTION = 0.7
-VAL_FRACTION = 0.1  # the rest is held out
+TRAIN_FRACTION = 0.7  # of a bag's moving data; the rest is held out
+VAL_FRACTION = 0.0  # no validation split: see the module docstring
 SPLITS = ("train", "val", "heldout")
 
 DRIVING_MPS = 0.05  # commanded or measured speed above this counts as driving
@@ -71,17 +71,22 @@ def drop_nested(runs: Sequence[Run], slack_s: float = 0.2) -> list[Run]:
     return kept
 
 
-def split_times(t0_s: float, t1_s: float) -> tuple[float, float]:
-    """Boundary times: train until the first, validation until the second, then held out."""
-    span = t1_s - t0_s
-    return t0_s + TRAIN_FRACTION * span, t0_s + (TRAIN_FRACTION + VAL_FRACTION) * span
+def split_times(run: Run) -> tuple[float, float]:
+    """Boundary times: train until the first, validation until the second (the same time, there
+    is no validation split), then held out. The first boundary is the time by which TRAIN_FRACTION
+    of the run's moving samples (`driving_mask`) have passed."""
+    moving = np.flatnonzero(driving_mask(run))
+    if len(moving) == 0:
+        return float(run.t_s[0]), float(run.t_s[0])
+    k_train = min(int(np.ceil(TRAIN_FRACTION * len(moving))), len(moving) - 1)
+    k_val = min(int(np.ceil((TRAIN_FRACTION + VAL_FRACTION) * len(moving))), len(moving) - 1)
+    # the boundary sits at the start of the first sample that is not in the part
+    return float(run.t_s[moving[k_train]]), float(run.t_s[moving[k_val]])
 
 
 def split_of_time(run: Run, t_s: float | np.ndarray) -> np.ndarray:
     """Split name index (0 train, 1 val, 2 held out) of grid time(s)."""
-    if run.name == HELD_OUT_BAG:
-        return np.full(np.shape(t_s), 2)
-    b1, b2 = split_times(float(run.t_s[0]), float(run.t_s[-1]))
+    b1, b2 = split_times(run)
     t = np.asarray(t_s)
     return np.where(t < b1, 0, np.where(t < b2, 1, 2))
 

@@ -577,6 +577,7 @@ def replay_cut(
     tracks_mode: str,
     params: dict[str, float | bool],
     tracks: perception.Tracks | None = None,
+    bundle: Path = DYNAMICS_BUNDLE,
 ) -> tuple[dict, dict]:
     cli = _cli_or_skip()
     rec, a, b = cut_fixture.load_cut(FIXTURE, name)
@@ -585,7 +586,7 @@ def replay_cut(
     stream = tmp_path / f"{name}.{unique}.stream"
     planner_stream.write_stream(lines, stream)
     rows = planner_stream.run_cli(
-        cli, DYNAMICS_BUNDLE, 0.4, {**DETERMINISTIC, **params}, stream, tmp_path / f"{unique}.csv"
+        cli, bundle, 0.4, {**DETERMINISTIC, **params}, stream, tmp_path / f"{unique}.csv"
     )
     recorded = (rec["st_t"] >= a) & (rec["st_t"] <= b)
     m = metrics.planner_metrics(
@@ -614,7 +615,9 @@ def test_planner_replay_r0_keeps_driving_where_the_v0_car_stopped(tmp_path: Path
 # An open-loop replay: the recorded wheel does not follow the replayed commands, so the wheel stall
 # detector (block reason 3) would fire wherever the recorded car stood still. It is set out of reach.
 OPEN_LOOP = {"stall_hold_s": 600.0}
-DEAD_ZONE = 0.20
+# The fitted car fixture carries the speed dead zone (0.22 m/s), so the planner floor is above it.
+CAR_BUNDLE = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-car-2026-11-12"
+DEAD_ZONE = 0.22
 
 
 def assert_only_start_ramp_ticks_are_in_the_dead_zone(rows: dict) -> None:
@@ -637,7 +640,7 @@ def assert_only_start_ramp_ticks_are_in_the_dead_zone(rows: dict) -> None:
 def test_planner_replay_r1_moves_at_the_floor_or_backs_out_at_the_recorded_corner(
     tmp_path: Path,
 ) -> None:
-    rows, m = replay_cut("R1", tmp_path, "recorded", dict(OPEN_LOOP))
+    rows, m = replay_cut("R1", tmp_path, "recorded", dict(OPEN_LOOP), bundle=CAR_BUNDLE)
     assert "NO_TRACK" not in m["state_counts"]
     assert_only_start_ramp_ticks_are_in_the_dead_zone(rows)  # v0 crawled under the dead zone
     state, cmd = rows["state"], rows["cmd_speed_mps"]
@@ -648,7 +651,7 @@ def test_planner_replay_r1_moves_at_the_floor_or_backs_out_at_the_recorded_corne
 
 
 def test_planner_replay_r3_nose_in_backs_out(tmp_path: Path) -> None:
-    rows, m = replay_cut("R3", tmp_path, "recorded", dict(OPEN_LOOP))
+    rows, m = replay_cut("R3", tmp_path, "recorded", dict(OPEN_LOOP), bundle=CAR_BUNDLE)
     assert m["collision_fraction_mean"] > 0.05
     assert_only_start_ramp_ticks_are_in_the_dead_zone(rows)
     assert m["state_counts"].get("RECOVERING", 0) > 0  # no free forward arc: reverse
@@ -660,7 +663,7 @@ def test_planner_replay_r3_nose_in_backs_out(tmp_path: Path) -> None:
 def test_planner_replay_drives_on_the_scan_alone_with_no_tracks(
     tmp_path: Path, perceiver: perception.Perceiver
 ) -> None:
-    rows, m = replay_cut("L", tmp_path, "none", dict(OPEN_LOOP))
+    rows, m = replay_cut("L", tmp_path, "none", dict(OPEN_LOOP), bundle=CAR_BUNDLE)
     assert "NO_TRACK" not in set(rows["state_name"]) and 6 not in set(rows["state"])
     assert set(rows["state"].tolist()) <= {1, 5, 7}  # this cut holds a stuck stretch
     assert float(np.nanmax(rows["track_confidence"])) == 0.0  # no track at all
@@ -668,7 +671,7 @@ def test_planner_replay_drives_on_the_scan_alone_with_no_tracks(
     rec, a, b = cut_fixture.load_cut(FIXTURE, "L")
     scans = planner_stream.scan_indices(rec, a - planner_stream.PREROLL_S, b)
     tracks = perception.run_perceiver(perceiver, rec, scans)
-    rows, m = replay_cut("L", tmp_path, "replay", dict(OPEN_LOOP), tracks)
+    rows, m = replay_cut("L", tmp_path, "replay", dict(OPEN_LOOP), tracks, bundle=CAR_BUNDLE)
     assert m["state_counts"].get("DRIVING", 0) > 0
     assert float(np.nanmean(rows["track_confidence"])) > 0.0  # the replayed tracks are used
     assert 6 not in set(rows["state"])  # no FAULT

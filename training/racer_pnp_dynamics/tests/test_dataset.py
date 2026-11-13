@@ -1,5 +1,5 @@
 """L1 for dataset.py: the split is by time, no sample is in two splits, nested bags are dropped,
-the held-out bag never appears in training."""
+every bag's held-out tail is after its training part."""
 
 from __future__ import annotations
 
@@ -18,14 +18,24 @@ def _run(name, t0, seconds, speed=0.4, odom=True):
     return Run(name, t, np.full_like(t, speed), np.zeros_like(t), wheel, [])
 
 
-def test_split_boundaries_are_70_10_20_of_the_span():
+def test_split_is_70_30_of_the_moving_data_and_has_no_validation_part():
     run = _run("a", 100.0, 100.0)
-    b1, _ = dataset.split_times(run.t_s[0], run.t_s[-1])
-    assert b1 == run.t_s[0] + 0.7 * (run.t_s[-1] - run.t_s[0])
+    b1, b2 = dataset.split_times(run)
+    assert b1 == b2 and b1 == run.t_s[70 * 50]
     which = dataset.split_of_time(run, run.t_s)
-    assert np.mean(which == 0) == np.float64(np.mean(run.t_s < b1))
-    assert 0.69 < np.mean(which == 0) < 0.71 and 0.09 < np.mean(which == 1) < 0.11
-    assert 0.19 < np.mean(which == 2) < 0.21 and (np.diff(which) >= 0).all()
+    assert 0.69 < np.mean(which == 0) < 0.71 and np.mean(which == 1) == 0.0
+    assert 0.29 < np.mean(which == 2) < 0.31 and (np.diff(which) >= 0).all()
+
+
+def test_split_counts_moving_samples_not_the_time_span():
+    run = _run("a", 0.0, 100.0)
+    run.speed_cmd_mps[:2500] = 0.0  # the first half of the bag stands still
+    run.wheel_speed_mps[:2500] = 0.0
+    b1, _ = dataset.split_times(run)
+    moving = np.flatnonzero(dataset.driving_mask(run))
+    assert len(moving) == 2500
+    assert b1 == run.t_s[moving[int(np.ceil(0.7 * 2500))]]
+    assert 0.84 < (b1 - run.t_s[0]) / 100.0 < 0.86  # 50 s idle + 70 percent of 50 s moving
 
 
 def test_no_sample_is_in_two_splits_and_segments_cover_each_split_once():
@@ -33,18 +43,18 @@ def test_no_sample_is_in_two_splits_and_segments_cover_each_split_once():
     segs = dataset.make_segments(run)
     spans = sorted((s.i0, s.i1) for s in segs)
     assert all(a1 <= b0 for (_, a1), (b0, _) in pairwise(spans))
-    assert {s.split for s in segs} == {"train", "val", "heldout"}
+    assert {s.split for s in segs} == {"train", "heldout"}
     train = [s for s in segs if s.split == "train"]
     heldout = [s for s in segs if s.split == "heldout"]
     assert max(s.t1_s for s in train) < min(s.t0_s for s in heldout)
     assert dataset.seconds(segs) > 95.0
 
 
-def test_held_out_bag_is_entirely_held_out():
-    run = _run(dataset.HELD_OUT_BAG, 0.0, 60.0)
-    segs = dataset.make_segments(run)
-    assert segs and {s.split for s in segs} == {"heldout"}
-    assert dataset.by_split(segs, "train") == [] and dataset.by_split(segs, "val") == []
+def test_every_bag_has_a_held_out_tail_and_none_is_held_out_whole():
+    for name in ("2026-11-11T04-20-19_car_teleop_v3", "2026-11-12T03-04-56_car_teleop"):
+        segs = dataset.make_segments(_run(name, 0.0, 60.0))
+        assert {s.split for s in segs} == {"train", "heldout"}
+        assert dataset.by_split(segs, "val") == []
 
 
 def test_by_split_odom_filter():

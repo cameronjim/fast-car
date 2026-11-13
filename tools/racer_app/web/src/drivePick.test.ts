@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Api, ApiError, loginError, type TokenStore } from "./api";
-import { externalDriveText, gapSpeed, pnpSelectionText, selectedBundle, selectedParamsFile } from "./drivePick";
+import { externalDriveText, gapMinSpeed, gapSpeed, pnpSelectionText, selectedBundle, selectedParamsFile } from "./drivePick";
 
 describe("bundle selection", () => {
   it("selects the only bundle, so the request names it", () => {
@@ -67,6 +67,48 @@ describe("gap follow max speed", () => {
 
   it("with no bounds known yet, a number passes (the agent still checks)", () => {
     expect(gapSpeed("0.5", undefined).value).toBe(0.5);
+  });
+});
+
+describe("gap follow min speed", () => {
+  const bounds = { min: 0.36, max: 1.0 };
+
+  it("empty means the profile's own floor", () => {
+    expect(gapMinSpeed("", bounds, undefined)).toEqual({ value: undefined, error: "" });
+    expect(gapMinSpeed("  ", bounds, 0.6)).toEqual({ value: undefined, error: "" });
+  });
+
+  it("with no max set, accepts 0 up to the profile's max, edges included", () => {
+    expect(gapMinSpeed("0", bounds, undefined).value).toBe(0);
+    expect(gapMinSpeed("0.5", bounds, undefined).value).toBe(0.5);
+    expect(gapMinSpeed("1", bounds, undefined).value).toBe(1);
+  });
+
+  it("with no max set, refuses above the profile's max or below 0", () => {
+    for (const bad of ["1.01", "-0.01"]) {
+      const r = gapMinSpeed(bad, bounds, undefined);
+      expect(r.value).toBeUndefined();
+      expect(r.error).toContain("between 0 and 1 m/s");
+      expect(r.error).toContain("this profile's max speed");
+    }
+  });
+
+  it("never exceeds the max speed set in the max box", () => {
+    expect(gapMinSpeed("0.6", bounds, 0.6).value).toBe(0.6);
+    const r = gapMinSpeed("0.61", bounds, 0.6);
+    expect(r.value).toBeUndefined();
+    expect(r.error).toContain("between 0 and 0.6 m/s");
+    expect(r.error).toContain("the max speed set here");
+  });
+
+  it("refuses what is not a number", () => {
+    expect(gapMinSpeed("slow", bounds, undefined).error).toContain("not a number");
+    expect(gapMinSpeed("Infinity", bounds, undefined).error).toContain("not a number");
+  });
+
+  it("with no bounds known yet, refuses only a negative number (the agent still checks)", () => {
+    expect(gapMinSpeed("5", undefined, undefined).value).toBe(5);
+    expect(gapMinSpeed("-1", undefined, undefined).error).toContain("negative");
   });
 });
 

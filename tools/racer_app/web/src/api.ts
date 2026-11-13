@@ -248,6 +248,7 @@ export class Api {
     pnp_v_max_mps?: number;
     pnp_params?: string;
     max_speed_mps?: number;
+    min_speed_mps?: number;
   }) => this.call<ActionReply>("POST", "/api/drive/start", b);
   startPerception = (b: { mode: string; device: string }) =>
     this.call<ActionReply>("POST", "/api/perception/start", b);

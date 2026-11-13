@@ -90,7 +90,11 @@ def _describe(mode: str, params: dict[str, Any]) -> str:
         )
     if mode == "gap_follow":
         cap = params.get("max_speed_mps")
-        return f" max_speed={'profile default' if cap is None else f'{cap:.2f} m/s'}"
+        floor = params.get("min_speed_mps")
+        return (
+            f" max_speed={'profile default' if cap is None else f'{cap:.2f} m/s'}"
+            f" min_speed={'profile default' if floor is None else f'{floor:.2f} m/s'}"
+        )
     return ""
 
 
@@ -857,11 +861,13 @@ class Controller:
         pnp_v_max_mps: float = cmd.PNP_DEFAULT_SPEED_MPS,
         pnp_params: str = "",
         max_speed_mps: float | None = None,
+        min_speed_mps: float | None = None,
     ) -> dict[str, Any]:
         action = f"drive.start.{mode}"
         params: dict[str, Any] = {"mode": mode, "profile": profile, "raceline": raceline}
         if mode == "gap_follow":
             params["max_speed_mps"] = max_speed_mps
+            params["min_speed_mps"] = min_speed_mps
         if mode == "spiderbot":
             params.update({"patrol": patrol, "rule": rule, "speed_mps": speed_mps})
         if mode == "ml_policy":
@@ -893,6 +899,7 @@ class Controller:
                     policy,
                     (pnp_perception, pnp_dynamics, pnp_backend, pnp_v_max_mps, pnp_params),
                     max_speed_mps,
+                    min_speed_mps,
                 )
                 params.update(resolved)
                 used_override = self._gate_drive(override, override_reason)
@@ -960,6 +967,7 @@ class Controller:
         policy: str = "",
         pnp: tuple[str, str, str, float, str] = ("", "", "net", cmd.PNP_DEFAULT_SPEED_MPS, ""),
         max_speed_mps: float | None = None,
+        min_speed_mps: float | None = None,
     ) -> tuple[str, str, dict[str, Any]]:
         """Validate a driving request against the whitelist.
 
@@ -1039,9 +1047,34 @@ class Controller:
                 )
         elif mode != "gap_follow" and max_speed_mps is not None:
             raise ActionError("a max speed is only used with gap follow", 400)
+        if mode == "gap_follow" and min_speed_mps is not None:
+            # The node refuses min > max, so the floor is checked against the max speed that
+            # will actually be in effect: the caller's cap, else the profile's ceiling (clipped
+            # by vehicle_params' speed cap).
+            if max_speed_mps is not None:
+                effective, source = float(max_speed_mps), "the max speed set here"
+            else:
+                effective = self.gap_follow_speed_limits(profile)[1]
+                source = f"profile {profile}'s max speed"
+            if (
+                isinstance(min_speed_mps, bool)
+                or not isinstance(min_speed_mps, (int, float))
+                or not (0.0 <= float(min_speed_mps) <= effective)
+            ):
+                raise ActionError(
+                    f"gap follow min speed must be between 0 and {effective:g} m/s "
+                    f"(it cannot exceed the max speed in effect, {source})",
+                    400,
+                )
+        elif mode != "gap_follow" and min_speed_mps is not None:
+            raise ActionError("a min speed is only used with gap follow", 400)
+        gap = mode == "gap_follow"
         return (
             cmd.ros_cmd_for(
-                mode, profile=profile, max_speed_mps=max_speed_mps if mode == "gap_follow" else None
+                mode,
+                profile=profile,
+                max_speed_mps=max_speed_mps if gap else None,
+                min_speed_mps=min_speed_mps if gap else None,
             ),
             label,
             resolved,

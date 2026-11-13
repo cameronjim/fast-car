@@ -420,6 +420,111 @@ def test_the_speed_must_be_a_number_in_the_command():
         cmd.ros_cmd_for("gap_follow", profile="none", max_speed_mps=True)  # type: ignore[arg-type]
 
 
+# -- gap follow min speed ---------------------------------------------------------------------
+
+
+def test_gap_follow_without_a_min_speed_passes_no_min_argument(car):
+    car.controller.start_drive("gap_follow", profile="race-2026-11-13", max_speed_mps=1.0)
+    assert "min_speed_mps" not in detached_execs(car)[0][-1]
+    assert car.last_log()["params"]["min_speed_mps"] is None
+    assert "min_speed=profile default" in car.last_log()["detail"]
+
+
+def test_gap_follow_with_a_min_speed_passes_it_and_logs_it(car):
+    car.controller.start_drive(
+        "gap_follow", profile="race-2026-11-12", max_speed_mps=0.6, min_speed_mps=0.5
+    )
+    assert (
+        "profile:=race-2026-11-12 max_speed_mps:=0.60 min_speed_mps:=0.50"
+        in detached_execs(car)[0][-1]
+    )
+    assert car.last_log()["params"]["min_speed_mps"] == 0.5
+    assert "min_speed=0.50 m/s" in car.last_log()["detail"]
+
+
+def test_gap_follow_min_speed_alone_passes_only_the_min(car):
+    car.controller.start_drive("gap_follow", profile="race-2026-11-13", min_speed_mps=1)
+    launched = detached_execs(car)[0][-1]
+    assert "profile:=race-2026-11-13 min_speed_mps:=1.00" in launched
+    assert "max_speed_mps" not in launched
+
+
+@pytest.mark.parametrize(
+    "profile,max_speed,min_speed,ok",
+    [
+        # no cap set: bounded by the profile's own ceiling
+        ("race-2026-11-12", None, 1.0, True),
+        ("race-2026-11-12", None, 1.01, False),
+        ("lane-2026-10-25", None, 0.64, True),
+        ("lane-2026-10-25", None, 0.65, False),
+        ("none", None, 1.43, True),
+        ("none", None, 1.5, False),
+        ("race-2026-11-12", None, 0.0, True),
+        ("race-2026-11-12", None, -0.01, False),
+        ("race-2026-11-12", None, float("nan"), False),
+        ("race-2026-11-12", None, float("inf"), False),
+        # a cap set: bounded by that cap, never above it
+        ("race-2026-11-12", 0.6, 0.6, True),
+        ("race-2026-11-12", 0.6, 0.61, False),
+        ("race-2026-11-13", 0.4, 0.36, True),
+        ("race-2026-11-13", 0.4, 1.0, False),
+    ],
+)
+def test_gap_follow_min_speed_is_bounded_by_the_max_in_effect(
+    car, profile, max_speed, min_speed, ok
+):
+    kwargs = {"profile": profile, "max_speed_mps": max_speed, "min_speed_mps": min_speed}
+    if ok:
+        car.controller.start_drive("gap_follow", **kwargs)
+        assert detached_execs(car)
+    else:
+        with pytest.raises(ActionError, match="min speed") as exc:
+            car.controller.start_drive("gap_follow", **kwargs)
+        assert exc.value.status == 400 and not detached_execs(car)
+        assert "cannot exceed the max speed" in exc.value.message
+
+
+def test_gap_follow_min_speed_is_also_bounded_by_vehicle_params(car):
+    (car.repo / "config").mkdir(exist_ok=True)
+    (car.repo / "config" / "vehicle_params.yaml").write_text(
+        "limits:\n  global_speed_cap_mps: 0.5\n"
+    )
+    with pytest.raises(ActionError, match="between 0 and 0.5"):
+        car.controller.start_drive("gap_follow", profile="race-2026-11-12", min_speed_mps=0.6)
+    car.controller.start_drive("gap_follow", profile="race-2026-11-12", min_speed_mps=0.5)
+
+
+def test_an_out_of_range_max_is_reported_before_the_min(car):
+    with pytest.raises(ActionError, match="max speed"):
+        car.controller.start_drive(
+            "gap_follow", profile="race-2026-11-12", max_speed_mps=5.0, min_speed_mps=0.5
+        )
+    assert not detached_execs(car)
+
+
+@pytest.mark.parametrize("bad", ["0.5", True])
+def test_the_controller_refuses_a_min_speed_that_is_not_a_number(car, bad):
+    with pytest.raises(ActionError, match="min speed") as exc:
+        car.controller.start_drive("gap_follow", profile="race-2026-11-12", min_speed_mps=bad)
+    assert exc.value.status == 400 and not detached_execs(car)
+
+
+def test_a_min_speed_is_only_for_gap_follow(car):
+    with pytest.raises(ActionError, match="min speed is only used with gap follow"):
+        car.controller.start_drive("wall_follow", min_speed_mps=0.5)
+    assert not detached_execs(car)
+
+
+def test_the_min_speed_must_be_a_number_in_the_command():
+    with pytest.raises(cmd.CommandError, match="min speed must be a number"):
+        cmd.ros_cmd_for("gap_follow", profile="none", min_speed_mps="1; reboot")  # type: ignore[arg-type]
+    with pytest.raises(cmd.CommandError, match="min speed must be a number"):
+        cmd.ros_cmd_for("gap_follow", profile="none", min_speed_mps=False)  # type: ignore[arg-type]
+    assert cmd.ros_cmd_for("gap_follow", profile="none", min_speed_mps=0).endswith(
+        "profile:=none min_speed_mps:=0.00"
+    )
+
+
 # -- the profile ceilings mirror the launch file ----------------------------------------------
 
 

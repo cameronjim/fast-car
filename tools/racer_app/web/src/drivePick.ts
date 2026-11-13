@@ -62,6 +62,35 @@ export function gapSpeed(
   return { value: n, error: "" };
 }
 
+/**
+ * The gap follow min speed box. Empty means "the profile's own floor" (0.36, no argument sent).
+ * A number must lie in [0, the max speed in effect]: the max box's value when it holds a valid
+ * number, else the profile's max from the agent. The node refuses min above max. Returns what to
+ * send and why not, if it cannot be sent.
+ */
+export function gapMinSpeed(
+  text: string,
+  bounds: SpeedBounds | undefined,
+  maxSet: number | undefined,
+): { value: number | undefined; error: string } {
+  const t = text.trim();
+  if (t === "") return { value: undefined, error: "" };
+  const n = Number(t);
+  if (!Number.isFinite(n)) return { value: undefined, error: "min speed is not a number" };
+  const ceiling = maxSet ?? bounds?.max;
+  if (n < 0 || (ceiling !== undefined && n > ceiling)) {
+    const why = maxSet !== undefined ? "the max speed set here" : "this profile's max speed";
+    return {
+      value: undefined,
+      error:
+        ceiling === undefined
+          ? "min speed cannot be negative"
+          : `min speed must be between 0 and ${ceiling} m/s (it cannot exceed ${why})`,
+    };
+  }
+  return { value: n, error: "" };
+}
+
 /** The warning for a driving launch the app did not start, or null. */
 export function externalDriveText(
   external: ReadonlyArray<{ pid: number; mode: string }> | undefined,

@@ -104,6 +104,18 @@ def test_planner_leaving_driving_or_low_clearance_makes_the_lap_unclean() -> Non
     assert drive(LapMemory(cfg()), 1.0, clearance=0.05)[0].clean is False
 
 
+@pytest.mark.parametrize("state", [5, 7], ids=["BLOCKED", "RECOVERING"])
+def test_a_blocked_or_recovering_tick_makes_the_lap_unclean(state: int) -> None:
+    # planner v0.1 states: BLOCKED (nothing drivable) and RECOVERING (backing out) are not clean
+    mem = LapMemory(cfg())
+
+    def blip(m: LapMemory, t: float) -> None:
+        if 1.0 < t < 1.02:
+            m.on_planner_status(state, 0.3)
+
+    assert [r.clean for r in drive(mem, 1.0, on_pose=blip)] == [False]
+
+
 def test_events_before_the_start_line_do_not_count() -> None:
     mem = LapMemory(cfg())
     mem.on_safety_event(PHASE_ENGAGE, SEVERITY_BRAKE)

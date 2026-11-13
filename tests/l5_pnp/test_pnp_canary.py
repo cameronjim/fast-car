@@ -13,7 +13,8 @@ Cases, each 3 laps at 0.6 m/s, car `params`, seed 11:
       (skipped, with the reason, when that fixture directory is absent)
 
 Pass criteria per case, never loosened to get green: 3 laps, 0 wall contacts, at most 3 safety
-brake engagements (/safety/events PHASE_ENGAGE with SEVERITY_BRAKE), the only publisher on
+brake engagements (/safety/events PHASE_ENGAGE with SEVERITY_BRAKE), no rate_limit event from
+safety_node (the planner's output rate limit stays inside it), the only publisher on
 /drive_raw is mppi_planner_node, the only publisher on /drive is safety_node, and no STATE_FAULT in
 /pnp/planner/status. Lap times and the brake count go to the test output. Skipped without a
 sourced ROS workspace.
@@ -35,6 +36,10 @@ pytest.importorskip("f1tenth_gym")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = REPO_ROOT / "tests" / "l5_reactive_bench" / "track_family_runner.py"
 DYNAMICS_BUNDLE = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-nominal-v0"
+# The planner's model: the fitted car fixture, which carries the speed dead zone (0.22 m/s), so the
+# planner's speed floor sits above the dead zone the car-like plant has. The sim plant itself
+# keeps the nominal fixture's actuation (DYNAMICS_BUNDLE) with its own 0.20 m/s dead zone.
+PLANNER_BUNDLE = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-car-2026-11-12"
 PERCEPTION_BUNDLE = (
     REPO_ROOT / "ros_ws" / "src" / "racer_track_perception" / "test" / "fixtures" / "bundle_release"
 )
@@ -73,6 +78,7 @@ def test_pnp_laps_the_track_through_the_real_command_path(
     if backend == "net" and not (PERCEPTION_BUNDLE / "manifest.yaml").is_file():
         pytest.skip(f"released perception bundle not committed yet: {PERCEPTION_BUNDLE}")
     assert (DYNAMICS_BUNDLE / "manifest.yaml").is_file(), DYNAMICS_BUNDLE
+    assert (PLANNER_BUNDLE / "manifest.yaml").is_file(), PLANNER_BUNDLE
     name, params = track
     out = tmp_path / "result.json"
     command = [
@@ -87,7 +93,7 @@ def test_pnp_laps_the_track_through_the_real_command_path(
         "--backend",
         backend,
         "--dynamics-bundle",
-        str(DYNAMICS_BUNDLE),
+        str(PLANNER_BUNDLE),
         "--v-max-mps",
         str(V_MAX_MPS),
         "--car",
@@ -119,13 +125,19 @@ def test_pnp_laps_the_track_through_the_real_command_path(
         print(
             f"\nl5_pnp {name} {'cw' if reverse else 'ccw'} {backend}: "
             f"laps {result['laps']} lap_times_s {result['lap_times_s']} "
-            f"safety_brakes {result['safety_brakes']} wall_contacts {result['wall_contacts']} "
+            f"safety_brakes {result['safety_brakes']} "
+            f"rate_limit_events {result['rate_limit_events']} "
+            f"wall_contacts {result['wall_contacts']} "
             f"min_clearance_m {result['min_body_clearance_m']} "
             f"planner_states {result['planner_states']}"
         )
     assert result["laps"] >= LAPS, result.get("stopped_because")
     assert result["wall_contacts"] == 0
     assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
+    assert result["rate_limit_events"] == 0, (
+        "safety_node rate-limited the planner's command: "
+        f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
+    )
     assert result["publisher_nodes"] == {
         "/drive_raw": ["mppi_planner_node"],
         "/drive": ["safety_node"],
@@ -181,6 +193,7 @@ CAR_LIKE_CASES = [
 @pytest.mark.parametrize(("track", "reverse", "perception"), CAR_LIKE_CASES)
 def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, capsys):
     assert (DYNAMICS_BUNDLE / "manifest.yaml").is_file(), DYNAMICS_BUNDLE
+    assert (PLANNER_BUNDLE / "manifest.yaml").is_file(), PLANNER_BUNDLE
     name, params = track
     out = tmp_path / "result.json"
     command = [
@@ -195,7 +208,7 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
         "--backend",
         "geometric",
         "--dynamics-bundle",
-        str(DYNAMICS_BUNDLE),
+        str(PLANNER_BUNDLE),
         "--v-max-mps",
         str(CAR_LIKE_V_MAX_MPS),
         "--car",
@@ -229,13 +242,19 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
             f"\nl5_pnp car-like {name} lane {params['lane_width_m']} "
             f"{'cw' if reverse else 'ccw'}{'' if perception else ' no-perception'}: "
             f"laps {result['laps']} lap_times_s {result['lap_times_s']} "
-            f"safety_brakes {result['safety_brakes']} wall_contacts {result['wall_contacts']} "
+            f"safety_brakes {result['safety_brakes']} "
+            f"rate_limit_events {result['rate_limit_events']} "
+            f"wall_contacts {result['wall_contacts']} "
             f"min_clearance_m {result['min_body_clearance_m']} "
             f"planner_states {result['planner_states']}"
         )
     assert result["laps"] >= LAPS, result.get("stopped_because")
     assert result["wall_contacts"] == 0
     assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
+    assert result["rate_limit_events"] == 0, (
+        "safety_node rate-limited the planner's command: "
+        f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
+    )
     assert result["publisher_nodes"] == {
         "/drive_raw": ["mppi_planner_node"],
         "/drive": ["safety_node"],

@@ -28,6 +28,7 @@ ROWS: list[tuple[str, str, str]] = [
     ("planner.state_counts.DRIVING", "  DRIVING", "{:.0f}"),
     ("planner.state_counts.NO_TRACK", "  NO_TRACK", "{:.0f}"),
     ("planner.state_counts.BLOCKED", "  BLOCKED", "{:.0f}"),
+    ("planner.state_counts.RECOVERING", "  RECOVERING", "{:.0f}"),
     ("planner.speed_zero_share", "speed command == 0 share", "{:.2f}"),
     ("planner.speed_below_dead_zone_share", "0 < speed < dead zone share", "{:.2f}"),
     ("planner.collision_fraction_mean", "collision fraction mean", "{:.2f}"),

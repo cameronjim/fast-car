@@ -110,21 +110,6 @@ std::map<std::string, Param> default_params() {
   d("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5);
   d("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0);
   d("w_term", mp.w_term, 0.0, 1e5);
-  d("move_margin", mp.move_margin, 0.0, 100.0);
-  d("speed_floor_margin_mps", mp.speed_floor_margin_mps, 0.0, 0.5);
-  d("steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02);
-  d("gap_reset_s", lg.gap_reset_s, 0.0, 0.058);
-  d("stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0);
-  d("gate_hold_s", cfg.drivability.gate_hold_s, 0.2, 600.0);
-  d("recover_distance_m", cfg.recovery.recover_distance_m, 0.1, 1.0);
-  d("recover_speed_mps", cfg.recovery.recover_speed_mps, 0.1, 0.6);
-  d("recover_max_s", cfg.recovery.recover_max_s, 0.5, 10.0);
-  d("recover_retry_s", cfg.recovery.recover_retry_s, 0.5, 30.0);
-  d("recover_margin_m", cfg.recovery.recover_margin_m, 0.0, 0.3);
-  d("recover_exhausted_hold_s", cfg.recovery.recover_exhausted_hold_s, 0.0, 600.0);
-  d("recover_gate_debounce_s", cfg.recovery.recover_gate_debounce_s, 0.02, 1.0);
-  d("recover_progress_m", cfg.recovery.recover_progress_m, 0.1, 5.0);
-  i("recover_max_attempts", cfg.recovery.recover_max_attempts, 1, 20);
   d("solve_halve_over_ms", 15.0, 1.0, 200.0);
   d("solve_restore_under_ms", 6.0, 0.5, 200.0);
   d("laser_yaw_from_vehicle_params", 1.0, 0.0, 1.0);
@@ -184,20 +169,6 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   lg.use_lap_guidance = false;
   lg.steer_output_tau_s = v("steer_output_tau_s");
   lg.rate_limit_fraction = v("rate_limit_fraction");
-  lg.steer_output_hysteresis_rad = v("steer_output_hysteresis_rad");
-  lg.gap_reset_s = v("gap_reset_s");
-  cfg.drivability.stall_hold_s = v("stall_hold_s");
-  cfg.drivability.gate_hold_s = v("gate_hold_s");
-  RecoveryParams& rc = cfg.recovery;
-  rc.recover_distance_m = v("recover_distance_m");
-  rc.recover_speed_mps = v("recover_speed_mps");
-  rc.recover_max_s = v("recover_max_s");
-  rc.recover_retry_s = v("recover_retry_s");
-  rc.recover_margin_m = v("recover_margin_m");
-  rc.recover_exhausted_hold_s = v("recover_exhausted_hold_s");
-  rc.recover_gate_debounce_s = v("recover_gate_debounce_s");
-  rc.recover_progress_m = v("recover_progress_m");
-  rc.recover_max_attempts = static_cast<int>(v("recover_max_attempts"));
   cfg.tick_s = 1.0 / v("control_rate_hz");
   MppiParams& mp = cfg.mppi;
   mp.horizon_steps = static_cast<int>(v("horizon_steps"));
@@ -223,8 +194,6 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   mp.w_steer_rate = v("w_steer_rate");
   mp.corner_radius_m = v("corner_radius_m");
   mp.w_term = v("w_term");
-  mp.move_margin = v("move_margin");
-  mp.speed_floor_margin_mps = v("speed_floor_margin_mps");
   cfg.budget.halve_over_s = v("solve_halve_over_ms") * 1e-3;
   cfg.budget.restore_under_s = v("solve_restore_under_ms") * 1e-3;
   return cfg;
@@ -262,8 +231,6 @@ const char* state_name(PlannerState s) {
       return "BLOCKED";
     case PlannerState::Fault:
       return "FAULT";
-    case PlannerState::Recovering:
-      return "RECOVERING";
   }
   return "UNKNOWN";
 }
@@ -372,12 +339,11 @@ int main(int argc, char** argv) {
   csv << "now_s,state,state_name,cmd_speed_mps,cmd_steering_rad,solve_time_s,est_speed_mps,"
          "est_steering_rad,v_cap_mps,best_cost,plan_progress_m,plan_min_clearance_m,"
          "collision_fraction,track_age_s,scan_age_s,samples,samples_halved,track_confidence,"
-         "freespace_goal_x_m,freespace_goal_y_m,freespace_reach_m,block_reason,recovery_attempts\n";
+         "freespace_goal_x_m,freespace_goal_y_m,freespace_reach_m,block_reason\n";
 
   std::vector<PointXY> points(kMaxScanPoints);
   DistanceField field;
   FreespaceField freespace(*geometry);
-  double last_published_speed = 0.0;
   bool have_prev_goal = false;
   PointXY prev_goal{0.0, 0.0};
   bool has_scan = false;
@@ -463,10 +429,6 @@ int main(int argc, char** argv) {
       ti.scan_stamp_s = scan_stamp_s;
       ti.field = has_scan ? &field : nullptr;
       ti.freespace = has_scan ? &freespace : nullptr;
-      // The replay has no safety node: the gated /drive is taken to pass what was published.
-      ti.has_gated = true;
-      ti.gated_stamp_s = now;
-      ti.gated_speed_mps = last_published_speed;
       ti.track = has_track ? &track : nullptr;
       const TickOutput o = planner.tick(ti);
       csv << csv_number(now) << ',' << static_cast<int>(o.state) << ',' << state_name(o.state)
@@ -479,9 +441,7 @@ int main(int argc, char** argv) {
           << (o.samples_halved ? 1 : 0) << ',' << csv_number(o.track_confidence) << ','
           << csv_number(o.has_freespace_goal ? o.freespace_goal_x_m : NAN) << ','
           << csv_number(o.has_freespace_goal ? o.freespace_goal_y_m : NAN) << ','
-          << csv_number(o.freespace_reach_m) << ',' << static_cast<int>(o.block_reason) << ','
-          << o.recovery_attempts << '\n';
-      last_published_speed = o.cmd.speed_mps;
+          << csv_number(o.freespace_reach_m) << ',' << static_cast<int>(o.block_reason) << '\n';
     } else {
       die(2, "stream line " + std::to_string(line_no) + ": unknown event '" + std::string(1, kind) +
                  "'");

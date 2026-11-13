@@ -13,13 +13,10 @@ uint8 STATE_NO_ODOM=4
 uint8 STATE_BLOCKED=5
 # Internal error, commands zero speed.
 uint8 STATE_FAULT=6
-# Backing up along a planned reverse arc to get out of a stuck pose (cmd_speed_mps is negative).
-uint8 STATE_RECOVERING=7
 uint8 state
 uint32 cycle
 float32 solve_time_s
-# What was published on /drive_raw this tick. cmd_speed_mps is negative while STATE_RECOVERING and
-# never otherwise.
+# What was published on /drive_raw this tick.
 float32 cmd_speed_mps
 float32 cmd_steering_rad
 # Wheel speed used as the initial state.
@@ -58,5 +55,3 @@ uint8 BLOCK_GATE_REFUSING=4
 uint8 BLOCK_RECOVERY_EXHAUSTED=5
 # Why the planner is in STATE_BLOCKED (BLOCK_NONE otherwise).
 uint8 block_reason
-# Recovery attempts counted since the car last covered 0.5 m forward.
-uint8 recovery_attempts

@@ -41,15 +41,12 @@ struct MppiParams {
   double w_du = 0.5;          // speed command differences
   double w_steer_rate = 0.1;  // steering command rate squared, first step against prev_cmd
   double w_term = 50.0;
-  // The plan moves only if the best moving sample beats the best standing one by this much cost.
-  double move_margin = 0.3;
   double corner_radius_m = Footprint::kDefaultCornerRadiusM;
   double plan_window_s = 0.5;  // window of SolveOutput::plan_speed_mps
   double tick_s = 0.02;        // control tick: the warm start advances the nominal by tick_s / dt
-  // Sampled and output speeds are 0 or at least this (0 turns the rule off). The Planner sets it
-  // to the bundle's speed dead zone plus speed_floor_margin_mps; the solver takes it as given.
+  // Sampled and output speeds are 0 or at least this (0 turns the rule off). The Planner fills it
+  // from the dynamics bundle; the solver takes it as given.
   double speed_floor_mps = 0.0;
-  double speed_floor_margin_mps = 0.03;  // read by the Planner only
 };
 
 struct CostBreakdown {
@@ -162,7 +159,6 @@ class MppiSolver {
   std::vector<double> cost_;        // capacity
   std::vector<double> scratch_;     // capacity, for the median
   std::vector<unsigned char> hit_;  // capacity, 1 when the sample collided
-  std::vector<unsigned char> cls_;  // capacity, 1 when the sample moves (see solve)
   std::vector<Control> u_new_;
   std::vector<Pose2> plan_;
 };

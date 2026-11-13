@@ -33,7 +33,6 @@ add_library(racer_planner_core
   src/distance_field.cpp
   src/footprint.cpp
   src/freespace_field.cpp
-  src/recovery.cpp
   src/ego_motion.cpp
   src/mppi.cpp
   src/planner_logic.cpp
@@ -102,7 +101,6 @@ if(BUILD_TESTING)
     test/test_distance_field.cpp
     test/test_footprint.cpp
     test/test_freespace_field.cpp
-    test/test_recovery.cpp
     test/test_ego_motion.cpp
     test/test_rng.cpp
     test/test_mppi_costs.cpp

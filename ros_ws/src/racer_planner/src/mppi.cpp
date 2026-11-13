@@ -56,7 +56,6 @@ MppiSolver::MppiSolver(const MppiParams& params, const DynamicsModel& model,
       cost_(static_cast<std::size_t>(capacity_)),
       scratch_(static_cast<std::size_t>(capacity_)),
       hit_(static_cast<std::size_t>(capacity_)),
-      cls_(static_cast<std::size_t>(capacity_)),
       u_new_(static_cast<std::size_t>(horizon_)),
       plan_(static_cast<std::size_t>(horizon_) + 1) {
   GaussianRng rng(params.seed);
@@ -304,47 +303,16 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
     const Control* vb = &v_[static_cast<std::size_t>(best) * T];
     for (int t = 0; t < T; ++t) u_new_[t] = Control{0.0, vb[t].steering_cmd};
   } else {
-    // The samples fall in two classes: those that move (mean speed command over the first
-    // plan_window_s at or above the floor) and those that stand. A weighted mean across the two
-    // is neither (a car commanded half a floor speed does not move), so the mean is taken inside
-    // the class of the best sample: the plan either moves or it does not.
-    const int win =
-        std::min(T, std::max(1, static_cast<int>(std::lround(p_.plan_window_s / model_.dt()))));
-    const double thr = std::max(p_.speed_floor_mps, 1e-3);
-    for (int k = 0; k < N; ++k) {
-      const Control* vk = &v_[static_cast<std::size_t>(k) * T];
-      double sum = 0.0;
-      for (int t = 0; t < win; ++t) sum += vk[t].speed_cmd;
-      cls_[k] = sum / win >= thr ? 1 : 0;
-    }
-    // Standing still is the default: the plan moves only when the best moving sample beats the best
-    // standing one by move_margin, so a car at the edge of what it can do does not flicker
-    // between creeping and stopping.
-    double best_move = 1e300, best_still = 1e300;
-    for (int k = 0; k < N; ++k) {
-      if (hit_[k]) continue;
-      double& b = cls_[k] ? best_move : best_still;
-      b = std::min(b, cost_[k]);
-    }
-    const unsigned char best_class = best_move + p_.move_margin < best_still ? 1 : 0;
-    int in_class = 0;
-    double j_min_c = 1e300;
-    for (int k = 0; k < N; ++k) {
-      if (hit_[k] || cls_[k] != best_class) continue;
-      scratch_[in_class++] = cost_[k];
-      j_min_c = std::min(j_min_c, cost_[k]);
-    }
-    // Robust temperature: the spread of the class sets the scale, lambda is a fraction of
+    // Robust temperature: the spread of the clean samples sets the scale, lambda is a fraction of
     // (median - minimum) with a floor so a flat cost field does not give an arbitrary weighting.
-    std::nth_element(scratch_.begin(), scratch_.begin() + in_class / 2,
-                     scratch_.begin() + in_class);
-    const double j_med = scratch_[static_cast<std::size_t>(in_class / 2)];
-    const double scale = p_.lambda * std::max(j_med - j_min_c, p_.cost_scale_floor);
+    std::nth_element(scratch_.begin(), scratch_.begin() + clean / 2, scratch_.begin() + clean);
+    const double j_med = scratch_[static_cast<std::size_t>(clean / 2)];
+    const double scale = p_.lambda * std::max(j_med - j_min, p_.cost_scale_floor);
     for (auto& c : u_new_) c = Control{};
     double wsum = 0.0;
     for (int k = 0; k < N; ++k) {
-      if (hit_[k] || cls_[k] != best_class) continue;
-      const double w = std::exp(-(cost_[k] - j_min_c) / scale);
+      if (hit_[k]) continue;
+      const double w = std::exp(-(cost_[k] - j_min) / scale);
       wsum += w;
       const Control* vk = &v_[static_cast<std::size_t>(k) * T];
       for (int t = 0; t < T; ++t) {

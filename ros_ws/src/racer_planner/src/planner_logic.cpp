@@ -88,8 +88,7 @@ double speed_cap(const LogicParams& p, const LogicInputs& in, double confidence)
 }
 
 Command command_for_state(PlannerState state, const Command& solver_cmd, double last_steering_rad,
-                          double v_cap_mps, double steer_min_rad, double steer_max_rad,
-                          double reverse_limit_mps) {
+                          double v_cap_mps, double steer_min_rad, double steer_max_rad) {
   auto clean_steer = [&](double s) {
     if (!std::isfinite(s)) return 0.0;
     return std::min(std::max(s, steer_min_rad), steer_max_rad);
@@ -99,13 +98,6 @@ Command command_for_state(PlannerState state, const Command& solver_cmd, double 
     case PlannerState::Driving: {
       const double sp = std::isfinite(solver_cmd.speed_mps) ? solver_cmd.speed_mps : 0.0;
       c.speed_mps = std::min(std::max(sp, 0.0), std::max(0.0, v_cap_mps));
-      c.steering_rad = clean_steer(solver_cmd.steering_rad);
-      break;
-    }
-    case PlannerState::Recovering: {
-      const double sp = std::isfinite(solver_cmd.speed_mps) ? solver_cmd.speed_mps : 0.0;
-      c.speed_mps =
-          std::min(std::max(sp, -std::max(0.0, reverse_limit_mps)), std::max(0.0, v_cap_mps));
       c.steering_rad = clean_steer(solver_cmd.steering_rad);
       break;
     }
@@ -142,21 +134,10 @@ Command rate_limit(const Command& wanted, const Command& previous, double max_st
       previous.steering_rad +
       std::min(std::max(wanted.steering_rad - previous.steering_rad, -max_steer_step_rad),
                max_steer_step_rad);
-  if (wanted.speed_mps < 0.0) {
-    // reverse: the magnitude may grow by one step from zero (or from the current reverse speed);
-    // coming from forward the brake to zero is free and the reverse grows from zero
-    const double base = std::min(previous.speed_mps, 0.0);
-    c.speed_mps = std::max(wanted.speed_mps, base - max_speed_up_step_mps);
-    return c;
-  }
-  const double base = std::max(previous.speed_mps, 0.0);  // from reverse: to zero at once
-  c.speed_mps = std::min(wanted.speed_mps, base + max_speed_up_step_mps);
-  if (speed_floor_mps > 0.0 && max_speed_up_step_mps > 0.0 && base < speed_floor_mps &&
+  c.speed_mps = std::min(wanted.speed_mps, previous.speed_mps + max_speed_up_step_mps);
+  if (speed_floor_mps > 0.0 && c.speed_mps > 0.0 && c.speed_mps < speed_floor_mps &&
       wanted.speed_mps >= speed_floor_mps) {
-    // up to the floor in equal steps, each within the limit
-    const double steps = std::ceil(speed_floor_mps / max_speed_up_step_mps - 1e-9);
-    c.speed_mps =
-        std::min(wanted.speed_mps, std::min(speed_floor_mps, base + speed_floor_mps / steps));
+    c.speed_mps = speed_floor_mps;
   }
   return c;
 }

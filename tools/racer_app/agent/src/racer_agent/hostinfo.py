@@ -90,6 +90,11 @@ class HostInfo:
         usage = self._usage(directory)
         return None if usage is None else usage[2] / GIB
 
+    def disk_usage_gb(self, directory: Path) -> tuple[float, float, float] | None:
+        """(total, used, free) GiB of the filesystem holding `directory`, or None."""
+        usage = self._usage(directory)
+        return None if usage is None else (usage[0] / GIB, usage[1] / GIB, usage[2] / GIB)
+
     def disk_total_gb(self, directory: Path) -> float | None:
         usage = self._usage(directory)
         return None if usage is None else usage[0] / GIB

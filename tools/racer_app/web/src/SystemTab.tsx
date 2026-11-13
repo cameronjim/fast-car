@@ -1,8 +1,10 @@
-// The System tab: stack start, stop and restart with their flags, cameras, perception, autostart,
-// reboot and shut down, and where this app keeps its token.
+// The System tab (the gear at the bottom of the sidebar): stack start, stop and restart with all
+// their flags, cameras, perception, autostart, reboot and shut down, where this app keeps its
+// token, and the less common drive modes (park, wall follow, ML policy, spiderbot).
 
 import { useState } from "preact/hooks";
 import { useApp } from "./ctx";
+import { OtherDrives } from "./modes";
 import { ActionButton, Card, SkeletonCard, StateBadge, Toggle } from "./ui";
 import { elapsedLabel, serviceState, stackState, type ServiceState } from "./view";
 
@@ -221,6 +223,9 @@ export function SystemTab() {
         </dl>
         {c.tokenNote && <div class="warnline">{c.tokenNote}</div>}
       </Card>
+
+      <h3 class="section span-all">More drives</h3>
+      <OtherDrives />
     </div>
   );
 }

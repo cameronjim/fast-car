@@ -18,6 +18,25 @@ const PATHS = {
   chevron: "M6 9l6 6 6-6",
   alert: "M12 8v5M12 16.5v.5",
   bolt: "M13 3L5 14h6l-1 7 8-11h-6z",
+  wheel: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 10a2 2 0 1 0 0 4a2 2 0 1 0 0-4zM3.6 10.5l6.5 1M20.4 10.5l-6.5 1M12 14v7",
+  sliders: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",
+  pulse: "M3 12h4l3-7 4 14 3-7h4",
+  disk: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3",
+  list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
+  gear: "M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1",
+  play: "M7 4.5l12 7.5-12 7.5z",
+  stop: "M6.5 6.5h11v11h-11z",
+  route: "M4 19c4 0 4-14 8-14s4 14 8 14",
+  chip: "M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4",
+  flag: "M5 21V4M5 4h12l-2.5 4.5L17 13H5",
+  camera: "M4 8h3l2-3h6l2 3h3v11H4zM12 10.5a3 3 0 1 0 0 6a3 3 0 1 0 0-6z",
+  copy: "M9 9h11v11H9zM5 15H4V4h11v1",
+  trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3",
+  reset: "M4 12a8 8 0 1 0 2.6-5.9M4 4v4.5h4.5",
+  power: "M12 3v8M6.3 6.8a8 8 0 1 0 11.4 0",
+  shield: "M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z",
+  car: "M3 15l2-6h14l2 6v4h-3v-2H6v2H3zM7 15h.01M17 15h.01",
+  layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
 } as const;
 export type IconName = keyof typeof PATHS;
 
@@ -81,6 +100,7 @@ export function Pill({ view, onClick, class: cls }: { view: PillView; onClick?: 
 /** A card with an optional state badge and an info button that opens the long explanation. */
 export function Card(p: {
   title: string;
+  icon?: IconName;
   badge?: ComponentChildren;
   info?: string;
   tools?: ComponentChildren;
@@ -92,6 +112,7 @@ export function Card(p: {
   return (
     <section class={`card ${p.class ?? ""}`} aria-label={p.label ?? p.title}>
       <header>
+        {p.icon && <span class="card-ic"><Icon name={p.icon} size={17} /></span>}
         <h2>{p.title}</h2>
         {p.badge}
         {(p.tools || p.info) && (
@@ -138,6 +159,9 @@ export interface ActionButtonProps {
   confirm?: string;
   class?: string;
   ariaLabel?: string;
+  /** Show a failure as a small red badge that opens the Logs tab, instead of the reason inline. */
+  onErrorBadge?: () => void;
+  icon?: IconName;
 }
 
 /**
@@ -179,7 +203,7 @@ export function ActionButton(p: ActionButtonProps) {
     p.class ?? "",
   ].join(" ");
 
-  let content: ComponentChildren = p.label;
+  let content: ComponentChildren = p.icon ? (<><Icon name={p.icon} />{p.label}</>) : p.label;
   if (pending) content = (<><Spinner />{p.pendingLabel ?? "Working..."}</>);
   else if (s.phase === "success") content = (<><Icon name="check" />{p.successLabel ?? "Done"}</>);
   else if (armed) content = p.confirm;
@@ -196,12 +220,41 @@ export function ActionButton(p: ActionButtonProps) {
       >
         {content}
       </button>
-      {s.phase === "error" && (
-        <div class="inline-error" role="alert">
-          <Icon name="warn" />
-          <span>{s.error}</span>
-        </div>
-      )}
+      {s.phase === "error" &&
+        (p.onErrorBadge ? (
+          <ErrorBadge title={s.error} onClick={p.onErrorBadge} />
+        ) : (
+          <div class="inline-error" role="alert">
+            <Icon name="warn" />
+            <span>{s.error}</span>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+/** The small red badge every main-tab failure becomes. It opens the Logs tab. */
+export function ErrorBadge({ title, onClick, count }: { title?: string; onClick: () => void; count?: number }) {
+  return (
+    <button class="errbadge" title={title} onClick={onClick} aria-label={title ? `Failed: ${title}. Open Logs` : "Open Logs"}>
+      <Icon name="alert" size={13} />
+      {count !== undefined ? count : "Failed"}
+    </button>
+  );
+}
+
+/** A status light: a big icon, a label and one word. */
+export function Light(p: { label: string; level: "green" | "amber" | "red" | "off"; text: string; icon: IconName; busy?: boolean }) {
+  return (
+    <div class={`light lvl-${p.level}`} role="status" aria-label={`${p.label}: ${p.text}`}>
+      <span class="light-ic"><Icon name={p.icon} size={22} /></span>
+      <span class="light-txt">
+        <span class="light-label">{p.label}</span>
+        <span class="light-val">
+          {p.busy ? <Spinner /> : <span class="ldot" />}
+          {p.text}
+        </span>
+      </span>
     </div>
   );
 }
@@ -212,6 +265,8 @@ export function Toggle(p: {
   checked: boolean;
   onChange: (next: boolean) => Promise<unknown>;
   disabled?: boolean;
+  title?: string;
+  onErrorBadge?: () => void;
 }) {
   const runner = useRunner({ errorMs: 6000 });
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
@@ -229,7 +284,7 @@ export function Toggle(p: {
   }, [p.checked, optimistic, s.phase]);
   return (
     <div class="action">
-      <label class={`switch ${s.phase === "pending" ? "pending" : ""} ${p.disabled ? "disabled" : ""}`}>
+      <label class={`switch ${s.phase === "pending" ? "pending" : ""} ${p.disabled ? "disabled" : ""}`} title={p.title}>
         <input
           type="checkbox"
           checked={shown}
@@ -240,8 +295,9 @@ export function Toggle(p: {
         <span>{p.label}</span>
         {s.phase === "pending" && <Spinner />}
         {s.phase === "success" && <span class="lvl-green"><Icon name="check" size={16} /></span>}
+        {s.phase === "error" && p.onErrorBadge && <ErrorBadge title={s.error} onClick={p.onErrorBadge} />}
       </label>
-      {s.phase === "error" && (
+      {s.phase === "error" && !p.onErrorBadge && (
         <div class="inline-error" role="alert">
           <Icon name="warn" />
           <span>{s.error}</span>
@@ -266,7 +322,7 @@ export function StepList({ steps }: { steps: Step[] }) {
   );
 }
 
-export function OpRow({ op, steps, now, onDismiss }: { op: Op; steps: Step[]; now: number; onDismiss: () => void }) {
+export function OpRow({ op, steps, now, onDismiss, onLogs }: { op: Op; steps: Step[]; now: number; onDismiss: () => void; onLogs?: () => void }) {
   const active = op.phase === "requesting" || op.phase === "waiting";
   const end = op.finishedAt ?? now;
   const failed = op.phase === "failed" || op.phase === "timeout";
@@ -288,7 +344,7 @@ export function OpRow({ op, steps, now, onDismiss }: { op: Op; steps: Step[]; no
         )}
       </header>
       <StepList steps={steps} />
-      {op.error && <div class="reason">{op.error}</div>}
+      {op.error && (onLogs ? <ErrorBadge title={op.error} onClick={onLogs} /> : <div class="reason">{op.error}</div>)}
     </div>
   );
 }

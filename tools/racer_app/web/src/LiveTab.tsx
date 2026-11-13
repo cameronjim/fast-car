@@ -25,13 +25,13 @@ export function LiveTab({ live, vehicle }: { live: Live; vehicle: VehicleInfo | 
   return (
     <div class="stack-col">
       {c.status && !c.status.stack.running && (
-        <div class="warnline">No live data while the stack is off. Start it from Drive or System.</div>
+        <div class="warnline">Car stopped: no live data</div>
       )}
       <Gauges live={live} vehicle={vehicle} />
       <div class="grid wide">
+        <Cameras live={live} />
         <LidarView live={live} vehicle={vehicle} />
         <MapView live={live} />
-        <Cameras live={live} />
         <EventsFeed live={live} />
       </div>
     </div>
@@ -90,13 +90,20 @@ function Gauges({ live, vehicle }: { live: Live; vehicle: VehicleInfo | null }) 
           FET {fmt(fet.value, 0, " C")} / motor {motor.value && motor.value > 0 ? fmt(motor.value, 0, " C") : "no sensor"} / {fmt(amps.value, 1, " A")}
         </div>
       </div>
-      {lap.value && (
-        <div class="gauge">
-          <div class="label">Laps <Age f={lap} /></div>
-          <div class={`big ${lap.stale ? "stale" : ""}`}>{lap.value.laps}</div>
-          <div class="sub">{lapSubline(lap.value)}</div>
-        </div>
-      )}
+      <div class="gauge">
+        <div class="label">Motor <Age f={motor} /></div>
+        {loading ? (
+          <Skeleton h={36} />
+        ) : (
+          <div class={`big ${motor.stale ? "stale" : ""}`}>{motor.value && motor.value > 0 ? fmt(motor.value, 0) : "--"}<small>C</small></div>
+        )}
+        <div class="sub">{motor.value && motor.value > 0 ? "VESC motor sensor" : "No motor sensor"}</div>
+      </div>
+      <div class="gauge">
+        <div class="label">Laps <Age f={lap} /></div>
+        <div class={`big ${lap.stale ? "stale" : ""}`}>{lap.value ? lap.value.laps : "--"}</div>
+        <div class="sub">{lap.value ? lapSubline(lap.value) : "Lap counter not running"}</div>
+      </div>
     </section>
   );
 }

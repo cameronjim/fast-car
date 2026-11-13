@@ -23,7 +23,7 @@ from racer_policy.verify import verify_against_environment
 def test_accepts_when_contract_matches_the_real_committed_params(
     tmp_path: Path, valid_manifest: dict[str, Any], real_vehicle_params: Any
 ) -> None:
-    # config/vehicle_params.yaml currently has meta.schema_version = "0.16.0" (0.1.0 ->
+    # config/vehicle_params.yaml currently has meta.schema_version = "0.17.0" (0.1.0 ->
     # 0.2.0 for milestone 4, roadmap task 1.3; 0.2.0 -> 0.2.1 when that file's safety_mux
     # PWM/watchdog fields were given PROVISIONAL values; 0.2.1 -> 0.2.2 when
     # actuation.throttle_full_scale_mps was added and the TTC thresholds were filled in,
@@ -49,7 +49,8 @@ def test_accepts_when_contract_matches_the_real_committed_params(
     # were added for the body-distance obstacle gate; 0.13.0 -> 0.14.0 on 2026-11-10, the first
     # calibration from real measurements, value-only; 0.14.0 -> 0.15.0 on 2026-11-12 when the required
     # actuation.peak_acceleration_mps2 and limits.stopping_margin_m were added; 0.15.0 -> 0.16.0 the
-    # same day when the required steering.yaw_rate_gain_table was added) and
+    # same day when the required steering.yaw_rate_gain_table was added; 0.16.0 -> 0.17.0 on
+    # 2026-11-13, value-only, throttle_full_scale_mps for the 9000 ERPM cap) and
     # meta.sysid_session_id = "none-preliminary" -- the same values `_TEMPLATE` in conftest.py records under
     # `vehicle_params`, by construction.
     assert (

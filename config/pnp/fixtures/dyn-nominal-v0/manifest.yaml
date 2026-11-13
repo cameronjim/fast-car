@@ -4,7 +4,7 @@ model_id: dyn-nominal-v0
 created_utc: '2026-11-12T00:00:00Z'
 git_sha: '0000000000000000000000000000000000000000'
 training_config_sha256: 210343e7f799c5dcb2547a10b473d60ba05358d18b7ca9d7226872f7e0c045cc
-vehicle_params: {schema_version: 0.16.0, sysid_session_id: none-preliminary}
+vehicle_params: {schema_version: 0.17.0, sysid_session_id: none-preliminary}
 payload:
 - {file: residual_mlp.f32, sha256: aa8b81d746d258905bc11c22f78ed6b9fd538b6253f38b1adf2ad74004b4268a}
 - {file: golden_rollouts.csv, sha256: 315f5f95da28eaff74add3444b11204a8ac04d64bec576734294f6e4362ff8ce}

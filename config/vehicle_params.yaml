@@ -111,6 +111,16 @@
 # laser bearing of 177 deg and a box on the driver's left read at -100 deg, so laser bearing
 # + pi gives the vehicle bearing with LEFT positive and no mirroring.
 #
+# schema_version bumped 0.16.0 -> 0.17.0 on 2026-11-13: one value changed,
+# actuation.throttle_full_scale_mps 2.08 -> 3.12, DERIVED from the VESC's l_max_erpm and the PPM
+# app's pid_max_erpm, both raised 6000 -> 9000 by the owner (config/vesc/2026-11-13-fsesc67-*.xml).
+# A request in m/s still means the same wheel speed (the pulse fraction and the ERPM full scale
+# move together), so recorded speeds keep their meaning and no bag conversion is needed; what
+# changes is the pulse a request maps to, and the forward pulse resolution is 1.5x coarser
+# (about 0.10 m/s per step instead of 0.065). Minor bump, as for 0.14.0, because the
+# pulse-to-speed meaning of a recorded /drive pulse changes; every PnP bundle and policy
+# contract pins the schema_version and refuses until re-pinned.
+#
 # schema_version bumped 0.15.0 -> 0.16.0 on 2026-11-12: one new REQUIRED field,
 # steering.yaw_rate_gain_table (MEASURED, see the steering section and
 # docs/notes/mapping-2026-11-12.md). The wheel-odometry yaw rate v tan(delta) / L over-read the
@@ -409,7 +419,12 @@ drivetrain:
   # NEVER be raised while this motor runs on 3S. Motor temperature monitoring is not yet
   # possible -- the hall/temp sensor cable is not fitted -- so l_temp_motor_start/end are
   # currently unenforceable in practice; treat that as an open safety item until the cable is
-  # fitted. Source: vendor-supplied Hobbywing G3 spec table, 2026-09-27; see
+  # fitted.
+  # SUPERSEDED 2026-11-13 by an owner decision: the sensor cable is now fitted, and the owner
+  # raised l_max_erpm and the PPM pid_max_erpm 6000 -> 9000 on 3S
+  # (config/vesc/2026-11-13-fsesc67-motor.xml, -app.xml). Current limits are unchanged (30 A,
+  # -15 A); the motor temperature limits were kept at 85 / 100 C (a 60 / 70 C cutoff was
+  # suggested and declined). Reverse stays capped at l_min_erpm -6000. Source: vendor-supplied Hobbywing G3 spec table, 2026-09-27; see
   # docs/notes/build-log.md's 2026-09-27 entry.
   #
   # VESC-DETECTED electrical constants (sensorless FOC, 2026-09-21): phase resistance R
@@ -545,7 +560,10 @@ actuation:
   # wheels slip, 0.55 to 0.7 of it), see the calibration note.
   # tools/tests/test_vehicle_params_calibration.py recomputes this from the three source fields
   # and the committed VESC l_max_erpm, so it cannot drift from them.
-  throttle_full_scale_mps: 2.08     # DERIVED 2026-11-10 from l_max_erpm, pole_pairs, gear_ratio, tire radius -- see above
+  # 2026-11-13: re-derived for the owner's 9000 ERPM cap (l_max_erpm and the PPM app's
+  # pid_max_erpm, config/vesc/2026-11-13-fsesc67-*.xml): 9000 / 2 / 8.32 * 2 pi * 0.055 / 60
+  # = 3.115 m/s, exactly 1.5 times the 2.077 above. Same request, same true speed as before.
+  throttle_full_scale_mps: 3.12     # DERIVED 2026-11-13 from l_max_erpm 9000, pole_pairs, gear_ratio, tire radius -- see above
   # PWM FRAME PERIOD on the Jetson's two sysfs PWM channels (GitHub issue #66). This is the
   # carrier period racer_drivers/pwm_output_node writes to <channel>/period, in microseconds
   # (the sysfs value is this x 1000, in nanoseconds).
@@ -891,6 +909,8 @@ meta:
   # "none-preliminary" -- there is still no on-vehicle fit of any kind, and this file is less
   # fitted than that name implies, not more. (meta is additionalProperties:false in config/vehicle_params.schema.json, so this
   # note lives as a comment rather than a tenth meta key.)
-  schema_version: "0.16.0"
+  # Updated 2026-11-13 (schema 0.17.0): actuation.throttle_full_scale_mps re-derived for the
+  # 9000 ERPM VESC cap.
+  schema_version: "0.17.0"
   sysid_session_id: "none-preliminary"
   fit_date: "2026-08-22"            # date this preliminary, gym-sourced file was assembled -- not a sysid fit date

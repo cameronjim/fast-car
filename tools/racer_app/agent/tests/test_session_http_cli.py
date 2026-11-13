@@ -39,6 +39,12 @@ def test_the_api_takes_the_new_drive_fields_and_still_rejects_unknown_ones(env):
         "/api/drive/start", headers=auth, json={"mode": "gap_follow", "max_speed_mps": 5.0}
     )
     assert r.status_code == 400 and "max speed" in r.json()["error"]
+    r = client.post(
+        "/api/drive/start",
+        headers=auth,
+        json={"mode": "gap_follow", "max_speed_mps": 0.5, "min_speed_mps": 0.6},
+    )
+    assert r.status_code == 400 and "min speed" in r.json()["error"]
     r = client.post("/api/drive/start", headers=auth, json={"mode": "gap_follow", "max_speed": 1})
     assert r.status_code == 422
     assert client.get("/api/status", headers=auth).json()["drive"]["external"] == []

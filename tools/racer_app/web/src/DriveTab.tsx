@@ -6,7 +6,7 @@ import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { ApiError, type Options } from "./api";
 import { useApp } from "./ctx";
-import { externalDriveText, gapSpeed, pnpSelectionText, selectedBundle, selectedParamsFile } from "./drivePick";
+import { externalDriveText, gapMinSpeed, gapSpeed, pnpSelectionText, selectedBundle, selectedParamsFile } from "./drivePick";
 import { toApiError } from "./feedback";
 import { ActionButton, Card, Icon, Pill, SkeletonCard, StateBadge } from "./ui";
 import { driveBlocked, driveState, modeMatches, stackState } from "./view";
@@ -22,6 +22,7 @@ export function DriveTab() {
 
   const [gapProfile, setGapProfile] = useState("lane-2026-10-25");
   const [gapText, setGapText] = useState("");
+  const [gapMinText, setGapMinText] = useState("");
   const [parkProfile, setParkProfile] = useState("floor-2026-10-07");
   const [raceline, setRaceline] = useState("");
   const [mlRaceline, setMlRaceline] = useState("");
@@ -72,6 +73,8 @@ export function DriveTab() {
   const paramsChoice = selectedParamsFile(pnpParams, pnp?.params_files);
   const gapBounds = options.gap_follow_speed?.[gapProfile];
   const gapCap = gapSpeed(gapText, gapBounds);
+  const gapFloor = gapMinSpeed(gapMinText, gapBounds, gapCap.value);
+  const gapMinCeiling = gapCap.value ?? gapBounds?.max;
   const spiderbot = status.spiderbot ?? options.spiderbot ?? null;
   const speedRange = options.spiderbot_speed_range ?? [0.1, 1.0];
 
@@ -114,10 +117,17 @@ export function DriveTab() {
         <ModeCard
           mode="gap_follow"
           title="Gap follow"
-          info="Follows the widest gap the LiDAR sees. Max speed empty means the profile's own speed; a number must sit inside the profile's bounds and the global speed cap."
+          info="Follows the widest gap the LiDAR sees. Max speed empty means the profile's own speed; a number must sit inside the profile's bounds and the global speed cap. Min speed empty means the profile's own floor (0.36); a number must be 0 or more and cannot exceed the max speed in effect."
           blocked={blocked}
-          extra={gapCap.error}
-          onStart={() => drive("gap follow", { mode: "gap_follow", profile: gapProfile, max_speed_mps: gapCap.value })}
+          extra={gapCap.error || gapFloor.error}
+          onStart={() =>
+            drive("gap follow", {
+              mode: "gap_follow",
+              profile: gapProfile,
+              max_speed_mps: gapCap.value,
+              min_speed_mps: gapFloor.value,
+            })
+          }
         >
           <div class="controls">
             <Field label="Profile">
@@ -135,6 +145,18 @@ export function DriveTab() {
                 step={0.05}
                 value={gapText}
                 onInput={(e) => setGapText(e.currentTarget.value)}
+              />
+            </Field>
+            <Field label="Min speed (m/s)">
+              <input
+                type="number"
+                aria-label="Gap follow min speed in metres per second"
+                placeholder={gapMinCeiling !== undefined ? `profile 0.36, up to ${gapMinCeiling}` : "profile's own"}
+                min={0}
+                max={gapMinCeiling}
+                step={0.05}
+                value={gapMinText}
+                onInput={(e) => setGapMinText(e.currentTarget.value)}
               />
             </Field>
           </div>

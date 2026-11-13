@@ -61,7 +61,8 @@ GAP_FOLLOW_PROFILE_MAX_SPEED_MPS = {
     "race-2026-11-13": 1.3,
 }
 #: The node refuses min_speed_mps > max_speed_mps and every profile uses its default 0.36, so a
-#: cap below that is refused here instead of at launch.
+#: cap below that is refused here instead of at launch. The caller may also set min_speed_mps,
+#: in [0, the max speed in effect]; unset leaves this profile value.
 GAP_FOLLOW_MIN_SPEED_MPS = 0.36
 
 #: Pose rules of racer_apps' spiderbot (racer_apps/spiderbot/pose_rules.py). test_spiderbot_whitelist
@@ -338,6 +339,7 @@ def ros_cmd_for(
     pnp_v_max_mps: float = PNP_DEFAULT_SPEED_MPS,
     pnp_params_container_path: str = "",
     max_speed_mps: float | None = None,
+    min_speed_mps: float | None = None,
 ) -> str:
     """The ros2 command for a driving mode. Raises CommandError for anything off the lists."""
     if mode == "gap_follow":
@@ -348,6 +350,10 @@ def ros_cmd_for(
             if isinstance(max_speed_mps, bool) or not isinstance(max_speed_mps, (int, float)):
                 raise CommandError("gap follow max speed must be a number")
             speed_arg = f" max_speed_mps:={float(max_speed_mps):.2f}"
+        if min_speed_mps is not None:
+            if isinstance(min_speed_mps, bool) or not isinstance(min_speed_mps, (int, float)):
+                raise CommandError("gap follow min speed must be a number")
+            speed_arg += f" min_speed_mps:={float(min_speed_mps):.2f}"
         return f"ros2 launch racer_control gap_follow.launch.py profile:={profile}{speed_arg}"
     if mode == "wall_follow":
         return "ros2 launch racer_control wall_follow.launch.py"

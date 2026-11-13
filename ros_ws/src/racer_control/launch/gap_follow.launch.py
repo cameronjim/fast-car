@@ -223,6 +223,12 @@ PROFILES: dict[str, dict[str, float | int | bool | str]] = {
 # Launch arguments forwarded to the node only when set (empty = profile, params file or node
 # default).
 _OPTIONAL_FLOAT_ARGS = {
+    "min_speed_mps": (
+        "Speed floor (m/s), [0, limits.global_speed_cap_mps], not above max_speed_mps. With "
+        "physics_speed it is also the floor under the stopping law, so a higher value means "
+        "safety_node brakes more often near walls. Empty (default) leaves the profile value, the "
+        "params file value or the node default 0.36."
+    ),
     "forward_preference": (
         "Gap selection weighting toward forward, [0, 1]. Empty (default) leaves the profile "
         "value, the params file value or the node default 0.0 (plain widest gap)."

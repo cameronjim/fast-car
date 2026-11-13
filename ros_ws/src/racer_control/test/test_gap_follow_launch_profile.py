@@ -139,6 +139,13 @@ def test_none_profile_with_params_file_and_explicit_max_speed():
     assert isinstance(entries[1]["max_speed_mps"], float)
 
 
+def test_min_speed_overrides_the_profile_floor_as_a_float():
+    merged = _merged(_node_parameters(profile="race-2026-11-13", min_speed_mps="1"))
+    assert merged["min_speed_mps"] == 1.0
+    assert type(merged["min_speed_mps"]) is float
+    assert _merged(_node_parameters(profile="race-2026-11-13"))["min_speed_mps"] == 0.36
+
+
 def test_floor_profile_reaches_the_node_with_the_right_types():
     merged = _merged(_node_parameters(profile="floor-2026-10-06"))
     assert merged == _FLOOR_2026_10_06

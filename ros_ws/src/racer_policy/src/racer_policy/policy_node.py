@@ -251,6 +251,7 @@ def _make_node_class() -> Any:
 
 def main(argv: list[str] | None = None) -> int:
     import rclpy
+    from racer_tools.spin_guard import spin_until_shutdown
 
     rclpy.init(args=argv)
     try:
@@ -261,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
         rclpy.shutdown()
         return 2
     try:
-        rclpy.spin(node)
+        spin_until_shutdown(node)
     except KeyboardInterrupt:
         pass
     finally:

@@ -19,6 +19,16 @@ side_cap_distance_m (range [0, 1] m) with 5 and status_rate_hz (range [0, 10] Hz
 
 Each node runs in its own scoped group so the includes' launch arguments do not leak into
 each other. They share the node name; neither gets far enough to matter.
+
+Each group also gets its own ROS_DOMAIN_ID. Fifteen participants in ONE domain, all created and
+all torn down within the same 100 ms, hit a race inside Fast-DDS 2.6 (Humble's libfastrtps): the
+receive thread of one process runs EDPSimplePUBListener::onNewCacheChangeAdded ->
+PDP::removeWriterProxyData -> StatefulReader::matched_writer_remove for a peer that is going away
+and crashes there, SIGSEGV (exit -11), in roughly 1 process in 450 at 2 CPUs (core dump
+backtrace, 2026-11-14; seen in CI as `gap_follow_node process has died, exit code -11` in the L3
+job of the runs for PR 161 and PR 168). The crash is in the middleware, not in gap_follow_node,
+which has already thrown out of its constructor by then. This test is about the nodes' parameter
+refusals, not about discovery, and needs no peers, so no two of them share a domain.
 """
 
 from __future__ import annotations
@@ -38,21 +48,26 @@ import launch_testing.asserts
 import launch_testing.markers
 import pytest
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import GroupAction, IncludeLaunchDescription
+from launch.actions import GroupAction, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 _PARAMS_FILE = str(Path(__file__).resolve().parent / "fixtures" / "gap_follow_test_params.yaml")
 
 
-def _include(**launch_arguments: str) -> GroupAction:
+# One domain per node, 160 and up: no other test uses them (see the docstring).
+_FIRST_NODE_DOMAIN = 160
+
+
+def _include(domain: int, **launch_arguments: str) -> GroupAction:
     launch_file = Path(get_package_share_directory("racer_control")) / "launch"
     arguments = {"params_file": _PARAMS_FILE, **launch_arguments}
     return GroupAction(
         [
+            SetEnvironmentVariable("ROS_DOMAIN_ID", str(domain)),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(str(launch_file / "gap_follow.launch.py")),
                 launch_arguments=arguments.items(),
-            )
+            ),
         ],
         scoped=True,
     )
@@ -64,23 +79,26 @@ def _include(**launch_arguments: str) -> GroupAction:
 @pytest.mark.launch_test
 @launch_testing.markers.keep_alive
 def generate_test_description():
+    cases = [
+        {"forward_preference": "1.5"},
+        {"gap_switch_margin": "-0.1"},
+        {"swept_path_lookahead_m": "0"},
+        {"speed_time_constant_s": "6"},
+        {"target_range_median_scans": "0"},
+        {"centering_gain": "-0.1"},
+        {"escape_probe_distance_m": "0"},
+        {"lane_lookahead_m": "0"},
+        {"lane_default_half_width_m": "5"},
+        {"a_lat_max_mps2": "0"},
+        {"apex_offset_m": "2"},
+        {"track_out_offset_m": "-1"},
+        {"stopping_margin_m": "3"},
+        {"side_cap_distance_m": "5"},
+        {"status_rate_hz": "50"},
+    ]
     return launch.LaunchDescription(
         [
-            _include(forward_preference="1.5"),
-            _include(gap_switch_margin="-0.1"),
-            _include(swept_path_lookahead_m="0"),
-            _include(speed_time_constant_s="6"),
-            _include(target_range_median_scans="0"),
-            _include(centering_gain="-0.1"),
-            _include(escape_probe_distance_m="0"),
-            _include(lane_lookahead_m="0"),
-            _include(lane_default_half_width_m="5"),
-            _include(a_lat_max_mps2="0"),
-            _include(apex_offset_m="2"),
-            _include(track_out_offset_m="-1"),
-            _include(stopping_margin_m="3"),
-            _include(side_cap_distance_m="5"),
-            _include(status_rate_hz="50"),
+            *[_include(_FIRST_NODE_DOMAIN + i, **case) for i, case in enumerate(cases)],
             launch_testing.actions.ReadyToTest(),
         ]
     )

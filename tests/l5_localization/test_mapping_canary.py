@@ -167,12 +167,8 @@ def _stop_slam_toolbox_after_the_map_is_saved() -> None:
 @launch_testing.post_shutdown_test()
 class TestMappingCanaryShutdown(unittest.TestCase):
     def test_exit_codes(self, proc_info):
-        for info in proc_info:
-            allowed = [0, -signal.SIGINT, -signal.SIGTERM]
-            if "async_slam_toolbox_node" in info.process_name:
-                allowed.append(-signal.SIGKILL)  # ended by the test, see above
-            self.assertIn(
-                info.returncode,
-                allowed,
-                f"{info.process_name} exited with {info.returncode}",
-            )
+        common.assert_shutdown_exit_codes(
+            self,
+            proc_info,
+            {"async_slam_toolbox_node": [-signal.SIGKILL]},  # ended by the test
+        )

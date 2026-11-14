@@ -25,6 +25,8 @@
   <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>
   <depend>tf2_ros</depend>
+  <!-- racer_tools.spin_guard.spin_until_shutdown (GitHub issue 50) -->
+  <depend>racer_tools</depend>
 
   <test_depend>python3-pytest</test_depend>
   <test_depend>launch</test_depend>

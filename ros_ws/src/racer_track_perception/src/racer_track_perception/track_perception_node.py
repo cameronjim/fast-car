@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 import rclpy
+from racer_tools.spin_guard import spin_until_shutdown
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -234,7 +235,7 @@ def main(args: list[str] | None = None) -> None:
     node = None
     try:
         node = TrackPerceptionNode()
-        rclpy.spin(node)
+        spin_until_shutdown(node)
     except StartupRefused as exc:
         # Printed, not only logged: the log may be gone once the process exits non-zero.
         print(f"track_perception_node: refusing to start: {exc}", file=sys.stderr, flush=True)

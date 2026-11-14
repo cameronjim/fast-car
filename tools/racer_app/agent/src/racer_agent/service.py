@@ -70,6 +70,14 @@ class DriveBody(Body):
     pnp_backend: str = "net"
     pnp_v_max_mps: float = 0.5
     pnp_params: str = ""
+    # Checked by the whitelist (a wrong type is a 400 with a plain message, not a 422).
+    pnp_v_lap1_mps: Any = None
+    pnp_lap_memory: Any = False
+    pnp_lap_mode: Any = "v0"
+    pnp_lap_source: Any = "start_scan"
+    pnp_lap_counter: Any = True
+    pnp_require_lap_counter: Any = False
+    pnp_shadow_perception: Any = ""
     max_speed_mps: float | None = None
     min_speed_mps: float | None = None
     a_lat_max_mps2: float | None = None

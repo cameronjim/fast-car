@@ -2,7 +2,7 @@
 // one place so it can be tested. The agent checks every value again on save and on every drive
 // start; this only keeps the UI from saving or sending something it knows will be refused.
 
-import type { Options, Prefs, Status } from "./api";
+import type { LapMode, LapSource, Options, Prefs, Status } from "./api";
 import { selectedBundle, selectedParamsFile, type SpeedBounds } from "./drivePick";
 
 /** The agent's defaults, used until the first GET /api/prefs answers. */
@@ -16,7 +16,20 @@ export const DEFAULT_PREFS: Prefs = {
     a_lat_max_mps2: null,
     side_cap_min_speed_mps: null,
   },
-  pnp: { v_max_mps: 0.5, backend: "geometric", dynamics: "", perception: "", params_file: "" },
+  pnp: {
+    v_max_mps: 0.5,
+    backend: "geometric",
+    dynamics: "",
+    perception: "",
+    params_file: "",
+    v_lap1_mps: null,
+    lap_memory: false,
+    lap_mode: "v0",
+    lap_source: "start_scan",
+    lap_counter: true,
+    require_lap_counter: false,
+    shadow_perception: "",
+  },
   tracker: { raceline: "" },
 };
 
@@ -49,12 +62,90 @@ export function gapErrors(g: Prefs["gap_follow"], bounds: SpeedBounds | undefine
   return e;
 }
 
-export function pnpErrors(p: Prefs["pnp"], options: Options | null): FieldErrors<"v_max_mps"> {
+export type PnpField =
+  | "v_max_mps"
+  | "v_lap1_mps"
+  | "lap_mode"
+  | "lap_source"
+  | "require_lap_counter"
+  | "shadow_perception";
+
+/** The lap learning choice the card shows: off, observe, D v0, D v1. */
+export type LapChoice = "off" | LapMode;
+
+export const LAP_CHOICES: { id: LapChoice; label: string }[] = [
+  { id: "off", label: "off" },
+  { id: "observe", label: "observe" },
+  { id: "v0", label: "D v0" },
+  { id: "v1", label: "D v1" },
+];
+
+/** Observe is lap memory in observe mode (the launch is given lap_memory:=true as well). */
+export function lapChoice(p: Prefs["pnp"]): LapChoice {
+  if (p.lap_mode === "observe") return "observe";
+  return p.lap_memory ? p.lap_mode : "off";
+}
+
+/** The saved fields for a lap learning choice (off goes back to D v0 so no stale mode stays). */
+export function lapChoicePatch(c: LapChoice): Pick<Prefs["pnp"], "lap_memory" | "lap_mode"> {
+  return c === "off" ? { lap_memory: false, lap_mode: "v0" } : { lap_memory: true, lap_mode: c };
+}
+
+/** Whether the car's launch file offers a lap mode / lap source. An agent that does not report
+ * the lists (older build) is taken to offer them: it checks again when the drive starts. */
+export function lapModeOffered(options: Options | null, mode: LapMode): boolean {
+  const list = options?.pnp?.lap_modes;
+  return !list || list.includes(mode);
+}
+export function lapSourceOffered(options: Options | null, source: LapSource): boolean {
+  const list = options?.pnp?.lap_sources;
+  return !list || list.includes(source);
+}
+
+/** The driving perception bundle that will be sent (net backend only), or "". */
+function drivingPerception(p: Prefs["pnp"], options: Options | null): string {
+  return p.backend === "net" ? selectedBundle(p.perception, options?.pnp?.perception) : "";
+}
+
+/**
+ * Per field: why the ML driver settings cannot be saved or started, or nothing. The wording of
+ * the lap rules is the agent's, so the same refusal reads the same in the card and from the car.
+ */
+export function pnpErrors(p: Prefs["pnp"], options: Options | null): FieldErrors<PnpField> {
+  const e: FieldErrors<PnpField> = {};
   const range = options?.pnp?.speed_range ?? [0.2, 1.5];
   if (!Number.isFinite(p.v_max_mps) || p.v_max_mps < range[0] || p.v_max_mps > range[1]) {
-    return { v_max_mps: `${range[0]} to ${range[1]}` };
+    e.v_max_mps = `${range[0]} to ${range[1]}`;
   }
-  return {};
+  const on = lapChoice(p) !== "off";
+  if (p.lap_mode !== "v0" && !p.lap_memory && p.lap_mode !== "observe") {
+    e.lap_mode = `pnp lap mode ${p.lap_mode} needs lap memory on`;
+  } else if (on && !lapModeOffered(options, p.lap_mode)) {
+    e.lap_mode = `lap_mode=${p.lap_mode} is not available in this build`;
+  }
+  if (p.lap_mode === "v1" && p.lap_source !== "start_scan") {
+    e.lap_source = "pnp lap mode v1 needs lap source start_scan";
+  } else if (on && !lapSourceOffered(options, p.lap_source)) {
+    e.lap_source = `lap_source=${p.lap_source} is not available in this build`;
+  }
+  const cap = p.v_lap1_mps;
+  if (cap !== null) {
+    if (!on) {
+      e.v_lap1_mps = "pnp lap 1 cap needs lap memory on or lap mode observe";
+    } else if (!Number.isFinite(cap) || cap < range[0] || cap > range[1]) {
+      e.v_lap1_mps = `pnp lap 1 cap must be between ${range[0]} and ${range[1]} m/s`;
+    } else if (cap > p.v_max_mps) {
+      e.v_lap1_mps = "pnp lap 1 cap cannot exceed the speed cap";
+    }
+  }
+  if (p.require_lap_counter && !p.lap_counter) {
+    e.require_lap_counter = "require lap counter needs the lap counter on";
+  }
+  const driving = drivingPerception(p, options);
+  if (p.shadow_perception && driving && p.shadow_perception === driving) {
+    e.shadow_perception = "the shadow perception bundle cannot be the driving one";
+  }
+  return e;
 }
 
 /** Every reason the settings cannot be saved, flattened, or [] when they can. */
@@ -90,10 +181,16 @@ export function gapBody(p: Prefs) {
   };
 }
 
-/** What the ML driver (Plug-and-Play) button sends: the saved bundles if still on offer. */
+/**
+ * What the ML driver (Plug-and-Play) button sends: the saved bundles if still on offer. The lap
+ * learning fields are left out while they are at their default, so an unchanged card sends
+ * today's request.
+ */
 export function pnpBody(p: Prefs, options: Options | null) {
   const n = p.pnp;
   const pnp = options?.pnp;
+  const on = lapChoice(n) !== "off";
+  const shadow = selectedParamsFile(n.shadow_perception, pnp?.perception);
   return {
     mode: "pnp",
     pnp_backend: n.backend,
@@ -101,6 +198,13 @@ export function pnpBody(p: Prefs, options: Options | null) {
     pnp_perception: n.backend === "net" ? selectedBundle(n.perception, pnp?.perception) : "",
     pnp_params: selectedParamsFile(n.params_file, pnp?.params_files),
     pnp_v_max_mps: n.v_max_mps,
+    pnp_v_lap1_mps: on && n.v_lap1_mps !== null ? n.v_lap1_mps : undefined,
+    pnp_lap_memory: on ? true : undefined,
+    pnp_lap_mode: on && n.lap_mode !== "v0" ? n.lap_mode : undefined,
+    pnp_lap_source: on && n.lap_source !== "start_scan" ? n.lap_source : undefined,
+    pnp_lap_counter: n.lap_counter ? undefined : false,
+    pnp_require_lap_counter: n.require_lap_counter ? true : undefined,
+    pnp_shadow_perception: shadow || undefined,
   };
 }
 
@@ -147,8 +251,22 @@ export function gapSummary(p: Prefs): string {
   return `${g.profile}, ${speed}`;
 }
 
-export function pnpSummary(p: Prefs): string {
-  return `${p.pnp.backend}, ${p.pnp.v_max_mps.toFixed(2)} m/s`;
+/** What the ML driver will run, from the same fields pnpBody sends. */
+export function pnpSummary(p: Prefs, options: Options | null = null): string {
+  const n = p.pnp;
+  const choice = lapChoice(n);
+  const parts = [n.backend, `cap ${n.v_max_mps.toFixed(2)}`];
+  if (choice === "off") {
+    parts.push("lap learning off");
+  } else {
+    const label = LAP_CHOICES.find((c) => c.id === choice)?.label ?? choice;
+    parts.push(`${label} from ${(n.v_lap1_mps ?? n.v_max_mps).toFixed(2)}`);
+    if (n.lap_source !== "start_scan") parts.push(`source ${n.lap_source}`);
+  }
+  parts.push(n.lap_counter ? (n.require_lap_counter ? "lap counter required" : "lap counter on") : "lap counter off");
+  const shadow = pnpBody(p, options).pnp_shadow_perception;
+  if (shadow) parts.push(`shadow ${shadow}`);
+  return parts.join(", ");
 }
 
 export function trackerSummary(p: Prefs): string {

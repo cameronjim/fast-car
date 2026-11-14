@@ -75,6 +75,24 @@ describe("demo fake agent", () => {
     });
   });
 
+  it("the demo agent takes the lap fields and refuses what the car refuses", async () => {
+    const { car, api } = rig();
+    car.preset("running");
+    const base = { mode: "pnp", pnp_backend: "geometric", pnp_dynamics: "dyn-2026-10-20" };
+    for (const bad of [
+      { pnp_lap_mode: "v1" },
+      { pnp_lap_memory: "true" },
+      { pnp_lap_memory: true, pnp_lap_mode: "v1", pnp_lap_source: "map_pose" },
+      { pnp_v_lap1_mps: 0.3 },
+      { pnp_lap_memory: true, pnp_v_lap1_mps: 0.9 },
+      { pnp_require_lap_counter: true, pnp_lap_counter: false },
+    ]) {
+      await expect(api.startDrive({ ...base, ...bad } as never)).rejects.toMatchObject({ status: 400 });
+    }
+    await api.startDrive({ ...base, pnp_lap_memory: true, pnp_lap_mode: "v1", pnp_v_lap1_mps: 0.3, pnp_shadow_perception: "net-2026-11-04" });
+    expect((await api.status()).drive.mode).toBe("pnp");
+  });
+
   it("the override flow: refused as overridable, accepted with a reason, logged", async () => {
     const { car, api } = rig();
     car.preset("running");

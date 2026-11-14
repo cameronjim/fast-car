@@ -1,6 +1,13 @@
 """L3: startup refusals. A bad checksum, a vehicle_params mismatch, v_max_mps above the bundle
 validity and a debug_stall_profile without use_sim_time (or a malformed one) each make the node
-exit non-zero before it publishes anything, naming the error."""
+exit non-zero before it publishes anything, naming the error.
+
+Each node gets its own ROS_DOMAIN_ID (170 and up, used by no other test). Seven participants in one
+domain, created and torn down within the same moments, hit a race inside Fast-DDS 2.6 (Humble's
+libfastrtps): a peer's receive thread crashes in StatefulReader::matched_writer_remove while
+handling the dispose of a participant that is exiting (SIGSEGV, exit -11, core dump backtrace in
+test_gap_follow_node_params_launch.py's docstring; seen here as `mppi_planner_node process has
+died, exit code -11` on the CI run for PR 169). The refusals need no peers."""
 
 from __future__ import annotations
 
@@ -35,6 +42,9 @@ _BAD_SUM = common.make_bad_checksum_bundle(_ROOT)
 _BAD_VEHICLE = common.make_vehicle_mismatch_bundle(_ROOT)
 
 
+_NODE_DOMAINS = iter(range(170, 170 + 16))
+
+
 def _node(name: str, bundle: Path, **extra) -> LaunchNode:
     params = {
         "dynamics_bundle": str(bundle),
@@ -48,6 +58,7 @@ def _node(name: str, bundle: Path, **extra) -> LaunchNode:
         name=name,
         output="screen",
         parameters=[params],
+        additional_env={"ROS_DOMAIN_ID": str(next(_NODE_DOMAINS))},
     )
 
 

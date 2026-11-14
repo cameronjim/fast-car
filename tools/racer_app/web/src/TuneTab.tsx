@@ -7,7 +7,21 @@ import type { Prefs } from "./api";
 import { useApp } from "./ctx";
 import { errorText } from "./feedback";
 import { Field } from "./modes";
-import { A_LAT_RANGE, GAP_NODE_DEFAULTS, gapErrors, parseNum, patch, pnpErrors, prefsProblems, samePrefs } from "./prefs";
+import {
+  A_LAT_RANGE,
+  GAP_NODE_DEFAULTS,
+  LAP_CHOICES,
+  gapErrors,
+  lapChoice,
+  lapChoicePatch,
+  lapModeOffered,
+  lapSourceOffered,
+  parseNum,
+  patch,
+  pnpErrors,
+  prefsProblems,
+  samePrefs,
+} from "./prefs";
 import { Card, ErrorBadge, Icon, Pill, SkeletonCard } from "./ui";
 
 type SaveState = { kind: "saved" } | { kind: "saving" } | { kind: "invalid"; why: string } | { kind: "error"; why: string };
@@ -69,6 +83,7 @@ export function TuneTab() {
   const pnp = options.pnp;
   const pRange = pnp?.speed_range ?? [0.2, 1.5];
   const pErr = pnpErrors(n, options);
+  const lap = lapChoice(n);
   const setGap = (v: Partial<Prefs["gap_follow"]>) => edit(patch(draft, "gap_follow", v));
   const setPnp = (v: Partial<Prefs["pnp"]>) => edit(patch(draft, "pnp", v));
 
@@ -184,6 +199,82 @@ export function TuneTab() {
               {(pnp?.params_files ?? []).map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
           </Field>
+          <div class="field">
+            <span>Lap learning</span>
+            <div class="seg" role="group" aria-label="ML driver lap learning">
+              {LAP_CHOICES.map((c) => (
+                <button
+                  key={c.id}
+                  aria-pressed={lap === c.id}
+                  disabled={c.id !== "off" && !lapModeOffered(options, c.id)}
+                  onClick={() => setPnp({ ...lapChoicePatch(c.id), ...(c.id === "v1" ? { lap_source: "start_scan" as const } : {}), ...(c.id === "off" ? { v_lap1_mps: null } : {}) })}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {pErr.lap_mode && <div class="why">{pErr.lap_mode}</div>}
+          {lap !== "off" && (
+            <>
+              <NumRow
+                label="Lap 1 cap"
+                unit="m/s"
+                value={n.v_lap1_mps}
+                min={pRange[0]}
+                max={Math.min(pRange[1], n.v_max_mps)}
+                step={0.05}
+                fallback={n.v_max_mps}
+                defaultLabel={`speed cap (${n.v_max_mps})`}
+                error={pErr.v_lap1_mps}
+                onChange={(v) => setPnp({ v_lap1_mps: v })}
+              />
+              <div class="field">
+                <span>Lap source</span>
+                <div class="seg" role="group" aria-label="ML driver lap source">
+                  {(["start_scan", "map_pose"] as const).map((s) => (
+                    <button
+                      key={s}
+                      aria-pressed={n.lap_source === s}
+                      disabled={(s === "map_pose" && lap === "v1") || !lapSourceOffered(options, s)}
+                      onClick={() => setPnp({ lap_source: s })}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {pErr.lap_source && <div class="why">{pErr.lap_source}</div>}
+            </>
+          )}
+          <div class="field">
+            <span>Camera lap counter</span>
+            <div class="seg" role="group" aria-label="ML driver camera lap counter">
+              {([true, false] as const).map((on) => (
+                <button key={String(on)} aria-pressed={n.lap_counter === on} onClick={() => setPnp({ lap_counter: on, ...(on ? {} : { require_lap_counter: false }) })}>
+                  {on ? "on" : "off"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div class="field">
+            <span>Require the counter</span>
+            <div class="seg" role="group" aria-label="ML driver require lap counter">
+              {([false, true] as const).map((req) => (
+                <button key={String(req)} aria-pressed={n.require_lap_counter === req} disabled={req && !n.lap_counter} onClick={() => setPnp({ require_lap_counter: req })}>
+                  {req ? "yes" : "no"}
+                </button>
+              ))}
+            </div>
+          </div>
+          {pErr.require_lap_counter && <div class="why">{pErr.require_lap_counter}</div>}
+          <Field label="Shadow net">
+            <select value={n.shadow_perception} onChange={(e) => setPnp({ shadow_perception: e.currentTarget.value })} aria-label="ML driver shadow net bundle">
+              <option value="">none</option>
+              {(pnp?.perception ?? []).map((x) => <option key={x} value={x}>{x}</option>)}
+            </select>
+          </Field>
+          {pErr.shadow_perception && <div class="why">{pErr.shadow_perception}</div>}
         </Card>
 
         <Card title="Racer" icon="flag" tools={reset("tracker")}>
@@ -251,6 +342,8 @@ function NumRow(p: {
   nullable?: boolean;
   /** The profile may set its own value, so the resting slider position is not the real value. */
   fallbackUnknown?: boolean;
+  /** What a null value means, when it is not "the profile" (for example "speed cap (0.5)"). */
+  defaultLabel?: string;
   onChange: (v: number | null) => void;
 }) {
   const nullable = p.nullable ?? true;
@@ -266,7 +359,7 @@ function NumRow(p: {
     <div class={`numrow ${bad ? "bad" : ""}`}>
       <div class="numrow-head">
         <span>{p.label}</span>
-        <span class={`numrow-val num ${isDefault ? "muted" : ""}`}>{isDefault ? (p.fallbackUnknown ? "profile" : `profile (${p.fallback})`) : `${show(p.value)} ${p.unit}`}</span>
+        <span class={`numrow-val num ${isDefault ? "muted" : ""}`}>{isDefault ? (p.defaultLabel ?? (p.fallbackUnknown ? "profile" : `profile (${p.fallback})`)) : `${show(p.value)} ${p.unit}`}</span>
       </div>
       <div class="numrow-ctl">
         <input

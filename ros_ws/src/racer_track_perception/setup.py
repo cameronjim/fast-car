@@ -21,6 +21,7 @@ setup(
     entry_points={
         "console_scripts": [
             "track_perception_node = racer_track_perception.track_perception_node:main",
+            "scan_deskew_node = racer_track_perception.scan_deskew_node:main",
         ],
     },
 )

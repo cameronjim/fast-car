@@ -59,6 +59,8 @@ class ResidualConfig:
     patience: int = 15
     lr: float = 3e-3
     out_cap: tuple[float, float] | None = None  # bound on |dv/dt| (m/s2) and |dyaw/dt| (rad/s)
+    # v0.3: the speed output is switched off exactly (output_scale[0] = 0, masked out of the loss)
+    yaw_only: bool = False
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
@@ -106,15 +108,32 @@ def multi_step_data(es: EvalSet, nominal: Nominal, vehicle: Vehicle) -> MultiSte
     return MultiStepData(state0, data.cmds[:, n_warm:, :], data.v_true, data.poses)
 
 
-def normalisation(samples: ResidualSamples, norm: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(input mean, input std, output scale). `none`: identity, outputs in physical units."""
+def normalisation(
+    samples: ResidualSamples, norm: str, yaw_only: bool = False
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(input mean, input std, output scale). `none`: identity, outputs in physical units.
+    With `yaw_only` the speed entry of the output scale is exactly 0.0 (the bundle's
+    `output_scale: [0.0, s_yaw]`), so the speed output cannot change the model."""
     if norm == "none" or len(samples) == 0:
-        return np.zeros(4), np.ones(4), np.ones(2)
-    return (
-        samples.x.mean(axis=0),
-        np.maximum(samples.x.std(axis=0), 1e-6),
-        np.maximum(samples.y.std(axis=0), 1e-6),
-    )
+        mean, std, scale = np.zeros(4), np.ones(4), np.ones(2)
+    else:
+        mean = samples.x.mean(axis=0)
+        std = np.maximum(samples.x.std(axis=0), 1e-6)
+        scale = np.maximum(samples.y.std(axis=0), 1e-6)
+    if yaw_only:
+        scale = scale.copy()
+        scale[0] = 0.0
+    return mean, std, scale
+
+
+def target_scale(scale: np.ndarray) -> np.ndarray:
+    """The divisor of the training targets: the output scale, 1 where it is 0 (a masked output)."""
+    return np.where(scale == 0.0, 1.0, scale)
+
+
+def loss_mask_of(cfg: ResidualConfig) -> np.ndarray | None:
+    """Which outputs enter the one step loss: both, or the yaw output only."""
+    return np.array([0.0, 1.0]) if cfg.yaw_only else None
 
 
 def cap_weights(weights: MlpWeights, cap_normalised: np.ndarray | None) -> MlpWeights:
@@ -154,9 +173,13 @@ def train_numpy(
     weight_decay: float = 1e-2,
     batch: int = 256,
     cap_normalised: np.ndarray | None = None,
+    loss_mask: np.ndarray | None = None,
 ) -> MlpWeights:
     """AdamW on the mean squared one step error with early stopping on the validation error.
-    Hand written backpropagation of the 4-32-32-2 tanh network, float64."""
+    Hand written backpropagation of the 4-32-32-2 tanh network, float64. `loss_mask` (2,) is 1
+    for an output that counts in the loss and 0 for one that is masked out (v0.3 yaw only: the
+    speed output gets no gradient and does not enter the validation loss)."""
+    mask = np.ones(2) if loss_mask is None else np.asarray(loss_mask, dtype=float)
     rng = np.random.default_rng(seed)
     w = _init_weights(rng)
     params = list(w.arrays())
@@ -172,7 +195,7 @@ def train_numpy(
             xb, yb = x[idx], y[idx]
             cur = MlpWeights(*params)
             a1, a2, out = _forward_cache(cur, xb)
-            d3 = 2.0 * (out - yb) / (len(idx) * yb.shape[1])
+            d3 = 2.0 * (out - yb) * mask / (len(idx) * mask.sum())
             g_w3, g_b3 = d3.T @ a2, d3.sum(axis=0)
             d2 = (d3 @ cur.w3) * (1.0 - a2**2)
             g_w2, g_b2 = d2.T @ a1, d2.sum(axis=0)
@@ -188,7 +211,8 @@ def train_numpy(
             if cap_normalised is not None:
                 capped = cap_weights(MlpWeights(*params), cap_normalised)
                 params[4][:], params[5][:] = capped.w3, capped.b3
-        val_loss = float(np.mean((_forward_cache(MlpWeights(*params), x_val)[2] - y_val) ** 2))
+        resid = (_forward_cache(MlpWeights(*params), x_val)[2] - y_val) * mask
+        val_loss = float(np.sum(resid**2) / (len(x_val) * mask.sum()))
         if val_loss < best - 1e-9:
             best, bad, best_params = val_loss, 0, [p.copy() for p in params]
         else:
@@ -232,7 +256,7 @@ def _numpy_trainer(cfg: ResidualConfig, cap_norm: np.ndarray | None):
     def trainer(x, y, xv, yv, seed):
         return train_numpy(
             x, y, xv, yv, seed, epochs=cfg.max_epochs * 2, patience=cfg.patience * 2, lr=cfg.lr,
-            weight_decay=cfg.weight_decay, cap_normalised=cap_norm,
+            weight_decay=cfg.weight_decay, cap_normalised=cap_norm, loss_mask=loss_mask_of(cfg),
         )  # fmt: skip
 
     return trainer
@@ -252,10 +276,11 @@ def fit_candidate(
 ) -> Candidate:
     """Train one candidate (config, seed) on train data only, early stopped on validation data,
     and score it on the validation windows."""
-    mean, std, scale = normalisation(train, cfg.norm)
-    cap = None if cfg.out_cap is None else np.asarray(cfg.out_cap) / scale
+    mean, std, scale = normalisation(train, cfg.norm, cfg.yaw_only)
+    divisor = target_scale(scale)  # a masked output (scale 0) is divided by 1, its loss is masked
+    cap = None if cfg.out_cap is None else np.asarray(cfg.out_cap) / divisor
     xs = lambda s: (s.x - mean) / std
-    ys = lambda s: s.y / scale
+    ys = lambda s: s.y / divisor
     make = one_step_trainer_fn or one_step_trainer
     weights: MlpWeights | None = None
     if cfg.mode in (ONE_STEP, MULTI_STEP_FROM_ONE):
@@ -304,7 +329,7 @@ def _torch_one_step_trainer(cfg: ResidualConfig, cap_norm):  # pragma: no cover 
     def trainer(x, y, xv, yv, seed):
         w = train_torch(
             x, y, xv, yv, seed, epochs=cfg.max_epochs * 4, patience=cfg.patience * 2, lr=cfg.lr,
-            weight_decay=cfg.weight_decay,
+            weight_decay=cfg.weight_decay, loss_mask=loss_mask_of(cfg),
         )  # fmt: skip
         return cap_weights(w, cap_norm)
 

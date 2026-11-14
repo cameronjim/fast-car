@@ -17,6 +17,8 @@
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>ackermann_msgs</depend>
   <depend>racer_pnp_msgs</depend>
   <depend>racer_tools</depend>
   <depend>python3-yaml</depend>

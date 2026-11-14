@@ -49,6 +49,7 @@ def _context(**overrides: str) -> LaunchContext:
         "lap_source": "start_scan",
         "lap_counter": "false",
         "require_lap_counter": "false",
+        "deskew": "false",
         "shadow_perception_bundle": "",
         "params_file": "",
     }
@@ -103,9 +104,11 @@ def test_argument_defaults() -> None:
         "lap_source": "start_scan",
         "lap_counter": "true",
         "require_lap_counter": "false",
+        "deskew": "false",
         "shadow_perception_bundle": "",
         "params_file": "",
     }
+    assert declared["deskew"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1"]
     assert declared["lap_source"].choices == ["start_scan", "map_pose"]
@@ -605,3 +608,110 @@ def test_nothing_in_the_planner_the_lap_memory_or_safety_reads_a_shadow_topic() 
         path = src / rel
         assert path.is_file(), path
         assert "/pnp/shadow" not in path.read_text(), rel
+
+
+# -- scan deskew (brief 33) ----------------------------------------------------------------------
+
+
+def _remaps(node) -> list | None:
+    """The node's remappings as (from, to) strings ([] when it has none)."""
+    remaps = node._Node__remappings
+    if remaps is None:
+        return None
+    return [
+        tuple(perform_substitutions(LaunchContext(), list(side)) for side in pair)
+        for pair in remaps
+    ]
+
+
+def _describe(node) -> tuple:
+    return (
+        node.node_package,
+        node.node_executable,
+        sorted(_flat_params(node).items(), key=lambda kv: kv[0]),
+        _remaps(node),
+    )
+
+
+def test_deskew_false_leaves_the_existing_nodes_exactly_as_they_were(monkeypatch) -> None:
+    """The golden is the description of the driving nodes before the deskew option existed: no
+    remapping on either, the same parameters, four actions (two nodes, two shutdown handlers)."""
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(_context(deskew="false"))
+    nodes = [a for a in actions if hasattr(a, "node_package")]
+    assert len(actions) == 4
+    assert [_describe(n) for n in nodes] == [
+        (
+            "racer_track_perception",
+            "track_perception_node",
+            [
+                ("backend", "net"),
+                ("bundle_dir", "/b/trackperc"),
+                ("laser_yaw_from_vehicle_params", True),
+            ],
+            [],
+        ),
+        (
+            "racer_planner",
+            "mppi_planner_node",
+            [
+                ("dynamics_bundle", "/b/dyn"),
+                ("laser_yaw_from_vehicle_params", True),
+                ("v_max_mps", 0.5),
+            ],
+            [],
+        ),
+    ]
+
+
+def test_deskew_true_is_refused_while_the_m_dsk_choices_are_unset(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "DESKEW_STAMP_IS", None)
+    monkeypatch.setattr(m, "DESKEW_BEAM_ORDER", None)
+    with pytest.raises(RuntimeError, match="DESKEW_STAMP_IS"):
+        m._make_actions(_context(deskew="true"))
+
+
+def _deskew_actions(monkeypatch, **overrides):
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "DESKEW_STAMP_IS", "sweep_start")
+    monkeypatch.setattr(m, "DESKEW_BEAM_ORDER", "index_descending")
+    return m, m._make_actions(_context(deskew="true", **overrides))
+
+
+def test_deskew_true_starts_the_node_and_remaps_the_three_consumers(monkeypatch, tmp_path) -> None:
+    _m, actions = _deskew_actions(
+        monkeypatch,
+        lap_memory="true",
+        dynamics_bundle=_bundle(tmp_path, 0.9),
+        shadow_perception_bundle="/b/shadow",
+    )
+    nodes = [a for a in actions if hasattr(a, "node_package")]
+    perception = [n for n in nodes if n.node_executable == "track_perception_node"]
+    others = {n.node_executable: n for n in nodes if n.node_executable != "track_perception_node"}
+    assert len(perception) == 2  # the driving one and the shadow one
+    assert "scan_deskew_node" in others
+    want = ("/scan", "/pnp/scan_deskewed")
+    for n in (*perception, others["mppi_planner_node"], others["lap_memory_node"]):
+        assert want in (_remaps(n) or []), n.node_executable
+    deskew = others["scan_deskew_node"]
+    assert deskew.node_package == "racer_track_perception"
+    assert not deskew._Node__remappings
+    p = _flat_params(deskew)
+    assert p["stamp_is"] == "sweep_start" and p["beam_order"] == "index_descending"
+    # the relay exiting shuts the launch down, like the driving nodes
+    assert len(_shutdown_handlers(actions)) == 4  # perception, planner, deskew, laps
+
+
+def test_deskew_true_never_touches_the_command_path_or_safety(monkeypatch) -> None:
+    _m, actions = _deskew_actions(monkeypatch)
+    nodes = [a for a in actions if hasattr(a, "node_package")]
+    assert not [n for n in nodes if n.node_package == "racer_safety"]
+    for n in nodes:
+        for r in _remaps(n) or []:
+            assert "/drive" not in r
+    source = (_LAUNCH_DIR / "pnp.launch.py").read_text()
+    assert not re.search(r"""["']/drive["']""", source)

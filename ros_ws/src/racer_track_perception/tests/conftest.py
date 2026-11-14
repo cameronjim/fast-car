@@ -13,7 +13,7 @@ from racer_track_perception.vehicle import LiveVehicle, load_live_vehicle
 collect_ignore = (
     []
     if importlib.util.find_spec("hypothesis")
-    else ["test_property.py", "test_refine_property.py"]
+    else ["test_property.py", "test_refine_property.py", "test_deskew_property.py"]
 )
 
 

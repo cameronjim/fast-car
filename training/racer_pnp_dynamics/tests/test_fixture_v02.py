@@ -6,7 +6,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import yaml
-from racer_pnp_dynamics import export, make_v02_fixtures as mk
+from racer_pnp_dynamics import export
+from racer_pnp_dynamics import make_v02_fixtures as mk
 from racer_pnp_dynamics.model import MlpWeights, Residual, zero_weights
 from racer_pnp_dynamics.vehicle import load_vehicle, repo_root
 from test_fit import TRUTH
@@ -21,7 +22,9 @@ def _source_bundle(tmp_path, enabled: bool):
     vehicle = load_vehicle()
     rng = np.random.default_rng(0)
     w = MlpWeights(*(rng.normal(0, 0.3, a.shape) for a in zero_weights().arrays()))
-    res = Residual(enabled, w, np.array([0.5, 0.0, 0.5, 0.0]), np.ones(4) * 0.3, np.array([0.2, 0.1]))
+    res = Residual(
+        enabled, w, np.array([0.5, 0.0, 0.5, 0.0]), np.ones(4) * 0.3, np.array([0.2, 0.1])
+    )
     nominal = TRUTH.replace(speed_deadband_mps=0.2, command_delay_s=0.04)
     export.write_bundle(
         tmp_path / "src", model_id="dyn-v0.2-test", created_utc="2026-11-13T01:00:00Z",

@@ -56,9 +56,10 @@ def test_run_table_has_one_row_per_run_with_r7_pooled_and_the_role_of_each(
             e = row["variants"][name]
             assert e["windows"] > 20 and set(e["errors"]) == {0.5, 1.0, 1.5}
     r3 = table["R3"]["variants"]
-    assert r3["truth"]["errors"][1.0]["speed_rmse_mps"] < r3["placeholder"]["errors"][1.0][
-        "speed_rmse_mps"
-    ]
+    assert (
+        r3["truth"]["errors"][1.0]["speed_rmse_mps"]
+        < r3["placeholder"]["errors"][1.0]["speed_rmse_mps"]
+    )
     other = pipeline_v02.run_table(segs, "no-such-bag", variants, toy_vehicle_module)
     assert other == {}
 
@@ -72,18 +73,16 @@ def test_legacy_report_is_the_v01_pooled_report_on_the_legacy_part(toy_vehicle_m
         legacy, toy_vehicle_module, {"truth": (TRUTH, None), "bad": (PLACEHOLDER_NOMINAL, None)}
     )
     assert out["segments"] == len(legacy) > 0
-    assert out["errors"]["truth"][1.0]["speed_rmse_mps"] < out["errors"]["bad"][1.0][
-        "speed_rmse_mps"
-    ]
+    assert (
+        out["errors"]["truth"][1.0]["speed_rmse_mps"] < out["errors"]["bad"][1.0]["speed_rmse_mps"]
+    )
     assert pipeline_v02.legacy_report([], toy_vehicle_module, {"truth": (TRUTH, None)}) == {
         "segments": 0,
         "errors": {},
     }
 
 
-def test_dead_zone_and_lag_reports_read_only_the_segments_they_are_given(
-    segs, toy_vehicle_module
-):
+def test_dead_zone_and_lag_reports_read_only_the_segments_they_are_given(segs, toy_vehicle_module):
     train_val = [s for s in segs if s.split in ("train", "val")]
     result = FitResult(nominal=TRUTH)
     dz = pipeline_v02.dead_zone_report(train_val, result, toy_vehicle_module)

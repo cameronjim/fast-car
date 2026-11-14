@@ -48,6 +48,10 @@ class Segment:
     name: str = ""  # the split file's segment name (G1a, R3, ...), "" without a split
     direction: str = ""  # cw / ccw from the split file, "legacy" for legacy_70_30 bags
     cap_mps: float | None = None
+    # Segments built from the pre-registered split are strict: a fit window may not read the
+    # delayed command from before the segment start (windows.speed_windows). The dyn-v0.1 rule
+    # (no split) leaves it False and its windows are unchanged.
+    strict_start: bool = False
 
     @property
     def t0_s(self) -> float:
@@ -215,12 +219,12 @@ def _whole_bag_segments(run: Run, motion: MotionSeries | None, entry: BagEntry) 
         for seg in _legacy_segments(run, motion):
             name = "legacy"
             if seg.split == "heldout":
-                out.append(replace(seg, split="legacy_heldout", direction=name))
+                out.append(replace(seg, split="legacy_heldout", direction=name, strict_start=True))
                 continue
             # train: the last share of the piece in time is validation
             cut = seg.i0 + int((1.0 - VAL_SEGMENT_FRACTION) * (seg.i1 - seg.i0))
             out.extend(
-                replace(seg, i0=c0, i1=c1, split=r, direction=name)
+                replace(seg, i0=c0, i1=c1, split=r, direction=name, strict_start=True)
                 for c0, c1, r in _carve(seg.i0, seg.i1, cut, "train")
             )
         return out
@@ -230,7 +234,7 @@ def _whole_bag_segments(run: Run, motion: MotionSeries | None, entry: BagEntry) 
         min_len = int(MIN_SEGMENT_S * 50.0)
         for a, b in _runs_of_true(mask):
             if b - a >= min_len:
-                out.append(Segment(run, motion, int(a), int(b), role, "whole", "whole"))
+                out.append(Segment(run, motion, int(a), int(b), role, "whole", "whole", None, True))
         return out
     return []  # unused, heldout_layout: nothing for the dynamics workstream
 

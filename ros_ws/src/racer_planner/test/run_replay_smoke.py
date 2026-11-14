@@ -44,7 +44,12 @@ def corridor_ranges() -> list[float]:
     return out
 
 
-def stream_text(seconds: float = 3.0) -> str:
+# K offsets inside a tick for the jittered stream: on time, late (12 ms after the tick's inputs, so
+# the next one lands 8 ms after it: a bunched callback) and early.
+JITTER_OFFSETS_S = (0.005, 0.005, 0.012, 0.0, 0.005, 0.005, 0.012, 0.0)
+
+
+def stream_text(seconds: float = 3.0, jitter: bool = False) -> str:
     ranges = " ".join("inf" if math.isinf(r) else f"{r:.6f}" for r in corridor_ranges())
     inc = 2.0 * math.pi / BEAMS
     lines = []
@@ -59,7 +64,8 @@ def stream_text(seconds: float = 3.0) -> str:
             sg = " ".join("0.02" for _ in range(16))
             lines.append(f"T {t + 0.01:.6f} {t:.6f} 16 0.02 0 {xs} {ys} {hw} {hw} {sg}")
         lines.append(f"O {t:.6f} {SPEED_MPS}")
-        lines.append(f"K {t + 0.005:.6f}")
+        offset = JITTER_OFFSETS_S[k % len(JITTER_OFFSETS_S)] if jitter else 0.005
+        lines.append(f"K {t + offset:.6f}")
     return "\n".join(lines) + "\n"
 
 
@@ -102,6 +108,9 @@ def main() -> int:
         if len(rows) != 150:
             print(f"expected 150 rows, got {len(rows)}")
             return 1
+        if any(r["slew_violation"] != "0" for r in rows):
+            print("a slew violation on the regular stream")
+            return 1
         states = {r["state_name"] for r in rows}
         print(f"states {sorted(states)}")
         if "FAULT" in states:
@@ -113,6 +122,31 @@ def main() -> int:
             return 1
         if max(float(r["cmd_speed_mps"]) for r in driving) <= 0.0:
             print("no positive speed command while DRIVING")
+            return 1
+
+        # The same corridor with tick times that jitter and bunch: the elapsed-time slew check the
+        # CLI writes next to every row (steering and speed step against f * rate * dt) has no
+        # violation, and callbacks just after a late one are republished.
+        jittered = root / "stream_jitter.txt"
+        jittered.write_text(stream_text(jitter=True), encoding="utf-8")
+        proc = run(args.cli, bundle, jittered)
+        if proc.returncode != 0:
+            print(f"planner_replay_cli (jitter) exited {proc.returncode}: {proc.stderr}")
+            return 1
+        jrows = list(csv.DictReader(proc.stdout.splitlines()))
+        violations = [r for r in jrows if r["slew_violation"] != "0"]
+        if violations:
+            print(f"{len(violations)} slew violations on jittered ticks, first {violations[0]}")
+            return 1
+        bunched = sum(int(r["bunched"]) for r in jrows)
+        if bunched < 10:
+            print(f"only {bunched} bunched callbacks in the jittered stream")
+            return 1
+        if sum(1 for r in jrows if r["state_name"] == "DRIVING") < 100:
+            print("the jittered stream never settled into DRIVING")
+            return 1
+        if any(r["state_name"] == "STARTING" and float(r["cmd_speed_mps"]) != 0.0 for r in jrows):
+            print("a STARTING tick published a speed")
             return 1
 
         desc = subprocess.run(

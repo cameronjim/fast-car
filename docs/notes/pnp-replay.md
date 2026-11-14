@@ -64,6 +64,23 @@ brackets): std R0 0.018 (0.018), R1 0.019 (0.020), R2 0.020 (0.021), R3 0.022 (0
 vehicle's acceleration limit per tick: up to two ticks in the dead zone, then the floor. Planner CSV
 columns appended: `recovery_attempts`.
 
+Planner v0.2 (timing, design 14.7) changes what a replay shows. The first ticks are STARTING (state
+0, speed 0): the planner holds still until 25 consecutive callbacks each arrived within 30 ms of the
+previous one and the solver has run on the real inputs for as many ticks, so the zero speed share
+of a short cut includes that warm start (25 ticks is 0.5 s, 2.5 percent of a 20 s run before any
+recorded gap restarts the count). A K line that arrives under half a tick after the last publish
+republishes the last command (`bunched` 1). The output slews by the measured time between ticks,
+not by the nominal 0.02 s. CSV columns appended, in this order: `elapsed_s` (the time the slew
+used), `bunched`, `plan_stale`, `gap_reset`, `start_missing` (the first condition STARTING still
+lacks, `StartMissing` of planner_logic.hpp), then the elapsed time check between two consecutive
+rows: `steer_step_rad` against `steer_allow_rad` (0.45 times the steering rate limit times the real
+time between the two ticks), `speed_up_step_mps` (growth of the speed magnitude) against
+`speed_allow_mps`, and `slew_violation` (1 when either step is over its allowance). `now_s` is
+written with microsecond resolution so that the allowance can be recomputed from the CSV. Replaying
+with the recorded tick times of a bag (the `/pnp/planner/status` stamps) instead of the regular
+0.02 s grid is what shows the elapsed time slew at work; the stream's K lines carry the tick times.
+
+
 
 ## Fault injection (roadmap P3.4)
 
@@ -159,3 +176,12 @@ recording on every run) over R0 to R8 of bag 2026-11-13T22-20-18 and the gap fol
         --set solve_halve_over_ms=200 --set stall_hold_s=600 --out 2026-11-13-v0.1.json
 
 The planner of brief 25 is accepted at zero violation pairs on every run.
+
+`tools/pnp_replay/baselines/2026-11-13-v0.2.json` is the same invocation with the planner of brief 25
+(v0.2: elapsed time slew, warm start gate, plan snapshot publisher, graceful staleness,
+`min_scan_points` 10): 0 rate allowance violation pairs on R0 to R8 and P0 (v0.1: see its file).
+The zero speed share there includes the 25 tick warm start. The two findings of the fault replay
+are fixed in the planner: F1, a scan with fewer than `min_scan_points` usable points is NO_SCAN
+(speed 0 within a tick, back to DRIVING through the warm start when good scans return), F2, a
+scan stamp a few ms ahead of the tick reports age 0. In a short fault BLOCKED with block reason 2
+on a scan older than 0.35 s is the end of the cap ramp (fault_checks `ramp_stop`), not a violation.

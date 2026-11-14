@@ -305,6 +305,54 @@ def _count_by_source(events: list[tuple]) -> dict:
     return out
 
 
+def pnp_timing_summary(recording, planner_status: list[tuple[float, int]]) -> dict:
+    """What the planner's timing acceptance counts (pre-registration 4.1 and 4.2):
+
+    safety_event_counts   /safety/events PHASE_ENGAGE records by source, stamped between the first
+                          non-zero /drive_raw command and the last /pnp/planner/status (the
+                          watchdog engagement after the planner has stopped is the stop mechanism
+                          and is not counted).
+    drive_raw             the command stream: the largest gap between two messages, the largest
+                          rate at which the speed magnitude rose over a window of at least 50 ms
+                          (m/s^2, the planner's allowance is its rate_limit_fraction times
+                          max_acceleration),
+                          and the largest first non-zero speed after the command had been 0.
+    """
+    out: dict = {}
+    # (stamp, speed, steering); a planner on use_sim_time stamps 0 until its first /clock arrives
+    drive = [d for d in recording.drive_raw if d[0] > 0.0]
+    first_nonzero = next((t for t, v, _ in drive if v != 0.0), None)
+    last_status = planner_status[-1][0] if planner_status else None
+    if first_nonzero is not None and last_status is not None:
+        counts: dict[str, int] = {}
+        for stamp, source, phase, _severity in recording.events:
+            if phase == 0 and first_nonzero <= stamp <= last_status:
+                counts[source] = counts.get(source, 0) + 1
+        out["safety_event_counts"] = counts
+        out["pnp_window_s"] = round(last_status - first_nonzero, 2)
+    if len(drive) >= 2:
+        t = np.array([d[0] for d in drive])
+        v = np.array([d[1] for d in drive])
+        mag = np.abs(v)  # the planner limits the growth of the magnitude (a reverse is slowing)
+        gaps = np.diff(t)
+        max_rate = 0.0
+        j0 = 0
+        for j in range(1, len(t)):
+            while j0 < j and t[j] - t[j0] >= 0.05:
+                max_rate = max(max_rate, (mag[j] - mag[j0]) / (t[j] - t[j0]))
+                j0 += 1
+        starts = [float(v[i]) for i in range(1, len(v)) if v[i - 1] == 0.0 and v[i] > 0.0]
+        out["drive_raw"] = {
+            "messages": len(drive),
+            "max_gap_s": round(float(gaps.max()), 4),
+            "gaps_over_50ms": int((gaps > 0.05).sum()),
+            "max_speed_rise_mps2": round(float(max_rate), 3),
+            "max_first_speed_after_zero_mps": round(max(starts), 4) if starts else 0.0,
+            "starts_from_zero": len(starts),
+        }
+    return out
+
+
 def run_benchmark(args: argparse.Namespace) -> dict:
     os.environ["ROS_DOMAIN_ID"] = str(args.domain_id)
     import bench_metrics as bm
@@ -398,6 +446,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         perception, planner = pnp_launch.parameters_for(
             args.perception_bundle, args.dynamics_bundle, args.backend, args.v_max_mps, mounted
         )
+        planner.update(json.loads(args.planner_params_json))
+        if args.wall_clock:
+            planner["use_sim_time"] = True
         nodes["track_perception_node"], nodes["mppi_planner_node"] = perception, planner
         pnp_nodes = [
             ("racer_track_perception", "track_perception_node"),
@@ -435,6 +486,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 # missing, stale or malformed guidance: the lap-1 cap, never the ceiling
                 planner["v_no_guidance_mps"] = float(lap_params["v_cap_start_mps"])
             result["lap_params"] = lap_params
+        if args.wall_clock:
+            stack.append(("wall_clock_node", [sys.executable, str(HERE / "wall_clock_node.py")]))
         for package, name in pnp_nodes:
             stack.append((name, [base._executable(package, name)]))
         result.update(
@@ -637,11 +690,17 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     lap_status: dict = {}
     driving_first: list[float] = []
     first_scan_after_driving: list[float] = []
+    planner_status: list[tuple[float, int]] = []
+
+    def on_planner_status(msg) -> None:
+        planner_states.append(msg.state)
+        planner_status.append((base._stamp_s(msg.header.stamp), msg.state))
+
     if args.driver == "pnp":
         from racer_pnp_msgs.msg import LapEvent, LapGuidance, PlannerStatus
 
         def on_planner(m) -> None:
-            planner_states.append(m.state)
+            on_planner_status(m)
             if m.state == 1 and not driving_first:
                 driving_first.append(node.get_clock().now().nanoseconds * 1e-9)
 
@@ -865,6 +924,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             result["rate_limit_events"] = sum(
                 1 for e in recording.events if e[1] == "rate_limit" and e[2] == 0
             )
+            result.update(pnp_timing_summary(recording, planner_status))
             # The command path: only the planner on /drive_raw, only safety_node on /drive.
             result["publisher_nodes"] = {
                 topic: sorted(i.node_name for i in node.get_publishers_info_by_topic(topic))
@@ -1007,6 +1067,18 @@ def main(argv: list[str] | None = None) -> int:
         default=1.5,
         help="with a lap memory: keep listening this long after the run ends so the system's "
         "last LapEvent arrives (s)",
+    )
+    parser.add_argument(
+        "--planner-params-json",
+        default="{}",
+        help="driver pnp: mppi_planner_node parameters on top of pnp.launch.py's (debug_stall_profile, "
+        "start_timeout_s, ...)",
+    )
+    parser.add_argument(
+        "--wall-clock",
+        action="store_true",
+        help="driver pnp: start wall_clock_node.py (publishes /clock from the system clock) and "
+        "give the planner use_sim_time:=true, which its debug_stall_profile requires",
     )
     parser.add_argument("--profile", default="lane-2026-10-25", help="gap_follow profile")
     parser.add_argument("--params-json", default="{}", help="gap_follow parameters on top")

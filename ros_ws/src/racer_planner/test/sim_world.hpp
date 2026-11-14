@@ -378,6 +378,7 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
 
   SimResult run;
   double last_cmd_speed = 0.0;
+  double last_cmd_steering = 0.0;
   int blocked_run = 0;
   double speed_sum = 0.0;
   int speed_n = 0;
@@ -452,11 +453,13 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
     in.has_gated = true;  // the sim has no safety node: the gated /drive passes what was published
     in.gated_stamp_s = t;
     in.gated_speed_mps = last_cmd_speed;
+    in.gated_steering_rad = last_cmd_steering;
     in.field = has_scan ? &field : nullptr;
     in.freespace = has_scan ? &freespace : nullptr;
     in.track = has_track ? &track : nullptr;
     const TickOutput out = planner.tick(in);
     last_cmd_speed = out.cmd.speed_mps;
+    last_cmd_steering = out.cmd.steering_rad;
     if (out.state == PlannerState::Recovering) ++run.ticks_recovering;
     run.max_solve_s = std::max(run.max_solve_s, out.solve_time_s);
     run.final_state = out.state;

@@ -1,5 +1,6 @@
-"""L3: startup refusals. A bad checksum, a vehicle_params mismatch and v_max_mps above the bundle
-validity each make the node exit non-zero before it publishes anything, naming the error."""
+"""L3: startup refusals. A bad checksum, a vehicle_params mismatch, v_max_mps above the bundle
+validity and a debug_stall_profile without use_sim_time (or a malformed one) each make the node
+exit non-zero before it publishes anything, naming the error."""
 
 from __future__ import annotations
 
@@ -54,6 +55,11 @@ _CHECKSUM = _node("planner_bad_checksum", _BAD_SUM)
 _VEHICLE = _node("planner_bad_vehicle", _BAD_VEHICLE)
 _VALIDITY = _node("planner_over_validity", _GOOD, v_max_mps=0.95)
 _MISSING = _node("planner_no_bundle", _ROOT / "does_not_exist")
+# The stall injection is for simulation only: refused without use_sim_time, and refused when the
+# profile is malformed even with it.
+_STALL = _node("planner_stall_profile", _GOOD, debug_stall_profile="1.0:0.4")
+_STALL_BAD = _node("planner_stall_bad", _GOOD, use_sim_time=True, debug_stall_profile="abc")
+_STALL_RANGE = _node("planner_stall_range", _GOOD, use_sim_time=True, debug_stall_profile="1:99")
 
 
 @pytest.mark.launch_test
@@ -64,6 +70,9 @@ def generate_test_description():
             _VEHICLE,
             _VALIDITY,
             _MISSING,
+            _STALL,
+            _STALL_BAD,
+            _STALL_RANGE,
             # every process under test exits at startup; keep the launch alive for the checks
             KeepAliveProc(),
             launch_testing.actions.ReadyToTest(),
@@ -78,6 +87,9 @@ class TestPlannerNodeRefusals(unittest.TestCase):
             (_VEHICLE, "VehicleParamsMismatch"),
             (_VALIDITY, "ValidityExceeded"),
             (_MISSING, "ManifestMissing"),
+            (_STALL, "StallProfileRefused"),
+            (_STALL_BAD, "StallProfileInvalid"),
+            (_STALL_RANGE, "StallProfileInvalid"),
         ]
         for action, code in cases:
             proc_info.assertWaitForShutdown(process=action, timeout=30)
@@ -87,7 +99,7 @@ class TestPlannerNodeRefusals(unittest.TestCase):
 @launch_testing.post_shutdown_test()
 class TestPlannerNodeRefusalExitCodes(unittest.TestCase):
     def test_exit_codes_are_non_zero(self, proc_info):
-        for action in (_CHECKSUM, _VEHICLE, _VALIDITY, _MISSING):
+        for action in (_CHECKSUM, _VEHICLE, _VALIDITY, _MISSING, _STALL, _STALL_BAD, _STALL_RANGE):
             launch_testing.asserts.assertExitCodes(
                 proc_info, allowable_exit_codes=[1], process=action
             )

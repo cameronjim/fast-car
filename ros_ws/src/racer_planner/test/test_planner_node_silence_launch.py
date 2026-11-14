@@ -50,6 +50,7 @@ def generate_test_description():
                 "samples": 128,
                 "laser_yaw_from_vehicle_params": False,
                 "laser_yaw_offset_rad": 0.0,
+                "require_gated_for_start": False,  # no safety_node in this test
             }
         ],
     )

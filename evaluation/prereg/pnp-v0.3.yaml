@@ -1,0 +1,98 @@
+# Pre-registered constants for Plug-and-Play v0.3: the second lap learning sim battery (B4), the
+# real-bag sets of the yaw dynamics gate (GP2c), the perception folds (GP1b) and the deskew
+# measurement (M-DSK).
+# Written 2026-11-14 before any v0.3 code, training, refit or run existed. Do not edit after the
+# first commit. Rationale and decision rules: docs/notes/preregistration-pnp-v0.3.md.
+# The real-bag time ranges are NOT repeated here: they stay in pnp-v0.2-split.yaml (SHA-256
+# bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83), which is unchanged.
+prereg_id: pnp-v0.3
+split_file: evaluation/prereg/pnp-v0.2-split.yaml
+split_sha256: bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83
+
+lap_battery:
+  id: B4
+  # Development data. Everything here has been run and read. The lap gate and D may be tuned and
+  # debugged on these and on nothing else in the simulator.
+  development:
+    seeds: [11, 12, 13]
+    cases:
+      T: {track: stadium, lane_width_m: 1.0, straight_length_m: 2.0, island_radius_m: 0.4}
+      T2: {track: stadium, lane_width_m: 1.0, straight_length_m: 5.0, island_radius_m: 0.4}
+      S1: {track: stadium, lane_width_m: 1.3, straight_length_m: 2.0, island_radius_m: 0.4}
+      S2: {track: rounded_rect, lane_width_m: 1.0, straight_length_m: 3.0, island_width_m: 2.0, island_radius_m: 0.4}
+      S3: {track: stadium, lane_width_m: 0.9, straight_length_m: 3.0, island_radius_m: 0.5}
+      S4: {track: map, map_dir: car-data/maps/2026-11-13-pnp-lap1}
+  # The battery. Never run, by anyone, before the freeze commit of the lap gate.
+  seeds: [21, 22, 23]
+  directions: [ccw, cw]
+  laps: 12
+  lap1_cap_mps: 0.5
+  ceiling: dynamics bundle validity v_max_mps (config/pnp/fixtures/dyn-car-2026-11-12)
+  plant: car-like (bundle actuation, dead zone, steering lag, command delay), scan noise on
+  lap_source: start_scan
+  cases:
+    N1: {track: stadium, lane_width_m: 1.1, straight_length_m: 4.0, island_radius_m: 0.45}
+    N2: {track: rounded_rect, lane_width_m: 0.9, straight_length_m: 4.0, island_width_m: 1.5, island_radius_m: 0.4}
+    N3: {track: stadium, lane_width_m: 1.4, straight_length_m: 2.5, island_radius_m: 0.6}
+    N4: {track: map, map_dir: car-data/maps/2026-11-10-oval}
+  # N4 is dropped (18 runs per condition, 22 of 24 becomes 16 of 18) if the map cannot be loaded
+  # or if condition a cannot complete 3 laps on it in either direction with seed 21.
+  conditions:
+    a: {lap_memory: "off", cap: lap1}
+    b: {lap_memory: "off", cap: ceiling}
+    c: {lap_memory: v0}
+    d: {lap_memory: v1, v_bound_floor_mps: 0.3, zone_merge: true}    # D v1 as merged in PR 169
+    e: {lap_memory: v1, v_bound_floor_mps: 0.0, zone_merge: false}   # D v1 as pre-registered in v0.2
+  thresholds:
+    lap_time_tolerance_s: 0.3
+    s0b_min_share_within_tolerance: 0.98
+    s0b_max_single_error_s: 1.0
+    max_contacts: 0
+    required_complete_of_24: 22
+    required_complete_of_18: 16
+    s1_reach_max_ratio_to_b: 1.05
+    s1_max_median_r: 0.80
+    s2_max_median_ratio_to_c: 0.95
+    s2_max_brakes_per_lap_late: 0.2
+    v02_ds1_max_r_reported_only: 0.80
+
+dynamics:
+  id: GP2c
+  truth: wheel_seeded_icp   # T2. The v0.2 truth (identity-seeded chain, T1) is reported next to it
+  icp_flags: {rms_max_m: 0.02, inlier_min_share: 0.7}
+  window_start_period_s: 0.25
+  min_start_speed_mps: 0.25
+  horizons_s: [0.5, 1.0, 1.5]
+  speed_bins_mps: [0.25, 0.6, 0.85, 1.25]
+  min_windows_per_stratum: 30
+  bootstrap: {block_s: 5.0, resamples: 2000, seed: 0}
+  base_nominal: dyn-v0.1-2026-11-12
+  yaw_refit_free_parameters: [steer_gain_left, steer_gain_right, steer_offset_rad, understeer_s2_per_m2]
+  residual_seeds: [0, 1, 2]
+  residual_output_scale_speed: 0.0
+  pose_check_segments: [G1b, T2b]
+  pose_check_max_interval_s: 1.5
+  fresh_confirmation_min_driving_s: 120
+
+perception:
+  id: GP1b
+  development_layout_bags: [2026-11-12T03-04-56_car_teleop, 2026-11-12T02-57-50_car_teleop]
+  folds:
+    F1: {heldout_bags: [2026-11-11T03-54-11_car_teleop_cw, 2026-11-11T04-20-19_car_teleop_v3]}
+    F2: {heldout_bags: [2026-10-24T23-13-18_car_teleop, 2026-10-25T19-27-08_car_teleop]}
+  moving_speed_min_mps: 0.2    # wheel speed, or ICP ground speed in bags with no /odom/wheel
+  bootstrap: {block_s: 2.0, resamples: 2000, seed: 0}
+  scale_augmentation_range: [0.75, 1.4]
+
+deskew:
+  id: M-DSK
+  selection_pairs:   # train role: used to choose the timing hypothesis
+    - {fast: R2, slow: R1, direction: ccw}
+    - {fast: R7a, slow: R0, direction: cw}
+  result_pairs:      # held-out role: scored once
+    - {fast: R8, slow: R3, direction: ccw}
+    - {fast: R7b, slow: R4, direction: cw}
+  fast_corner: {min_wheel_speed_mps: 0.6, min_abs_yaw_rate_radps: 0.5}
+  bootstrap: {block_s: 2.0, resamples: 2000, seed: 0}
+  max_ratio_fast_corner: 0.90
+  max_ratio_other: 1.02

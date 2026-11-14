@@ -1,7 +1,7 @@
 """Command line.
 
-    python -m racer_eval session --bags <dir> [<dir> ...] --conditions <yaml> --out <dir>
-    python -m racer_eval baseline --bag <2026-11-13T22-20-18 dir>
+    uv run --group bags python -m racer_eval session --bags <dir> [<dir> ...] --conditions <yaml> --out <dir>
+    uv run --group bags python -m racer_eval baseline --bag <2026-11-13T22-20-18 dir>
 
 `session` writes laps.csv, interventions.csv, curves.json, decisions.json and summary.md.
 `baseline` prints the section 4.2 counts per run and in total next to the hand count the

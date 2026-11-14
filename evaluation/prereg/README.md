@@ -4,4 +4,4 @@
 `docs/notes/preregistration-pnp-v0.2.md` holds the gates, thresholds and counting rules the split serves.
 Both files are frozen: a correction is a dated appendix by the owner, never an edit.
 The analysis code that implements them is `evaluation/analysis` (package `racer_eval`, tested to 90 percent line coverage).
-Run `uv run python -m racer_eval baseline --bag <bag dir>` there to recompute the section 4.2 baseline.
+Run `uv run --group bags python -m racer_eval baseline --bag <bag dir>` there to recompute the section 4.2 baseline.

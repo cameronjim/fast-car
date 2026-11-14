@@ -98,7 +98,9 @@ def speed_windows(
     for seg in segments:
         if not seg.run.has_odom:
             continue
-        starts = np.arange(seg.t0_s, seg.t1_s - horizon_s, stride_s)
+        # the first command a window uses is the one `delay_s` before its start: it must be inside
+        # the segment too (a window never reaches over a segment edge)
+        starts = np.arange(seg.t0_s + delay_s, seg.t1_s - horizon_s, stride_s)
         if len(starts) == 0:
             continue
         times = starts[:, None] + offsets[None, :]

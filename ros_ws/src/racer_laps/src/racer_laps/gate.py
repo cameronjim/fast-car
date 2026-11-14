@@ -26,21 +26,19 @@ is accepted when RMS <= `rms_max_m`, inlier share >= `inlier_min_share`, |latera
 Crossing. An accepted match is the car's pose in the start frame. The lap closes when the
 longitudinal offset goes from negative to non-negative between two accepted matches at most
 `max_match_gap_s` apart. Crossing time: linear interpolation between the two scans' effective
-times (header stamp plus half the sweep). One addition: the views a metre or more before the
-start pose are often too unlike the start scan to pass the thresholds, so the first accepted
-match of an approach can already be ahead of the line. If it is at most `late_match_max_m`
-(0.4 m) ahead, no match was accepted in the previous `max_match_gap_s` and the match is a good
-one (inlier share at least 0.75 and RMS at most 0.027 m: a borderline match of the partial view
-of a lane is not evidence), the crossing is placed that far back by wheel distance (an error of
-centimetres of path) and the lap closes. Beyond 0.4 m nothing is invented. On the 2026-11-13
-bags this recovers the laps whose approach never matched (PnP runs R1 and R7); in the simulator
-a version without the quality condition closed laps at 0.63 of the real lap. Lap time is crossing to crossing, lap length the wheel
-distance between crossings. The first closure fixes the reference lap length. A crossing is
-checked before it counts: at least `min_along_support` inlier matches of the later scan must
-sit on surfaces whose normal has a large component along the start heading (corners, island
-ends, the far wall of a bend). In a straight lane the along-lane offset is not observable, ICP
-then keeps whatever x it was seeded with, and a gate without the check would "cross" wherever the
-odometry says; the check refuses exactly that.
+times (header stamp plus half the sweep). Two additions, from lap 2 on only (lap 1 has no
+reference length) and only for a lap whose wheel distance is within 0.85 to 1.25 of it: the views a
+metre or more before the start pose are often too unlike the start scan to pass the thresholds, so
+the first accepted match of an approach can already be ahead of the line. If it is at most
+`late_match_max_m` (0.4 m) ahead and no match was accepted in the previous `max_match_gap_s`, the
+crossing is placed that far back by wheel distance (an error of centimetres of path) and the lap
+closes, when either the match is a good one (inlier share at least 0.75 and RMS at most 0.027 m: a
+borderline match of the partial view of a lane is not evidence) or three accepted matches in a row
+TRACK the car's motion (the latest is ahead of the first by the wheel distance driven since, within
+a tolerance, after 0.15 m of travel: a match on an alias of the start scan does not move with the
+car). Beyond 0.4 m nothing is invented. On the 2026-11-13 bags this recovers laps whose approach
+never matched (PnP runs R1 and R7); in the simulator versions without the quality condition and
+without the length range closed laps at 0.63 of the real lap.
 
 Missed gate. If the wheel distance since the last closure exceeds `missed_factor` times the
 reference lap length without a crossing, the station is uncertain: the gate never invents a lap,
@@ -107,6 +105,17 @@ class GateConfig:
     #: share and at most this RMS.
     late_match_min_share: float = 0.75
     late_match_rms_max_m: float = 0.027
+    #: ... or on a run of accepted matches that TRACK the car's motion: from the first match (at
+    #: most `late_match_max_m` ahead of the line) the latest has moved ahead by the wheel distance
+    #: driven since, within `tracked_tolerance_m` plus `tracked_tolerance_share` of that distance,
+    #: after at least `tracked_min_travel_m` of travel and at least 3 matches. A match that sits on
+    #: an alias of the start scan does not move with the car.
+    #: The late rules close a lap only when its length is within this range of the reference
+    #: length (and never on lap 1, which has none).
+    late_length_range: tuple[float, float] = (0.85, 1.25)
+    tracked_min_travel_m: float = 0.15
+    tracked_tolerance_m: float = 0.04
+    tracked_tolerance_share: float = 0.2
     #: Also seed the ICP with the dead-reckoned pose of the car in the start frame (see _seeds).
     dead_reckoning_seed: bool = True
     #: Around the dead-reckoned seed, rank a grid of along-lane and yaw offsets by overlap and
@@ -188,6 +197,7 @@ class StartScanGate:
         self._source_dense: FloatArray = np.zeros((0, 2))
         self._start_dr: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._prev: tuple[float, MatchResult] | None = None  # t_eff, accepted match
+        self._run: list[tuple[float, MatchResult, float]] = []  # t_eff, match, wheel total
         self._last_good: tuple[float, MatchResult, tuple[float, float, float]] | None = None
         self._uncertain_lap = False  # a crossing was missed during this lap
         self.n_armed_scans = 0
@@ -310,6 +320,7 @@ class StartScanGate:
         self._heading_origin = self._hist[-1].heading
         self._t_lap_start = float(t_eff_s)
         self._prev = None
+        self._run = []
         self._last_good = None
         self._uncertain_lap = False
         last = self._hist[-1]
@@ -438,6 +449,7 @@ class StartScanGate:
         if not self.armed:
             self.last_arming_state = "waiting"
             self._prev = None
+            self._run = []
             return None
         self.last_arming_state = "armed"
         self.n_armed_scans += 1
@@ -452,25 +464,59 @@ class StartScanGate:
         self._last_good = (t_eff_s, res, (now.x, now.y, now.theta))
         crossing: GateCrossing | None = None
         prev = self._prev
+        # the run of consecutive accepted matches this one belongs to
+        if prev is None or not (0.0 < t_eff_s - prev[0] <= self.cfg.max_match_gap_s):
+            self._run = []
+        self._run.append((t_eff_s, res, now.total_m))
         if prev is not None and 0.0 < t_eff_s - prev[0] <= self.cfg.max_match_gap_s:
             t0, m0 = prev
             if m0.x_m < 0.0 <= res.x_m and self._supported(source, res):
                 crossing = self._close(t0, m0, t_eff_s, res)
-        elif (
-            self.cfg.late_match_max_m > 0.0
-            and 0.0 <= res.x_m <= self.cfg.late_match_max_m
-            and res.inlier_share >= self.cfg.late_match_min_share
-            and res.rms_m <= self.cfg.late_match_rms_max_m
-            and self._supported(source, res)
-        ):
-            # The first accepted match of the approach is already past the line (the views
-            # before it are too unlike the start scan to match): place the crossing the wheel
+        if crossing is None and self._late_crossing_ok(res, source):
+            # The approach never matched (the views before it are too unlike the start scan) and
+            # the first accepted match is already past the line: place the crossing the wheel
             # distance x back instead of interpolating.
-            t_cross = self._time_at_total(now.total_m - res.x_m)
+            first = self._run[0]
+            t_cross = self._time_at_total(first[2] - first[1].x_m)
             if t_cross is not None and t_cross > self._t_lap_start:
-                crossing = self._finish(t_cross, res.y_m, res.yaw_rad)
+                crossing = self._finish(t_cross, first[1].y_m, first[1].yaw_rad)
+        if crossing is not None:
+            self._run = []
         self._prev = None if crossing is not None else (t_eff_s, res)
         return crossing
+
+    def _late_crossing_ok(self, res: MatchResult, source: FloatArray) -> bool:
+        """The late-match rules: a clearly good first match just past the line, or a run of
+        matches that tracks the car's motion away from it."""
+        c = self.cfg
+        if c.late_match_max_m <= 0.0 or not self._run:
+            return False
+        _t_first, m_first, total_first = self._run[0]
+        if not (0.0 <= m_first.x_m <= c.late_match_max_m):
+            return False
+        # Only from lap 2 on, and only when the wheel distance since the last closure is a lap
+        # within `late_length_range` of the reference: a match of a partial view that looks like
+        # the start scan somewhere else on the track (a lane looks the same along its length)
+        # cannot close a lap at 0.63 of its length.
+        if not math.isfinite(self._l_ref):
+            return False
+        length = total_first - m_first.x_m - self._origin_m
+        lo, hi = c.late_length_range
+        if not (lo * self._l_ref <= length <= hi * self._l_ref):
+            return False
+        if len(self._run) == 1:
+            return (
+                res.inlier_share >= c.late_match_min_share
+                and res.rms_m <= c.late_match_rms_max_m
+                and self._supported(source, res)
+            )
+        _t_last, m_last, total_last = self._run[-1]
+        travelled = total_last - total_first
+        if len(self._run) < 3 or travelled < c.tracked_min_travel_m:
+            return False
+        moved = m_last.x_m - m_first.x_m
+        tolerance = c.tracked_tolerance_m + c.tracked_tolerance_share * travelled
+        return abs(moved - travelled) <= tolerance and self._supported(source, res)
 
     def _time_at_total(self, total_m: float) -> float | None:
         """Time at which the wheel distance was `total_m` (linear in the odometry history)."""

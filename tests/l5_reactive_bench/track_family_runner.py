@@ -49,6 +49,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -238,6 +239,17 @@ def rescore_from_start_scan(
     return list(tracker.lap_times_s), list(getattr(tracker, "_crossings", [])), start_stamp
 
 
+def crossing_lap_times(crossings: list[float], start_stamp: float | None) -> list[float]:
+    """Ground-truth lap k is crossing stamp k minus crossing stamp k-1, crossing 0 being the stamp
+    of the first /scan after the planner first reported DRIVING (pre-registration 1.3). It does
+    not depend on where the simulator's own lap tracker started its clock: a tracker reset
+    (a teleport in the recorded odometry) moves ITS first lap, not these differences."""
+    if start_stamp is None or not crossings:
+        return []
+    edges = [float(start_stamp), *[float(c) for c in crossings]]
+    return [round(b - a, 3) for a, b in pairwise(edges)]
+
+
 def lap_results(
     lap_tracker,
     events: list[tuple],
@@ -282,9 +294,11 @@ def lap_results(
         entry["max_cap_mps"] = max(entry["max_cap_mps"], cap)
         entry["max_stations"] = max(entry["max_stations"], n_arrays)
         entry["last_cap_mps"] = cap
+    by_crossing_start = lap1_start_s if lap1_start_s is not None else driving_first_s
     return {
         "gt_lap_crossings_s": [round(c, 3) for c in crossings],
         "gt_lap_times_s": [round(t, 3) for t in gt_times],
+        "gt_lap_times_by_crossing_s": crossing_lap_times(crossings, by_crossing_start),
         "gt_lap1_start_s": start_s,
         "gt_lap_times_from_first_odom_s": [round(t, 3) for t in first_odom_times],
         "gt_rescored_from_start_scan": rescored is not None,
@@ -478,6 +492,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     "output_dir": str(work / "laps"),
                 }
             )
+            # D v1 variants (brief 29): the defaults are the node's own.
+            lap_params["zone_merge"] = bool(args.lap_zone_merge)
+            if args.lap_bound_floor_mps is not None:
+                lap_params["v_bound_floor_mps"] = float(args.lap_bound_floor_mps)
+            if os.environ.get("RUNNER_LAP_DUMP_DIR"):
+                # Diagnostics only: the lap node's inputs, to replay a run through the gate.
+                lap_params["debug_dump_path"] = str(
+                    Path(os.environ["RUNNER_LAP_DUMP_DIR"]) / f"{work.name}.npz"
+                )
             lap_params.update(json.loads(args.lap_params_json))
             nodes["lap_memory_node"] = lap_params
             pnp_nodes.append(("racer_laps", "lap_memory_node"))
@@ -685,6 +708,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         node.create_subscription(String, "/policy/status", on_policy_status, reliable)
         node.create_subscription(String, "/policy/events", on_policy_event, reliable)
     planner_states: list[int] = []
+    tracker_resets: list[float] = []  # stamps of ground-truth teleports (the tracker restarts)
     lap_events: list[dict] = []
     guidance_log: list[tuple] = []
     lap_status: dict = {}
@@ -840,6 +864,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     start_stamp = t
                 if previous is not None and bm.is_teleport(previous[1:3], (x, y)):
                     lap_tracker.reset()
+                    tracker_resets.append(round(t, 3))
                     cooldown_until = 0.0
                     if localised:
                         initial_pose_until = time.monotonic() + 3.0
@@ -901,6 +926,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         )
         result.update(metrics)
         result["stopped_because"] = stopped_because
+        result["gt_tracker_resets_s"] = tracker_resets
         if args.driver == "tracker_policy":
             for _ in range(150):  # let the 1 Hz status of the last second arrive
                 rclpy.spin_once(node, timeout_sec=0.01)
@@ -1057,6 +1083,19 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=None,
         help="cap of lap 1 (default: --v-max-mps); the planner's v_no_guidance_mps",
+    )
+    parser.add_argument(
+        "--lap-zone-merge",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="D v1: merge a flickering state into one caution zone (--no-lap-zone-merge: the "
+        "variant of pre-registration v0.2)",
+    )
+    parser.add_argument(
+        "--lap-bound-floor-mps",
+        type=float,
+        default=None,
+        help="D v1: no speed bound below this (default: the node's v_bound_floor_mps)",
     )
     parser.add_argument(
         "--lap-params-json", default="{}", help="lap_memory_node parameters on top (tuning)"

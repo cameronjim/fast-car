@@ -133,24 +133,45 @@ def drive_stadium(
     scan_hz: float = 10.0,
     start_s: float = 0.0,
     t0: float = 100.0,
+    odom_scale: float = 1.0,
+    speed_step_per_lap_mps: float = 0.0,
+    speed_max_mps: float = math.inf,
+    wobble_m: float = 0.0,
+    wobble_period_m: float = 3.1,
 ) -> Iterator[Tick]:
-    """Events (odom, drive, scan) of a car driving the centre line at a constant speed from
-    arc length `start_s`, in time order. Scan payload is (x, y, yaw, scan_stamp); the caller
-    casts the scan itself with `scan_at` so tests can tamper with it."""
+    """Events (odom, drive, scan) of a car driving the centre line from arc length `start_s`, in
+    time order. The speed is `speed_mps` and rises by `speed_step_per_lap_mps` at every lap
+    (capped at `speed_max_mps`). The wheel odometry reads the true speed times `odom_scale` (a
+    wheel diameter or slip error). `wobble_m` makes the car weave about the centre line (a
+    sinusoid of that amplitude over `wobble_period_m` of path, with the heading that goes with it)
+    as a real run does. Scan payload is (x, y, yaw, scan_stamp); the caller casts the
+    scan itself with `scan_at` so tests can tamper with it."""
     del seed
-    total_t = laps * stadium.length_m / speed_mps
-    n_odom = int(total_t * odom_hz)
+    dt = 1.0 / odom_hz
+    travelled = 0.0
+    total_m = laps * stadium.length_m
     next_scan = 0.0
-    for i in range(n_odom + 1):
-        t = i / odom_hz
-        s = start_s + speed_mps * t
+    t = 0.0
+    while travelled <= total_m:
+        s = start_s + travelled
         x, y, yaw, k = stadium.pose_at(s, clockwise)
         steer = math.atan(WHEELBASE_M * k)
+        if wobble_m:
+            w = 2.0 * math.pi / wobble_period_m
+            off = wobble_m * math.sin(w * s)
+            yaw_off = math.atan(wobble_m * w * math.cos(w * s))
+            x, y = x - off * math.sin(yaw), y + off * math.cos(yaw)
+            yaw += yaw_off
+        v = min(
+            speed_max_mps, speed_mps + speed_step_per_lap_mps * int(travelled // stadium.length_m)
+        )
         yield Tick(t0 + t, "drive", (steer,))
-        yield Tick(t0 + t, "odom", (speed_mps,))
+        yield Tick(t0 + t, "odom", (v * odom_scale,))
         if t >= next_scan - 1e-9:
             yield Tick(t0 + t, "scan", (x, y, yaw, t0 + t))
             next_scan += 1.0 / scan_hz
+        travelled += v * dt
+        t += dt
 
 
 def feed(
@@ -162,6 +183,7 @@ def feed(
     clockwise: bool = False,
     start_s: float = 0.0,
     on_tick: Callable[[object, Tick], None] | None = None,
+    **drive_kw: float,
 ) -> list[object]:
     """Drive `mem` (a LapMemory) round the stadium; returns its LapResults."""
     from racer_laps.scan_match import scan_to_points
@@ -169,7 +191,9 @@ def feed(
     rng = np.random.default_rng(seed)
     walls = stadium.walls()
     out: list[object] = []
-    for tick in drive_stadium(stadium, laps, speed_mps, seed, clockwise, start_s=start_s):
+    for tick in drive_stadium(
+        stadium, laps, speed_mps, seed, clockwise, start_s=start_s, **drive_kw
+    ):
         if on_tick is not None:
             on_tick(mem, tick)
         if tick.kind == "drive":

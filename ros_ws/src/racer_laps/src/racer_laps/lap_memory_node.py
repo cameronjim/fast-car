@@ -111,7 +111,21 @@ class LapMemoryNode(Node):
         lap_source = declare_str(
             "lap_source", "start_scan", f"One of {list(LAP_SOURCES)}: how a lap closes."
         )
-        lap_mode = declare_str("lap_mode", "v0", f"One of {list(LAP_MODES)}: D v0 or D v1.")
+        lap_mode = declare_str(
+            "lap_mode",
+            "v0",
+            f"One of {list(LAP_MODES)}: D v0, D v1, or observe (events and status, no guidance).",
+        )
+        zone_merge = bool(
+            self.declare_parameter(
+                "zone_merge",
+                True,
+                ParameterDescriptor(
+                    description="D v1: merge a flickering state into one caution zone (false "
+                    "keeps every zone, the variant of pre-registration v0.2)."
+                ),
+            ).value
+        )
         v_start = declare(
             "v_cap_start_mps", _DEFAULTS.v_cap_start_mps, "Speed cap of lap 1.", 0.05, 5.0
         )
@@ -241,13 +255,6 @@ class LapMemoryNode(Node):
                 0.1,
                 1.5,
             ),
-            max_match_gap_s=declare(
-                "max_match_gap_s",
-                _GATE.max_match_gap_s,
-                "Two accepted matches further apart than this are not a crossing.",
-                0.05,
-                5.0,
-            ),
             missed_factor=declare(
                 "missed_factor",
                 _GATE.missed_factor,
@@ -255,6 +262,41 @@ class LapMemoryNode(Node):
                 "uncertain.",
                 1.05,
                 5.0,
+            ),
+            strong_max_violation=declare(
+                "strong_max_violation",
+                _GATE.strong_max_violation,
+                "Largest free-space violation share of a STRONG match.",
+                0.0,
+                1.0,
+            ),
+            consensus_window_m=declare(
+                "consensus_window_m",
+                _GATE.consensus_window_m,
+                "A STRONG match this near the line is a crossing candidate.",
+                0.1,
+                3.0,
+            ),
+            consensus_past_m=declare(
+                "consensus_past_m",
+                _GATE.consensus_past_m,
+                "Close when the car is this far past the median line estimate.",
+                0.0,
+                2.0,
+            ),
+            consensus_wait_s=declare(
+                "consensus_wait_s",
+                _GATE.consensus_wait_s,
+                "Close this long after the last candidate once one was at the line.",
+                0.0,
+                5.0,
+            ),
+            consensus_spread_m=declare(
+                "consensus_spread_m",
+                _GATE.consensus_spread_m,
+                "Two line estimates agree within this.",
+                0.01,
+                1.0,
             ),
             min_along_support=declare_int(
                 "min_along_support",
@@ -372,10 +414,16 @@ class LapMemoryNode(Node):
             inlier_dist_m=gate.inlier_dist_m,
             lateral_max_m=gate.lateral_max_m,
             yaw_max_rad=gate.yaw_max_rad,
-            max_match_gap_s=gate.max_match_gap_s,
             missed_factor=gate.missed_factor,
             yaw_gain_table=table,
             min_along_support=gate.min_along_support,
+            strong_max_violation=gate.strong_max_violation,
+            consensus_window_m=gate.consensus_window_m,
+            consensus_past_m=gate.consensus_past_m,
+            consensus_wait_s=gate.consensus_wait_s,
+            consensus_spread_m=gate.consensus_spread_m,
+            lidar_x_m=self._vehicle.mount.x_m,
+            lidar_y_m=self._vehicle.mount.y_m,
             yaw_gain_right_scale=(
                 yaw_gain_override_right / yaw_gain_override
                 if yaw_gain_override > 0.0 and yaw_gain_override_right > 0.0
@@ -398,6 +446,7 @@ class LapMemoryNode(Node):
             caution_laps=int(caution_laps),
             v_bound_floor_mps=float(bound_floor),
             min_filter_half_m=float(min_filter),
+            zone_merge=zone_merge,
             gate=gate if lap_source == "start_scan" else None,
         )
         # A bad cap schedule (ceiling below start, ...) raises here and the node exits non-zero.
@@ -418,7 +467,12 @@ class LapMemoryNode(Node):
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
         self._event_pub = self.create_publisher(LapEvent, "/pnp/lap/event", _qos(True, 50))
-        self._guidance_pub = self.create_publisher(LapGuidance, "/pnp/lap/guidance", _qos(True, 5))
+        # observe mode publishes events and status only: no guidance topic at all
+        self._guidance_pub = (
+            None
+            if lap_mode == "observe"
+            else self.create_publisher(LapGuidance, "/pnp/lap/guidance", _qos(True, 5))
+        )
         self._status_pub = self.create_publisher(String, "/pnp/lap/status", _qos(True, 10))
         self.create_subscription(
             PlannerStatus, "/pnp/planner/status", self._on_planner, _qos(True, 50)
@@ -431,7 +485,8 @@ class LapMemoryNode(Node):
         self.create_subscription(AckermannDriveStamped, "/drive", self._on_drive, _qos(False, 10))
         self.create_subscription(LaserScan, "/scan", self._on_scan, _qos(False, 5))
         self.create_timer(self._pose_period_s, self._on_pose_timer)
-        self.create_timer(guidance_period_s, self._publish_guidance)
+        if self._guidance_pub is not None:
+            self.create_timer(guidance_period_s, self._publish_guidance)
         self.create_timer(status_period_s, self._publish_status)
         if self._dump_path:
             self.create_timer(15.0, self.dump_inputs)
@@ -543,6 +598,7 @@ class LapMemoryNode(Node):
         self.get_logger().info(
             f"lap {r.lap_index}: {r.lap_time_s:.2f} s, {r.length_m:.2f} m, cap {r.cap_mps:.2f}, "
             f"{'clean' if r.clean else 'UNCLEAN'}{' (missed gate, not a lap)' if r.missed_gate else ''}"
+            f", {r.n_candidates} candidates spread {r.spread_m:.2f} m"
             f", brakes {r.safety_brakes} (obstacle {r.obstacle_brakes}, timing {r.timing_brakes}), "
             f"next cap {r.next_cap_mps:.2f}"
         )
@@ -625,6 +681,7 @@ class LapMemoryNode(Node):
         msg.s_m = [float(v) for v in g.s_m]
         msg.v_ref_mps = [float(v) for v in g.v_ref_mps]
         msg.cost_to_go_s = [float(v) for v in g.cost_to_go_s]
+        assert self._guidance_pub is not None
         self._guidance_pub.publish(msg)
 
     def _publish_status(self) -> None:

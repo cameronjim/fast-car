@@ -107,7 +107,7 @@ def test_argument_defaults() -> None:
         "params_file": "",
     }
     assert declared["backend"].choices == ["net", "geometric"]
-    assert declared["lap_mode"].choices == ["v0", "v1"]
+    assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
     assert declared["lap_source"].choices == ["start_scan", "map_pose"]
 
 
@@ -299,6 +299,44 @@ def test_lap_memory_adds_the_node_with_the_cap_range_and_the_planner_fallback(
     assert float(q["v_max_mps"]) == 0.8
     assert float(q["v_no_guidance_mps"]) == 0.4  # a dead lap node leaves lap 1's cap, not 0.8
     assert len([a for a in actions if isinstance(a, RegisterEventHandler)]) == 3
+
+
+def test_lap_mode_observe_starts_the_lap_node_and_launches_the_planner_as_without_lap_memory(
+    monkeypatch, tmp_path
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    bundle = _bundle(tmp_path, 0.9)
+    plain = m._make_actions(_context(v_max_mps="0.7", dynamics_bundle=bundle))
+    plain_planner = next(a for a in plain if getattr(a, "node_package", "") == "racer_planner")
+    # v_lap1_mps 0.9 is above v_max_mps 0.7: refused with v0/v1, ignored with observe
+    ctx = _context(
+        lap_memory="true",
+        lap_mode="observe",
+        dynamics_bundle=bundle,
+        v_max_mps="0.7",
+        v_lap1_mps="0.9",
+    )
+    actions = m._make_actions(ctx)
+    laps = [a for a in actions if getattr(a, "node_package", "") == "racer_laps"]
+    assert len(laps) == 1
+    p = _flat_params(laps[0])
+    assert p["lap_mode"] == "observe" and p["lap_source"] == "start_scan"
+    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    q = _flat_params(planner)
+    assert "use_lap_guidance" not in q and "v_no_guidance_mps" not in q
+    assert float(q["v_max_mps"]) == 0.7
+    # the planner's parameters are exactly those of lap_memory:=false
+    assert q == _flat_params(plain_planner)
+    logs = [a for a in actions if type(a).__name__ == "LogInfo"]
+    assert any("v_lap1_mps is ignored" in "".join(t.text for t in a.msg) for a in logs)
+
+
+def test_observe_parameters_ignore_v_lap1_and_never_refuse_it(tmp_path) -> None:
+    m = _module()
+    params = m.lap_memory_parameters(_bundle(tmp_path, 0.9), 0.7, 0.95, "observe", "start_scan")
+    assert params["lap_mode"] == "observe"
+    assert params["v_cap_ceiling_mps"] == 0.7 and params["v_cap_start_mps"] == 0.7
 
 
 def test_v_lap1_defaults_to_v_max_so_a_launch_without_lap_memory_is_as_before(

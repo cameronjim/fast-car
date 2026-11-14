@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import racer_laps.gate as gate_module
 from racer_laps.engine import LapConfig, LapMemory
-from racer_laps.gate import GateConfig, StartScanGate, yaw_gain
+from racer_laps.gate import GateConfig, GateCrossing, StartScanGate, yaw_gain
 from racer_laps.lap_record import STATE_DRIVING
 from racer_laps.scan_match import MatchResult
 from synth import WHEELBASE_M, Stadium, feed
@@ -91,6 +91,11 @@ def test_yaw_gain_is_piecewise_linear_and_held_outside_the_knots() -> None:
         {"wheelbase_m": 0.33, "arm_fraction": 0.0},
         {"wheelbase_m": 0.33, "arm_fraction": 1.5},
         {"wheelbase_m": 0.33, "missed_factor": 1.0},
+        {"wheelbase_m": 0.33, "strong_max_violation": 1.5},
+        {"wheelbase_m": 0.33, "strong_max_violation": -0.1},
+        {"wheelbase_m": 0.33, "consensus_window_m": 0.0},
+        {"wheelbase_m": 0.33, "consensus_past_m": -0.1},
+        {"wheelbase_m": 0.33, "consensus_wait_s": -1.0},
     ],
 )
 def test_bad_configs_are_refused(kw: dict) -> None:
@@ -227,19 +232,61 @@ def test_arming_works_for_a_clockwise_lap_too() -> None:
     assert g.armed
 
 
-def test_later_laps_arm_at_0_6_of_the_reference_length(monkeypatch: pytest.MonkeyPatch) -> None:
-    g = armed_gate(monkeypatch)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
-    assert g.on_scan(5.69, PTS) is None
-    c = g.on_scan(5.74, PTS)
-    assert c is not None and c.lap_index == 1
-    l_ref = g.l_ref_m
-    assert l_ref == pytest.approx(5.7, abs=0.15)
-    # the next lap: below 0.6 L_ref of distance the gate is not armed even with the heading
+def strong(monkeypatch: pytest.MonkeyPatch, violation: float = 0.0) -> None:
+    """Every match has this free-space violation share (the scripted points are not a scene)."""
+    monkeypatch.setattr(gate_module, "freespace_violation_share", lambda *a, **k: violation)
+
+
+def advance(g: StartScanGate, t_from: float, seconds: float, v: float = 1.0) -> float:
     steer = math.atan(WHEELBASE_M / 0.9)
-    t = 5.74
+    return drive_odom(g, t_from, seconds, v, steer)
+
+
+def scan(
+    g: StartScanGate, mp: pytest.MonkeyPatch, t: float, res: MatchResult | None
+) -> GateCrossing | None:
+    mp.setattr(gate_module, "match_scans", Scripted([res]))
+    return g.on_scan(t, PTS)
+
+
+def close_lap(g: StartScanGate, mp: pytest.MonkeyPatch, t: float) -> tuple[GateCrossing, float]:
+    """Two agreeing STRONG candidates just before the line, then the car drives 0.45 m on and a
+    scan with no match closes the lap (0.3 m past the median estimate). Returns (crossing, t)."""
+    assert scan(g, mp, t, result(-0.2)) is None
+    t = advance(g, t, 0.1)
+    assert scan(g, mp, t, result(-0.1)) is None
+    t = advance(g, t, 0.5)
+    c = scan(g, mp, t, None)
+    assert c is not None
+    return c, t
+
+
+def lap_n_gate(mp: pytest.MonkeyPatch, laps: int, **kw: object) -> tuple[StartScanGate, float]:
+    """A gate that has closed `laps` laps (through `close_lap`) and driven the next one round:
+    armed. Returns (gate, time of the last odometry sample)."""
+    strong(mp)
+    g = armed_gate(mp, **kw)
+    t = 5.7
+    for _ in range(laps):
+        _c, t = close_lap(g, mp, t)
+        t = advance(g, t, 5.5)
+    assert g.armed
+    return g, t
+
+
+# -- arming --------------------------------------------------------------------------------------
+
+
+def test_later_laps_arm_at_0_6_of_the_estimated_length(monkeypatch: pytest.MonkeyPatch) -> None:
+    strong(monkeypatch)
+    g = armed_gate(monkeypatch)
+    c, t = close_lap(g, monkeypatch, 5.7)
+    assert c.lap_index == 1
+    l_ref = g.l_ref_m
+    assert l_ref == pytest.approx(5.8, abs=0.15)
+    steer = math.atan(WHEELBASE_M / 0.9)
     g.on_steering(steer)
-    for _ in range(int(0.55 * l_ref * 100)):
+    while g.station_m < 0.55 * l_ref:
         t += 0.01
         g.on_odom(t, 1.0)
     assert g.station_m < 0.6 * l_ref
@@ -267,189 +314,188 @@ def test_later_laps_arm_at_0_6_of_the_reference_length(monkeypatch: pytest.Monke
         (result(-0.1, yaw=math.radians(61)), False),
         (result(-0.1, yaw=-math.radians(61)), False),
         (result(-0.1, y=0.74, yaw=math.radians(59), rms=0.029, share=0.61), True),
-        (None, False),
     ],
 )
 def test_acceptance_thresholds(
-    monkeypatch: pytest.MonkeyPatch, res: MatchResult | None, accepted: bool
+    monkeypatch: pytest.MonkeyPatch, res: MatchResult, accepted: bool
 ) -> None:
     g = armed_gate(monkeypatch)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([res]))
-    g.on_scan(5.69, PTS)
-    assert (g._prev is not None) == accepted
+    assert g._accept(res) == accepted
 
 
-# -- crossing ------------------------------------------------------------------------------------
+def test_an_accepted_match_keeps_the_tracking_seed_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    strong(monkeypatch)
+    g = armed_gate(monkeypatch)
+    scan(g, monkeypatch, 5.6, result(-3.0))  # far from the line: no candidate, still the seed
+    assert g._last_good is not None and not g._cands
+    g2 = armed_gate(monkeypatch)
+    scan(g2, monkeypatch, 5.6, result(-0.1, rms=0.031))
+    assert g2._last_good is None
 
 
-def test_crossing_time_is_interpolated_between_the_two_matches(
+# -- consensus crossing --------------------------------------------------------------------------
+
+
+def test_two_agreeing_strong_matches_close_the_lap_at_the_median_estimate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    strong(monkeypatch)
     g = armed_gate(monkeypatch)
-    # x goes from -0.1 at t = 5.60 to +0.3 at t = 5.70: zero at a quarter of the way
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1, y=0.2, yaw=0.1)]))
-    assert g.on_scan(5.60, PTS) is None
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.3, y=0.0, yaw=0.3)]))
-    c = g.on_scan(5.70, PTS)
-    assert c is not None
-    assert c.t_cross_s == pytest.approx(5.625, abs=1e-9)
-    assert c.lateral_m == pytest.approx(0.15, abs=1e-9)
-    assert c.yaw_rad == pytest.approx(0.15, abs=1e-9)
-    assert c.lap_time_s == pytest.approx(5.625, abs=1e-9)  # lap 1 starts at the start scan, t=0
-    # wheel distance between the crossings: station at 5.625
-    assert c.length_m == pytest.approx(5.625, abs=0.1)
+    assert scan(g, monkeypatch, 5.60, result(-0.2, y=0.2, yaw=0.1)) is None
+    assert scan(g, monkeypatch, 5.70, result(-0.1, y=0.0, yaw=0.3)) is None  # same line: 5.8
+    t = advance(g, 5.7, 0.2)
+    assert scan(g, monkeypatch, t, None) is None  # 0.1 m past the line: not yet 0.3 m
+    t = advance(g, t, 0.3)
+    c = scan(g, monkeypatch, t, None)
+    assert c is not None and c.lap_index == 1
+    assert c.t_cross_s == pytest.approx(5.8, abs=0.03)
+    assert c.length_m == pytest.approx(5.8, abs=0.05)
+    assert c.n_candidates == 2 and c.spread_m == pytest.approx(0.0, abs=0.03)
     assert not c.missed
     assert g.l_ref_m == pytest.approx(c.length_m)
+    # the pose handed on is that of the candidate nearest the line, carried to the line
+    assert c.yaw_rad == pytest.approx(0.3)
+    assert c.lateral_m == pytest.approx(0.0 - (-0.1) * math.tan(0.3))
 
 
-def test_two_matches_more_than_half_a_second_apart_are_not_a_crossing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_two_disagreeing_matches_do_not_close_a_lap(monkeypatch: pytest.MonkeyPatch) -> None:
+    strong(monkeypatch)
     g = armed_gate(monkeypatch)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1)]))
-    g.on_scan(5.60, PTS)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.6)]))
-    assert g.on_scan(6.20, PTS) is None  # 0.6 s later and 0.6 m ahead: not a crossing
+    scan(g, monkeypatch, 5.60, result(-0.2, share=0.65, rms=0.029))  # line 5.8
+    scan(g, monkeypatch, 5.70, result(-0.5, share=0.65, rms=0.029))  # line 6.2: 0.4 m apart
+    t = advance(g, 5.7, 1.0)
+    assert scan(g, monkeypatch, t, None) is None
     assert g.laps_completed == 0
 
 
-def lap2_gate(monkeypatch: pytest.MonkeyPatch, **kw: object) -> tuple[StartScanGate, float, float]:
-    """A gate that has closed lap 1 (the strict pair) and driven a second full turn: armed,
-    reference length known. Returns (gate, time of the last odometry sample, total distance)."""
-    g = armed_gate(monkeypatch, **kw)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
-    g.on_scan(5.69, PTS)
-    assert g.on_scan(5.74, PTS) is not None
-    t = advance(g, 5.74, 5.7)
-    assert g.armed and math.isfinite(g.l_ref_m)
-    return g, t, g.total_m
-
-
-def advance(g: StartScanGate, t_from: float, seconds: float, v: float = 1.0) -> float:
-    steer = math.atan(WHEELBASE_M / 0.9)
-    return drive_odom(g, t_from, seconds, v, steer)
-
-
-def test_the_first_accepted_match_just_past_the_line_places_the_crossing_back_by_distance(
+def test_one_match_of_late_quality_closes_but_one_of_normal_quality_does_not(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    g, t, total = lap2_gate(monkeypatch)
-    origin = total - g.station_m
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.3, y=0.1, yaw=0.05)]))
-    c = g.on_scan(t, PTS)
-    assert c is not None and c.lap_index == 2
-    assert c.t_cross_s == pytest.approx(t - 0.3, abs=0.03)  # 0.3 m back at 1 m/s
-    assert c.length_m == pytest.approx(total - 0.3 - origin, abs=0.05)
-    assert c.lateral_m == pytest.approx(0.1)
-    assert c.yaw_rad == pytest.approx(0.05)
-    assert not c.missed
+    strong(monkeypatch)
+    good = armed_gate(monkeypatch)
+    scan(good, monkeypatch, 5.7, result(-0.1, share=0.75, rms=0.027))
+    t = advance(good, 5.7, 0.5)
+    assert scan(good, monkeypatch, t, None) is not None
+    plain = armed_gate(monkeypatch)
+    scan(plain, monkeypatch, 5.7, result(-0.1, share=0.74, rms=0.029))
+    t = advance(plain, 5.7, 0.5)
+    assert scan(plain, monkeypatch, t, None) is None
 
 
-def test_the_late_match_rule_has_a_limit_a_quality_bar_and_a_switch(
+def test_the_wait_rule_closes_half_a_second_after_the_last_candidate_at_the_line(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    g, t, _ = lap2_gate(monkeypatch)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.41)]))
-    assert g.on_scan(t, PTS) is None  # 0.41 m ahead: nothing is invented
-    h, t, _ = lap2_gate(monkeypatch, late_match_max_m=0.0)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.1)]))
-    assert h.on_scan(t, PTS) is None  # switched off
-    # a borderline match (share 0.74, or RMS 0.028) of a partial view is not evidence
-    for weak in (result(0.1, share=0.74), result(0.1, rms=0.028)):
-        w, t, _ = lap2_gate(monkeypatch)
-        monkeypatch.setattr(gate_module, "match_scans", Scripted([weak]))
-        assert w.on_scan(t, PTS) is None
-    ok, t, _ = lap2_gate(monkeypatch)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.1, share=0.75, rms=0.027)]))
-    assert ok.on_scan(t, PTS) is not None
-    # a fresh earlier match that is already ahead of the line does not allow the late rule
-    k, t, _ = lap2_gate(monkeypatch)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.9)]))
-    assert k.on_scan(t, PTS) is None
-    t = advance(k, t, 0.1)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.3)]))
-    assert k.on_scan(t, PTS) is None
+    strong(monkeypatch)
+    g = armed_gate(monkeypatch)
+    scan(g, monkeypatch, 5.65, result(-0.05, share=0.65, rms=0.029))
+    scan(g, monkeypatch, 5.70, result(0.05, share=0.65, rms=0.029))  # lines 5.7 and 5.65
+    # the car stops on the line: 0.3 m past is never reached, 0.5 s after the last candidate is
+    for k in range(1, 61):
+        g.on_odom(5.7 + 0.01 * k, 0.0)
+    assert scan(g, monkeypatch, 6.1, None) is None  # 0.4 s
+    c = scan(g, monkeypatch, 6.25, None)
+    assert c is not None and c.length_m == pytest.approx(5.7, abs=0.1)
 
 
-def test_the_late_rules_never_close_lap_1_and_only_a_lap_of_about_the_reference_length(
+def test_the_wait_rule_needs_a_candidate_at_or_past_the_line(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = armed_gate(monkeypatch)  # lap 1: there is no reference length yet
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.1)]))
-    assert first.on_scan(5.7, PTS) is None
-    # lap 2 at 0.63 of the reference length: the heading arms it early (odometry over-reads), but
-    # the distance says it is not a lap
-    g, t, _ = lap2_gate(monkeypatch)
-    # pretend the previous crossing was much later: shorten the lap by moving the origin forward
-    g._origin_m += 0.37 * g.l_ref_m
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.1)]))
-    assert g.on_scan(t, PTS) is None
-    # and a lap 1.3 times the reference is no lap either (the missed gate flags those)
-    h, t, _ = lap2_gate(monkeypatch)
-    h._origin_m -= 0.3 * h.l_ref_m
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.1)]))
-    assert h.on_scan(t, PTS) is None
+    strong(monkeypatch)
+    g = armed_gate(monkeypatch)
+    scan(g, monkeypatch, 5.65, result(-0.15, share=0.65, rms=0.029))
+    scan(g, monkeypatch, 5.70, result(-0.10, share=0.65, rms=0.029))
+    for k in range(1, 61):
+        g.on_odom(5.7 + 0.01 * k, 0.0)
+    assert scan(g, monkeypatch, 6.25, None) is None  # all candidates before the line, car stopped
 
 
-def test_a_run_of_matches_that_tracks_the_motion_closes_the_lap_back_at_the_first_match(
+def test_a_match_outside_the_window_or_not_strong_is_no_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    g, t, total0 = lap2_gate(monkeypatch)
-    origin = total0 - g.station_m
-    t_first = t
-    out = None
-    for k, x in enumerate([0.20, 0.30, 0.40]):
-        # a weak first match (no single-match rule applies), then two that move with the car
-        monkeypatch.setattr(
-            gate_module, "match_scans", Scripted([result(x, share=0.65, rms=0.029)])
-        )
-        out = g.on_scan(t, PTS)
-        if k < 2:
-            assert out is None  # fewer than three matches, or less than 0.15 m of travel
-            t = advance(g, t, 0.1)
-    assert out is not None
-    assert out.t_cross_s == pytest.approx(t_first - 0.2, abs=0.03)
-    assert out.length_m == pytest.approx(total0 - 0.2 - origin, abs=0.05)
+    strong(monkeypatch)
+    far = armed_gate(monkeypatch)
+    scan(far, monkeypatch, 5.6, result(-0.61, share=0.8, rms=0.02))
+    scan(far, monkeypatch, 5.7, result(0.61, share=0.8, rms=0.02))
+    assert not far._cands
+    strong(monkeypatch, 0.041)
+    weak = armed_gate(monkeypatch)
+    scan(weak, monkeypatch, 5.7, result(-0.1, share=0.8, rms=0.02))
+    assert not weak._cands
+    strong(monkeypatch, 0.04)
+    edge = armed_gate(monkeypatch)
+    scan(edge, monkeypatch, 5.7, result(-0.1, share=0.8, rms=0.02))
+    assert len(edge._cands) == 1
+    assert edge.last_match is not None and edge.last_match.freespace_violation == 0.04
 
 
-def test_a_match_that_does_not_move_with_the_car_is_an_alias_and_never_closes_a_lap(
+def test_a_candidate_not_confirmed_in_time_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    strong(monkeypatch)
+    g = armed_gate(monkeypatch)
+    scan(g, monkeypatch, 5.7, result(-0.1, share=0.65, rms=0.029))
+    t = advance(g, 5.7, 2.0)
+    scan(g, monkeypatch, t, None)
+    assert not g._cands
+
+
+def test_the_violation_of_the_match_is_measured_both_ways_and_the_larger_kept(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    g, t, _ = lap2_gate(monkeypatch)
-    for _ in range(8):
-        monkeypatch.setattr(
-            gate_module, "match_scans", Scripted([result(0.2, share=0.65, rms=0.029)])
-        )
-        assert g.on_scan(t, PTS) is None  # x stays 0.2 while the car drives on
-        t = advance(g, t, 0.1)
-    assert g.laps_completed == 1
+    shares = iter([0.01, 0.03])
+    monkeypatch.setattr(gate_module, "freespace_violation_share", lambda *a, **k: next(shares))
+    g = armed_gate(monkeypatch)
+    scan(g, monkeypatch, 5.7, result(-0.1))
+    assert g.last_match is not None and g.last_match.freespace_violation == 0.03
 
 
-def test_the_tracking_rule_needs_three_matches_and_a_chain_without_gaps(
+def test_with_a_trusted_length_an_estimate_outside_the_band_is_ignored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    g, t, _ = lap2_gate(monkeypatch)
-    # two matches 0.3 m apart: tracking, but only two
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.1, share=0.65, rms=0.029)]))
-    assert g.on_scan(t, PTS) is None
-    t = advance(g, t, 0.3)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.4, share=0.65, rms=0.029)]))
-    assert g.on_scan(t, PTS) is None
-    # a third after a gap of more than half a second starts a new run at x = 0.45 > 0.4: no
-    t = advance(g, t, 0.6)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.45, share=0.65, rms=0.029)]))
-    assert g.on_scan(t, PTS) is None
-    assert g.laps_completed == 1
+    g, t = lap_n_gate(monkeypatch, 2)
+    assert g.l_ref_trusted
+    # the same in-window match: on the expected line it is a candidate, 2 m early it is not
+    g._origin_m -= 2.0  # the expected line is now 2 m behind the match's line
+    scan(g, monkeypatch, t, result(-0.1, share=0.8, rms=0.02))
+    assert not g._cands
+    g._origin_m += 2.0
+    scan(g, monkeypatch, t, result(-0.1, share=0.8, rms=0.02))
+    assert len(g._cands) == 1
 
 
-def test_the_late_rules_share_a_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    g, t, _ = lap2_gate(monkeypatch, late_match_max_m=0.0)
-    for x in (0.2, 0.3, 0.4, 0.5):
-        monkeypatch.setattr(
-            gate_module, "match_scans", Scripted([result(x, share=0.65, rms=0.029)])
-        )
-        assert g.on_scan(t, PTS) is None
-        t = advance(g, t, 0.1)
+def test_without_a_trusted_length_a_candidate_needs_the_minimum_lap_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strong(monkeypatch)
+    g = armed_gate(monkeypatch)
+    g._origin_m += 3.0  # only 2.8 m since the last line
+    scan(g, monkeypatch, 5.7, result(-0.1, share=0.8, rms=0.02))
+    assert not g._cands
+
+
+def test_after_a_closure_no_candidate_is_kept_until_the_gate_arms_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strong(monkeypatch)
+    g = armed_gate(monkeypatch)
+    _c, t = close_lap(g, monkeypatch, 5.7)
+    assert not g._cands and not g.armed
+    scan(g, monkeypatch, t, result(-0.1, share=0.9, rms=0.01))
+    assert not g._cands and g.laps_completed == 1
+
+
+def test_a_closure_needs_the_heading_of_a_lap_not_just_an_armed_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strong(monkeypatch)
+    # armed (heading above 2 pi - 1.2) but short of 2 pi - 0.9: 5.2 rad is 83 percent of a turn
+    g, t = gate_at_heading(5.2)
+    assert g.armed
+    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1, share=0.8, rms=0.02)]))
+    g.on_scan(t, PTS)
+    assert not g._cands
+    h, t = gate_at_heading(5.6)
+    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1, share=0.8, rms=0.02)]))
+    h.on_scan(t, PTS)
+    assert len(h._cands) == 1
 
 
 def gate_at_heading(target: float) -> tuple[StartScanGate, float]:
@@ -464,38 +510,19 @@ def gate_at_heading(target: float) -> tuple[StartScanGate, float]:
     return g, t
 
 
-def test_a_closure_needs_the_heading_of_a_lap_not_just_an_armed_gate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # armed (heading above 2 pi - 1.2) but short of 2 pi - 0.9: 5.2 rad is 83 percent of a turn
-    g, t = gate_at_heading(5.2)
-    assert g.armed
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
-    assert g.on_scan(t - 0.05, PTS) is None
-    assert g.on_scan(t, PTS) is None  # a pair that crosses, but not after a lap
-    assert g.laps_completed == 0
-    # a little further round it is a lap
-    h, t = gate_at_heading(5.6)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
-    h.on_scan(t - 0.05, PTS)
-    assert h.on_scan(t, PTS) is not None
+# -- the lap length estimate in the gate -----------------------------------------------------------
 
 
-def test_from_lap_2_a_closure_needs_nine_tenths_of_the_reference_length(
+def test_a_poisoned_first_lap_is_flagged_suspect_once_the_estimate_is_trusted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    g, t, _ = lap2_gate(monkeypatch)
-    l_ref = g.l_ref_m
-    g._origin_m += 0.15 * l_ref  # the lap is only 85 percent of the reference so far
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
-    assert g.on_scan(t - 0.05, PTS) is None
-    assert g.on_scan(t, PTS) is None
-    assert g.laps_completed == 1
-    h, t, _ = lap2_gate(monkeypatch)
-    h._origin_m += 0.05 * h.l_ref_m  # 95 percent: fine
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
-    h.on_scan(t - 0.05, PTS)
-    assert h.on_scan(t, PTS) is not None
+    g, _t = lap_n_gate(monkeypatch, 3)
+    # all three scripted laps are ~5.8 m: nothing suspect
+    assert g.l_ref_trusted and g.suspect_laps == []
+    g._lengths[1] = 3.9  # pretend lap 1 closed 2 m early
+    g._suspect = sorted(i for i, n in g._lengths.items() if g._est.suspect(n))
+    assert g.suspect_laps == [1]
+    assert g.status()["suspect_laps"] == [1] and g.status()["l_ref_trusted"] is True
 
 
 # -- the along-lane support check ------------------------------------------------------------------
@@ -504,20 +531,19 @@ def test_from_lap_2_a_closure_needs_nine_tenths_of_the_reference_length(
 def test_a_crossing_whose_along_lane_offset_is_not_observable_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    strong(monkeypatch)
     g = armed_gate(monkeypatch, min_along_support=8)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
     monkeypatch.setattr(gate_module, "along_support", lambda *a, **k: 7)
-    g.on_scan(5.60, PTS)
-    assert g.on_scan(5.70, PTS) is None  # 7 supporting matches: not enough
-    assert g.laps_completed == 0
+    scan(g, monkeypatch, 5.7, result(-0.1, share=0.8, rms=0.02))
+    assert not g._cands  # 7 supporting matches: not enough
 
 
 def test_an_observable_crossing_passes_the_support_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    strong(monkeypatch)
     g = armed_gate(monkeypatch, min_along_support=8)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
     monkeypatch.setattr(gate_module, "along_support", lambda *a, **k: 8)
-    g.on_scan(5.60, PTS)
-    assert g.on_scan(5.70, PTS) is not None
+    scan(g, monkeypatch, 5.7, result(-0.1, share=0.8, rms=0.02))
+    assert len(g._cands) == 1
 
 
 # -- the missed gate -----------------------------------------------------------------------------
@@ -526,39 +552,49 @@ def test_an_observable_crossing_passes_the_support_check(monkeypatch: pytest.Mon
 def test_missed_gate_never_invents_a_lap_and_the_next_crossing_is_flagged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    strong(monkeypatch)
     g = armed_gate(monkeypatch)
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
-    g.on_scan(5.69, PTS)
-    c1 = g.on_scan(5.74, PTS)
-    assert c1 is not None and not c1.missed
+    c1, t = close_lap(g, monkeypatch, 5.7)
+    assert not c1.missed
     l_ref = g.l_ref_m
-    steer = math.atan(WHEELBASE_M / 0.9)
-    t = 5.74
-    g.on_steering(steer)
-    # drive 1.3 reference laps with every scan failing to match
+    g.on_steering(math.atan(WHEELBASE_M / 0.9))
     monkeypatch.setattr(gate_module, "match_scans", Scripted([]))
     while g.station_m < 1.3 * l_ref:
         t += 0.1
         for k in range(5):
             g.on_odom(t - 0.08 + 0.02 * k, 1.0)
         assert g.on_scan(t, PTS) is None
-    assert g.station_uncertain
-    assert g.poll_uncertain()
+    assert g.station_uncertain and g.poll_uncertain()
     assert g.status()["station_uncertain"] is True
     assert g.laps_completed == 1  # no lap invented
     assert g.armed  # stays armed
-    # the next real crossing closes a lap that is flagged and does not move L_ref
-    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
-    t += 0.1
-    g.on_odom(t, 1.0)
-    g.on_scan(t, PTS)
-    c2 = g.on_scan(t + 0.05, PTS)
-    assert c2 is not None
-    assert c2.missed
-    assert c2.lap_index == 2
-    assert g.l_ref_m == l_ref
+    c2, t = close_lap(g, monkeypatch, t + 0.1)
+    assert c2.missed and c2.lap_index == 2
+    assert g.l_ref_m == l_ref  # a missed lap is not a lap length
+    assert not g.station_uncertain and not g.poll_uncertain()
+
+
+def test_a_trusted_length_raises_the_uncertain_flag_at_the_length_plus_the_band(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    g, _t = lap_n_gate(monkeypatch, 2)
+    assert g.l_ref_trusted
+    band = g._est.band_m()
+    g._origin_m = g.total_m - (g.l_ref_m + band - 0.05)
     assert not g.station_uncertain
-    assert not g.poll_uncertain()
+    g._origin_m = g.total_m - (g.l_ref_m + band + 0.05)
+    assert g.station_uncertain  # earlier than the 1.25 L of an untrusted estimate
+
+
+def test_an_untrusted_length_raises_it_at_missed_factor_times_the_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    g, _t = lap_n_gate(monkeypatch, 1)
+    assert not g.l_ref_trusted
+    g._origin_m = g.total_m - 1.2 * g.l_ref_m
+    assert not g.station_uncertain
+    g._origin_m = g.total_m - 1.3 * g.l_ref_m
+    assert g.station_uncertain
 
 
 def test_status_keys() -> None:
@@ -569,6 +605,8 @@ def test_status_keys() -> None:
         "station_m",
         "heading_since_closure_rad",
         "l_ref_m",
+        "l_ref_trusted",
+        "suspect_laps",
         "station_uncertain",
         "armed_scans",
         "matched_scans",

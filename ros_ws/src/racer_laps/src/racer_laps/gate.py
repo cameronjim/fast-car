@@ -1,5 +1,5 @@
-"""The start-scan gate: when a lap closes and how far along the lap the car is, without a map.
-Numpy only, no ROS.
+"""The start-scan gate (v2): when a lap closes and how far along the lap the car is, without a
+map. Numpy only, no ROS. Design: claude-docs/13-plug-and-play.md section 15.2.
 
 There is no IMU on the car and a slam_toolbox map built over several laps smears, so lap closure
 and lap position must not depend on a metric map after lap 1. The gate needs two things only:
@@ -9,14 +9,17 @@ and lap position must not depend on a metric map after lap 1. The gate needs two
 * The start scan: the LiDAR scan (points in base_link) taken when driving starts. It defines the
   start pose.
 
+The gate is a small estimator of one number, the wheel distance at which the car crosses the
+start line. Odometry proposes it, scans confirm it, and a closure needs both.
+
 Arming. The gate is armed when both hold: the wheel distance since the last closure is at least
-`min_lap_length_m` (lap 1) or `arm_fraction` times the reference lap length (later laps), and the
-heading integrated from wheel odometry has turned at least 2 pi minus `heading_slack_rad` in
-either direction since the last closure. The heading rate is `gain(|delta|) v tan(delta) / L`
-with the gated steering `delta` (the yaw-rate gain table of vehicle_params when the caller has
-it). The heading condition is what stops a symmetric track (a stadium looks the same half a lap
-later) from closing at half a lap. Only the lower bound is used: odometry that over-reads the
-turn must not disarm the gate.
+`min_lap_length_m` (no lap length estimate yet) or `arm_fraction` times the estimated lap length,
+and the heading integrated from wheel odometry has turned at least 2 pi minus
+`heading_slack_rad` in either direction since the last closure. The heading rate is
+`gain(|delta|) v tan(delta) / L` with the gated steering `delta` (the yaw-rate gain table of
+vehicle_params when the caller has it). The heading condition is what stops a symmetric track (a
+stadium looks the same half a lap later) from closing at half a lap. Only the lower bound is used:
+odometry that over-reads the turn must not disarm the gate.
 
 Match. While tracking (about 60 percent of a lap round, so the matches chain on the approach) and
 while armed, every scan is matched to the start scan by point-to-point ICP. Seeds: the previous
@@ -27,30 +30,37 @@ the ICP iterates on. A match within 2.5 m of the start pose is then re-scored sh
 start heading: ICP slides along a straight lane (the walls match at any shift) and could be a
 metre off; only the lane ends and bends decide the shift, and a clearly better one replaces it. A
 match is accepted when RMS <= `rms_max_m`, inlier share >= `inlier_min_share`, |lateral offset| <=
-`lateral_max_m` and |relative yaw| <= `yaw_max_rad`. A closure needs the gate ARMED; tracking
-alone never closes a lap.
+`lateral_max_m` and |relative yaw| <= `yaw_max_rad`. Accepted matches keep the tracking seed
+alive. They place a crossing only when STRONG.
 
-Crossing. An accepted match is the car's pose in the start frame. The lap closes when the
-longitudinal offset goes from negative to non-negative between two accepted matches at most
-`max_match_gap_s` apart. Crossing time: linear interpolation between the two scans' effective
-times (header stamp plus half the sweep). Two additions, from lap 2 on only (lap 1 has no
-reference length) and only for a lap whose wheel distance is within 0.85 to 1.25 of it: the views a
-metre or more before the start pose are often too unlike the start scan to pass the thresholds, so
-the first accepted match of an approach can already be ahead of the line. If it is at most
-`late_match_max_m` (0.4 m) ahead and no match was accepted in the previous `max_match_gap_s`, the
-crossing is placed that far back by wheel distance (an error of centimetres of path) and the lap
-closes, when either the match is a good one (inlier share at least 0.75 and RMS at most 0.027 m: a
-borderline match of the partial view of a lane is not evidence) or three accepted matches in a row
-TRACK the car's motion (the latest is ahead of the first by the wheel distance driven since, within
-a tolerance, after 0.15 m of travel: a match on an alias of the start scan does not move with the
-car). Beyond 0.4 m nothing is invented. On the 2026-11-13 bags this recovers laps whose approach
-never matched (PnP runs R1 and R7); in the simulator versions without the quality condition and
-without the length range closed laps at 0.63 of the real lap.
+STRONG. An accepted match whose along-lane offset is observable (`along_support`) and whose
+free-space violation share is at most `strong_max_violation`: under the match each scan is moved
+into the other's frame and a point that lies more than `freespace_margin_m` inside the other
+scan's nearest range in its bearing bin is a violation (`scan_match.freespace_violation_share`;
+the larger of the two directions counts). A straight lane matches itself at any shift and the
+side walls alone pass every other test, but the lane ends of an alias sit in the other scan's
+free space.
 
-Missed gate. If the wheel distance since the last closure exceeds `missed_factor` times the
-reference lap length without a crossing, the station is uncertain: the gate never invents a lap,
-stays armed, and the next real crossing closes a lap that is flagged `missed` (the caller marks it
-unclean and does not store it, its length is not a lap).
+Candidate and consensus crossing. A STRONG match within `consensus_window_m` of the line, whose
+heading since the last closure is a lap's, is one estimate of the line's wheel distance: the wheel
+total at the scan minus the match's along offset. With a trusted lap length estimate the estimate
+must also lie within the band of the last line position plus the estimated length (innovation
+gate: an alias metres early is metres of innovation and is ignored); without one it must be at
+least `min_lap_length_m` from the last line. The lap closes when the car is `consensus_past_m`
+past the median estimate by wheel distance, or `consensus_wait_s` after the last candidate once
+one was at or past the line, and only if two estimates agree within `consensus_spread_m` or one
+is of late-match quality (inlier share >= `quality_min_share`, RMS <= `quality_rms_max_m`). The
+crossing is at wheel total `median`, its time from the odometry history. After a closure no
+candidate is accepted until the gate arms again.
+
+Lap length estimate (`LapLengthEstimate`): the median of the last five closed, not-missed laps,
+trusted once the last two agree. A lap that differs from a trusted estimate by more than the band
+is flagged suspect (a LapEvent cannot be recalled; the caller drops the lap from what it learned).
+
+Missed gate. If the wheel distance since the last closure exceeds the estimated length plus the
+band (trusted) or `missed_factor` times it (not yet trusted) without a crossing, the station is
+uncertain: the gate never invents a lap, stays armed, and the next real crossing closes a lap that
+is flagged `missed` (the caller marks it unclean and does not store it, its length is not a lap).
 
 The gate is a measurement of lap position, not a safety function.
 """
@@ -59,7 +69,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 
 import numpy as np
@@ -70,8 +80,10 @@ from racer_laps.scan_match import (
     FloatArray,
     MatchResult,
     along_support,
+    freespace_violation_share,
     match_scans,
     overlap_share,
+    polar_profile,
     surface_normals,
     thin,
     wrap,
@@ -80,7 +92,18 @@ from racer_laps.scan_match import (
 TWO_PI = 2.0 * math.pi
 #: A dropout of the wheel odometry longer than this is not integrated across.
 MAX_ODOM_DT_S = 1.0
-HISTORY_S = 4.0
+#: Odometry history kept: a crossing is placed back in it by wheel distance (at most the 0.3 m
+#: past the line plus the `consensus_wait_s` after the last candidate, a few seconds at the
+#: slowest speed the planner drives).
+HISTORY_S = 6.0
+#: Lap length estimate (pre-registration of the design, 13-plug-and-play.md 15.2): the median of
+#: the last LENGTH_MEDIAN_LAPS laps; the last two agree within max(LENGTH_AGREE_ABS_M,
+#: LENGTH_AGREE_REL * value); the suspect band is max(BAND_ABS_M, BAND_REL * value).
+LENGTH_MEDIAN_LAPS = 5
+LENGTH_AGREE_ABS_M = 0.30
+LENGTH_AGREE_REL = 0.04
+BAND_ABS_M = 0.5
+BAND_REL = 0.08
 #: How far a scan time may run ahead of the last odometry sample and still be extrapolated.
 MAX_EXTRAPOLATION_S = 0.2
 
@@ -94,10 +117,8 @@ class GateConfig:
     #: Matching starts (without permission to close a lap) at this share of the arming distance
     #: and with this heading slack: about 60 percent of a lap.
     #: A closure needs the heading since the last one to be at least 2 pi minus this (tighter
-    #: than `heading_slack_rad`, which only arms the gate) and, from lap 2, a wheel distance of
-    #: at least `closure_min_length_fraction` of the reference lap length.
+    #: than `heading_slack_rad`, which only arms the gate).
     closure_heading_slack_rad: float = 0.9
-    closure_min_length_fraction: float = 0.9
     track_distance_fraction: float = 0.6
     track_slack_rad: float = 2.4
     rms_max_m: float = 0.03
@@ -105,7 +126,6 @@ class GateConfig:
     inlier_dist_m: float = 0.05
     lateral_max_m: float = 0.75
     yaw_max_rad: float = math.radians(60.0)
-    max_match_gap_s: float = 0.5
     missed_factor: float = 1.25
     #: (|delta| rad, gain) pairs from vehicle_params steering.yaw_rate_gain_table; empty = 1.0.
     yaw_gain_table: tuple[tuple[float, float], ...] = ()
@@ -121,26 +141,26 @@ class GateConfig:
     along_search_m: float = 2.5
     along_step_m: float = 0.1
     along_min_gain: float = 0.03
-    #: When the first accepted match of an approach (none in the previous `max_match_gap_s`) is
-    #: already up to this far ahead of the line, close the lap with the crossing placed that
-    #: wheel distance back. 0 turns it off: then only a negative-to-non-negative pair counts.
-    late_match_max_m: float = 0.4
-    #: ... and only on a clearly better match than a normal one (a borderline match of a partial
-    #: view of a lane is not evidence that the car is back at the start): at least this inlier
-    #: share and at most this RMS.
-    late_match_min_share: float = 0.75
-    late_match_rms_max_m: float = 0.027
-    #: ... or on a run of accepted matches that TRACK the car's motion: from the first match (at
-    #: most `late_match_max_m` ahead of the line) the latest has moved ahead by the wheel distance
-    #: driven since, within `tracked_tolerance_m` plus `tracked_tolerance_share` of that distance,
-    #: after at least `tracked_min_travel_m` of travel and at least 3 matches. A match that sits on
-    #: an alias of the start scan does not move with the car.
-    #: The late rules close a lap only when its length is within this range of the reference
-    #: length (and never on lap 1, which has none).
-    late_length_range: tuple[float, float] = (0.85, 1.25)
-    tracked_min_travel_m: float = 0.15
-    tracked_tolerance_m: float = 0.04
-    tracked_tolerance_share: float = 0.2
+    #: The LiDAR head's position in base_link (vehicle_params sensors.lidar.mount_x_m, mount_y_m;
+    #: the node and the replay pass the binding's numbers, 0.0 is for synthetic tests).
+    lidar_x_m: float = 0.0
+    lidar_y_m: float = 0.0
+    #: STRONG match: free-space violation share at most this (design 15.2, starting value).
+    strong_max_violation: float = 0.04
+    freespace_margin_m: float = 0.15
+    freespace_max_range_m: float = 6.0
+    #: Consensus crossing (design 15.2): only STRONG matches within `consensus_window_m` of the
+    #: line are candidates; close when the car is `consensus_past_m` past the median line estimate
+    #: or `consensus_wait_s` after the last candidate once one was at or past the line; two
+    #: estimates must agree within `consensus_spread_m`, or one is of late-match quality.
+    consensus_window_m: float = 0.6
+    consensus_past_m: float = 0.3
+    consensus_wait_s: float = 0.5
+    consensus_spread_m: float = 0.15
+    quality_min_share: float = 0.75
+    quality_rms_max_m: float = 0.027
+    #: A candidate not confirmed within this long is dropped.
+    candidate_ttl_s: float = 1.5
     #: Also seed the ICP with the dead-reckoned pose of the car in the start frame (see _seeds).
     dead_reckoning_seed: bool = True
     #: Around the dead-reckoned seed, rank a grid of along-lane and yaw offsets by overlap and
@@ -158,6 +178,10 @@ class GateConfig:
             raise ValueError("min_lap_length_m must be positive, arm_fraction in (0, 1]")
         if self.missed_factor <= 1.0:
             raise ValueError("missed_factor must exceed 1")
+        if not (0.0 <= self.strong_max_violation <= 1.0) or self.consensus_window_m <= 0.0:
+            raise ValueError("strong_max_violation must be in [0, 1], consensus_window_m positive")
+        if self.consensus_past_m < 0.0 or self.consensus_wait_s < 0.0:
+            raise ValueError("consensus_past_m and consensus_wait_s must not be negative")
 
 
 @dataclass(frozen=True)
@@ -170,6 +194,8 @@ class GateCrossing:
     lateral_m: float
     yaw_rad: float
     heading_rad: float = math.nan  # heading integrated from odometry over the lap
+    n_candidates: int = 0  # STRONG matches the crossing was placed from
+    spread_m: float = 0.0  # max minus min of their line estimates, wheel distance
 
 
 @dataclass
@@ -180,6 +206,60 @@ class _Sample:
     x: float  # dead-reckoned pose in the odometry frame
     y: float
     theta: float
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    """One STRONG match near the line: an estimate of the line's wheel distance."""
+
+    t_eff_s: float
+    line_m: float  # wheel total at the scan minus the match's along offset
+    match: MatchResult
+
+
+class LapLengthEstimate:
+    """The lap length in wheel distance, revisable. `value_m` is the median of the last
+    `LENGTH_MEDIAN_LAPS` closed, not-missed lap lengths; it is `trusted` once at least two laps
+    were added and the last two agree within `max(LENGTH_AGREE_ABS_M, LENGTH_AGREE_REL * value)`.
+    A first lap that closed early heals by the third lap: two laps that disagree are not trusted,
+    the third makes the median the right length and the first is then suspect."""
+
+    def __init__(self) -> None:
+        self._laps: list[float] = []
+
+    def add(self, length_m: float) -> None:
+        """A closed, not-missed lap."""
+        if math.isfinite(length_m) and length_m > 0.0:
+            self._laps.append(float(length_m))
+
+    def clear(self) -> None:
+        self._laps = []
+
+    @property
+    def n_laps(self) -> int:
+        return len(self._laps)
+
+    @property
+    def value_m(self) -> float:
+        if not self._laps:
+            return math.nan
+        return float(np.median(self._laps[-LENGTH_MEDIAN_LAPS:]))
+
+    @property
+    def trusted(self) -> bool:
+        if len(self._laps) < 2:
+            return False
+        tol = max(LENGTH_AGREE_ABS_M, LENGTH_AGREE_REL * self.value_m)
+        return abs(self._laps[-1] - self._laps[-2]) <= tol
+
+    def band_m(self) -> float:
+        value = self.value_m
+        if not math.isfinite(value):
+            return BAND_ABS_M
+        return max(BAND_ABS_M, BAND_REL * value)
+
+    def suspect(self, length_m: float) -> bool:
+        return self.trusted and abs(length_m - self.value_m) > self.band_m()
 
 
 def yaw_gain(table: tuple[tuple[float, float], ...], abs_delta: float) -> float:
@@ -212,18 +292,21 @@ class StartScanGate:
         self._steer = 0.0
         self._speed = 0.0
         self._laps = 0
-        self._l_ref = math.nan
+        self._est = LapLengthEstimate()
+        self._lengths: dict[int, float] = {}
+        self._flagged: set[int] = set()  # suspect when they closed
+        self._suspect: list[int] = []
         self._origin_m = 0.0
         self._heading_origin = 0.0
         self._t_lap_start = 0.0
         self._start_pts: FloatArray = np.zeros((0, 2))
         self._start_normals: FloatArray = np.zeros((0, 2))
         self._start_dense: FloatArray = np.zeros((0, 2))
+        self._start_profile: FloatArray = np.zeros(0)
         self._source_dense: FloatArray = np.zeros((0, 2))
         self._source_thin: FloatArray = np.zeros((0, 2))
         self._start_dr: tuple[float, float, float] = (0.0, 0.0, 0.0)
-        self._prev: tuple[float, MatchResult] | None = None  # t_eff, accepted match
-        self._run: list[tuple[float, MatchResult, float]] = []  # t_eff, match, wheel total
+        self._cands: list[_Candidate] = []
         self._last_good: tuple[float, MatchResult, tuple[float, float, float]] | None = None
         self._uncertain_lap = False  # a crossing was missed during this lap
         self.n_armed_scans = 0
@@ -244,8 +327,18 @@ class StartScanGate:
 
     @property
     def l_ref_m(self) -> float:
-        """Reference lap length (NaN before the first closure)."""
-        return self._l_ref
+        """Estimated lap length (NaN before the first closure)."""
+        return self._est.value_m
+
+    @property
+    def l_ref_trusted(self) -> bool:
+        return self._est.trusted
+
+    @property
+    def suspect_laps(self) -> list[int]:
+        """Indices of closed laps whose length differs from the trusted estimate by more than the
+        band (set later than the LapEvent, which cannot be recalled)."""
+        return list(self._suspect)
 
     @property
     def total_m(self) -> float:
@@ -260,40 +353,42 @@ class StartScanGate:
     def heading_since_closure_rad(self) -> float:
         return (self._hist[-1].heading if self._hist else 0.0) - self._heading_origin
 
+    def _uncertain_after_m(self) -> float:
+        value = self._est.value_m
+        if not math.isfinite(value):
+            return math.inf
+        if self._est.trusted:
+            return value + self._est.band_m()
+        return self.cfg.missed_factor * value
+
     @property
     def station_uncertain(self) -> bool:
-        """No crossing although more than `missed_factor` reference laps were driven."""
-        return math.isfinite(self._l_ref) and (
-            self.station_m > self.cfg.missed_factor * self._l_ref
-        )
+        """No crossing although the estimated lap length (plus its band when trusted, else
+        `missed_factor` times it) was driven."""
+        return self.station_m > self._uncertain_after_m()
+
+    def _need_m(self) -> float:
+        value = self._est.value_m
+        if not math.isfinite(value):
+            return self.cfg.min_lap_length_m
+        return self.cfg.arm_fraction * value
 
     @property
     def tracking(self) -> bool:
         """Matching runs: far enough round the lap (distance and heading, with a wider heading
         slack than arming) that the start scan can be followed on the approach. A closure still
-        needs `armed`. Following the approach early lets the matches chain, so the seed of the
-        scan that crosses the line is the last match advanced by odometry rather than a guess."""
+        needs `armed`."""
         if not self._started:
             return False
-        need = (
-            self.cfg.min_lap_length_m
-            if not math.isfinite(self._l_ref)
-            else self.cfg.arm_fraction * self._l_ref
-        )
-        return self.station_m >= self.cfg.track_distance_fraction * need and (
+        return self.station_m >= self.cfg.track_distance_fraction * self._need_m() and (
             abs(self.heading_since_closure_rad) >= TWO_PI - self.cfg.track_slack_rad
         )
 
     @property
     def armed(self) -> bool:
-        need = (
-            self.cfg.min_lap_length_m
-            if not math.isfinite(self._l_ref)
-            else self.cfg.arm_fraction * self._l_ref
-        )
         return (
             self._started
-            and self.station_m >= need
+            and self.station_m >= self._need_m()
             and abs(self.heading_since_closure_rad) >= TWO_PI - self.cfg.heading_slack_rad
         )
 
@@ -354,14 +449,17 @@ class StartScanGate:
         self._start_pts = pts
         self._start_normals = surface_normals(pts)
         self._start_dense = thin(points, DENSE_VOXEL_M, DENSE_MAX_POINTS)
+        self._start_profile = polar_profile(points, (self.cfg.lidar_x_m, self.cfg.lidar_y_m))
         self._started = True
         self._laps = 0
-        self._l_ref = math.nan
+        self._est = LapLengthEstimate()
+        self._lengths = {}
+        self._flagged = set()
+        self._suspect = []
         self._origin_m = self._hist[-1].total_m
         self._heading_origin = self._hist[-1].heading
         self._t_lap_start = float(t_eff_s)
-        self._prev = None
-        self._run = []
+        self._cands = []
         self._last_good = None
         self._uncertain_lap = False
         last = self._hist[-1]
@@ -522,6 +620,27 @@ class StartScanGate:
             return again
         return res
 
+    def _freespace(self, res: MatchResult, points: FloatArray) -> float:
+        """Larger free-space violation share of the match, both ways (see scan_match)."""
+        c = self.cfg
+        origin = (c.lidar_x_m, c.lidar_y_m)
+        cos_y, sin_y = math.cos(res.yaw_rad), math.sin(res.yaw_rad)
+        rot = np.array([[cos_y, -sin_y], [sin_y, cos_y]])
+        trans = np.array([res.x_m, res.y_m])
+        cur_in_start = self._source_dense @ rot.T + trans
+        a = freespace_violation_share(
+            cur_in_start, self._start_profile, origin, c.freespace_margin_m, c.freespace_max_range_m
+        )
+        start_in_cur = (self._start_dense - trans) @ rot
+        b = freespace_violation_share(
+            start_in_cur,
+            polar_profile(points, origin),
+            origin,
+            c.freespace_margin_m,
+            c.freespace_max_range_m,
+        )
+        return max(a, b)
+
     def on_scan(self, t_eff_s: float, points: FloatArray) -> GateCrossing | None:
         """One scan (base_link points, body filtered) at its effective time. Returns the lap it
         closed, if any. Costs one ICP while armed, nothing otherwise."""
@@ -529,8 +648,7 @@ class StartScanGate:
             return None
         if not self.tracking:
             self.last_arming_state = "waiting"
-            self._prev = None
-            self._run = []
+            self._cands = []
             return None
         armed = self.armed
         self.last_arming_state = "armed" if armed else "tracking"
@@ -541,75 +659,67 @@ class StartScanGate:
         self._source_dense = thin(points, DENSE_VOXEL_M, DENSE_MAX_POINTS)
         now = self._at(t_eff_s)
         res = self._best_match(source, now)
+        if res is not None and self._accept(res):
+            if armed:
+                self.n_matched_scans += 1
+                res = replace(res, freespace_violation=self._freespace(res, points))
+            self._last_good = (t_eff_s, res, (now.x, now.y, now.theta))
+            if armed:
+                self._consider(t_eff_s, res, source, now)
         self.last_match = res
-        if res is None or not self._accept(res):
-            return None
-        if armed:
-            self.n_matched_scans += 1
-        self._last_good = (t_eff_s, res, (now.x, now.y, now.theta))
         if not armed:
-            self._prev = (t_eff_s, res)  # keep following; no lap can close before arming
-            self._run = []
             return None
-        crossing: GateCrossing | None = None
-        prev = self._prev
-        # the run of consecutive accepted matches this one belongs to
-        if prev is None or not (0.0 < t_eff_s - prev[0] <= self.cfg.max_match_gap_s):
-            self._run = []
-        self._run.append((t_eff_s, res, now.total_m))
-        if prev is not None and 0.0 < t_eff_s - prev[0] <= self.cfg.max_match_gap_s:
-            t0, m0 = prev
-            if m0.x_m < 0.0 <= res.x_m and self._supported(source, res):
-                crossing = self._close(t0, m0, t_eff_s, res)
-        if crossing is None and self._late_crossing_ok(res, source):
-            # The approach never matched (the views before it are too unlike the start scan) and
-            # the first accepted match is already past the line: place the crossing the wheel
-            # distance x back instead of interpolating.
-            first = self._run[0]
-            t_cross = self._time_at_total(first[2] - first[1].x_m)
-            if (
-                t_cross is not None
-                and t_cross > self._t_lap_start
-                and self._closure_plausible(t_cross)
-            ):
-                crossing = self._finish(t_cross, first[1].y_m, first[1].yaw_rad)
-        if crossing is not None:
-            self._run = []
-        self._prev = None if crossing is not None else (t_eff_s, res)
-        return crossing
+        return self._try_close(t_eff_s, now)
 
-    def _late_crossing_ok(self, res: MatchResult, source: FloatArray) -> bool:
-        """The late-match rules: a clearly good first match just past the line, or a run of
-        matches that tracks the car's motion away from it."""
+    def _consider(self, t_eff_s: float, res: MatchResult, source: FloatArray, now: _Sample) -> None:
+        """Keep a STRONG match near the line as one estimate of the line's wheel distance."""
         c = self.cfg
-        if c.late_match_max_m <= 0.0 or not self._run:
-            return False
-        _t_first, m_first, total_first = self._run[0]
-        if not (0.0 <= m_first.x_m <= c.late_match_max_m):
-            return False
-        # Only from lap 2 on, and only when the wheel distance since the last closure is a lap
-        # within `late_length_range` of the reference: a match of a partial view that looks like
-        # the start scan somewhere else on the track (a lane looks the same along its length)
-        # cannot close a lap at 0.63 of its length.
-        if not math.isfinite(self._l_ref):
-            return False
-        length = total_first - m_first.x_m - self._origin_m
-        lo, hi = c.late_length_range
-        if not (lo * self._l_ref <= length <= hi * self._l_ref):
-            return False
-        if len(self._run) == 1:
-            return (
-                res.inlier_share >= c.late_match_min_share
-                and res.rms_m <= c.late_match_rms_max_m
-                and self._supported(source, res)
-            )
-        _t_last, m_last, total_last = self._run[-1]
-        travelled = total_last - total_first
-        if len(self._run) < 3 or travelled < c.tracked_min_travel_m:
-            return False
-        moved = m_last.x_m - m_first.x_m
-        tolerance = c.tracked_tolerance_m + c.tracked_tolerance_share * travelled
-        return abs(moved - travelled) <= tolerance and self._supported(source, res)
+        if abs(res.x_m) > c.consensus_window_m or res.freespace_violation > c.strong_max_violation:
+            return
+        if abs(now.heading - self._heading_origin) < TWO_PI - c.closure_heading_slack_rad:
+            return
+        line = now.total_m - res.x_m
+        if line - self._origin_m < c.min_lap_length_m:
+            return
+        # innovation gate: with a trusted length an alias metres early is metres of innovation
+        if self._est.trusted and abs(line - (self._origin_m + self._est.value_m)) > (
+            self._est.band_m()
+        ):
+            return
+        if not self._supported(source, res):
+            return
+        self._cands.append(_Candidate(t_eff_s, line, res))
+
+    def _try_close(self, t_eff_s: float, now: _Sample) -> GateCrossing | None:
+        c = self.cfg
+        self._cands = [k for k in self._cands if t_eff_s - k.t_eff_s <= c.candidate_ttl_s]
+        if not self._cands:
+            return None
+        lines = sorted(k.line_m for k in self._cands)
+        median = float(np.median(lines))
+        agree = any(b - a_ <= c.consensus_spread_m for a_, b in pairwise(lines))
+        quality = any(
+            k.match.inlier_share >= c.quality_min_share and k.match.rms_m <= c.quality_rms_max_m
+            for k in self._cands
+        )
+        if not (agree or quality):
+            return None
+        past = now.total_m >= median + c.consensus_past_m
+        wait = t_eff_s - self._cands[-1].t_eff_s >= c.consensus_wait_s and any(
+            k.match.x_m >= 0.0 for k in self._cands
+        )
+        if not (past or wait):
+            return None
+        t_cross = self._time_at_total(median)
+        if t_cross is None:
+            return None
+        t_cross = min(t_cross, t_eff_s)
+        if t_cross <= self._t_lap_start:
+            return None
+        nearest = min(self._cands, key=lambda k: abs(k.match.x_m))
+        m = nearest.match
+        lateral = m.y_m - m.x_m * math.tan(m.yaw_rad)
+        return self._finish(t_cross, lateral, m.yaw_rad, len(self._cands), lines[-1] - lines[0])
 
     def _time_at_total(self, total_m: float) -> float | None:
         """Time at which the wheel distance was `total_m` (linear in the odometry history)."""
@@ -623,31 +733,14 @@ class StartScanGate:
                 return a.t + w * (b.t - a.t)
         return h[-1].t if total_m >= h[-1].total_m else None
 
-    def _close(self, t0: float, m0: MatchResult, t1: float, m1: MatchResult) -> GateCrossing | None:
-        f = -m0.x_m / (m1.x_m - m0.x_m)
-        t_cross = t0 + f * (t1 - t0)
-        if not self._closure_plausible(t_cross):
-            return None
-        return self._finish(
-            t_cross,
-            m0.y_m + f * (m1.y_m - m0.y_m),
-            m0.yaw_rad + f * wrap(m1.yaw_rad - m0.yaw_rad),
-        )
-
-    def _closure_plausible(self, t_cross: float) -> bool:
-        """A lap closes only where odometry says a lap was driven: the integrated heading has
-        turned at least 2 pi minus `closure_heading_slack_rad` (tighter than the arming slack:
-        a match on an alias of the start scan a fifth of a lap early is refused) and, from lap 2,
-        the wheel distance is at least `closure_min_length_fraction` of the reference length."""
-        c = self.cfg
-        at = self._at(t_cross)
-        if abs(at.heading - self._heading_origin) < TWO_PI - c.closure_heading_slack_rad:
-            return False
-        if math.isfinite(self._l_ref):
-            return at.total_m - self._origin_m >= c.closure_min_length_fraction * self._l_ref
-        return True
-
-    def _finish(self, t_cross: float, lateral_m: float, yaw_rad: float) -> GateCrossing:
+    def _finish(
+        self,
+        t_cross: float,
+        lateral_m: float,
+        yaw_rad: float,
+        n_candidates: int = 0,
+        spread_m: float = 0.0,
+    ) -> GateCrossing:
         at = self._at(t_cross)
         length = at.total_m - self._origin_m
         missed = self._uncertain_lap or self.station_uncertain_at(at.total_m)
@@ -661,9 +754,21 @@ class StartScanGate:
             lateral_m=lateral_m,
             yaw_rad=yaw_rad,
             heading_rad=at.heading - self._heading_origin,
+            n_candidates=n_candidates,
+            spread_m=spread_m,
         )
-        if not math.isfinite(self._l_ref) and not missed:
-            self._l_ref = length
+        if not missed:
+            # judged against the estimate as it stood: adding a deviant lap would itself make the
+            # last two disagree and the estimate untrusted
+            if self._est.suspect(length):
+                self._flagged.add(self._laps)
+            self._est.add(length)
+            self._lengths[self._laps] = length
+        # and every earlier lap against the estimate as it is now (a poisoned first lap is
+        # flagged once the later laps make the estimate trusted)
+        self._suspect = sorted(
+            self._flagged | {i for i, n in self._lengths.items() if self._est.suspect(n)}
+        )
         # The start pose in the odometry frame, from this crossing: the car is at (0, lateral,
         # yaw) in the start frame, so the start frame is that pose's inverse from the car.
         self._start_dr = _compose(
@@ -673,12 +778,11 @@ class StartScanGate:
         self._heading_origin = at.heading
         self._t_lap_start = t_cross
         self._uncertain_lap = False
+        self._cands = []
         return crossing
 
     def station_uncertain_at(self, total_m: float) -> bool:
-        return math.isfinite(self._l_ref) and (
-            total_m - self._origin_m > self.cfg.missed_factor * self._l_ref
-        )
+        return total_m - self._origin_m > self._uncertain_after_m()
 
     def poll_uncertain(self) -> bool:
         """Latch the missed-gate condition (call from the node's tick) and return it."""
@@ -692,7 +796,9 @@ class StartScanGate:
             "gate_state": self.last_arming_state,
             "station_m": self.station_m,
             "heading_since_closure_rad": self.heading_since_closure_rad,
-            "l_ref_m": self._l_ref,
+            "l_ref_m": self._est.value_m,
+            "l_ref_trusted": self._est.trusted,
+            "suspect_laps": list(self._suspect),
             "station_uncertain": self.poll_uncertain(),
             "armed_scans": self.n_armed_scans,
             "matched_scans": self.n_matched_scans,

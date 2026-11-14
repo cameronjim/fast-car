@@ -190,7 +190,7 @@ steps:
          "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
          "lap_memory:=true", "lap_mode:=observe", "deskew:=true"]
     requires:
-      - "deskew:=true: brief 33, skip if not on main or if M-DSK was not accepted"
+      - "deskew:=true: brief 33 (on main, M-DSK passed 2026-11-14), skip if M-DSK was not accepted"
       - "lap_mode:=observe: brief 29, skip if not on main"
     runs:
       caps_mps: [1.0]

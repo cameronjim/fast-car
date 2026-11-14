@@ -427,7 +427,7 @@ def test_the_options_list_the_modes_and_sources_the_launch_file_declares(pnp_car
     assert status["lap_sources"] == ["start_scan", "map_pose"]
     assert set(status) - {"lap_modes", "lap_sources"} == {
         "available", "reason", "perception", "dynamics", "backends", "speed_range",
-        "default_speed", "params_files",
+        "default_speed", "params_files", "dynamics_v_max_mps",
     }  # fmt: skip
 
 

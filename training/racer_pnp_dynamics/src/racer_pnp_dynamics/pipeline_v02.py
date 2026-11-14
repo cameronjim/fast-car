@@ -422,8 +422,11 @@ def evaluate_heldout(
     exported_vehicle: Vehicle,
     v01: tuple[Nominal, Residual],
     v01_id: str,
+    nominal_name: str = "dyn-v0.2 nominal",
+    residual_prefix: str = "dyn-v0.2 + residual seed",
 ) -> dict[str, Any]:
-    """The pre-registered evaluation of section 3 on the held-out segments."""
+    """The pre-registered evaluation of section 3 on the held-out segments. `nominal_name` and
+    `residual_prefix` name the frozen nominal and its residuals in the tables."""
     es = eval_set([s for s in heldout if s.run.has_odom])
     if len(es) == 0:
         raise ValueError("no held-out windows")
@@ -432,16 +435,16 @@ def evaluate_heldout(
     by_seed = {c.seed: c for c in frozen.candidates if c.config.name == frozen.shipping.config.name}
     models: dict[str, tuple[Nominal, Residual | None]] = {
         v01_id: (v01[0], None),
-        "dyn-v0.2 nominal": (nominal, None),
+        nominal_name: (nominal, None),
         **{
-            f"dyn-v0.2 + residual seed {seed}": (nominal, c.residual)
+            f"{residual_prefix} {seed}": (nominal, c.residual)
             for seed, c in sorted(by_seed.items())
         },
     }
     errs = {name: window_errors(es, nom, fvehicle, res) for name, (nom, res) in models.items()}
     macro = {name: macro_triplet(es, strata, e) for name, e in errs.items()}
-    ship_name = f"dyn-v0.2 + residual seed {frozen.shipping.seed}"
-    nom_name = "dyn-v0.2 nominal"
+    ship_name = f"{residual_prefix} {frozen.shipping.seed}"
+    nom_name = nominal_name
 
     def at1(name: str) -> dict[str, float]:
         m = macro[name][1.0]
@@ -456,7 +459,7 @@ def evaluate_heldout(
     )
     res = frozen.shipping.residual
     sweep = gp2.stability_sweep(nominal, res, exported_vehicle, frozen.v_max_mps)
-    seed_p1 = {seed: at1(f"dyn-v0.2 + residual seed {seed}")["P1"] for seed in sorted(by_seed)}
+    seed_p1 = {seed: at1(f"{residual_prefix} {seed}")["P1"] for seed in sorted(by_seed)}
     strat_nom = stratum_rmse(errs[nom_name][1.0]["pos"], strata)
     strat_res = stratum_rmse(errs[ship_name][1.0]["pos"], strata)
     residual_decision = gp2.decide_residual(
@@ -848,10 +851,22 @@ def write_outputs(
     pointer_dir: Path | None,
     data_lines: Sequence[str],
     profile_png: bool,
-) -> dict[str, Any]:
-    """The bundle (residual enabled only if GP2a passed), the pointer directory, the README."""
+    readme_text: str | None = None,
+    export_bundle: bool = True,
+) -> dict[str, Any] | None:
+    """The bundle (residual enabled only if GP2a passed), the pointer directory, the README.
+    `readme_text` replaces the v0.2 report; with `export_bundle` False only the pointer
+    directory (metrics and README) is written and nothing is exported."""
     enabled = bool(metrics["heldout"]["residual_ships"])
     residual = frozen.shipping.residual if enabled else disabled_residual()
+    if not export_bundle:
+        if pointer_dir is not None:
+            pointer_dir.mkdir(parents=True, exist_ok=True)
+            (pointer_dir / "metrics.json").write_text(
+                json.dumps(metrics, indent=2), encoding="utf-8"
+            )
+            (pointer_dir / "README.md").write_text(readme_text or "", encoding="utf-8")
+        return None
     manifest = export.write_bundle(
         bundle_dir,
         model_id=model_id,
@@ -874,8 +889,8 @@ def write_outputs(
         metrics=metrics,
         golden_residual_rollouts=enabled,
     )
-    readme = render_report(metrics, model_id)
-    if not metrics["heldout"]["refit_ships"]:
+    readme = readme_text or render_report(metrics, model_id)
+    if readme_text is None and not metrics["heldout"]["refit_ships"]:
         assert readme.splitlines()[0] == REFIT_NOT_BETTER
     (bundle_dir / "README.md").write_text(readme, encoding="utf-8")
     if profile_png:
@@ -966,3 +981,153 @@ def build_metrics(
         **({"runs_r0_r8": runs_table} if runs_table is not None else {}),
     }
     return _json(metrics)
+
+
+# ---- strict reading of 3.2: the residual on top of the nominal that ships (dyn-v0.1) ----------
+
+ADDENDUM_STRICT = (
+    "Addendum 2 (2026-11-14), written before any scoring of the strict residual: 3.2 nominal "
+    "ambiguity resolved strictly: the residual is evaluated on top of the deployed nominal "
+    "dyn-v0.1 because 3.1 failed; the residual on v0.2 is reported for information only, it "
+    "cannot ship."
+)
+STRICT_NOMINAL_NAME = "dyn-v0.1 nominal (deployed)"
+STRICT_RESIDUAL_PREFIX = "dyn-v0.1 + residual seed"
+
+
+def strict_fit_stage(
+    segments: Sequence[Segment],
+    vehicle: Vehicle,
+    nominal: Nominal,
+    v_max_mps: float,
+    *,
+    configs: Sequence[ResidualConfig] = DEFAULT_CANDIDATES,
+    seeds: Sequence[int] = SEEDS,
+    one_step_trainer_fn=None,
+) -> Frozen:
+    """The residual candidates on top of a GIVEN nominal (the deployed dyn-v0.1), same procedure
+    as fit_stage: train segments only, early stopping on val, config and seed chosen on
+    validation P1. The nominal is not refitted."""
+    fvehicle = fit_vehicle_of(vehicle)
+    train, val = by_split(segments, "train"), by_split(segments, "val")
+    candidates, counts = candidate_residuals(
+        configs, seeds, nominal, fvehicle, train, val, one_step_trainer_fn
+    )
+    _, shipping, table = select_candidate(candidates)
+    val_set = eval_set([s for s in val if s.run.has_odom])
+    nominal_p1 = validation_p1(nominal, None, fvehicle, val_set)
+    return Frozen(
+        fit=FitResult(nominal=nominal),
+        nominal=nominal,
+        v_max_mps=v_max_mps,
+        validity={"v_max_mps": v_max_mps, "source": "the dyn-v0.1 bundle"},
+        dead_zone={},
+        lag_check={},
+        candidates=candidates,
+        selection={**table, "_nominal_validation_P1": {"value": nominal_p1}},
+        shipping=shipping,
+        nominal_val={"P1": nominal_p1},
+        samples=counts,
+        config_names=[c.name for c in configs],
+    )
+
+
+def render_strict_report(
+    metrics: dict[str, Any], model_id: str, v02_info: dict[str, Any] | None = None
+) -> str:
+    """README of the strict residual: first line is the deployment verdict."""
+    ev = metrics["heldout"]
+    ships = ev["residual_ships"]
+    first = (
+        f"Deployment verdict: dyn-v0.1 nominal + residual ({model_id}) passes GP2a, "
+        "this is the dyn-v0.1 nominal with the residual enabled"
+        if ships
+        else "Deployment verdict: the deployed model stays dyn-v0.1 with the residual disabled "
+        "(GP2a failed on top of dyn-v0.1)"
+    )
+    lines = [
+        first,
+        "",
+        f"# {model_id}",
+        "",
+        (
+            "dyn-v0.1 nominal parameters (repo copy, vehicle_params 0.17.0) with a residual trained "
+            "on top of THEM, train segments only, early stopping and selection of the config and "
+            f"seed on validation P1 only. Split SHA-256 `{metrics['split_sha256']}`."
+        ),
+        "",
+        "## Addendum",
+        "",
+        ADDENDUM,
+        "",
+        ADDENDUM_STRICT,
+        "",
+        "## 3.2 GP2a residual on dyn-v0.1 (held-out segments)",
+        "",
+        (
+            f"Shipping config `{ev['shipping_config']}`, seed {ev['shipping_seed']} (lowest "
+            "validation P1, frozen before held-out was read)."
+        ),
+        "",
+        _decision_table(ev["decision_3_2_residual"]),
+        "",
+        _boot_line(
+            "shipping residual over dyn-v0.1", ev["bootstrap_p1_ratio_residual_over_nominal"]
+        ),
+        "",
+        "Macro RMSE at each horizon, position (m) / yaw (rad) / wheel speed (m/s):",
+        "",
+        "| model | 0.5 s | 1.0 s | 1.5 s |",
+        "|---|---|---|---|",
+        *[
+            "| "
+            + name
+            + " | "
+            + " | ".join(
+                f"{m[h]['P']:.3f} / {m[h]['Y']:.3f} / {m[h]['S']:.3f}"
+                for h in ("0.5", "1.0", "1.5")
+            )
+            + " |"
+            for name, m in ev["macro"].items()
+            if name != "dyn-v0.1 (reference)"
+        ],
+        "",
+        "Validation P1 per candidate (metres, macro):",
+        "",
+        "| config | mean | min | seed 0 | seed 1 | seed 2 |",
+        "|---|---|---|---|---|---|",
+        *[
+            f"| {k} | {v['mean']:.4f} | {v['min']:.4f} | {v.get('seed0', float('nan')):.4f} | "
+            f"{v.get('seed1', float('nan')):.4f} | {v.get('seed2', float('nan')):.4f} |"
+            for k, v in metrics["selection"].items()
+            if not k.startswith("_")
+        ],
+        "",
+        "Per stratum position RMSE at 1.0 s (m):",
+        "",
+        _stratum_table(ev["per_stratum_position_rmse_1s_m"]),
+        "",
+        "Strata merges: "
+        + (
+            "; ".join(
+                f"{m['direction']} {m['from']} ({m['windows']} windows) into {m['into']}"
+                for m in ev["strata"]["merges"]
+            )
+            or "none"
+        )
+        + ".",
+        "",
+    ]
+    if v02_info:
+        lines += [
+            "## Information only: the residual on the v0.2 nominal",
+            "",
+            (
+                "Reported in training/pnp_models/dyn-v0.2-2026-11-14: 3.1 failed, so that nominal "
+                "cannot ship and neither can a residual on it. Its GP2a numbers: "
+                f"P1 ratio {v02_info['p1_ratio']:.4f}, bootstrap upper end {v02_info['ci_hi']:.4f}, "
+                f"{v02_info['verdict']}."
+            ),
+            "",
+        ]
+    return "\n".join(lines)

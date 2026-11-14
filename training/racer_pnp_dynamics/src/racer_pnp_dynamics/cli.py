@@ -54,12 +54,77 @@ def read_pointer_nominal(manifest_path: Path):  # pragma: no cover - real data
     io = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))["io"]
     if io["residual"]["enabled"]:
         raise ValueError("the v0.1 pointer has a residual: its weights are not committed")
-    return SimpleNamespace(nominal=Nominal.from_dict(io["nominal"]), residual=Residual.disabled())
+    return SimpleNamespace(
+        nominal=Nominal.from_dict(io["nominal"]),
+        residual=Residual.disabled(),
+        v_max_mps=float(io["validity"]["v_max_mps"]),
+    )
+
+
+def strict_evaluate(  # pragma: no cover - real data
+    args, root, vehicle, segments, split, runs, strict_path, v01_pointer
+) -> int:
+    """Score the residual trained on dyn-v0.1 on the held-out segments, once."""
+    import json
+
+    frozen = pickle.loads(strict_path.read_bytes())
+    v01 = read_pointer_nominal(v01_pointer)
+    fvehicle = pipeline_v02.fit_vehicle_of(vehicle)
+    heldout = by_split(segments, "heldout", odom_only=True)
+    report = pipeline_v02.evaluate_heldout(
+        frozen, heldout, fvehicle, vehicle, (v01.nominal, v01.residual), "dyn-v0.1 (reference)",
+        pipeline_v02.STRICT_NOMINAL_NAME, pipeline_v02.STRICT_RESIDUAL_PREFIX,
+    )  # fmt: skip
+    model_id = f"dyn-v0.1r-{args.date}"
+    metrics = {
+        "split_id": split.split_id,
+        "split_sha256": split.sha256,
+        "vehicle_params": f"{vehicle.schema_version} / {vehicle.sysid_session_id}",
+        "nominal": frozen.nominal.to_dict(),
+        "validity": frozen.validity,
+        "selection": frozen.selection,
+        "residual_samples": frozen.samples,
+        "frozen_before_heldout": {
+            "nominal": frozen.nominal.to_dict(),
+            "v_max_mps": frozen.v_max_mps,
+            "shipping_config": frozen.shipping.config.name,
+            "shipping_seed": frozen.shipping.seed,
+        },
+        "heldout": report,
+        "data": pipeline_v02.data_table(segments),
+    }
+    metrics = pipeline_v02._json(metrics)
+    v02 = json.loads(
+        (root / "training" / "pnp_models" / f"dyn-v0.2-{args.date}" / "metrics.json").read_text()
+    )["heldout"]
+    items = v02["decision_3_2_residual"]["items"]
+    info = {
+        "p1_ratio": next(i["value"] for i in items if i["name"].startswith("1a")),
+        "ci_hi": next(i["value"] for i in items if i["name"].startswith("1b")),
+        "verdict": "passed GP2a on its own nominal" if v02["residual_ships"] else "failed GP2a",
+    }
+    readme = pipeline_v02.render_strict_report(metrics, model_id, info)
+    git_sha = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    ships = report["residual_ships"]
+    pipeline_v02.write_outputs(
+        frozen, metrics, vehicle, model_id=model_id,
+        created_utc=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        git_sha=git_sha, bundle_dir=args.models / model_id,
+        pointer_dir=root / "training" / "pnp_models" / model_id,
+        data_lines=[f"bags of the pre-registered split; dyn-v0.1 nominal + residual ({model_id})"],
+        profile_png=False, readme_text=readme, export_bundle=ships,
+    )  # fmt: skip
+    LOG.info("strict residual ships: %s", ships)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - real data
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=("fit", "evaluate"), required=True)
+    parser.add_argument(
+        "--stage", choices=("fit", "evaluate", "strict-fit", "strict-evaluate"), required=True
+    )
     parser.add_argument("--date", default=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d"))
     parser.add_argument("--bags", type=Path, default=DATA_ROOT / "bags")
     parser.add_argument("--models", type=Path, default=DATA_ROOT / "pnp" / "models")
@@ -84,6 +149,17 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - real data
     table = pipeline_v02.data_table(segments)
     LOG.info("seconds by bag: %s", table["seconds_by_bag"])
     frozen_path = args.cache / "dyn-v0.2-frozen.pkl"
+    strict_path = args.cache / "dyn-v0.1r-frozen.pkl"
+    v01_pointer = root / "training" / "pnp_models" / V01_BUNDLE / "manifest.yaml"
+    if args.stage == "strict-fit":
+        v01 = read_pointer_nominal(v01_pointer)
+        frozen = pipeline_v02.strict_fit_stage(segments, vehicle, v01.nominal, v01.v_max_mps)
+        strict_path.write_bytes(pickle.dumps(frozen))
+        LOG.info("strict selection on validation P1: %s", frozen.selection)
+        LOG.info("strict frozen state written to %s", strict_path)
+        return 0
+    if args.stage == "strict-evaluate":
+        return strict_evaluate(args, root, vehicle, segments, split, runs, strict_path, v01_pointer)
     if args.stage == "fit":
         frozen = pipeline_v02.fit_stage(segments, vehicle)
         frozen_path.write_bytes(pickle.dumps(frozen))

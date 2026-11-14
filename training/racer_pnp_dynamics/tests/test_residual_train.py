@@ -294,3 +294,46 @@ def test_the_stability_sweep_is_part_of_the_gate_and_clean_for_the_shipped_resid
     _, report = gate_with
     sweep = report["sweep"]
     assert sweep["passed"] and sweep["samples"] == gp2.SWEEP_SAMPLES and sweep["steps"] == 30
+
+
+def test_strict_residual_on_a_given_nominal_is_selected_on_validation_and_reported_strictly(
+    tmp_path, with_residual, toy_vehicle_module
+):
+    frozen = pipeline_v02.strict_fit_stage(
+        with_residual, toy_vehicle_module, TRUTH, 1.3, configs=(CFG,), seeds=(0, 1),
+        one_step_trainer_fn=_numpy_trainer,
+    )  # fmt: skip
+    assert frozen.nominal == TRUTH and frozen.v_max_mps == 1.3
+    assert frozen.shipping.val_p1_m == min(c.val_p1_m for c in frozen.candidates)
+    fv = pipeline_v02.fit_vehicle_of(toy_vehicle_module)
+    report = pipeline_v02.evaluate_heldout(
+        frozen, by_split(with_residual, "heldout"), fv, toy_vehicle_module,
+        (TRUTH, Residual.disabled()), "dyn-v0.1 (reference)",
+        pipeline_v02.STRICT_NOMINAL_NAME, pipeline_v02.STRICT_RESIDUAL_PREFIX,
+    )  # fmt: skip
+    assert report["residual_ships"]  # the known residual is there to be found
+    metrics = pipeline_v02._json(
+        {"split_sha256": "0" * 64, "heldout": report, "selection": frozen.selection}
+    )
+    text = pipeline_v02.render_strict_report(
+        metrics, "dyn-v0.1r-test", {"p1_ratio": 0.9, "ci_hi": 0.95, "verdict": "passed"}
+    )
+    first = text.splitlines()[0]
+    assert first.startswith("Deployment verdict: dyn-v0.1 nominal + residual")
+    assert "Addendum 2" in text and "information only" in text.lower() and chr(0x2014) not in text
+    # not shipping: only the pointer is written, no bundle
+    report["residual_ships"] = False
+    pipeline_v02.write_outputs(
+        frozen, {"heldout": report, "split_sha256": "0" * 64}, toy_vehicle_module,
+        model_id="dyn-v0.1r-test", created_utc="2026-11-14T00:00:00Z", git_sha="0" * 40,
+        bundle_dir=tmp_path / "b", pointer_dir=tmp_path / "p", data_lines=[], profile_png=False,
+        readme_text="x", export_bundle=False,
+    )  # fmt: skip
+    assert not (tmp_path / "b").exists() and (tmp_path / "p" / "README.md").read_text() == "x"
+    fail_text = pipeline_v02.render_strict_report(
+        pipeline_v02._json(
+            {"split_sha256": "0" * 64, "heldout": report, "selection": frozen.selection}
+        ),
+        "m",
+    )
+    assert fail_text.startswith("Deployment verdict: the deployed model stays dyn-v0.1")

@@ -54,7 +54,7 @@ STATE_RECOVERING = 7
 CAUTION_STATES = frozenset({STATE_BLOCKED, STATE_RECOVERING})
 
 LAP_SOURCES = ("start_scan", "map_pose")
-LAP_MODES = ("v0", "v1")
+LAP_MODES = ("v0", "v1", "observe")
 GUIDANCE_SPACING_M = 0.10
 #: A sample of the lap is kept at most this often (the odometry runs at 50 Hz).
 SAMPLE_PERIOD_S = 0.04
@@ -79,6 +79,10 @@ class LapConfig:
     caution_laps: int = 2
     v_bound_floor_mps: float = 0.3
     min_filter_half_m: float = 0.4
+    #: D v1 variant switch: False keeps every caution zone separate (see StationSet).
+    zone_merge: bool = True
+    #: A stored lap scale is rebuilt when the trusted lap length moves by more than this share.
+    rescale_share: float = 0.02
     #: Gate settings of the start-scan source (required for it).
     gate: GateConfig | None = None
     #: Lap-1 cross-check: both sources closing within this many seconds is `agree`.
@@ -125,6 +129,8 @@ class LapResult:
     obstacle_brakes: int = -1
     timing_brakes: int = 0
     heading_rad: float = math.nan  # start-scan source: heading integrated over the lap
+    n_candidates: int = 0  # start-scan source: STRONG matches the crossing came from
+    spread_m: float = 0.0  # ... and their spread
 
 
 @dataclass(frozen=True)
@@ -149,7 +155,9 @@ class LapMemory:
             caution_before_m=cfg.caution_before_m,
             caution_laps=cfg.caution_laps,
             floor_mps=cfg.v_bound_floor_mps,
+            zone_merge=cfg.zone_merge,
         )
+        self._handled_suspect: set[int] = set()
         self.gate: StartScanGate | None = (
             StartScanGate(cfg.gate) if cfg.lap_source == "start_scan" and cfg.gate else None
         )
@@ -327,7 +335,11 @@ class LapMemory:
                 self._cap_this_lap,
             )
         cap = self._cap_this_lap
-        next_cap = self.schedule.finish_lap(record.clean)
+        next_cap = self.schedule.finish_lap(record.clean, crossing.lap_index)
+        stored = self._reconcile_lengths(crossing.lap_index, stored)
+        next_cap = self.schedule.cap_mps
+        if self.cfg.lap_mode == "observe":
+            next_cap = self.cfg.v_cap_start_mps
         self.station_set.expire_zones(crossing.lap_index + 1)
         self._lap_t0 = crossing.t_cross_s
         self._recent.clear()
@@ -353,11 +365,40 @@ class LapMemory:
             obstacle_brakes=record.obstacle_brake_count,
             timing_brakes=record.brake_count - record.obstacle_brake_count,
             heading_rad=crossing.heading_rad,
+            n_candidates=crossing.n_candidates,
+            spread_m=crossing.spread_m,
         )
+
+    def _reconcile_lengths(self, lap_index: int, stored: bool) -> bool:
+        """After a closure: laps the gate now calls suspect leave the station set and the cap
+        schedule history, and the stored laps are rescaled when the trusted lap length moved.
+        Returns whether the lap just closed is still stored."""
+        gate = self.gate
+        assert gate is not None
+        for idx in gate.suspect_laps:
+            if idx in self._handled_suspect:
+                continue
+            self._handled_suspect.add(idx)
+            self.station_set.remove_lap(idx)
+            self.schedule.drop_lap(idx)
+            if idx == lap_index:
+                stored = False
+        ref = self.station_set.l_ref_m
+        value = gate.l_ref_m
+        if (
+            gate.l_ref_trusted
+            and math.isfinite(ref)
+            and math.isfinite(value)
+            and abs(value - ref) > self.cfg.rescale_share * ref
+        ):
+            self.station_set.rescale(value)
+        return stored
 
     def _driven_cap(self) -> float:
         """The cap handed out now: the lap-1 cap until a clean lap is stored, then (D v1) the
         highest speed bound of the lap capped at the ceiling; D v0 follows the schedule."""
+        if self.cfg.lap_mode == "observe":
+            return self.cfg.v_cap_start_mps  # the planner runs at its fixed cap
         if self.cfg.lap_mode == "v1" and self.gate is not None:
             if self.station_set.n_laps >= 1 and not self._uncertain():
                 top = self.station_set.max_bound(self.lap_in_progress, self.cfg.explore_dv_mps)

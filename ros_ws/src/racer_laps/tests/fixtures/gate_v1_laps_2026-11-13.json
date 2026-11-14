@@ -1,0 +1,835 @@
+{
+ "gate": "start-scan gate",
+ "commit": "f45fd09",
+ "split": "/Users/cameronjim/code/car/.claude/worktrees/agent-a97cf3c879586a116/evaluation/prereg/pnp-v0.2-split.yaml",
+ "segments": {
+  "G1a": {
+   "bag": "2026-11-13T22-00-40_car_teleop",
+   "window_bag_s": [
+    109.2,
+    540.0
+   ],
+   "laps": 26,
+   "lap_times_s": [
+    16.515,
+    16.303,
+    16.264,
+    16.309,
+    16.257,
+    16.354,
+    16.214,
+    16.358,
+    16.189,
+    16.351,
+    16.179,
+    16.403,
+    16.273,
+    16.339,
+    16.548,
+    16.23,
+    16.3,
+    16.296,
+    16.375,
+    16.382,
+    16.322,
+    16.334,
+    16.26,
+    16.317,
+    16.337,
+    16.307
+   ],
+   "crossings_bag_s": [
+    125.672,
+    141.975,
+    158.239,
+    174.548,
+    190.806,
+    207.16,
+    223.374,
+    239.732,
+    255.921,
+    272.272,
+    288.451,
+    304.853,
+    321.127,
+    337.466,
+    354.014,
+    370.244,
+    386.544,
+    402.84,
+    419.215,
+    435.597,
+    451.92,
+    468.254,
+    484.514,
+    500.831,
+    517.168,
+    533.475
+   ],
+   "lengths_m": [
+    6.569,
+    6.558,
+    6.544,
+    6.546,
+    6.542,
+    6.539,
+    6.53,
+    6.532,
+    6.534,
+    6.532,
+    6.51,
+    6.569,
+    6.519,
+    6.501,
+    6.521,
+    6.552,
+    6.528,
+    6.542,
+    6.537,
+    6.547,
+    6.523,
+    6.534,
+    6.524,
+    6.537,
+    6.526,
+    6.523
+   ],
+   "missed": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 172.34
+  },
+  "G1b": {
+   "bag": "2026-11-13T22-00-40_car_teleop",
+   "window_bag_s": [
+    542.0,
+    650.0
+   ],
+   "laps": 6,
+   "lap_times_s": [
+    16.307,
+    16.318,
+    16.265,
+    16.281,
+    16.211,
+    16.335
+   ],
+   "crossings_bag_s": [
+    558.303,
+    574.62,
+    590.886,
+    607.167,
+    623.378,
+    639.713
+   ],
+   "lengths_m": [
+    6.515,
+    6.531,
+    6.535,
+    6.513,
+    6.545,
+    6.546
+   ],
+   "missed": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 43.45
+  },
+  "G2": {
+   "bag": "2026-11-13T22-00-40_car_teleop",
+   "window_bag_s": [
+    667.2,
+    825.4
+   ],
+   "laps": 9,
+   "lap_times_s": [
+    18.249,
+    17.089,
+    17.186,
+    17.132,
+    17.045,
+    17.043,
+    17.176,
+    17.068,
+    17.104
+   ],
+   "crossings_bag_s": [
+    685.437,
+    702.526,
+    719.713,
+    736.845,
+    753.889,
+    770.932,
+    788.109,
+    805.177,
+    822.281
+   ],
+   "lengths_m": [
+    7.085,
+    6.884,
+    6.923,
+    6.899,
+    6.879,
+    6.864,
+    6.87,
+    6.863,
+    6.852
+   ],
+   "missed": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 63.55
+  },
+  "G3a": {
+   "bag": "2026-11-13T22-00-40_car_teleop",
+   "window_bag_s": [
+    856.3,
+    877.6
+   ],
+   "laps": 2,
+   "lap_times_s": [
+    10.187,
+    7.484
+   ],
+   "crossings_bag_s": [
+    866.51,
+    873.994
+   ],
+   "lengths_m": [
+    7.725,
+    7.537
+   ],
+   "missed": [
+    false,
+    false
+   ],
+   "wheel_distance_m": 18.99
+  },
+  "G3b": {
+   "bag": "2026-11-13T22-00-40_car_teleop",
+   "window_bag_s": [
+    879.6,
+    895.0
+   ],
+   "laps": 2,
+   "lap_times_s": [
+    7.285,
+    7.519
+   ],
+   "crossings_bag_s": [
+    886.893,
+    894.413
+   ],
+   "lengths_m": [
+    7.465,
+    7.623
+   ],
+   "missed": [
+    false,
+    false
+   ],
+   "wheel_distance_m": 15.74
+  },
+  "P0": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    16.6,
+    113.9
+   ],
+   "laps": 5,
+   "lap_times_s": [
+    17.528,
+    17.243,
+    17.101,
+    17.196,
+    17.161
+   ],
+   "crossings_bag_s": [
+    34.265,
+    51.509,
+    68.61,
+    85.806,
+    102.967
+   ],
+   "lengths_m": [
+    6.922,
+    6.906,
+    6.858,
+    6.885,
+    6.876
+   ],
+   "missed": [
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 38.68
+  },
+  "R0": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    430.1,
+    481.4
+   ],
+   "laps": 3,
+   "lap_times_s": [
+    14.48,
+    13.65,
+    13.519
+   ],
+   "crossings_bag_s": [
+    444.76,
+    458.41,
+    471.928
+   ],
+   "lengths_m": [
+    6.048,
+    6.087,
+    6.039
+   ],
+   "missed": [
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 22.47
+  },
+  "R1": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    501.5,
+    552.9
+   ],
+   "laps": 3,
+   "lap_times_s": [
+    13.455,
+    14.049,
+    13.305
+   ],
+   "crossings_bag_s": [
+    515.159,
+    529.207,
+    542.512
+   ],
+   "lengths_m": [
+    5.339,
+    6.25,
+    5.945
+   ],
+   "missed": [
+    false,
+    true,
+    true
+   ],
+   "wheel_distance_m": 22.13
+  },
+  "R2": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    626.1,
+    645.8
+   ],
+   "laps": 3,
+   "lap_times_s": [
+    5.738,
+    5.767,
+    5.738
+   ],
+   "crossings_bag_s": [
+    632.033,
+    637.8,
+    643.537
+   ],
+   "lengths_m": [
+    4.913,
+    5.288,
+    5.312
+   ],
+   "missed": [
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 17.56
+  },
+  "R3": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    2729.7,
+    2786.3
+   ],
+   "laps": 3,
+   "lap_times_s": [
+    14.792,
+    14.266,
+    14.409
+   ],
+   "crossings_bag_s": [
+    2744.604,
+    2758.87,
+    2773.278
+   ],
+   "lengths_m": [
+    6.113,
+    6.364,
+    6.436
+   ],
+   "missed": [
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 24.72
+  },
+  "R4": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    2812.7,
+    2852.8
+   ],
+   "laps": 2,
+   "lap_times_s": [
+    13.323,
+    13.575
+   ],
+   "crossings_bag_s": [
+    2826.364,
+    2839.939
+   ],
+   "lengths_m": [
+    5.276,
+    6.07
+   ],
+   "missed": [
+    false,
+    false
+   ],
+   "wheel_distance_m": 17.1
+  },
+  "R5": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    2868.6,
+    2895.5
+   ],
+   "laps": 2,
+   "lap_times_s": [
+    9.192,
+    8.734
+   ],
+   "crossings_bag_s": [
+    2877.886,
+    2886.62
+   ],
+   "lengths_m": [
+    5.548,
+    5.605
+   ],
+   "missed": [
+    false,
+    false
+   ],
+   "wheel_distance_m": 16.88
+  },
+  "R6": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    2914.6,
+    2940.6
+   ],
+   "laps": 3,
+   "lap_times_s": [
+    8.687,
+    8.314,
+    8.421
+   ],
+   "crossings_bag_s": [
+    2923.538,
+    2931.852,
+    2940.273
+   ],
+   "lengths_m": [
+    5.236,
+    5.356,
+    5.424
+   ],
+   "missed": [
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 16.25
+  },
+  "R7a": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    2967.2,
+    2980.6
+   ],
+   "laps": 2,
+   "lap_times_s": [
+    6.238,
+    5.742
+   ],
+   "crossings_bag_s": [
+    2973.637,
+    2979.379
+   ],
+   "lengths_m": [
+    4.789,
+    5.381
+   ],
+   "missed": [
+    false,
+    false
+   ],
+   "wheel_distance_m": 11.27
+  },
+  "R7b": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    2982.6,
+    2991.6
+   ],
+   "laps": 1,
+   "lap_times_s": [
+    5.971
+   ],
+   "crossings_bag_s": [
+    2988.554
+   ],
+   "lengths_m": [
+    5.462
+   ],
+   "missed": [
+    false
+   ],
+   "wheel_distance_m": 8.25
+  },
+  "R8": {
+   "bag": "2026-11-13T22-20-18_car_teleop",
+   "window_bag_s": [
+    3012.4,
+    3029.7
+   ],
+   "laps": 2,
+   "lap_times_s": [
+    6.233,
+    5.868
+   ],
+   "crossings_bag_s": [
+    3018.688,
+    3024.556
+   ],
+   "lengths_m": [
+    5.237,
+    5.423
+   ],
+   "missed": [
+    false,
+    false
+   ],
+   "wheel_distance_m": 15.44
+  },
+  "M0": {
+   "bag": "2026-11-13T23-19-51_car_teleop",
+   "window_bag_s": [
+    343.0,
+    356.2
+   ],
+   "laps": 0,
+   "lap_times_s": [],
+   "crossings_bag_s": [],
+   "lengths_m": [],
+   "missed": [],
+   "wheel_distance_m": 5.23
+  },
+  "T0": {
+   "bag": "2026-11-13T23-27-23_car_teleop",
+   "window_bag_s": [
+    458.7,
+    683.6
+   ],
+   "laps": 13,
+   "lap_times_s": [
+    17.808,
+    16.948,
+    17.056,
+    17.066,
+    17.116,
+    17.02,
+    17.098,
+    17.113,
+    17.103,
+    16.968,
+    17.101,
+    17.021,
+    17.109
+   ],
+   "crossings_bag_s": [
+    476.555,
+    493.503,
+    510.559,
+    527.624,
+    544.741,
+    561.761,
+    578.858,
+    595.971,
+    613.074,
+    630.042,
+    647.144,
+    664.165,
+    681.274
+   ],
+   "lengths_m": [
+    7.897,
+    7.583,
+    7.623,
+    7.63,
+    7.649,
+    7.607,
+    7.641,
+    7.651,
+    7.645,
+    7.582,
+    7.645,
+    7.607,
+    7.579
+   ],
+   "missed": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 100.38
+  },
+  "T1": {
+   "bag": "2026-11-13T23-27-23_car_teleop",
+   "window_bag_s": [
+    1158.0,
+    1222.3
+   ],
+   "laps": 7,
+   "lap_times_s": [
+    8.32,
+    8.306,
+    8.349,
+    8.301,
+    8.345,
+    8.301,
+    8.299
+   ],
+   "crossings_bag_s": [
+    1166.364,
+    1174.669,
+    1183.018,
+    1191.319,
+    1199.664,
+    1207.966,
+    1216.265
+   ],
+   "lengths_m": [
+    7.797,
+    7.81,
+    7.848,
+    7.803,
+    7.848,
+    7.806,
+    7.802
+   ],
+   "missed": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 60.39
+  },
+  "T2a": {
+   "bag": "2026-11-13T23-27-23_car_teleop",
+   "window_bag_s": [
+    1230.9,
+    1244.1
+   ],
+   "laps": 2,
+   "lap_times_s": [
+    6.236,
+    5.899
+   ],
+   "crossings_bag_s": [
+    1237.311,
+    1243.21
+   ],
+   "lengths_m": [
+    7.975,
+    7.849
+   ],
+   "missed": [
+    false,
+    false
+   ],
+   "wheel_distance_m": 17.05
+  },
+  "T2b": {
+   "bag": "2026-11-13T23-27-23_car_teleop",
+   "window_bag_s": [
+    1246.1,
+    1254.9
+   ],
+   "laps": 1,
+   "lap_times_s": [
+    5.865
+   ],
+   "crossings_bag_s": [
+    1251.933
+   ],
+   "lengths_m": [
+    7.835
+   ],
+   "missed": [
+    false
+   ],
+   "wheel_distance_m": 11.75
+  },
+  "T3a": {
+   "bag": "2026-11-13T23-27-23_car_teleop",
+   "window_bag_s": [
+    1264.3,
+    1310.1
+   ],
+   "laps": 7,
+   "lap_times_s": [
+    6.205,
+    5.766,
+    5.77,
+    5.795,
+    5.799,
+    5.838,
+    5.777
+   ],
+   "crossings_bag_s": [
+    1270.553,
+    1276.319,
+    1282.088,
+    1287.884,
+    1293.682,
+    1299.521,
+    1305.297
+   ],
+   "lengths_m": [
+    7.759,
+    7.876,
+    7.897,
+    7.891,
+    7.857,
+    7.943,
+    7.826
+   ],
+   "missed": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 61.25
+  },
+  "T3b": {
+   "bag": "2026-11-13T23-27-23_car_teleop",
+   "window_bag_s": [
+    1312.1,
+    1347.6
+   ],
+   "laps": 0,
+   "lap_times_s": [],
+   "crossings_bag_s": [],
+   "lengths_m": [],
+   "missed": [],
+   "wheel_distance_m": 0.0
+  },
+  "T2a+T2b": {
+   "bag": "2026-11-13T23-27-23_car_teleop",
+   "window_bag_s": [
+    1230.9,
+    1254.9
+   ],
+   "laps": 3,
+   "lap_times_s": [
+    6.236,
+    5.899,
+    5.892
+   ],
+   "crossings_bag_s": [
+    1237.311,
+    1243.21,
+    1249.102
+   ],
+   "lengths_m": [
+    7.975,
+    7.849,
+    7.927
+   ],
+   "missed": [
+    false,
+    false,
+    false
+   ],
+   "wheel_distance_m": 31.53
+  }
+ }
+}

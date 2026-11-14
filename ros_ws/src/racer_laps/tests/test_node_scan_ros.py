@@ -304,6 +304,31 @@ def test_v1_publishes_valid_guidance_after_clean_laps(tmp_path: Path) -> None:
         h.close()
 
 
+def test_observe_mode_publishes_events_and_status_and_no_guidance(tmp_path: Path) -> None:
+    h = Harness(
+        tmp_path, extra=("lap_mode:=observe", "v_cap_start_mps:=0.7", "v_cap_ceiling_mps:=0.7")
+    )
+    h.wait_for_node()
+    try:
+        assert [
+            i
+            for i in h.node.get_publishers_info_by_topic("/pnp/lap/guidance")
+            if i.node_name == "lap_memory_node"
+        ] == []
+        h.drive_loops(2.2)
+        h.spin(0.3)
+        assert [e.lap_index for e in h.events] == [1, 2]
+        for e in h.events:
+            assert abs(e.lap_time_s - LOOP_S) < 0.3
+            assert abs(e.v_cap_mps - 0.7) < 1e-6  # the planner's fixed cap, never a schedule
+        assert h.guidance == []
+        status = h.statuses[-1]
+        assert status["lap_mode"] == "observe" and status["laps_completed"] >= 1
+        assert "l_ref_trusted" in status and "suspect_laps" in status
+    finally:
+        h.close()
+
+
 @pytest.mark.parametrize("bad", ["lap_source:=magic", "lap_mode:=v2", "lap_mode:=v1"])
 def test_bad_modes_are_refused(tmp_path: Path, bad: str) -> None:
     params = [bad]

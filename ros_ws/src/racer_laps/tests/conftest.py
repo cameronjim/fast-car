@@ -6,4 +6,8 @@ from __future__ import annotations
 
 import importlib.util
 
-collect_ignore = [] if importlib.util.find_spec("hypothesis") else ["test_cap_property.py"]
+collect_ignore = (
+    []
+    if importlib.util.find_spec("hypothesis")
+    else ["test_cap_property.py", "test_gate_v2.py", "test_lap_length.py"]
+)

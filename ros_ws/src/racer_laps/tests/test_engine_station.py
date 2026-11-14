@@ -370,3 +370,75 @@ def test_crosscheck_agree_and_disagree_by_the_closure_times() -> None:
     assert mem.crosscheck == "disagree"  # the gate closed and the pose never did
     mem._pose_feeding = True
     assert mem.crosscheck == "pending"
+
+
+# -- brief 29: lap length estimate in the bookkeeping, observe mode, zone merge ---------------------
+
+
+def test_a_short_first_lap_is_dropped_and_the_set_is_rescaled_once_the_estimate_is_trusted() -> (
+    None
+):
+    d = started("v1")
+    first = d.lap(close_in=5.2)  # an early closure: 5.2 m instead of 6 m
+    assert first.clean and first.stored
+    assert d.mem.station_set.l_ref_m == pytest.approx(5.4, abs=0.3)
+    second = d.lap()
+    assert second.stored and not d.mem.gate.l_ref_trusted  # 5.4 m then 6.3 m: they disagree
+    assert d.mem.station_set.n_laps == 2
+    third = d.lap()
+    # three laps (5.4, 6.3, 6.3): the median is 6, the estimate is trusted, lap 1 is suspect
+    assert d.mem.gate.l_ref_trusted and d.mem.gate.suspect_laps == [1]
+    assert third.stored
+    ss = d.mem.station_set
+    assert [lap.lap_index for lap in ss.laps] == [2, 3]
+    assert ss.l_ref_m == pytest.approx(6.0, abs=0.35)
+    assert ss.l_ref_m == pytest.approx(d.mem.gate.l_ref_m, rel=0.02)
+    # the cap schedule forgot lap 1: three clean laps minus one is two steps
+    assert d.mem.guidance().v_cap_mps >= 0.5
+    assert d.mem.schedule.cap_mps == pytest.approx(0.7)
+    # a fourth lap: nothing new is dropped and the set stays on the corrected grid
+    d.lap()
+    assert [lap.lap_index for lap in d.mem.station_set.laps] == [2, 3, 4]
+    assert d.mem.status()["suspect_laps"] == [1]
+    assert d.mem.status()["l_ref_trusted"] is True
+
+
+def test_a_suspect_closing_lap_is_not_stored() -> None:
+    d = started("v0")
+    d.lap()
+    d.lap()
+    assert d.mem.gate.l_ref_trusted
+    bad = d.lap(close_in=3.0)  # 3 m against a trusted 6 m
+    assert d.mem.gate.suspect_laps == [3]
+    assert not bad.stored
+    assert [lap.lap_index for lap in d.mem.station_set.laps] == [1, 2]
+    assert d.mem.schedule.cap_mps == pytest.approx(0.7)  # laps 1 and 2 only
+
+
+def test_laps_within_the_band_are_not_suspect_and_the_set_is_not_rescaled() -> None:
+    d = started("v1")
+    d.lap()
+    d.lap(close_in=6.1)
+    l_ref = d.mem.station_set.l_ref_m
+    d.lap(close_in=5.9)
+    assert d.mem.gate.suspect_laps == []
+    assert d.mem.station_set.l_ref_m == l_ref  # under 2 percent: kept
+    assert d.mem.station_set.n_laps == 3
+
+
+def test_observe_mode_keeps_the_fixed_cap_and_never_guides() -> None:
+    d = started("observe")
+    for _ in range(3):
+        r = d.lap()
+        assert r.cap_mps == 0.5 and r.next_cap_mps == 0.5
+    g = d.mem.guidance()
+    assert g.v_cap_mps == 0.5 and g.s_m.size == 0
+    assert d.mem.status()["lap_mode"] == "observe"
+    assert d.mem.laps_completed == 3
+    assert LapConfig(lap_mode="observe").lap_mode == "observe"
+
+
+def test_zone_merge_reaches_the_station_set() -> None:
+    assert make("v1")[0].station_set.zone_merge is True
+    assert make("v1", zone_merge=False)[0].station_set.zone_merge is False
+    assert make("v1", v_bound_floor_mps=0.0)[0].station_set.floor_mps == 0.0

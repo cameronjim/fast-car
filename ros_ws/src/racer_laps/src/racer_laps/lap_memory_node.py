@@ -271,7 +271,8 @@ class LapMemoryNode(Node):
                 "yaw_gain_override",
                 0.0,
                 "Yaw-rate gain of the gate's heading integral: 0 uses vehicle_params' "
-                "steering.yaw_rate_gain_table (the car). The sim's car turns as commanded: 1.0.",
+                "steering.yaw_rate_gain_table (the car). The sim's plant needs its own number "
+                "(about 0.90, see tests/l5_reactive_bench/track_family_runner.py SIM_YAW_GAIN).",
                 0.0,
                 3.0,
             )

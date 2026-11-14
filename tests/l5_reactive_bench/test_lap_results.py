@@ -28,6 +28,13 @@ def test_lap_1_is_counted_from_the_first_driving_report_and_the_rest_are_unchang
     assert plain["gt_lap_times_s"] == [11.0, 20.0, 20.5]
 
 
+def test_lap_1_starts_at_the_first_scan_after_driving_when_there_is_one() -> None:
+    tracker = Tracker([110.0, 130.0], [11.0, 20.0])
+    out = runner.lap_results(tracker, [], [], [], {}, driving_first_s=100.0, lap1_start_s=100.4)
+    assert out["gt_lap_times_s"] == [9.6, 20.0]
+    assert out["gt_lap1_start_s"] == 100.4 and out["driving_first_s"] == 100.0
+
+
 def test_interventions_are_counted_per_ground_truth_lap_by_source() -> None:
     tracker = Tracker([110.0, 130.0], [10.0, 20.0])
     events = [

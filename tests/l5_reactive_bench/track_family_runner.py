@@ -73,6 +73,9 @@ TRACKS = (
 DRIVERS = ("gap_follow", "tracker", "tracker_loc", "tracker_policy", "pnp")
 CARS = ("gym", "params")
 PNP_SCAN_BEAMS = 720
+#: Ground-truth yaw change over the integral of v tan(delta) / L of the gated steering command,
+#: sim plant of the PnP canaries (dyn-car-2026-11-12 actuation), measured on the tuning stadium.
+SIM_YAW_GAIN = 0.90
 LOCALISATION_LAUNCH = REPO_ROOT / "ros_ws" / "src" / "racer_bringup" / "launch"
 # The sensor errors the localisation canaries use (sim_autopilot.launch.py SIM_SENSOR_NOISE).
 LANE_TRACKER_DEFAULTS = {
@@ -199,17 +202,23 @@ def lap_results(
     guidance_log: list[tuple],
     lap_status: dict,
     driving_first_s: float | None,
+    lap1_start_s: float | None = None,
 ) -> dict:
     """Ground truth against the system for a run with the lap memory: the ground-truth crossing
-    stamps, lap times (lap 1 counted from the instant the planner first reported DRIVING, which
-    is what the system's lap 1 counts from), the system's LapEvents, the interventions per
-    ground-truth lap by source (every /safety/events ENGAGE, and the BRAKE severity ones
-    separately) and the guidance cap per system lap."""
+    stamps, lap times, the system's LapEvents, the interventions per ground-truth lap by source
+    (every /safety/events ENGAGE, and the BRAKE severity ones separately) and the guidance cap
+    per system lap.
+
+    Lap 1 is counted from the system's own start line: the stamp of the first /scan after the
+    planner first reported DRIVING (`lap1_start_s`; the report instant itself, `driving_first_s`,
+    when no scan was seen). The simulator's lap tracker counts from the first odometry sample, and
+    from a standstill a few centimetres of start line are a few tenths of a second."""
     crossings = list(getattr(lap_tracker, "_crossings", []))
     gt_times = list(lap_tracker.lap_times_s)
-    if gt_times and crossings and driving_first_s is not None:
-        gt_times[0] = crossings[0] - driving_first_s  # the system's lap 1 starts at DRIVING
-    edges = [driving_first_s if driving_first_s is not None else -math.inf, *crossings]
+    start_s = lap1_start_s if lap1_start_s is not None else driving_first_s
+    if gt_times and crossings and start_s is not None:
+        gt_times[0] = crossings[0] - start_s
+    edges = [start_s if start_s is not None else -math.inf, *crossings]
     engage: list[dict] = []
     brake: list[dict] = []
     for k in range(len(crossings)):
@@ -228,7 +237,8 @@ def lap_results(
     return {
         "gt_lap_crossings_s": [round(c, 3) for c in crossings],
         "gt_lap_times_s": [round(t, 3) for t in gt_times],
-        "gt_lap1_start_s": driving_first_s,
+        "gt_lap1_start_s": start_s,
+        "driving_first_s": driving_first_s,
         "system_lap_events": lap_events,
         "system_laps": len(lap_events),
         "engage_per_lap": engage,
@@ -357,8 +367,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             )
             lap_params.update(
                 {
-                    # the sim's car turns as commanded, the table is the real car's measurement
-                    "yaw_gain_override": 1.0,
+                    # The heading the gate integrates from the gated steering command: the sim
+                    # car turns 0.90 times what the command gives (ground-truth yaw over the
+                    # integral of v tan(delta) / L, measured on the tuning stadium: 0.903; the
+                    # real car's table is vehicle_params' steering.yaw_rate_gain_table).
+                    "yaw_gain_override": SIM_YAW_GAIN,
                     "laser_yaw_from_vehicle_params": mounted,
                     "save_lap1_map": False,
                     "output_dir": str(work / "laps"),
@@ -573,6 +586,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     guidance_log: list[tuple] = []
     lap_status: dict = {}
     driving_first: list[float] = []
+    first_scan_after_driving: list[float] = []
     if args.driver == "pnp":
         from racer_pnp_msgs.msg import LapEvent, LapGuidance, PlannerStatus
 
@@ -614,6 +628,22 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 lap_status.clear()
                 lap_status.update(json.loads(m.data))
 
+            from sensor_msgs.msg import LaserScan
+
+            def on_scan_seen(m) -> None:
+                if driving_first and not first_scan_after_driving:
+                    first_scan_after_driving.append(base._stamp_s(m.header.stamp))
+
+            node.create_subscription(
+                LaserScan,
+                "/scan",
+                on_scan_seen,
+                QoSProfile(
+                    reliability=ReliabilityPolicy.BEST_EFFORT,
+                    history=HistoryPolicy.KEEP_LAST,
+                    depth=5,
+                ),
+            )
             node.create_subscription(LapEvent, "/pnp/lap/event", on_lap_event, reliable)
             node.create_subscription(LapGuidance, "/pnp/lap/guidance", on_guidance, reliable)
             node.create_subscription(String, "/pnp/lap/status", on_lap_status, reliable)
@@ -799,6 +829,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                         guidance_log,
                         lap_status,
                         driving_first[0] if driving_first else None,
+                        first_scan_after_driving[0] if first_scan_after_driving else None,
                     )
                 )
         t_first = recording.odom[0][0] if recording.odom else 0.0

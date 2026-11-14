@@ -12,7 +12,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -100,7 +100,35 @@ def validate_manifest(manifest: dict[str, Any], schema: dict[str, Any] | None = 
         raise BundleInvalid("manifest invalid: " + "; ".join(lines))
 
 
-def golden_scenarios(v_max_mps: float, steer_limit_rad: float) -> list[dict[str, Any]]:
+def residual_golden_scenarios(v_max_mps: float, steer_limit_rad: float) -> list[dict[str, Any]]:
+    """Five rollouts at speed (0.9 and 0.7 of the validity speed, steering both ways, an S-curve,
+    braking in a turn, accelerating with a steering ramp) that exercise an enabled residual: the
+    network sees large v, delta and command inputs, not just the launch region."""
+    v_hi = round(0.9 * v_max_mps, 3)
+    v_mid = round(0.7 * v_max_mps, 3)
+    s_mid = round(0.6 * steer_limit_rad, 3)
+    n = GOLDEN_STEPS
+
+    def const(speed: float, steer: float) -> np.ndarray:
+        return np.tile([speed, steer], (n, 1))
+
+    s_curve = np.array([[v_hi, s_mid if (i // 8) % 2 == 0 else -s_mid] for i in range(n)])
+    brake = np.array([[v_hi if i < 8 else 0.3 * v_hi, s_mid] for i in range(n)])
+    accel = np.array(
+        [[round(v_hi * (0.5 + 0.5 * i / n), 4), round(-s_mid * i / n, 4)] for i in range(n)]
+    )
+    return [
+        {"state0": [0.0, 0.0, 0.0, v_hi, 0.0], "controls": const(v_hi, s_mid)},
+        {"state0": [0.0, 0.0, 0.0, v_hi, 0.0], "controls": const(v_hi, -s_mid)},
+        {"state0": [0.2, -0.1, 0.3, v_mid, 0.05], "controls": s_curve},
+        {"state0": [0.0, 0.0, 0.0, v_hi, 0.1], "controls": brake},
+        {"state0": [0.0, 0.0, 0.0, v_mid, 0.0], "controls": accel},
+    ]
+
+
+def golden_scenarios(
+    v_max_mps: float, steer_limit_rad: float, exercise_residual: bool = False
+) -> list[dict[str, Any]]:
     """Twelve hand-designed rollouts: left, right, accelerating, braking, saturated both ways, an
     S-curve and a hard steering reversal (which engages the steering rate limit), then three that
     cross the speed dead zone: a command ramp 0 to 0.4 m/s and back, and a constant 0.1 m/s from
@@ -126,7 +154,7 @@ def golden_scenarios(v_max_mps: float, steer_limit_rad: float) -> list[dict[str,
     ramp = np.array(
         [[round(0.4 * (i / half if i < half else (n - i) / half), 4), 0.0] for i in range(n)]
     )
-    return [
+    base = [
         {"state0": [0.0, 0.0, 0.0, v_mid, 0.0], "controls": const(v_mid, s_mid)},
         {"state0": [0.0, 0.0, 0.0, v_mid, 0.0], "controls": const(v_mid, -s_mid)},
         {"state0": [0.0, 0.0, 0.0, 0.0, 0.0], "controls": const(v_hi, 0.0)},
@@ -140,6 +168,9 @@ def golden_scenarios(v_max_mps: float, steer_limit_rad: float) -> list[dict[str,
         {"state0": [0.0, 0.0, 0.0, 0.0, 0.0], "controls": const(0.1, 0.0)},
         {"state0": [0.0, 0.0, 0.0, 0.4, 0.0], "controls": const(0.1, 0.0)},
     ]
+    if exercise_residual:
+        base += residual_golden_scenarios(v_max_mps, steer_limit_rad)
+    return base
 
 
 def golden_rows(
@@ -148,9 +179,11 @@ def golden_rows(
     vehicle: Vehicle,
     v_max_mps: float,
     scenarios: list[dict[str, Any]] | None = None,
+    exercise_residual: bool = False,
 ) -> list[list[float]]:
-    """CSV rows (rollout, step, controls, state). The last row of a rollout has controls 0, 0."""
-    scenarios = scenarios or golden_scenarios(v_max_mps, vehicle.steer_max_rad)
+    """CSV rows (rollout, step, controls, state). The last row of a rollout has controls 0, 0.
+    `exercise_residual` adds the five rollouts at speed that an enabled residual is checked on."""
+    scenarios = scenarios or golden_scenarios(v_max_mps, vehicle.steer_max_rad, exercise_residual)
     rows: list[list[float]] = []
     for k, sc in enumerate(scenarios):
         controls = np.asarray(sc["controls"], dtype=float)
@@ -263,8 +296,10 @@ def write_bundle(
     data: list[str],
     metrics: dict[str, Any],
     schema: dict[str, Any] | None = None,
+    golden_residual_rollouts: bool = False,
 ) -> dict[str, Any]:
-    """Write the bundle directory and return the manifest. Nothing is written on a refusal."""
+    """Write the bundle directory and return the manifest. Nothing is written on a refusal.
+    `golden_residual_rollouts` adds the rollouts at speed that exercise an enabled residual."""
     if not 0.0 < v_max_mps <= vehicle.throttle_full_scale_mps:
         raise BundleInvalid(
             f"v_max_mps {v_max_mps} must be in (0, {vehicle.throttle_full_scale_mps}] "
@@ -276,7 +311,10 @@ def write_bundle(
         else np.zeros(pack_weights(residual.weights).size, dtype=np.float32)
     )
     weights_bytes = weights_flat.astype("<f4").tobytes()
-    rows = golden_rows(nominal, residual, vehicle, v_max_mps)
+    # The weights are stored as float32: the golden rollouts must come from the weights a loader
+    # will actually read, or the Python round trip (and the C++ check) sees the rounding.
+    stored = replace(residual, weights=unpack_weights(weights_flat))
+    rows = golden_rows(nominal, stored, vehicle, v_max_mps, None, golden_residual_rollouts)
     payload_files = {RESIDUAL_FILE: weights_bytes}
     # Build the golden text in memory so the manifest can be validated before any write.
     payload_files[GOLDEN_FILE] = _golden_text(rows).encode("utf-8")

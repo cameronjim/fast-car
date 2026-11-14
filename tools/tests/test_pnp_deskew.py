@@ -215,7 +215,9 @@ def test_items_1_and_2_pass_a_clear_gain_and_report_the_bootstrap(monkeypatch) -
     assert out["item1"]["ratio"] == pytest.approx(0.6, abs=1e-9)
     assert out["item1"]["ci95_hi"] < 1.0 and out["item1"]["passed"] is True
     assert out["item2"]["ratio"] == pytest.approx(1.0) and out["item2"]["passed"] is True
-    assert out["item1"]["paired_scored"] == 80 and out["item1"]["blocks"] == 4  # 4 s per pair, 2 s blocks
+    assert (
+        out["item1"]["paired_scored"] == 80 and out["item1"]["blocks"] == 4
+    )  # 4 s per pair, 2 s blocks
     assert set(out["pairs"]) == {"R8/R3", "R7b/R4"}
 
 

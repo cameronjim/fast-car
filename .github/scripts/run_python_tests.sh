@@ -72,6 +72,9 @@ run "tests/replay_harness" report
 run "tests/sim_in_loop" report
 run "tests/bench" report
 run "tests/l5_reactive_bench" report
+# tests/launch_support: the orderly end of a launch_testing stack the L5 and e2e canaries use
+# (one DDS participant leaves at a time). ROS-free, needs /proc; skips itself elsewhere.
+run "tests/launch_support" report
 
 # tests/sim_regression (roadmap task S.6) is deliberately NOT run here: it installs and
 # steps the pinned f1tenth_gym through several maneuvers (like sim/racer_gym above), which

@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import math
 import signal
+import sys
 import time
 import unittest
+from pathlib import Path
 
 import launch
 import launch_testing
@@ -29,6 +31,9 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
+import orderly_shutdown
 
 _TEST_SEED = 21
 _BRIDGE_STEP_RATE_HZ = 50.0
@@ -95,6 +100,7 @@ class TestSimSafetyE2e(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         rclpy.shutdown()
+        orderly_shutdown.stop_stack()
 
     def setUp(self):
         self.node = rclpy.create_node("e2e_sim_safety_test_client")

@@ -1,0 +1,531 @@
+bundle_schema_version: 1.0.0
+kind: track_perception
+model_id: trackperc-v1-2026-11-14
+created_utc: '2026-11-14T02:11:45Z'
+git_sha: ef4d3ac657e46bf42d2c9dd2b233bf42249c5a91
+training_config_sha256: 036cac5699f2032b42ef9fd4a5ef208ab46c600caca0f38eb3032b52497797bc
+vehicle_params:
+  schema_version: 0.17.0
+  sysid_session_id: none-preliminary
+payload:
+- file: weights.npz
+  sha256: 469eb7cc7721a645b01fc218c950182522e2f84fcda290571586bbe8bbe01add
+io:
+  input:
+    tensor:
+    - 1
+    - 2
+    - 360
+    n_bins: 360
+    range_clip_m: 6.0
+    origin: lidar
+    pooling: min
+    body_filter_margin_m: 0.02
+  output:
+    tensor:
+    - 16
+    - 5
+    stations: 16
+    station_spacing_m: 0.2
+    frame: base_link
+  lidar_mount:
+    x_m: 0.285
+    y_m: 0.0
+    yaw_rad: 3.141593
+  arch:
+    type: circ_conv1d_v0
+data:
+- 'simulated lanes: trackperc-v0-train-s0-n300000.npz (6 epochs, batch 256, seed 0), validation trackperc-v0-val-s0-n20000.npz;
+  nuisances per racer_pnp_perception.nuisance'
+- 'real self-labels (geometry seen later by the same sensor, no command topic read): 5654 train labels,
+  share 0.75 of each batch, mirrored and bin dropout; 1200 labels held back as internal validation'
+- 'real segments used (role train only): 2026-11-11T03-54-11_car_teleop_cw/whole_bag, 2026-11-11T04-20-19_car_teleop_v3/whole_bag,
+  2026-11-13T22-00-40_car_teleop/G1a, 2026-11-13T22-00-40_car_teleop/G2, 2026-11-13T22-00-40_car_teleop/G3a,
+  2026-11-13T22-20-18_car_teleop/R0, 2026-11-13T22-20-18_car_teleop/R1, 2026-11-13T22-20-18_car_teleop/R2,
+  2026-11-13T22-20-18_car_teleop/R7a, 2026-11-13T23-19-51_car_teleop/M0, 2026-11-13T23-27-23_car_teleop/T0,
+  2026-11-13T23-27-23_car_teleop/T1, 2026-11-13T23-27-23_car_teleop/T2a, 2026-11-13T23-27-23_car_teleop/T3a'
+- split pnp-v0.2 SHA-256 bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83
+- never trained on held-out or cross-layout data; held-out scored once, see metrics.gp1
+- initialised from /Users/cameronjim/code/car-data/pnp/runs/v0-a/model.pt (sim-only v0 weights)
+- seed 0 of ['0', '1', '2'] chosen by final val_real_ec_m (internal validation only)
+metrics:
+  gp1:
+    split_sha256: bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83
+    split_sha256_expected: bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83
+    bundle: trackperc-v1-2026-11-14
+    sets:
+      H-run:
+        labelled_scans: 2597
+      H-layout:
+        labelled_scans: 1088
+      A-run:
+        moving_scans: 4009
+      A-layout:
+        moving_scans: 2715
+    per_segment:
+      2026-11-13T22-00-40_car_teleop/G1b:
+        set: run
+        moving_scans: 1080
+        labelled_scans: 810
+      2026-11-13T22-00-40_car_teleop/G3b:
+        set: run
+        moving_scans: 154
+        labelled_scans: 24
+      2026-11-13T22-20-18_car_teleop/P0:
+        set: run
+        moving_scans: 966
+        labelled_scans: 638
+      2026-11-13T22-20-18_car_teleop/R3:
+        set: run
+        moving_scans: 553
+        labelled_scans: 409
+      2026-11-13T22-20-18_car_teleop/R4:
+        set: run
+        moving_scans: 385
+        labelled_scans: 301
+      2026-11-13T22-20-18_car_teleop/R5:
+        set: run
+        moving_scans: 264
+        labelled_scans: 183
+      2026-11-13T22-20-18_car_teleop/R6:
+        set: run
+        moving_scans: 255
+        labelled_scans: 152
+      2026-11-13T22-20-18_car_teleop/R7b:
+        set: run
+        moving_scans: 90
+        labelled_scans: 29
+      2026-11-13T22-20-18_car_teleop/R8:
+        set: run
+        moving_scans: 174
+        labelled_scans: 51
+      2026-11-13T23-27-23_car_teleop/T2b:
+        set: run
+        moving_scans: 88
+        labelled_scans: 0
+      2026-11-12T03-04-56_car_teleop/whole_bag:
+        set: layout
+        moving_scans: 2715
+        labelled_scans: 1088
+    H-run:
+      net:
+        scans: 2597
+        e_c_m: 0.05073116134262434
+        e_far_m: 0.07012794435899312
+        v: 16.0
+        c95: 0.93453985367732
+      geometric:
+        scans: 2597
+        e_c_m: 0.1355333784055033
+        e_far_m: 0.19286919828938906
+        v: 16.0
+        c95: 0.9341547939930689
+    H-layout:
+      net:
+        scans: 1088
+        e_c_m: 0.12203702894600996
+        e_far_m: 0.16988032509896792
+        v: 15.504595588235293
+        c95: 0.7178308823529411
+      geometric:
+        scans: 1088
+        e_c_m: 0.14998033866723068
+        e_far_m: 0.21716333822504616
+        v: 15.954963235294118
+        c95: 0.7987132352941176
+    A-run:
+      net:
+        scans: 4009
+        intrusion_mean: 0.0015580707962275127
+        residual_median_m: 0.06380921319249921
+        deficit_p90_m: 0.017983137550180023
+        c95: 0.8841068917018284
+        c95_scans: 3555
+      geometric:
+        scans: 4009
+        intrusion_mean: 0.0030071895218507115
+        residual_median_m: 0.02585216730242696
+        deficit_p90_m: 0.020750275475334437
+        c95: 0.889451476793249
+        c95_scans: 3555
+    A-layout:
+      net:
+        scans: 2715
+        intrusion_mean: 0.02274346084359733
+        residual_median_m: 0.08067818709849095
+        deficit_p90_m: 0.0672450514734842
+        c95: 0.4908561928512053
+        c95_scans: 2406
+      geometric:
+        scans: 2715
+        intrusion_mean: 0.006523744443497586
+        residual_median_m: 0.030999938014880497
+        deficit_p90_m: 0.024630889218260454
+        c95: 0.5635910224438903
+        c95_scans: 2406
+    e_c_scans_without_common_station:
+      H-run:
+        net: 0
+        geometric: 0
+    bootstrap_e_c_ratio_net_over_geometric_h_run:
+      ratio: 0.37430750962940956
+      lo: 0.3548924019575869
+      hi: 0.39486013676175413
+      blocks: 169
+      block_s: 2.0
+      resamples: 2000
+      seed: 0
+    cells:
+    - set: layout
+      direction: unknown
+      speed_bin: 0.85+
+      scans: 269
+      e_c_net_m: 0.12363535742118723
+      e_c_geo_m: 0.19773092600951506
+      judged: true
+      ratio: 0.6252707146844482
+    - set: layout
+      direction: unknown
+      speed_bin: '[0.2, 0.6)'
+      scans: 797
+      e_c_net_m: 0.11949643876581618
+      e_c_geo_m: 0.1308377120973276
+      judged: true
+      ratio: 0.9133180093895644
+    - set: layout
+      direction: unknown
+      speed_bin: '[0.6, 0.85)'
+      scans: 22
+      e_c_net_m: 0.19568601943972772
+      e_c_geo_m: 0.259606037809877
+      judged: false
+      ratio: 0.7537806943574971
+    - set: run
+      direction: ccw
+      speed_bin: 0.85+
+      scans: 42
+      e_c_net_m: 0.06178420659054136
+      e_c_geo_m: 0.09375445421589237
+      judged: true
+      ratio: 0.6590002267867534
+    - set: run
+      direction: ccw
+      speed_bin: '[0.2, 0.6)'
+      scans: 1224
+      e_c_net_m: 0.04549252648042309
+      e_c_geo_m: 0.12005534503169453
+      judged: true
+      ratio: 0.37892962173748357
+    - set: run
+      direction: ccw
+      speed_bin: '[0.6, 0.85)'
+      scans: 156
+      e_c_net_m: 0.060276817725987156
+      e_c_geo_m: 0.1434420954148439
+      judged: true
+      ratio: 0.4202170747134073
+    - set: run
+      direction: cw
+      speed_bin: 0.85+
+      scans: 48
+      e_c_net_m: 0.06349212172624304
+      e_c_geo_m: 0.15749344433545018
+      judged: true
+      ratio: 0.4031413624494058
+    - set: run
+      direction: cw
+      speed_bin: '[0.2, 0.6)'
+      scans: 958
+      e_c_net_m: 0.05388761735464179
+      e_c_geo_m: 0.14933416985036274
+      judged: true
+      ratio: 0.36085255912051994
+    - set: run
+      direction: cw
+      speed_bin: '[0.6, 0.85)'
+      scans: 169
+      e_c_net_m: 0.05559700641475941
+      e_c_geo_m: 0.166248327773762
+      judged: true
+      ratio: 0.3344214474771635
+    items:
+    - number: 1
+      name: H-run has at least 300 labelled scans
+      value:
+        labelled_scans: 2597
+      threshold:
+        min: 300
+      passed: true
+      note: ''
+    - number: 2
+      name: in-layout accuracy
+      value:
+        e_c_net_m: 0.05073116134262434
+        e_c_geometric_m: 0.1355333784055033
+        ratio: 0.37430750962940956
+        ratio_ci_upper: 0.39486013676175413
+      threshold:
+        ratio_max: 0.9
+        ci_upper_below: 1.0
+      passed: true
+      note: ''
+    - number: 3
+      name: in-layout range
+      value:
+        v_net: 16.0
+        v_geometric: 16.0
+      threshold:
+        v_net_min: 16.0
+      passed: true
+      note: ''
+    - number: 4
+      name: cross-layout
+      value:
+        e_c_net_m: 0.12203702894600996
+        e_c_geometric_m: 0.14998033866723068
+        ratio: 0.8136868474259148
+        v_net: 15.504595588235293
+        v_geometric: 15.954963235294118
+      threshold:
+        ratio_max: 1.0
+        v_net_min: 15.454963235294118
+      passed: true
+      note: ''
+    - number: 5
+      name: label-free non-inferiority on A-run and A-layout
+      value:
+        a_run:
+          intrusion_mean: 0.0015580707962275127
+          residual_median_m: 0.06380921319249921
+          deficit_p90_m: 0.017983137550180023
+          c95: 0.8841068917018284
+          geometric_intrusion_mean: 0.0030071895218507115
+          geometric_c95: 0.889451476793249
+        a_layout:
+          intrusion_mean: 0.02274346084359733
+          residual_median_m: 0.08067818709849095
+          deficit_p90_m: 0.0672450514734842
+          c95: 0.4908561928512053
+          geometric_intrusion_mean: 0.006523744443497586
+          geometric_c95: 0.5635910224438903
+      threshold:
+        a_run:
+          intrusion_max: 0.02
+          residual_median_max_m: 0.1
+          deficit_p90_max_m: 0.05
+          c95_min: 0.869451476793249
+          checks:
+            intrusion: true
+            residual_median: true
+            deficit_p90: true
+            c95: true
+        a_layout:
+          intrusion_max: 0.02
+          residual_median_max_m: 0.1
+          deficit_p90_max_m: 0.05
+          c95_min: 0.5435910224438902
+          checks:
+            intrusion: false
+            residual_median: true
+            deficit_p90: false
+            c95: false
+      passed: false
+      note: ''
+    - number: 6
+      name: per cell
+      value:
+        cells_judged: 8
+        cells_not_judged: 1
+        worst_ratio: 0.9133180093895644
+        failing_cells: []
+      threshold:
+        ratio_max: 1.1
+        min_labelled_scans: 40
+      passed: true
+      note: ''
+    failed_items:
+    - 5
+    outcome: better where it trained, not shown elsewhere (items 2 and 3 passed, item 4, 5 or 6 failed),
+      geometric stays deployed for unseen layouts
+  split_sha256: bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83
+  numpy_vs_torch_max_abs_diff: 2.8014183044433594e-06
+  sim:
+    in_distribution:
+      samples: 4000
+      geometric_valid:
+        centreline_err_median_stations_0_7_m: 0.01440214179456234
+        centreline_err_median_stations_8_15_m: 0.04042241536080837
+        centreline_err_p90_stations_0_7_m: 0.04493879154324532
+        centreline_err_p90_stations_8_15_m: 0.1695805311203004
+        half_width_err_median_m: 0.02115817368030548
+        valid_share: 0.99821875
+      net_raw:
+        centreline_err_median_stations_0_7_m: 0.011247320100665092
+        centreline_err_median_stations_8_15_m: 0.03566386550664902
+        centreline_err_p90_stations_0_7_m: 0.034699756652116776
+        centreline_err_p90_stations_8_15_m: 0.12360293418169022
+        half_width_err_median_m: 0.018522456288337708
+        valid_share: 1.0
+      net_valid:
+        centreline_err_median_stations_0_7_m: 0.011196887120604515
+        centreline_err_median_stations_8_15_m: 0.03511183336377144
+        centreline_err_p90_stations_0_7_m: 0.03415949270129204
+        centreline_err_p90_stations_8_15_m: 0.11696138978004456
+        half_width_err_median_m: 0.018411606550216675
+        valid_share: 0.991515625
+      net_sigma_median_m: 0.0198421198874712
+    clean:
+      samples: 4000
+      geometric_valid:
+        centreline_err_median_stations_0_7_m: 0.0011307905078865588
+        centreline_err_median_stations_8_15_m: 0.006936774356290698
+        centreline_err_p90_stations_0_7_m: 0.008544225711375475
+        centreline_err_p90_stations_8_15_m: 0.10629625990986824
+        half_width_err_median_m: 8.872151374816895e-05
+        valid_share: 0.999375
+      net_raw:
+        centreline_err_median_stations_0_7_m: 0.010692059062421322
+        centreline_err_median_stations_8_15_m: 0.03203593194484711
+        centreline_err_p90_stations_0_7_m: 0.030112596228718758
+        centreline_err_p90_stations_8_15_m: 0.10744687914848328
+        half_width_err_median_m: 0.01685900241136551
+        valid_share: 1.0
+      net_valid:
+        centreline_err_median_stations_0_7_m: 0.01067836582660675
+        centreline_err_median_stations_8_15_m: 0.03179966285824776
+        centreline_err_p90_stations_0_7_m: 0.0299923587590456
+        centreline_err_p90_stations_8_15_m: 0.10357098281383514
+        half_width_err_median_m: 0.01682029664516449
+        valid_share: 0.995875
+      net_sigma_median_m: 0.01772242598235607
+    held_out:
+      stadium_l1.0_s2.0_r0.4:
+        samples: 4000
+        geometric_valid:
+          centreline_err_median_stations_0_7_m: 0.014984897803515196
+          centreline_err_median_stations_8_15_m: 0.05595390126109123
+          centreline_err_p90_stations_0_7_m: 0.041654181852936754
+          centreline_err_p90_stations_8_15_m: 0.23825741112232204
+          half_width_err_median_m: 0.020847707986831665
+          valid_share: 0.998796875
+        net_raw:
+          centreline_err_median_stations_0_7_m: 0.011893680319190025
+          centreline_err_median_stations_8_15_m: 0.04389907419681549
+          centreline_err_p90_stations_0_7_m: 0.03180938959121704
+          centreline_err_p90_stations_8_15_m: 0.14989155530929565
+          half_width_err_median_m: 0.019585251808166504
+          valid_share: 1.0
+        net_valid:
+          centreline_err_median_stations_0_7_m: 0.011855732649564743
+          centreline_err_median_stations_8_15_m: 0.043436311185359955
+          centreline_err_p90_stations_0_7_m: 0.03135436400771141
+          centreline_err_p90_stations_8_15_m: 0.14534826576709747
+          half_width_err_median_m: 0.019503027200698853
+          valid_share: 0.994109375
+        net_sigma_median_m: 0.0215927567332983
+      rounded_rect_l1.0_3.0x2.0_r0.4:
+        samples: 4000
+        geometric_valid:
+          centreline_err_median_stations_0_7_m: 0.015059865545481443
+          centreline_err_median_stations_8_15_m: 0.04013439267873764
+          centreline_err_p90_stations_0_7_m: 0.04411447159945965
+          centreline_err_p90_stations_8_15_m: 0.14394040405750275
+          half_width_err_median_m: 0.019901439547538757
+          valid_share: 0.999
+        net_raw:
+          centreline_err_median_stations_0_7_m: 0.011094414629042149
+          centreline_err_median_stations_8_15_m: 0.037650227546691895
+          centreline_err_p90_stations_0_7_m: 0.03043394163250923
+          centreline_err_p90_stations_8_15_m: 0.11551805585622787
+          half_width_err_median_m: 0.016924291849136353
+          valid_share: 1.0
+        net_valid:
+          centreline_err_median_stations_0_7_m: 0.011060986667871475
+          centreline_err_median_stations_8_15_m: 0.03729090094566345
+          centreline_err_p90_stations_0_7_m: 0.030015962198376656
+          centreline_err_p90_stations_8_15_m: 0.11156222969293594
+          half_width_err_median_m: 0.016839101910591125
+          valid_share: 0.993828125
+        net_sigma_median_m: 0.02046220935881138
+      rounded_rect_l1.2_2.0x1.6_r0.8:
+        samples: 4000
+        geometric_valid:
+          centreline_err_median_stations_0_7_m: 0.013858035672456026
+          centreline_err_median_stations_8_15_m: 0.029990537092089653
+          centreline_err_p90_stations_0_7_m: 0.03625584989786148
+          centreline_err_p90_stations_8_15_m: 0.07041513919830326
+          half_width_err_median_m: 0.021842747926712036
+          valid_share: 0.998953125
+        net_raw:
+          centreline_err_median_stations_0_7_m: 0.009581941179931164
+          centreline_err_median_stations_8_15_m: 0.022257130593061447
+          centreline_err_p90_stations_0_7_m: 0.025207335129380226
+          centreline_err_p90_stations_8_15_m: 0.05939454212784767
+          half_width_err_median_m: 0.013805046677589417
+          valid_share: 1.0
+        net_valid:
+          centreline_err_median_stations_0_7_m: 0.009544401429593563
+          centreline_err_median_stations_8_15_m: 0.022119395434856415
+          centreline_err_p90_stations_0_7_m: 0.024897199124097824
+          centreline_err_p90_stations_8_15_m: 0.058093588799238205
+          half_width_err_median_m: 0.01374848186969757
+          valid_share: 0.99509375
+        net_sigma_median_m: 0.015037833712995052
+    held_out_acceptance:
+      stadium_l1.0_s2.0_r0.4:
+        centreline_0_7_ok: true
+        centreline_8_15_ok: true
+        half_width_ok: true
+      rounded_rect_l1.0_3.0x2.0_r0.4:
+        centreline_0_7_ok: true
+        centreline_8_15_ok: true
+        half_width_ok: true
+      rounded_rect_l1.2_2.0x1.6_r0.8:
+        centreline_0_7_ok: true
+        centreline_8_15_ok: true
+        half_width_ok: true
+      all_ok: true
+  sim_v0_held_out_net_raw:
+    stadium_l1.0_s2.0_r0.4:
+      centreline_err_median_stations_0_7_m: 0.009506968781352043
+      centreline_err_median_stations_8_15_m: 0.03889671713113785
+      centreline_err_p90_stations_0_7_m: 0.02617965266108513
+      centreline_err_p90_stations_8_15_m: 0.143598273396492
+      half_width_err_median_m: 0.009861789643764496
+      valid_share: 1.0
+    rounded_rect_l1.0_3.0x2.0_r0.4:
+      centreline_err_median_stations_0_7_m: 0.009195316582918167
+      centreline_err_median_stations_8_15_m: 0.032847728580236435
+      centreline_err_p90_stations_0_7_m: 0.025397665798664093
+      centreline_err_p90_stations_8_15_m: 0.10113167762756348
+      half_width_err_median_m: 0.009169921278953552
+      valid_share: 1.0
+    rounded_rect_l1.2_2.0x1.6_r0.8:
+      centreline_err_median_stations_0_7_m: 0.00787324458360672
+      centreline_err_median_stations_8_15_m: 0.01804184541106224
+      centreline_err_p90_stations_0_7_m: 0.020429883152246475
+      centreline_err_p90_stations_8_15_m: 0.04883628338575363
+      half_width_err_median_m: 0.008516639471054077
+      valid_share: 1.0
+  latency_numpy_forward_ms:
+    scans: 2000
+    net_forward:
+      p50: 0.048791058361530304
+      p99: 0.06233649211935699
+      max: 0.13383303303271532
+      mean: 0.04961352900136262
+    scan_to_track:
+      geometric:
+        p50: 1.0394370183348656
+        p99: 1.2264209508430213
+        max: 2.10787495598197
+        mean: 0.9510601413203403
+      net:
+        p50: 0.21775002824142575
+        p99: 0.28324560262262816
+        max: 0.6967079825699329
+        mean: 0.21175903297262266
+    p50: 0.048791058361530304
+    p99: 0.06233649211935699
+    max: 0.13383303303271532
+    mean: 0.04961352900136262

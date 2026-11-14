@@ -28,6 +28,11 @@ class EgoMotion {
   // oldest sample (the first sample is extrapolated backwards) or the buffer is empty.
   Pose2 relative_pose(double t_from_s, double t_to_s, bool* covered = nullptr) const;
 
+  // Signed wheel distance travelled between t0 and t1, metres (the integral of the held speed,
+  // forward positive; negative for t1 < t0). The lap profile's stations advance by this. Same
+  // holding and extrapolation rules as relative_pose; 0 for an empty buffer or a non finite time.
+  double distance_between(double t0_s, double t1_s) const;
+
  private:
   struct Sample {
     double t = 0.0;

@@ -44,6 +44,8 @@ add_library(racer_planner_core
   src/freespace_field.cpp
   src/recovery.cpp
   src/ego_motion.cpp
+  src/gate_predictor.cpp
+  src/lap_profile.cpp
   src/mppi.cpp
   src/planner_logic.cpp
   src/planner.cpp
@@ -114,6 +116,8 @@ if(BUILD_TESTING)
     test/test_recovery.cpp
     test/test_ego_motion.cpp
     test/test_rng.cpp
+    test/test_gate_predictor.cpp
+    test/test_lap_profile.cpp
     test/test_mppi_costs.cpp
     test/test_planner_logic.cpp
     test/test_planner_properties.cpp
@@ -137,6 +141,33 @@ if(BUILD_TESTING)
   target_compile_definitions(test_planner_closed_loop PRIVATE
     RACER_PLANNER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
   )
+
+  # The gate tests compile racer_safety's OWN sources, read only, to compare the planner's
+  # reimplementation of the in-path distance and the gate decision against the real ones.
+  # Production code does not link them (that would be a change to racer_safety). A missing
+  # sibling package fails the configure step: no silent skip.
+  set(RACER_SAFETY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../racer_safety")
+  foreach(f src/forward_sector.cpp src/gate_logic.cpp src/gate_logic_formatting.cpp
+            include/racer_safety/forward_sector.hpp include/racer_safety/gate_logic.hpp)
+    if(NOT EXISTS "${RACER_SAFETY_DIR}/${f}")
+      message(FATAL_ERROR "racer_planner gate tests need ${RACER_SAFETY_DIR}/${f} (racer_safety sibling package)")
+    endif()
+  endforeach()
+  foreach(t test_gate_divergence test_gate_closed_loop)
+    ament_add_gtest(${t} test/${t}.cpp
+      "${RACER_SAFETY_DIR}/src/forward_sector.cpp"
+      "${RACER_SAFETY_DIR}/src/gate_logic.cpp"
+      "${RACER_SAFETY_DIR}/src/gate_logic_formatting.cpp"
+      TIMEOUT 1500
+    )
+    add_dependencies(${t} racer_planner_generate_vehicle_params)
+    target_include_directories(${t} PRIVATE "${RACER_GENERATED_DIR}" src test
+      "${RACER_SAFETY_DIR}/include")
+    target_link_libraries(${t} racer_planner_core)
+    target_compile_definitions(${t} PRIVATE
+      RACER_PLANNER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+    )
+  endforeach()
 
   # The solve / publish split on real threads (run under ThreadSanitizer for the race check) and
   # the no-heap-allocation check (its own binary: it replaces the global operator new).

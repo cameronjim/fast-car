@@ -3,11 +3,18 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
+#include <random>
 #include <set>
 #include <utility>
 #include <vector>
 
+#include "gate_test_support.hpp"
 #include "racer_planner/mppi.hpp"
 #include "test_support.hpp"
 
@@ -953,4 +960,569 @@ TEST(MppiSolver, RolloutPlanMatchesTheModelStepWithExactTrig) {
     EXPECT_NEAR(plan[static_cast<std::size_t>(t + 1)].y, st.y, 1e-9) << t;
     EXPECT_NEAR(plan[static_cast<std::size_t>(t + 1)].yaw, st.yaw, 1e-12) << t;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The optional hooks (gate table, lap profile) must not change anything while they are off. The
+// numbers in kGolden below were recorded from the solver on main BEFORE the hooks existed (same
+// scenes, same seeds), as exact hex floats: with no gate table and no profile the solver is
+// bit-identical to it.
+
+namespace {
+
+constexpr int kGoldenScenes = 5;
+constexpr int kGoldenSolves = 3;
+constexpr int kGoldenFields = 6;
+
+using GoldenRow = std::array<double, kGoldenFields>;
+
+GoldenRow golden_row(const SolveOutput& o) {
+  return GoldenRow{o.cmd.speed_cmd,   o.cmd.steering_cmd,     o.best_cost,
+                   o.plan_progress_m, o.plan_min_clearance_m, o.collision_fraction};
+}
+
+std::array<GoldenRow, kGoldenSolves> golden_scene(int scene) {
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 256;
+  p.speed_floor_mps = 0.2;
+  p.seed = 5 + static_cast<std::uint64_t>(scene);
+  std::array<GoldenRow, kGoldenSolves> rows{};
+  BlendEnv e;
+  SolveInput in = e.input(0.4, 0.0, 0.8);
+  switch (scene) {
+    case 0:  // track only, a little off the centreline
+      in.x0.y = 0.05;
+      in.x0.yaw = 0.05;
+      break;
+    case 1:  // free-space field alone
+      in = e.blend_input(0.5, 0.0);
+      in.x0.y = 0.1;
+      in.x0.yaw = 0.1;
+      in.v_cap_mps = 0.8;
+      break;
+    case 2: {  // blend, with a wall across the corridor
+      std::vector<PointXY> pts = e.pts;
+      for (double y = -0.5; y <= 0.5; y += 0.02) pts.push_back({2.0, y});
+      e.set_points(pts);
+      in = e.blend_input(0.5, 0.5);
+      in.v_cap_mps = 1.0;
+      in.x0.delta = 0.05;
+      break;
+    }
+    case 3: {  // an obstacle ahead and to the left
+      std::vector<PointXY> pts = e.pts;
+      pts.push_back({0.9, 0.25});
+      e.set_points(pts);
+      in = e.input(0.6, 0.05, 1.0);
+      break;
+    }
+    default:  // a wall close ahead
+      e.set_points(wall_across(0.8));
+      in = e.input(0.8, 0.0, 1.0);
+      break;
+  }
+  MppiSolver s(p, e.model, e.g, 256);
+  for (int i = 0; i < kGoldenSolves; ++i) {
+    rows[static_cast<std::size_t>(i)] = golden_row(s.solve(in));
+  }
+  return rows;
+}
+
+// Recorded on aarch64 (GCC 11, -O2, the ros-dev image) at the commit before the hooks. Columns:
+// speed cmd, steering cmd, best cost, plan progress, plan min clearance, collision fraction.
+const GoldenRow kGolden[kGoldenScenes * kGoldenSolves] = {
+    {0x1.4f4fdce162fedp-1, -0x1.fb7dad9b401c6p-5, -0x1.1beb3711c6925p+3, 0x1.d610fd3b583f3p-1,
+     0x1.1923d6cd28e4fp-2, 0x1.8p-5},
+    {0x1.76c200a83f73fp-1, -0x1.c456190926393p-4, -0x1.37170033c1bep+3, 0x1.0235b5136361cp+0,
+     0x1.19b4c89519ec9p-2, 0x1p-4},
+    {0x1.84cd83cc6c8bdp-1, -0x1.1fb9b62937352p-3, -0x1.3f904048e67b4p+3, 0x1.08542e21f5527p+0,
+     0x1.19b8496faed1ep-2, 0x1.2p-4},
+    {0x1.2b3427d04c1abp-1, -0x1.c906d963215bep-4, -0x1.0f0967cb2c32ap+3, 0x1.da76a023783p-1,
+     0x1.a09b921d97576p-3, 0x1.3p-3},
+    {0x1.4d1384a31cfcdp-1, -0x1.4fdd333225cdap-3, -0x1.10fdd7c068b4fp+3, 0x1.0973ad66dd7e8p+0,
+     0x1.a2653a457f34cp-3, 0x1.ep-5},
+    {0x1.66e7db3139a48p-1, -0x1.a9fcb9ae9b2e5p-3, -0x1.2778d155c0b99p+3, 0x1.166e2322d9b4ap+0,
+     0x1.a370a377f204ap-3, 0x1.3p-4},
+    {0x1.ac6ca6e9cc65bp-1, -0x1.2a8e98aa993ep-8, -0x1.7e174f7c9bacp+3, 0x1.2c068279ffa72p+0,
+     0x1.59283105ffd0ap-2, 0x1.cp-5},
+    {0x1.c3c378af4e712p-1, 0x1.d836cfab70017p-10, -0x1.7e174f7c9bacp+3, 0x1.3e00f5ec19bc2p+0,
+     0x1.3f99a5ca0bad8p-2, 0x1.58p-3},
+    {0x1.cabf4e199298ap-1, 0x1.c4160882b2771p-8, -0x1.83bdc63f46d94p+3, 0x1.428f597cbc301p+0,
+     0x1.2fb47a978891ep-2, 0x1.8p-3},
+    {0x1.30fb2d6ee3f89p-1, -0x1.40e2f0358c2fcp-4, -0x1.7dc759684014p+2, 0x1.b89bd6fd2c72p-1,
+     0x1.5d4193a9a9ffap-3, 0x1p-2},
+    {0x1.3cc9db13f0c47p-1, -0x1.e9019ffe5792ep-4, -0x1.8ebf9598e029cp+2, 0x1.a457c672780bcp-1,
+     0x1.6cae692563cadp-3, 0x1.ap-4},
+    {0x1.50ef69806df31p-1, -0x1.0e885bf68dd2ap-3, -0x1.aa1604ca9bbeap+2, 0x1.a95483d1ce00dp-1,
+     0x1.86f2858d2389ep-3, 0x1.cp-4},
+    {0x0p+0, 0x0p+0, -0x1.35aa0c1496038p+0, 0x1.1e347382e14abp-2, 0x1.48ebd7424a974p-4, 0x1.fep-1},
+    {0x1.9c3e6427e557fp-5, 0x1.47dcb2757667p-11, -0x1.35aa0c1496038p+0, 0x1.1fd49d350792ap-2,
+     0x1.41cbf1fc92e58p-4, 0x1.0ap-1},
+    {0x1.eea3f02c5e5edp-5, 0x1.05101a15ce27ap-8, -0x1.3381967ef252cp+0, 0x1.1fa98915f9b7fp-2,
+     0x1.41e42bbd1fea8p-4, 0x1.1p-1},
+};
+
+}  // namespace
+
+TEST(MppiSolver, WithoutTheHooksTheSolverIsBitIdenticalToTheOneBeforeThem) {
+  for (int sc = 0; sc < kGoldenScenes; ++sc) {
+    const auto rows = golden_scene(sc);
+    for (int i = 0; i < kGoldenSolves; ++i) {
+      const GoldenRow& want = kGolden[sc * kGoldenSolves + i];
+      const GoldenRow& got = rows[static_cast<std::size_t>(i)];
+      for (int f = 0; f < kGoldenFields; ++f) {
+        const std::string what = "scene " + std::to_string(sc) + " solve " + std::to_string(i) +
+                                 " field " + std::to_string(f);
+#if defined(__aarch64__)
+        // The platform the numbers were recorded on: exact.
+        EXPECT_EQ(got[static_cast<std::size_t>(f)], want[static_cast<std::size_t>(f)]) << what;
+#else
+        // Another architecture contracts multiply-adds differently: same numbers to 1e-9.
+        EXPECT_NEAR(got[static_cast<std::size_t>(f)], want[static_cast<std::size_t>(f)],
+                    1e-9 * std::max(1.0, std::fabs(want[static_cast<std::size_t>(f)])))
+            << what;
+#endif
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The gate aware cost
+
+namespace {
+
+MppiParams gate_only() {
+  MppiParams p = only_weights();
+  p.w_gate = 300.0;  // a weight that makes the term stand out of the other terms' noise
+  return p;
+}
+
+// An Env with a gate table built from a wall across the road `x_head` ahead of the LiDAR.
+struct GateEnv : Env {
+  GateConfig cfg = test::binding_gate();
+  GateTable table{cfg.geometry, cfg.limits};
+  test::ScanData scan = test::make_scan();
+
+  explicit GateEnv(double wall_x_head = 1.0) {
+    scan = test::scan_of(cfg.geometry, test::wall_across_road(wall_x_head));
+    table.build(scan.view());
+  }
+
+  SolveInput gate_input(double v, double delta = 0.0, double v_cap = 2.0) {
+    SolveInput in = input(v, delta, v_cap);
+    in.gate = &table;
+    in.wheel_speed_mps = v;
+    return in;
+  }
+
+  double ahead(double x_head) const {
+    return x_head + cfg.geometry.lidar_mount_x_m - cfg.geometry.body_front_x_m;
+  }
+};
+
+// The gate cost of the first kGateCostSteps steps of a straight constant speed sequence from the
+// closed form, for a wall d0 ahead of the body.
+double expected_gate_cost(double d0, double v, const MppiParams& p, const GateLimits& lim) {
+  double sum = 0.0;
+  for (int k = 0; k < kGateCostSteps; ++k) {
+    const double d = d0 - v * 0.05 * k;
+    const double ttc = d / v;
+    const double a = std::max(0.0, 1.0 - ttc / (p.gate_ttc_margin * lim.ttc_warning_s));
+    const double b = std::max(0.0, 1.0 - d / (p.gate_clear_margin * lim.min_forward_clearance_m));
+    sum += a * a + b * b;
+  }
+  return p.w_gate * sum;
+}
+
+}  // namespace
+
+TEST(MppiGate, TermMatchesTheFormulaForAStraightApproach) {
+  GateEnv e(1.0);
+  const MppiParams params = gate_only();
+  auto s = e.solver(params);
+  const double v = 1.5;
+  CostBreakdown bd;
+  const auto seq = e.constant(v, 0.0);
+  s.evaluate_sequence(e.gate_input(v), seq.data(), &bd);
+  // the table reads the smaller of two grid cells around the straight arc, so compare with the
+  // distance it gives
+  const double d0 = e.table.distance(0.0);
+  EXPECT_NEAR(bd.gate, expected_gate_cost(d0, v, params, e.cfg.limits), 1e-9);
+  EXPECT_GT(bd.gate, 1.0);
+  EXPECT_NEAR(bd.total, bd.gate, 1e-12) << "nothing else is on";
+}
+
+TEST(MppiGate, ASequenceThatEntersTheBandCostsMoreThanOneThatBrakesEarlierOrSteersClear) {
+  GateEnv e(1.0);
+  auto s = e.solver(gate_only());
+  CostBreakdown straight, brake, arc, slow;
+  const double v = 1.5;
+  const auto into = e.constant(v, 0.0);
+  s.evaluate_sequence(e.gate_input(v), into.data(), &straight);
+  // brakes at the first step: a zero request is never judged by the gate
+  std::vector<Control> braking = e.constant(0.0, 0.0);
+  s.evaluate_sequence(e.gate_input(v), braking.data(), &brake);
+  // steers the arc clear: full lock misses the wall in the scan
+  const auto clear = e.constant(v, e.cfg.geometry.steering_max_rad);
+  s.evaluate_sequence(e.gate_input(v, e.cfg.geometry.steering_max_rad), clear.data(), &arc);
+  // slower into the same wall: later, shallower entry
+  const auto crawl = e.constant(0.8, 0.0);
+  s.evaluate_sequence(e.gate_input(0.8), crawl.data(), &slow);
+  EXPECT_GT(straight.gate, brake.gate);
+  EXPECT_GT(straight.gate, arc.gate);
+  EXPECT_GT(straight.gate, slow.gate);
+  EXPECT_EQ(brake.gate, 0.0);
+  EXPECT_EQ(arc.gate, 0.0);
+  // a sequence that brakes after a step or two costs less than one that never does
+  std::vector<Control> late = e.constant(v, 0.0);
+  for (int t = 2; t < kT; ++t) late[static_cast<std::size_t>(t)].speed_cmd = 0.0;
+  CostBreakdown late_bd;
+  s.evaluate_sequence(e.gate_input(v), late.data(), &late_bd);
+  EXPECT_LT(late_bd.gate, straight.gate);
+  EXPECT_GT(late_bd.gate, 0.0);
+}
+
+TEST(MppiGate, ZeroWhenFarFromEverythingAndWithoutATable) {
+  GateEnv far(6.0);  // a wall 6 m ahead: the whole first 0.3 s is far from the band
+  auto s = far.solver(gate_only());
+  CostBreakdown bd;
+  const auto seq = far.constant(1.5, 0.0);
+  s.evaluate_sequence(far.gate_input(1.5), seq.data(), &bd);
+  EXPECT_EQ(bd.gate, 0.0);
+  // an empty scan: nothing in any corridor
+  GateEnv empty(1.0);
+  std::fill(empty.scan.ranges.begin(), empty.scan.ranges.end(),
+            std::numeric_limits<float>::infinity());
+  empty.table.build(empty.scan.view());
+  CostBreakdown be;
+  s.evaluate_sequence(empty.gate_input(1.5), seq.data(), &be);
+  EXPECT_EQ(be.gate, 0.0);
+  // no table, a table that was never built, or a zero weight: no term and the same total
+  GateEnv e(1.0);
+  SolveInput in = e.gate_input(1.5);
+  CostBreakdown with_table, no_table, unbuilt, zero_w;
+  s.evaluate_sequence(in, seq.data(), &with_table);
+  EXPECT_GT(with_table.gate, 0.0);
+  in.gate = nullptr;
+  s.evaluate_sequence(in, seq.data(), &no_table);
+  EXPECT_EQ(no_table.gate, 0.0);
+  GateTable never(e.cfg.geometry, e.cfg.limits);
+  in.gate = &never;
+  s.evaluate_sequence(in, seq.data(), &unbuilt);
+  EXPECT_EQ(unbuilt.gate, 0.0);
+  MppiParams p0 = gate_only();
+  p0.w_gate = 0.0;
+  auto s0 = e.solver(p0);
+  in.gate = &e.table;
+  s0.evaluate_sequence(in, seq.data(), &zero_w);
+  EXPECT_EQ(zero_w.gate, 0.0);
+}
+
+TEST(MppiGate, AGapInFrontOfTheWallCountsTheDistanceAlreadyTravelled) {
+  GateEnv e(1.0);
+  auto s = e.solver(gate_only());
+  const auto seq = e.constant(1.0, 0.0);
+  CostBreakdown fresh, stale;
+  SolveInput in = e.gate_input(1.0);
+  s.evaluate_sequence(in, seq.data(), &fresh);
+  in.gate_travel_since_scan_m = 0.2;  // the scan is 0.2 m of driving old
+  s.evaluate_sequence(in, seq.data(), &stale);
+  EXPECT_GT(stale.gate, fresh.gate);
+  // garbage travel counts as none
+  in.gate_travel_since_scan_m = std::nan("");
+  CostBreakdown garbage;
+  s.evaluate_sequence(in, seq.data(), &garbage);
+  EXPECT_EQ(garbage.gate, fresh.gate);
+}
+
+TEST(MppiGate, OnlyAForwardRequestIsJudged) {
+  GateEnv e(0.6);
+  auto s = e.solver(gate_only());
+  CostBreakdown bd;
+  const auto stopped = e.constant(0.0, 0.0);
+  SolveInput in = e.gate_input(0.0);
+  s.evaluate_sequence(in, stopped.data(), &bd);
+  EXPECT_EQ(bd.gate, 0.0) << "standing in front of a wall costs nothing from the gate";
+}
+
+TEST(MppiGate, IsFiniteForEveryInput) {
+  GateEnv e(1.0);
+  auto s = e.solver(gate_only());
+  test::SceneGenerator gen(7);
+  std::mt19937_64 rng(3);
+  std::uniform_real_distribution<double> u(0.0, 1.0);
+  for (int n = 0; n < 300; ++n) {
+    const test::ScanData scan = gen.make(e.cfg.geometry);
+    e.table.build(scan.view());
+    SolveInput in = e.gate_input(2.0 * u(rng), -0.4 + 0.8 * u(rng), 2.0);
+    in.wheel_speed_mps = n % 7 == 0 ? std::nan("") : 3.0 * u(rng);
+    in.gate_travel_since_scan_m = n % 5 == 0 ? std::numeric_limits<double>::infinity() : u(rng);
+    std::vector<Control> seq(kT);
+    for (auto& c : seq) c = Control{2.0 * u(rng), -0.449 + 0.898 * u(rng)};
+    CostBreakdown bd;
+    const double j = s.evaluate_sequence(in, seq.data(), &bd);
+    EXPECT_TRUE(std::isfinite(j)) << n;
+    EXPECT_TRUE(std::isfinite(bd.gate)) << n;
+    EXPECT_GE(bd.gate, 0.0);
+  }
+}
+
+TEST(MppiGate, TheSolverStaysOutOfTheGatesBandWhereWithoutTheTermItDrivesIn) {
+  // A wall in the gate's scan 0.9 m ahead of the LiDAR that the planner's own distance field does
+  // not know about (so only the gate term can object), a straight track and a 1.5 m/s cap.
+  GateEnv e(0.9);
+  auto make = [&](double w_gate) {
+    MppiParams p;
+    p.horizon_steps = kT;
+    p.samples = 256;
+    p.speed_floor_mps = 0.2;
+    p.seed = 4;
+    p.w_gate = w_gate;
+    return e.solver(p, 256);
+  };
+  auto drive = [&](double w_gate) {
+    MppiSolver solver = make(w_gate);
+    SolveInput in = e.gate_input(1.0, 0.0, 1.5);
+    SolveOutput out;
+    for (int i = 0; i < 8; ++i) out = solver.solve(in);
+    return out;
+  };
+  const SolveOutput with_term = drive(300.0);
+  const SolveOutput without = drive(0.0);
+  EXPECT_TRUE(
+      would_trip_exact(e.table, without.cmd.steering_cmd, without.cmd.speed_cmd, 1.0, e.cfg.limits))
+      << "without the term the solver asks the gate to brake";
+  EXPECT_FALSE(with_term.cmd_would_trip);
+  EXPECT_FALSE(would_trip_exact(e.table, with_term.cmd.steering_cmd, with_term.cmd.speed_cmd, 1.0,
+                                e.cfg.limits));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The lap profile hook
+
+namespace {
+
+// A profile that starts at station s0 with a speed bound and a time to finish given by functions.
+template <typename FV, typename FQ>
+LapProfile make_profile(double s0, FV bound_at, FQ q_at, int n = 61) {
+  std::vector<float> s, v, q;
+  for (int i = 0; i < n; ++i) {
+    const double st = s0 + 0.1 * i;
+    s.push_back(static_cast<float>(st));
+    v.push_back(static_cast<float>(bound_at(st)));
+    q.push_back(static_cast<float>(q_at(st)));
+  }
+  LapProfile p;
+  EXPECT_EQ(
+      make_lap_profile(s.data(), v.data(), q.data(), s.size(), v.size(), q.size(), 1.0, 1.0, &p),
+      LapProfileStatus::kOk);
+  return p;
+}
+
+}  // namespace
+
+TEST(MppiLap, TrustRegionCostsAboveTheBoundAndNothingAtOrBelowIt) {
+  Env e;
+  MppiParams p = only_weights();
+  p.w_trust = 400.0;
+  auto s = e.solver(p);
+  const auto bound = [](double) { return 0.5; };
+  const auto togo = [](double st) { return 6.0 - st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
+  auto cost_at = [&](double speed) {
+    SolveInput in = e.input(speed, 0.0, 1.5);
+    in.lap = &prof;
+    CostBreakdown bd;
+    const auto seq = e.constant(speed, 0.0);
+    s.evaluate_sequence(in, seq.data(), &bd);
+    return bd;
+  };
+  const CostBreakdown at = cost_at(0.5), above = cost_at(0.9), below_a = cost_at(0.3),
+                      below_b = cost_at(0.4);
+  EXPECT_EQ(at.lap_trust, 0.0);
+  EXPECT_EQ(below_a.lap_trust, 0.0);
+  EXPECT_EQ(below_b.lap_trust, 0.0);
+  EXPECT_GT(above.lap_trust, 0.0);
+  // 400 * (0.9 - 0.5)^2 * dt over 30 steps
+  EXPECT_NEAR(above.lap_trust, 400.0 * 0.4 * 0.4 * 0.05 * kT, 1e-9);
+  // equal below the bound: the totals only differ by the terminal term (the same path length is
+  // not the same here, so compare the trust terms alone)
+  EXPECT_EQ(below_a.lap_trust, below_b.lap_trust);
+}
+
+TEST(MppiLap, TrustRegionFollowsTheStationOfEveryStepNotTheStartingOne) {
+  Env e;
+  MppiParams p = only_weights();
+  p.w_trust = 400.0;
+  auto s = e.solver(p);
+  // fast for the first metre, slow after it
+  const auto bound = [](double st) { return st < 1.0 ? 1.2 : 0.4; };
+  const auto togo = [](double st) { return 6.0 - st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
+  SolveInput in = e.input(0.8, 0.0, 1.5);
+  in.lap = &prof;
+  CostBreakdown bd;
+  const auto seq = e.constant(0.8, 0.0);  // 1.2 m in the horizon: crosses into the slow part at 1 m
+  s.evaluate_sequence(in, seq.data(), &bd);
+  // only the steps past the station 1.0 are over: 0.8 m/s * 0.05 s = 0.04 m per step
+  int steps_over = 0;
+  for (int t = 0; t < kT; ++t) {
+    if ((t + 1) * 0.04 >= 1.0) ++steps_over;
+  }
+  ASSERT_GT(steps_over, 0);
+  EXPECT_NEAR(bd.lap_trust, 400.0 * 0.4 * 0.4 * 0.05 * steps_over, 0.5 * 400.0 * 0.16 * 0.05);
+  // the same car starting 1 m further along is over the bound for the whole horizon
+  in.lap_station_now_m = 1.0;
+  CostBreakdown later;
+  s.evaluate_sequence(in, seq.data(), &later);
+  // (the bound 0.4 is stored as a float in the profile, hence 1e-4)
+  EXPECT_NEAR(later.lap_trust, 400.0 * 0.4 * 0.4 * 0.05 * kT, 1e-4);
+}
+
+TEST(MppiLap, TerminalCostToGoReplacesProgressAndIsSecondsGainedTimesTheCap) {
+  Env e;
+  MppiParams p = only_weights();
+  p.w_progress = 10.0;
+  auto s = e.solver(p);
+  // best lap slow before station 2 (2 s per metre), fast after it (0.5 s per metre)
+  const auto bound = [](double) { return 1.5; };
+  const auto togo = [](double st) { return st < 2.0 ? 10.0 - 2.0 * st : 6.0 - 0.5 * (st - 2.0); };
+  const LapProfile prof = make_profile(0.0, bound, togo);
+  const auto seq = e.constant(0.8, 0.0);  // the same 1.2 m of path everywhere
+  auto run = [&](double station_now, double cap) {
+    SolveInput in = e.input(0.8, 0.0, cap);
+    in.lap = &prof;
+    in.lap_station_now_m = station_now;
+    CostBreakdown bd;
+    s.evaluate_sequence(in, seq.data(), &bd);
+    return bd;
+  };
+  const CostBreakdown slow_zone = run(0.2, 1.5);
+  const CostBreakdown fast_zone = run(3.0, 1.5);
+  const double path = 0.8 * 0.05 * kT;
+  // seconds of the best lap gained: 2 s per metre in the slow zone, 0.5 in the fast one
+  EXPECT_NEAR(slow_zone.lap_terminal, -10.0 * 1.5 * (2.0 * path), 1e-4);
+  EXPECT_NEAR(fast_zone.lap_terminal, -10.0 * 1.5 * (0.5 * path), 1e-4);
+  EXPECT_LT(slow_zone.lap_terminal, fast_zone.lap_terminal)
+      << "the same path gains more best-lap time where the best lap was slow";
+  EXPECT_EQ(slow_zone.progress, 0.0) << "the cost-to-go replaces the progress term";
+  EXPECT_NEAR(slow_zone.total, slow_zone.lap_terminal + slow_zone.lap_trust, 1e-12);
+  // the physical progress is still reported
+  EXPECT_NEAR(slow_zone.progress_m, path, 1e-9);
+  // scaled by the cap in force
+  const CostBreakdown low_cap = run(0.2, 0.75);
+  EXPECT_NEAR(low_cap.lap_terminal, 0.5 * slow_zone.lap_terminal, 1e-9);
+  // and more path is cheaper still
+  SolveInput in = e.input(1.2, 0.0, 1.5);
+  in.lap = &prof;
+  in.lap_station_now_m = 0.2;
+  CostBreakdown longer;
+  const auto fast_seq = e.constant(1.2, 0.0);
+  s.evaluate_sequence(in, fast_seq.data(), &longer);
+  EXPECT_LT(longer.lap_terminal, slow_zone.lap_terminal);
+}
+
+TEST(MppiLap, NoProfileOrAnInactiveOneIsTheOldProgressTerm) {
+  Env e;
+  MppiParams p = only_weights();
+  p.w_progress = 10.0;
+  auto s = e.solver(p);
+  const auto seq = e.constant(0.5, 0.0);
+  CostBreakdown plain, inactive;
+  SolveInput in = e.input(0.5);
+  s.evaluate_sequence(in, seq.data(), &plain);
+  LapProfile off;  // active false
+  in.lap = &off;
+  in.lap_station_now_m = 3.0;
+  s.evaluate_sequence(in, seq.data(), &inactive);
+  EXPECT_EQ(plain.progress, inactive.progress);
+  EXPECT_EQ(plain.total, inactive.total);
+  EXPECT_EQ(inactive.lap_trust, 0.0);
+  EXPECT_EQ(inactive.lap_terminal, 0.0);
+  EXPECT_LT(plain.progress, 0.0);
+}
+
+TEST(MppiLap, TheProfileNeverRelaxesTheOtherTerms) {
+  // Collision, clearance and the stop-within-sight term are unchanged by an active profile.
+  Env e;
+  e.set_points(wall_across(0.8));
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.d_hard_m = 0.03;
+  auto s = e.solver(p);
+  const auto bound = [](double) { return 1.5; };
+  const auto togo = [](double st) { return 6.0 - st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
+  const auto seq = e.constant(0.6, 0.0);
+  SolveInput in = e.input(0.6);
+  CostBreakdown base, with_lap;
+  s.evaluate_sequence(in, seq.data(), &base);
+  in.lap = &prof;
+  s.evaluate_sequence(in, seq.data(), &with_lap);
+  EXPECT_EQ(base.collision, with_lap.collision);
+  EXPECT_EQ(base.clearance, with_lap.clearance);
+  EXPECT_EQ(base.boundary, with_lap.boundary);
+  EXPECT_EQ(base.lateral, with_lap.lateral);
+  EXPECT_EQ(base.terminal, with_lap.terminal);
+  EXPECT_EQ(base.smoothness, with_lap.smoothness);
+  EXPECT_EQ(base.steer_rate, with_lap.steer_rate);
+}
+
+// L2 property: whatever profile passes make_lap_profile and whatever the input, the solver output
+// is finite, within the cap and within the steering limits.
+TEST(MppiLap, PropertyAnyValidProfileAndInputGivesAFiniteCommandWithinTheLimits) {
+  Env e;
+  const GateConfig cfg = test::binding_gate();
+  GateTable table(cfg.geometry, cfg.limits);
+  test::SceneGenerator gen(12);
+  std::mt19937_64 rng(77);
+  auto u = [&](double lo, double hi) {
+    return std::uniform_real_distribution<double>(lo, hi)(rng);
+  };
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 128;
+  p.speed_floor_mps = 0.2;
+  auto solver = e.solver(p, 128);
+  int accepted = 0;
+  for (int n = 0; n < 150; ++n) {
+    std::vector<float> s, v, q;
+    const std::size_t len = 2 + static_cast<std::size_t>(u(0.0, 126.0));
+    const double s0 = u(-2.0, 30.0);
+    double qq = u(-5.0, 20.0);
+    for (std::size_t i = 0; i < len; ++i) {
+      s.push_back(static_cast<float>(s0 + 0.1 * static_cast<double>(i)));
+      v.push_back(static_cast<float>(n % 4 == 0 ? 0.0 : u(0.0, 3.0)));
+      q.push_back(static_cast<float>(qq));
+      qq -= u(0.0, 0.5);
+    }
+    LapProfile prof;
+    if (make_lap_profile(s.data(), v.data(), q.data(), len, len, len, 5.0, 5.0 + u(0.0, 0.5),
+                         &prof) != LapProfileStatus::kOk) {
+      continue;
+    }
+    ++accepted;
+    const test::ScanData scan = gen.make(cfg.geometry);
+    table.build(scan.view());
+    const double cap = u(0.0, 2.0);
+    SolveInput in = e.input(u(0.0, 2.0), u(-0.4, 0.4), cap);
+    in.x0.y = u(-0.3, 0.3);
+    in.x0.yaw = u(-0.4, 0.4);
+    in.lap = &prof;
+    in.lap_station_now_m = u(-1.0, 3.0);
+    in.gate = &table;
+    in.wheel_speed_mps = u(0.0, 2.0);
+    in.gate_travel_since_scan_m = u(0.0, 0.5);
+    const SolveOutput out = solver.solve(in);
+    ASSERT_TRUE(std::isfinite(out.cmd.speed_cmd)) << n;
+    ASSERT_TRUE(std::isfinite(out.cmd.steering_cmd)) << n;
+    EXPECT_GE(out.cmd.speed_cmd, 0.0);
+    EXPECT_LE(out.cmd.speed_cmd, cap + 1e-12);
+    EXPECT_GE(out.cmd.steering_cmd, e.g.steering_min_rad - 1e-12);
+    EXPECT_LE(out.cmd.steering_cmd, e.g.steering_max_rad + 1e-12);
+    EXPECT_TRUE(std::isfinite(out.best_cost));
+  }
+  EXPECT_GT(accepted, 100);
 }

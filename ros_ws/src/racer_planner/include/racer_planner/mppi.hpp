@@ -11,6 +11,8 @@
 #include "racer_planner/dynamics_model.hpp"
 #include "racer_planner/footprint.hpp"
 #include "racer_planner/freespace_field.hpp"
+#include "racer_planner/gate_predictor.hpp"
+#include "racer_planner/lap_profile.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/rng.hpp"
 #include "racer_planner/speed_set.hpp"
@@ -50,6 +52,26 @@ struct MppiParams {
   // to the bundle's speed dead zone plus speed_floor_margin_mps; the solver takes it as given.
   double speed_floor_mps = 0.0;
   double speed_floor_margin_mps = 0.03;  // read by the Planner only
+  // Gate aware cost (gate_predictor.hpp): over the first kGateCostSteps steps of a rollout, with
+  // d_k the table distance along the commanded steering less the path already travelled and
+  // ttc_k = d_k / max(v_cmd, v, 1e-3), w_gate * (max(0, 1 - ttc_k / (gate_ttc_margin *
+  // ttc_warning_s))^2 + max(0, 1 - d_k / (gate_clear_margin * min_forward_clearance_m))^2).
+  // 0 turns the term off. Only a forward request is judged, like the gate. The defaults come
+  // from the closed loop sweeps in test_gate_closed_loop.cpp (stadium ovals, both directions, caps
+  // 1.2 and 1.5 m/s, planner margins just under the gate's): the starting values 300 / 1.3 made
+  // the planner 70 percent slower, 3 / 1.1 / 1.5 keeps the gate from engaging at 3 to 9 percent
+  // of lap time. A planner with much thinner own margins needs a larger weight (15 and more) and
+  // pays more lap time for it.
+  double w_gate = 3.0;
+  double gate_ttc_margin = 1.1;
+  double gate_clear_margin = 1.5;
+  // Lap profile (lap_profile.hpp), used only while SolveInput::lap is active: weight of the
+  // trust region on speed, w_trust * max(0, v_k - v_bound(s_k))^2 * dt, every step. There is no
+  // setting that turns it off while a profile is active. 2500 keeps the driven speed within 0.04
+  // m/s of a bound with 0.8 m ramps in test_gate_closed_loop.cpp (the starting value 400 left it
+  // 0.06 over); the quadratic hinge trades against the cost-to-go, so no weight makes a literal
+  // step in the bound exact for a car with a speed lag.
+  double w_trust = 2500.0;
 };
 
 struct CostBreakdown {
@@ -61,6 +83,9 @@ struct CostBreakdown {
   double smoothness = 0.0;  // speed command differences
   double steer_rate = 0.0;
   double terminal = 0.0;
+  double gate = 0.0;          // gate aware cost, 0 without a gate table
+  double lap_trust = 0.0;     // trust region on the lap profile's speed bound
+  double lap_terminal = 0.0;  // cost-to-go gain, replaces `progress` while a profile is active
   double total = 0.0;
   double s_end_m = 0.0;
   double progress_m = 0.0;  // blended: c * (s_end - s_start) + (1 - c) * (Phi_start - Phi_end)
@@ -78,6 +103,20 @@ struct SolveInput {
   // Weight of the track prior, 0 to 1. The free-space progress field weighs (1 - confidence).
   double confidence = 1.0;
   const FreespaceField* freespace = nullptr;  // null or not valid(): no free-space part
+  // In-path distances of the latest scan along each steering angle, as the safety gate will judge
+  // them. Null or not valid(): no gate term.
+  const GateTable* gate = nullptr;
+  // Measured wheel speed, m/s: the gate's speed estimate at the first step.
+  double wheel_speed_mps = 0.0;
+  // Distance the car has travelled since the scan the gate table was built from, m: the table's
+  // distances are from the scan pose, the rollout starts at x0 (0 when the table is fresh).
+  double gate_travel_since_scan_m = 0.0;
+  // Lap profile from lap-over-lap learning. Null or not active: no trust region and the progress
+  // term is the one above.
+  const LapProfile* lap = nullptr;
+  // Wheel distance travelled between the profile's stamp and now, m. The station of x0 is
+  // lap->s0_m + lap_station_now_m.
+  double lap_station_now_m = 0.0;
 };
 
 struct SolveOutput {
@@ -89,6 +128,9 @@ struct SolveOutput {
   double plan_speed_mps = 0.0;  // mean speed command of the weighted mean over its first window
   double collision_fraction = 0.0;
   int samples = 0;
+  // The gate would brake the first command given the table and the wheel speed (diagnostic: the
+  // gate cost is what steers away from it). False without a table.
+  bool cmd_would_trip = false;
 };
 
 constexpr int kMinSamples = 64;
@@ -139,6 +181,13 @@ class MppiSolver {
     double c = 0.0;  // effective track weight
     bool use_track = false;
     bool use_free = false;
+    bool use_gate = false;
+    bool use_lap = false;
+    double lap_s_now = 0.0;  // station of x0 on the profile
+    double lap_q_now = 0.0;
+    double gate_travel_m = 0.0;   // sanitised SolveInput::gate_travel_since_scan_m
+    double gate_ttc_ref_s = 0.0;  // gate_ttc_margin * ttc_warning_s
+    double gate_clear_ref_m = 0.0;
   };
   Ctx make_ctx(const SolveInput& in) const;
   double evaluate(const SolveInput& in, const Ctx& ctx, const Control* u, CostBreakdown* bd,

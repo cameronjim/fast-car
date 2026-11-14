@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from fakes import healthy_ros
 from racer_agent import commands as cmd
 from racer_agent.controller import ActionError
 
@@ -126,13 +127,73 @@ def test_a_launch_that_dies_at_once_is_reported(car):
 # -- tracker and ML policy ---------------------------------------------------------------------
 
 
+LOCALISED_STACK = "lidar:=true vesc:=true localization:=true map:=/workspace/data/maps/a.yaml"
+
+
+def test_tracker_starts_from_rest_after_amcl_published_its_initial_pose(car, monkeypatch):
+    # 2026-11-13 on the car: AMCL publishes /pose on the initial pose and then only once the car
+    # has moved 0.05 m / 0.05 rad, so a car parked on the start spot reads /pose at 0 Hz.
+    now = [500.0]
+    monkeypatch.setattr(car.ros, "_clock", lambda: now[0])
+    car.world.start_stack(LOCALISED_STACK)
+    car.ros.count("/pose")
+    now[0] += 60.0
+    assert car.ros.snapshot().rate("/pose") == 0.0
+    car.controller.start_drive("tracker", raceline="track:gym_oval")
+    (call,) = detached_execs(car)
+    assert "ros2 run racer_control tracker_node" in call[-1]
+
+
+def test_tracker_starts_from_rest_on_a_live_map_to_odom_transform(car, monkeypatch):
+    now = [500.0]
+    monkeypatch.setattr(car.ros, "_clock", lambda: now[0])
+    car.world.start_stack(LOCALISED_STACK)
+    car.ros.note_tf("odom", "base_link")
+    with pytest.raises(ActionError, match="neither /pose nor map -> odom"):
+        car.controller.start_drive("tracker", raceline="track:gym_oval")
+    car.ros.note_tf("map", "odom")
+    now[0] += 1.0
+    car.controller.start_drive("tracker", raceline="track:gym_oval")
+    assert len(detached_execs(car)) == 1
+
+
+def test_tracker_refuses_a_stale_map_to_odom_transform(car, monkeypatch):
+    now = [500.0]
+    monkeypatch.setattr(car.ros, "_clock", lambda: now[0])
+    car.world.start_stack(LOCALISED_STACK)
+    car.ros.note_tf("map", "odom")
+    now[0] += 30.0
+    with pytest.raises(ActionError, match="neither /pose nor map -> odom") as exc:
+        car.controller.start_drive("tracker", raceline="track:gym_oval")
+    assert exc.value.status == 409
+
+
+def test_tracker_forgets_the_pose_of_a_previous_stack(car):
+    # foxglove_bridge runs inside the stack, so a stack restart drops the connection; a /pose
+    # from the old stack must not let the tracker start on the new one.
+    car.world.start_stack(LOCALISED_STACK)
+    car.ros.count("/pose")
+    car.ros.set_connected(False, "closed")
+    healthy_ros(car.ros)
+    with pytest.raises(ActionError, match="neither /pose nor map -> odom"):
+        car.controller.start_drive("tracker", raceline="track:gym_oval")
+
+
+def test_tracker_refuses_a_parked_pose_without_localisation_on(car):
+    car.world.start_stack("lidar:=true vesc:=true")
+    car.ros.count("/pose")
+    car.ros.note_tf("map", "odom")
+    with pytest.raises(ActionError, match="needs the stack running with localisation"):
+        car.controller.start_drive("tracker", raceline="track:gym_oval")
+
+
 def test_tracker_needs_localisation_and_a_live_pose(car):
     with pytest.raises(ActionError, match="needs the stack running with localisation"):
         car.controller.start_drive("tracker", raceline="track:gym_oval")
     car.world.start_stack(
         "lidar:=true vesc:=true localization:=true map:=/workspace/data/maps/a.yaml"
     )
-    with pytest.raises(ActionError, match="live /pose"):
+    with pytest.raises(ActionError, match="AMCL has published neither /pose nor map -> odom"):
         car.controller.start_drive("tracker", raceline="track:gym_oval")
     for _ in range(40):
         car.ros.count("/pose")

@@ -305,3 +305,75 @@ def test_client_connects_to_a_bridge_that_only_speaks_the_sdk_subprotocol():
         return connected
 
     assert asyncio.run(scenario())
+
+
+def tf_message(*frames: tuple[str, str], endian: str = "<") -> bytes:
+    """A CDR tf2_msgs/TFMessage, aligned the way rmw lays it out."""
+    body = bytearray()
+
+    def align(n: int) -> None:
+        body.extend(b"\x00" * ((-len(body)) % n))
+
+    def put(fmt: str, *values) -> None:
+        align(struct.calcsize(fmt[-1]))
+        body.extend(struct.pack(endian + fmt, *values))
+
+    def text(value: str) -> None:
+        raw = value.encode() + b"\x00"
+        put("I", len(raw))
+        body.extend(raw)
+
+    put("I", len(frames))
+    for parent, child in frames:
+        put("i", 12)
+        put("I", 34)
+        text(parent)
+        text(child)
+        for v in (1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0):
+            put("d", v)
+    header = LE if endian == "<" else b"\x00\x00\x00\x00"
+    return header + bytes(body)
+
+
+def test_decode_tf_frames_reads_every_frame_pair_in_both_endiannesses():
+    frames = [("map", "odom"), ("odom", "base_link"), ("base_link", "laser")]
+    assert rs.decode_tf_frames(tf_message(*frames)) == frames
+    assert rs.decode_tf_frames(tf_message(*frames, endian=">")) == frames
+    assert rs.decode_tf_frames(tf_message()) == []
+
+
+def test_decode_tf_frames_rejects_truncated_and_garbage():
+    good = tf_message(("map", "odom"))
+    assert rs.decode_tf_frames(good[:-8]) is None
+    assert rs.decode_tf_frames(good[:12]) is None
+    assert rs.decode_tf_frames(LE) is None
+    assert rs.decode_tf_frames(LE + struct.pack("<II", 1, 0) + b"\x00" * 8) is None
+
+
+def test_tf_messages_record_when_each_transform_was_last_seen():
+    now = [10.0]
+    state = rs.RosState(clock=lambda: now[0])
+    client = rs.FoxgloveClient("ws://x", state)
+    wanted = client.handle_text(advertise("/tf", "/tf_static"), {})
+    assert [ch.topic for ch in wanted] == ["/tf"]
+    subs = {7: wanted[0]}
+    state.set_connected(True)
+    client.handle_binary(frame(7, tf_message(("map", "odom"), ("odom", "base_link"))), subs)
+    client.handle_binary(frame(7, b"\x00\x01\x00\x00\x05"), subs)  # garbage is ignored
+    now[0] = 12.5
+    snap = state.snapshot()
+    assert snap.last_age(rs.tf_key("map", "odom")) == 2.5
+    assert snap.last_age(rs.tf_key("/odom", "base_link")) == 2.5
+    assert snap.last_age(rs.tf_key("base_link", "laser")) is None
+
+
+def test_last_seen_outlives_the_rate_window_and_clears_on_disconnect():
+    now = [100.0]
+    state = rs.RosState(clock=lambda: now[0])
+    state.set_connected(True)
+    state.count("/pose")
+    now[0] += 60.0
+    snap = state.snapshot()
+    assert snap.rate("/pose") == 0.0 and snap.last_age("/pose") == 60.0
+    state.set_connected(False, "closed")
+    assert state.snapshot().last_age("/pose") is None

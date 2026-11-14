@@ -6,7 +6,10 @@ already there (port 8765, `viz` defaults on), the browser UI uses the same socke
 client of it can only read. So the agent is a second subscriber, no launch file changes, no
 rebuild, and it keeps working whichever launch started the stack. The cost is a hand-written
 decoder for the two std_msgs types the checks need (Float32 and String, both trivial CDR);
-everything else is only counted, which gives message RATES for /scan, /pose and /odom/wheel.
+everything else is only counted, which gives message RATES for /scan, /pose and /odom/wheel and
+the time each was LAST seen. /tf is read only as far as its frame ids, so the agent can tell
+that AMCL is broadcasting map -> odom (it republishes the last transform on every scan, also
+while the car stands still and /pose is silent).
 
 The agent never advertises or publishes anything over this socket.
 """
@@ -46,7 +49,15 @@ RATE_TOPICS = ("/scan", "/pose", "/odom/wheel", "/perception/objects")
 #: Topics whose presence in the bridge's channel list is itself a check.
 PRESENCE_TOPICS = ("/drive", "/drive_raw", "/safety/events", "/map")
 
+#: Topics read only for the parent -> child frame ids of their transforms.
+TF_TOPICS = ("/tf",)
+
 RATE_WINDOW_S = 4.0
+
+
+def tf_key(parent: str, child: str) -> str:
+    """The `last_age` key of one transform seen on /tf."""
+    return f"tf:{parent.lstrip('/')}->{child.lstrip('/')}"
 
 
 def decode_float32(payload: bytes) -> float | None:
@@ -69,6 +80,59 @@ def decode_string(payload: bytes) -> str | None:
     return raw.rstrip(b"\x00").decode("utf-8", errors="replace")
 
 
+def decode_tf_frames(payload: bytes) -> list[tuple[str, str]] | None:
+    """CDR tf2_msgs/TFMessage: the (frame_id, child_frame_id) of every transform.
+
+    Layout per transform: int32 sec, uint32 nanosec, string frame_id, string child_frame_id,
+    then 7 float64 (translation, rotation) aligned to 8. Alignment counts from after the 4 byte
+    encapsulation header. None for a truncated or malformed message.
+    """
+    if len(payload) < 8:
+        return None
+    end = "<" if payload[1] == 1 else ">"
+    body = payload[4:]
+    pos = 0
+
+    def align(n: int) -> None:
+        nonlocal pos
+        pos += (-pos) % n
+
+    def u32() -> int:
+        nonlocal pos
+        align(4)
+        if pos + 4 > len(body):
+            raise ValueError("truncated")
+        (v,) = struct.unpack_from(end + "I", body, pos)
+        pos += 4
+        return v
+
+    def text() -> str:
+        nonlocal pos
+        n = u32()
+        if n == 0 or pos + n > len(body):
+            raise ValueError("bad string")
+        raw = body[pos : pos + n]
+        pos += n
+        return raw.rstrip(b"\x00").decode("utf-8", errors="replace")
+
+    try:
+        count = u32()
+        frames: list[tuple[str, str]] = []
+        for _ in range(count):
+            u32()  # stamp.sec
+            u32()  # stamp.nanosec
+            parent = text()
+            child = text()
+            align(8)
+            pos += 7 * 8
+            if pos > len(body):
+                raise ValueError("truncated")
+            frames.append((parent, child))
+    except ValueError:
+        return None
+    return frames
+
+
 @dataclass(frozen=True)
 class RosSnapshot:
     connected: bool
@@ -77,9 +141,15 @@ class RosSnapshot:
     values: dict[str, float | str]
     value_age_s: dict[str, float]
     error: str = ""
+    #: seconds since the last message on a counted topic, or the last `tf_key` transform, in
+    #: this bridge connection. A key that is missing was never seen.
+    last_age_s: dict[str, float] = field(default_factory=dict)
 
     def rate(self, topic: str) -> float:
         return self.rates_hz.get(topic, 0.0)
+
+    def last_age(self, key: str) -> float | None:
+        return self.last_age_s.get(key)
 
     def value(self, key: str) -> float | str | None:
         return self.values.get(key)
@@ -96,6 +166,7 @@ class RosState:
         self._stamps: dict[str, deque[float]] = {t: deque() for t in RATE_TOPICS}
         self._values: dict[str, float | str] = {}
         self._value_t: dict[str, float] = {}
+        self._last_t: dict[str, float] = {}
         self._error = ""
 
     def set_connected(self, connected: bool, error: str = "") -> None:
@@ -104,6 +175,7 @@ class RosState:
             self._error = error
             if not connected:
                 self._topics.clear()
+                self._last_t.clear()
                 for dq in self._stamps.values():
                     dq.clear()
 
@@ -125,6 +197,12 @@ class RosState:
             dq = self._stamps.setdefault(topic, deque())
             dq.append(now)
             self._trim(dq, now)
+            self._last_t[topic] = now
+
+    def note_tf(self, parent: str, child: str) -> None:
+        now = self._clock()
+        with self._lock:
+            self._last_t[tf_key(parent, child)] = now
 
     def set_value(self, key: str, value: float | str) -> None:
         with self._lock:
@@ -150,6 +228,7 @@ class RosState:
                 values=dict(self._values),
                 value_age_s={k: now - t for k, t in self._value_t.items()},
                 error=self._error,
+                last_age_s={k: now - t for k, t in self._last_t.items()},
             )
 
 
@@ -276,7 +355,11 @@ class FoxgloveClient:
                 channel = _Channel(int(ch["id"]), str(ch["topic"]), str(ch.get("schemaName", "")))
                 channels[channel.id] = channel
                 self.state.add_topics({channel.topic})
-                if channel.topic in VALUE_TOPICS or channel.topic in RATE_TOPICS:
+                if (
+                    channel.topic in VALUE_TOPICS
+                    or channel.topic in RATE_TOPICS
+                    or channel.topic in TF_TOPICS
+                ):
                     wanted.append(channel)
         elif op == "unadvertise":
             for cid in msg.get("channelIds", []):
@@ -296,6 +379,10 @@ class FoxgloveClient:
         topic = channel.topic
         if topic in RATE_TOPICS:
             self.state.count(topic)
+            return
+        if topic in TF_TOPICS:
+            for parent, child in decode_tf_frames(payload) or ():
+                self.state.note_tf(parent, child)
             return
         key = VALUE_TOPICS.get(topic)
         if key is None:

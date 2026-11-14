@@ -6,10 +6,13 @@ import {
   gapErrors,
   gapSummary,
   gapWhy,
+  lapChoice,
+  lapChoicePatch,
   parseNum,
   patch,
   pnpBody,
   pnpErrors,
+  pnpSummary,
   pnpWhy,
   prefsProblems,
   samePrefs,
@@ -32,6 +35,8 @@ const options = {
     speed_range: [0.2, 1.5],
     default_speed: 0.5,
     params_files: ["tight.yaml"],
+    lap_modes: ["v0", "v1"],
+    lap_sources: ["start_scan", "map_pose"],
   },
 } as unknown as Options;
 
@@ -165,5 +170,105 @@ describe("helpers", () => {
   it("summaries say what will run", () => {
     expect(gapSummary(prefs())).toBe("lane-2026-10-25, profile speed");
     expect(gapSummary(prefs({ gap_follow: { ...DEFAULT_PREFS.gap_follow, max_speed_mps: 1 } }))).toBe("lane-2026-10-25, 1.00 m/s");
+  });
+});
+
+// -- lap learning (brief 35) ---------------------------------------------------------------------
+
+const pnpPrefs = (over: Partial<Prefs["pnp"]>): Prefs => prefs({ pnp: { ...DEFAULT_PREFS.pnp, dynamics: "dyn-a", ...over } });
+const errs = (over: Partial<Prefs["pnp"]>) => pnpErrors({ ...DEFAULT_PREFS.pnp, ...over }, options);
+
+describe("lap learning choice", () => {
+  it("maps the four buttons to the saved fields and back", () => {
+    expect(lapChoice(DEFAULT_PREFS.pnp)).toBe("off");
+    for (const c of ["off", "observe", "v0", "v1"] as const) {
+      expect(lapChoice({ ...DEFAULT_PREFS.pnp, ...lapChoicePatch(c) })).toBe(c);
+    }
+    expect(lapChoicePatch("observe")).toEqual({ lap_memory: true, lap_mode: "observe" });
+  });
+});
+
+describe("pnpErrors lap rules, in the agent's words", () => {
+  it("defaults are valid", () => expect(errs({})).toEqual({}));
+  it("a mode other than v0 needs lap memory, except observe", () => {
+    expect(errs({ lap_mode: "v1", lap_memory: false }).lap_mode).toBe("pnp lap mode v1 needs lap memory on");
+    expect(errs({ lap_mode: "observe", lap_memory: false }).lap_mode).toBe("lap_mode=observe is not available in this build");
+  });
+  it("v1 needs start_scan", () => {
+    expect(errs({ lap_memory: true, lap_mode: "v1", lap_source: "map_pose" }).lap_source).toBe("pnp lap mode v1 needs lap source start_scan");
+    expect(errs({ lap_memory: true, lap_mode: "v0", lap_source: "map_pose" })).toEqual({});
+  });
+  it("the lap 1 cap needs lap memory or observe, a valid range and at most the speed cap", () => {
+    expect(errs({ v_lap1_mps: 0.3 }).v_lap1_mps).toBe("pnp lap 1 cap needs lap memory on or lap mode observe");
+    expect(errs({ v_lap1_mps: 0.3, lap_memory: true })).toEqual({});
+    expect(errs({ v_lap1_mps: 0.6, lap_memory: true }).v_lap1_mps).toBe("pnp lap 1 cap cannot exceed the speed cap");
+    expect(errs({ v_lap1_mps: 0.1, lap_memory: true }).v_lap1_mps).toBe("pnp lap 1 cap must be between 0.2 and 1.5 m/s");
+    expect(errs({ v_lap1_mps: Number.NaN, lap_memory: true }).v_lap1_mps).toBeDefined();
+  });
+  it("require needs the counter", () => {
+    expect(errs({ require_lap_counter: true, lap_counter: false }).require_lap_counter).toBe("require lap counter needs the lap counter on");
+    expect(errs({ require_lap_counter: true })).toEqual({});
+  });
+  it("the shadow net may not be the driving net", () => {
+    const net = { backend: "net", perception: "net-a", shadow_perception: "net-a" };
+    expect(errs(net).shadow_perception).toBe("the shadow perception bundle cannot be the driving one");
+    expect(errs({ ...net, backend: "geometric" })).toEqual({});
+  });
+  it("a mode the car's launch file does not declare is not available in this build", () => {
+    const observe = { ...DEFAULT_PREFS.pnp, ...lapChoicePatch("observe") };
+    expect(pnpErrors(observe, options).lap_mode).toBe("lap_mode=observe is not available in this build");
+    const withObserve = { ...options, pnp: { ...options.pnp!, lap_modes: ["v0", "v1", "observe"] } } as Options;
+    expect(pnpErrors(observe, withObserve)).toEqual({});
+    // an older agent that reports no list is not second-guessed
+    const old = { ...options, pnp: { ...options.pnp!, lap_modes: undefined } } as Options;
+    expect(pnpErrors(observe, old)).toEqual({});
+  });
+  it("shows up in prefsProblems and stops the button", () => {
+    const bad = pnpPrefs({ lap_mode: "v1", lap_memory: false });
+    expect(prefsProblems(bad, options).join(" ")).toContain("needs lap memory on");
+    expect(pnpWhy(bad, options)).toBe("Fix Tune values");
+  });
+});
+
+describe("pnpBody lap learning", () => {
+  const json = (p: Prefs) => JSON.parse(JSON.stringify(pnpBody(p, options)));
+  it("an untouched card sends today's request: no lap fields", () => {
+    expect(json(pnpPrefs({}))).toEqual({
+      mode: "pnp",
+      pnp_backend: "geometric",
+      pnp_dynamics: "dyn-a",
+      pnp_perception: "",
+      pnp_params: "",
+      pnp_v_max_mps: 0.5,
+    });
+  });
+  it("includes only the fields that changed", () => {
+    expect(json(pnpPrefs({ lap_memory: true, v_lap1_mps: 0.4 }))).toMatchObject({ pnp_lap_memory: true, pnp_v_lap1_mps: 0.4 });
+    const v1 = json(pnpPrefs({ ...lapChoicePatch("v1"), lap_counter: false, shadow_perception: "net-a" }));
+    expect(v1).toMatchObject({ pnp_lap_memory: true, pnp_lap_mode: "v1", pnp_lap_counter: false, pnp_shadow_perception: "net-a" });
+    expect(v1).not.toHaveProperty("pnp_lap_source");
+    expect(v1).not.toHaveProperty("pnp_require_lap_counter");
+    expect(json(pnpPrefs({ lap_memory: true, lap_source: "map_pose" }))).toMatchObject({ pnp_lap_source: "map_pose" });
+    expect(json(pnpPrefs({ require_lap_counter: true }))).toMatchObject({ pnp_require_lap_counter: true });
+    expect(json(pnpPrefs({ ...lapChoicePatch("observe") }))).toMatchObject({ pnp_lap_mode: "observe", pnp_lap_memory: true });
+  });
+  it("lap settings are not sent while lap learning is off, and a stale shadow name is dropped", () => {
+    const off = json(pnpPrefs({ v_lap1_mps: 0.3, lap_source: "map_pose", shadow_perception: "gone" }));
+    expect(off).not.toHaveProperty("pnp_v_lap1_mps");
+    expect(off).not.toHaveProperty("pnp_lap_source");
+    expect(off).not.toHaveProperty("pnp_lap_memory");
+    expect(off).not.toHaveProperty("pnp_shadow_perception");
+  });
+});
+
+describe("pnpSummary", () => {
+  it("says what will run", () => {
+    expect(pnpSummary(pnpPrefs({}), options)).toBe("geometric, cap 0.50, lap learning off, lap counter on");
+    const p = pnpPrefs({ v_max_mps: 1, v_lap1_mps: 0.5, ...lapChoicePatch("v0") });
+    expect(pnpSummary(p, options)).toBe("geometric, cap 1.00, D v0 from 0.50, lap counter on");
+    const full = pnpPrefs({ ...lapChoicePatch("v1"), lap_counter: true, require_lap_counter: true, shadow_perception: "net-a" });
+    expect(pnpSummary(full, options)).toBe("geometric, cap 0.50, D v1 from 0.50, lap counter required, shadow net-a");
+    expect(pnpSummary(pnpPrefs({ lap_counter: false }), options)).toContain("lap counter off");
+    expect(pnpSummary(pnpPrefs({ ...lapChoicePatch("observe"), lap_source: "map_pose" }), options)).toContain("observe from 0.50, source map_pose");
   });
 });

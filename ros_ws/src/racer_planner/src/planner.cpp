@@ -197,6 +197,12 @@ TickOutput Planner::run(const TickInput& in) {
       si.field = in.field;
       si.confidence = confidence_;
       si.freespace = has_free ? in.freespace : nullptr;
+      si.gate = in.gate;
+      si.wheel_speed_mps = est_.v;
+      if (in.lap != nullptr && in.lap->active) {
+        si.lap = in.lap;
+        si.lap_station_now_m = ego_.distance_between(in.lap->stamp_s, in.now_s);
+      }
       const auto t0 = std::chrono::steady_clock::now();
       const SolveOutput so = solver_.solve(si);
       out.solve_time_s =

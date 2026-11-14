@@ -35,9 +35,11 @@
 #include <vector>
 
 #include "binding_geometry.hpp"
+#include "gate_binding.hpp"
 #include "racer_planner/bundle_loader.hpp"
 #include "racer_planner/distance_field.hpp"
 #include "racer_planner/freespace_field.hpp"
+#include "racer_planner/gate_predictor.hpp"
 #include "racer_planner/planner.hpp"
 
 using namespace racer_planner;
@@ -110,6 +112,10 @@ std::map<std::string, Param> default_params() {
   d("steer_output_tau_s", lg.steer_output_tau_s, 0.0, 0.5);
   d("rate_limit_fraction", lg.rate_limit_fraction, 0.05, 1.0);
   d("w_term", mp.w_term, 0.0, 1e5);
+  d("w_gate", mp.w_gate, 0.0, 1e4);
+  d("gate_ttc_margin", mp.gate_ttc_margin, 0.5, 5.0);
+  d("gate_clear_margin", mp.gate_clear_margin, 0.5, 10.0);
+  d("w_trust", mp.w_trust, 0.0, 1e7);
   d("move_margin", mp.move_margin, 0.0, 100.0);
   d("speed_floor_margin_mps", mp.speed_floor_margin_mps, 0.0, 0.5);
   d("steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02);
@@ -223,6 +229,10 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   mp.w_steer_rate = v("w_steer_rate");
   mp.corner_radius_m = v("corner_radius_m");
   mp.w_term = v("w_term");
+  mp.w_gate = v("w_gate");
+  mp.gate_ttc_margin = v("gate_ttc_margin");
+  mp.gate_clear_margin = v("gate_clear_margin");
+  mp.w_trust = v("w_trust");
   mp.move_margin = v("move_margin");
   mp.speed_floor_margin_mps = v("speed_floor_margin_mps");
   cfg.budget.halve_over_s = v("solve_halve_over_ms") * 1e-3;
@@ -342,6 +352,12 @@ int main(int argc, char** argv) {
   const double laser_yaw_rad =
       yaw_from_params ? geometry->lidar_mount_yaw_rad : params.at("laser_yaw_offset_rad").value;
   Planner planner(cfg, loaded.bundle->params, *geometry);
+  // The gate's view of each scan, as the node builds it (same binding fields, same LiDAR yaw).
+  const auto gate_cfg = gate_from_binding(VEHICLE_PARAMS, &why);
+  if (!gate_cfg) die(2, why);
+  GateConfig gate_config = *gate_cfg;
+  gate_config.geometry.lidar_mount_yaw_rad = laser_yaw_rad;
+  GateTable gate_table(gate_config.geometry, gate_config.limits);
 
   if (describe) {
     std::cout << "{\"dynamics_model_id\":\"" << loaded.bundle->model_id << "\",\"parameters\":{";
@@ -417,6 +433,14 @@ int main(int argc, char** argv) {
           scan_to_points(ranges.data(), ranges.size(), amin, ainc, rmin, rmax, laser_yaw_rad,
                          *geometry, kBodyMarginM, points.data(), points.size());
       field.build(points.data(), count);
+      GateScan gate_scan;
+      gate_scan.ranges = ranges.data();
+      gate_scan.count = ranges.size();
+      gate_scan.angle_min_rad = amin;
+      gate_scan.angle_increment_rad = ainc;
+      gate_scan.range_min_m = rmin;
+      gate_scan.range_max_m = rmax;
+      gate_table.build(gate_scan);
       // As the node's scan callback: the free-space field with the previous scan's goal.
       freespace.build(field, points.data(), count, have_prev_goal ? &prev_goal : nullptr);
       have_prev_goal = freespace.valid();
@@ -463,6 +487,7 @@ int main(int argc, char** argv) {
       ti.scan_stamp_s = scan_stamp_s;
       ti.field = has_scan ? &field : nullptr;
       ti.freespace = has_scan ? &freespace : nullptr;
+      ti.gate = has_scan ? &gate_table : nullptr;
       // The replay has no safety node: the gated /drive is taken to pass what was published.
       ti.has_gated = true;
       ti.gated_stamp_s = now;

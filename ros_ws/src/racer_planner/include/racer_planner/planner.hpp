@@ -11,6 +11,8 @@
 #include "racer_planner/dynamics_model.hpp"
 #include "racer_planner/ego_motion.hpp"
 #include "racer_planner/freespace_field.hpp"
+#include "racer_planner/gate_predictor.hpp"
+#include "racer_planner/lap_profile.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/mppi.hpp"
 #include "racer_planner/planner_logic.hpp"
@@ -47,6 +49,11 @@ struct TickInput {
   bool has_gated = false;
   double gated_stamp_s = 0.0;
   double gated_speed_mps = 0.0;
+  // The in-path distances of the scan stamped scan_stamp_s as the safety gate judges them
+  // (gate_predictor.hpp), null or not valid(): no gate aware cost.
+  const GateTable* gate = nullptr;
+  // The lap profile (lap_profile.hpp), null or not active: no profile.
+  const LapProfile* lap = nullptr;
 };
 
 struct TickOutput {

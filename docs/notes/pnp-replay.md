@@ -64,3 +64,98 @@ brackets): std R0 0.018 (0.018), R1 0.019 (0.020), R2 0.020 (0.021), R3 0.022 (0
 vehicle's acceleration limit per tick: up to two ticks in the dead zone, then the floor. Planner CSV
 columns appended: `recovery_attempts`.
 
+
+## Fault injection (roadmap P3.4)
+
+`tools/pnp_replay/faults.py` mutates a recording (a pure function of the `Recording` dict, a time
+window in bag seconds of ARRIVAL time, and a seed; the input is never changed): `nan_ranges` (10,
+50 or 100 percent of beams set to NaN, inf or 0; wheel speed NaN), `drop`, `stamp_jump_forward` and
+`stamp_jump_backward` (header stamps plus or minus 5 s, arrival unchanged), `out_of_order`
+(adjacent pairs of messages swap places in arrival order), `frozen` (the last message before the
+window repeated, stamp included), `frozen_fresh_stamp` (the payload repeated, the stamp advancing)
+and `track_garbage` (the recorded `/pnp/local_track` replaced by NaN arrays, or a valid_count of
+17). Float scan ranges with NaN do not fit the recording's uint16 quarter millimetres, so a mutated
+recording carries `scan_f`, which `bag.scan_ranges` reads first.
+
+`tools/pnp_replay/fault_checks.py` holds the rules and `tools/pnp_replay/fault_run.py` the cases
+(`CASES`, one id per fault, stream and size). Perception is checked on what
+`TrackPerceiver.process` returns for the mutated scans (never raises, arrays of 16, valid_count 0 to
+16 with the leading entries finite, self-check numbers never infinite, a scan with no usable beam
+gives valid_count 0). The planner is checked on the CSV of `planner_replay_cli` fed the mutated
+stream, with the tracks of the recording: the always rules (finite, speed within
+[-reverse limit, v_cap] and v_max, steering within the vehicle limits, nothing between 0 and the
+speed floor outside a start ramp), the hard timeouts (no good scan for more than 0.60 s: speed 0
+and NO_SCAN from 0.60 s plus two ticks on; no good odometry for more than 0.20 s: NO_ODOM; DRIVING
+again within 1.0 s of the end), the short faults (the speed does not exceed what it was before the
+fault plus one ramp step; only DRIVING, NO_SCAN and NO_ODOM appear), 100 percent unusable scans
+(BLOCKED or NO_SCAN with speed 0), garbage tracks (never NO_TRACK, track confidence 0 within a
+tick) and out of order scans (no negative age). The bounds are the HARD timeouts of the v0.2
+design, so they hold for a planner with a step at 0.35 s and 0.10 s and for one that makes
+staleness gradual.
+
+What the planner cannot see is not asserted. A frozen scan with fresh stamps (plausible ranges, a
+fresh header) is not detected: the test says so and checks the always rules. Wheel odometry is
+stamped with its ARRIVAL time (`on_odom` in the node, the `O` line of the stream), so a stamp jump,
+a repeated or an out of order sample is invisible to it; only silence (dropped samples, NaN
+speeds, which the node does not let refresh the clock) is detected. Those faults are caught, if at
+all, by layer 3 and layer 1. Three track faults cannot be sent through the stream (a track of
+another length, another frame, spacing 0.19: the `T` line is fixed at 16 stations, base_link,
+0.20 m); `faults.track_garbage` refuses them, and the node's own validity check and gtest cover
+them.
+
+The per-push tests are `tools/tests/test_pnp_replay_faults.py` (`test_perception[<case>]` and
+`test_planner[<case>]` on `tools/tests/fixtures/pnp_fault_2026-11-13.npz`: 8 s from the start of R2,
+6 s from the middle of R7 and 3 s of R4 of bag 2026-11-13T22-20-18; `python -m pnp_replay.cut_fixture <bag>
+--fault-fixture` regenerates it) and `.github/scripts/pnp_replay_test.sh` runs them with the built
+CLI. A finding against the planner is a strict xfail with the bag time and what was commanded.
+Two stand on main (planner v0.1): F1, a scan with no usable beam (every range NaN, inf or 0) builds
+an empty distance field and the planner keeps DRIVING at 0.9 to 1.0 m/s through the whole second
+(the free-space field has no reach, min clearance 9.85 m), where BLOCKED or NO_SCAN with speed 0 is
+expected (`test_planner[scan-nan_ranges-100-*]`, every one of 18 seeded windows of R2 and R7); F2,
+a scan stream with two messages swapped can give a scan age of -0.5 ms (a header stamp ahead of the
+tick, `test_planner[scan-out_of_order-pair-r4]`, bag time 2823.877 s; the planner takes the latest
+arrival whatever its stamp). Briefs 25 and 26 own the planner; the strict xfails flip to failures
+when it is fixed, which is the cue to remove the marks.
+
+The full-bag run, a local command (every case at three seeded windows inside each PnP run, both
+consumers, JSON of the violations and a table):
+
+    cd tools && PLANNER_REPLAY_DOCKER_CLI=<Linux planner_replay_cli> uv run python -m \
+        pnp_replay.fault_run /Users/cameronjim/code/car-data/bags/2026-11-13T22-20-18_car_teleop \
+        --dynamics-bundle /abs/path/config/pnp/fixtures/dyn-car-2026-11-12 --v-max 0.5 \
+        --v-max-segment R2=1.0 R5=0.7 R6=0.7 R7=1.0 R8=1.0 --seed 20261113 --windows 3
+
+Result of that command on 2026-11-13 (seed 20261113, R0 to R8, three windows per case, 783
+injections): 0 violations in every case but the three 100 percent unusable scan cases (F1), which
+violated in all 81 of their windows. Each run has its own generator, seeded from the seed and the
+run number, so one run can be repeated alone (`--segment R4`).
+
+There the short-fault speed bound is max(speed before, the unfaulted replay's speed at that tick)
+plus one step, so a fault is not blamed for an acceleration the run was making anyway; the pytest
+cases use the literal rule on the steady 1.0 m/s stretch of R7. On a Mac under docker every path
+passed to the CLI must be absolute and under a directory docker shares (run pytest with
+`--basetemp` under your home, not the default `/private/var/folders`).
+
+## Rate allowance and the 2026-11-13 baseline
+
+`--ticks recorded` replays the planner at the arrival times of the recorded `/pnp/planner/status`
+(the car's bunching and gaps) instead of every 0.02 s. `planner.rate_allowance` counts the
+consecutive-publish pairs whose steering step, or growth of the speed's magnitude, exceeds 0.45 of
+the vehicle's rate limit (`steering.max_rate_rad_per_s`, `actuation.max_acceleration_mps2` of the
+generated bindings) times the elapsed time between the two, the elapsed time clamped to one tick.
+On the uniform grid it is 0 (P0); on the recorded ticks it is not. `--window NAME=FROM:TO` names a
+window and `--v-max-segment SEG=M_S` gives a run its own cap, so one invocation covers all runs.
+`tools/pnp_replay/baselines/2026-11-13-v0.1.json` is the planner on main (v0.1, bundle
+dyn-car-2026-11-12, tracer geometric-v1 replayed with 0.03 s latency, fidelity 0.0 m against the
+recording on every run) over R0 to R8 of bag 2026-11-13T22-20-18 and the gap follow segment P0
+(16.6 to 113.9 s, cap 0.54, planner cap 0.55, uniform ticks, no status to take ticks from):
+
+    uv run python tools/pnp_replay.py <bag> --cache <recording.npz> \
+        --segment R0 R1 R2 R3 R4 R5 R6 R7 R8 P0 --window P0=16.6:113.9 \
+        --dynamics-bundle config/pnp/fixtures/dyn-car-2026-11-12 --v-max 0.5 \
+        --v-max-segment R2=1.0 --v-max-segment R5=0.7 --v-max-segment R6=0.7 \
+        --v-max-segment R7=1.0 --v-max-segment R8=1.0 --v-max-segment P0=0.55 \
+        --ticks recorded --tracks replay --check-fidelity \
+        --set solve_halve_over_ms=200 --set stall_hold_s=600 --out 2026-11-13-v0.1.json
+
+The planner of brief 25 is accepted at zero violation pairs on every run.

@@ -15,7 +15,7 @@ setup(
     zip_safe=False,
     maintainer="cameronjim",
     maintainer_email="64621038+cameronjim@users.noreply.github.com",
-    description="Lap memory: lap detection, lap records, safe set and speed cap schedule.",
+    description="Lap memory: start-scan lap gate, lap records, station set and cap schedule.",
     license="TODO: License declaration",
     tests_require=["pytest"],
     entry_points={

@@ -1,0 +1,82 @@
+# Pre-registered data split for Plug-and-Play v0.2 (GP1 perception, GP2 dynamics).
+# Written 2026-11-13 before any v0.2 training or evaluation. Do not edit after the first commit.
+# Rationale and decision rules: docs/notes/preregistration-pnp-v0.2.md.
+#
+# Time axis: seconds after the first /scan message of the bag (recorder log time), the axis of
+# tools/pnp_replay/bag.py. first_scan_log_time_s is that message's log time, for checking.
+# A sample belongs to a segment only if EVERY message it was built from (the scans of a label's
+# submap, the commands and odometry of a dynamics window) lies inside [from, to] of that one
+# segment. Anything outside every segment is unused: not trained on, not evaluated.
+# Roles per workstream: train | heldout | heldout_layout | legacy_70_30 | unused.
+#   heldout         in-layout held-out (the 2026-11-13 loop), decides GP1 and GP2a
+#   heldout_layout  a layout the perception net never trains on, decides the cross-layout part of GP1
+#   legacy_70_30    the dyn-v0.1 rule: first 70 percent of the bag's moving data train, the rest
+#                   reported as "legacy held-out", never used for a v0.2 decision
+split_id: pnp-v0.2
+bags_root: /Users/cameronjim/code/car-data/bags
+layout_2026_11_13: "loop of about 7.4 m around a 0.4 m central box, min line radius 0.83 m"
+bags:
+  2026-11-13T22-00-40_car_teleop:
+    first_scan_log_time_s: 1794607244.974
+    units: current
+    segments:
+      - {name: G1a, from: 109.2, to: 540.0, driver: gap_follow, direction: ccw, cap_mps: 0.60, perception: train, dynamics: train}
+      - {name: G1b, from: 542.0, to: 650.0, driver: gap_follow, direction: ccw, cap_mps: 0.60, perception: heldout, dynamics: heldout}
+      - {name: G2, from: 667.2, to: 825.4, driver: gap_follow, direction: cw, cap_mps: 0.56, perception: train, dynamics: train}
+      - {name: G3a, from: 856.3, to: 877.6, driver: gap_follow_race, direction: cw, cap_mps: 1.51, perception: train, dynamics: train}
+      - {name: G3b, from: 879.6, to: 895.0, driver: gap_follow_race, direction: cw, cap_mps: 1.51, perception: heldout, dynamics: heldout}
+  2026-11-13T22-20-18_car_teleop:
+    first_scan_log_time_s: 1794608422.462
+    units: current
+    segments:
+      - {name: P0, from: 16.6, to: 113.9, driver: gap_follow, direction: cw, cap_mps: 0.54, perception: heldout, dynamics: heldout}
+      - {name: R0, from: 430.1, to: 481.4, driver: pnp, direction: cw, cap_mps: 0.5, perception: train, dynamics: train}
+      - {name: R1, from: 501.5, to: 552.9, driver: pnp, direction: ccw, cap_mps: 0.5, perception: train, dynamics: train}
+      - {name: R2, from: 626.1, to: 645.8, driver: pnp, direction: ccw, cap_mps: 1.0, perception: train, dynamics: train}
+      - {name: R3, from: 2729.7, to: 2786.3, driver: pnp, direction: ccw, cap_mps: 0.5, perception: heldout, dynamics: heldout}
+      - {name: R4, from: 2812.7, to: 2852.8, driver: pnp, direction: cw, cap_mps: 0.5, perception: heldout, dynamics: heldout}
+      - {name: R5, from: 2868.6, to: 2895.5, driver: pnp, direction: cw, cap_mps: 0.7, perception: heldout, dynamics: heldout}
+      - {name: R6, from: 2914.6, to: 2940.6, driver: pnp, direction: ccw, cap_mps: 0.7, perception: heldout, dynamics: heldout}
+      - {name: R7a, from: 2967.2, to: 2980.6, driver: pnp, direction: cw, cap_mps: 1.0, perception: train, dynamics: train}
+      - {name: R7b, from: 2982.6, to: 2991.6, driver: pnp, direction: cw, cap_mps: 1.0, perception: heldout, dynamics: heldout}
+      - {name: R8, from: 3012.4, to: 3029.7, driver: pnp, direction: ccw, cap_mps: 1.0, perception: heldout, dynamics: heldout}
+  2026-11-13T23-19-51_car_teleop:
+    first_scan_log_time_s: 1794611995.155
+    units: current
+    segments:
+      - {name: M0, from: 343.0, to: 356.2, driver: pnp, direction: ccw, cap_mps: 0.5, perception: train, dynamics: train}
+  2026-11-13T23-27-23_car_teleop:
+    first_scan_log_time_s: 1794612448.196
+    units: current
+    segments:
+      - {name: T0, from: 458.7, to: 683.6, driver: tracker, direction: ccw, cap_mps: 0.5, perception: train, dynamics: train}
+      # 1107.5 to 1158.0 is the wall crash after the stale AMCL pose and the stand-still that
+      # followed (wheel speed 0 with a 1.0 m/s command): unused.
+      - {name: T1, from: 1158.0, to: 1222.3, driver: tracker, direction: ccw, cap_mps: 1.0, perception: train, dynamics: train}
+      - {name: T2a, from: 1230.9, to: 1244.1, driver: tracker, direction: ccw, cap_mps: 1.5, perception: train, dynamics: train}
+      - {name: T2b, from: 1246.1, to: 1254.9, driver: tracker, direction: ccw, cap_mps: 1.5, perception: heldout, dynamics: heldout}
+      - {name: T3a, from: 1264.3, to: 1310.1, driver: tracker, direction: ccw, cap_mps: 2.0, perception: train, dynamics: train}
+      - {name: T3b, from: 1312.1, to: 1347.6, driver: tracker, direction: ccw, cap_mps: 2.0, perception: heldout, dynamics: heldout}
+  2026-11-13T23-18-49_car_teleop:
+    units: current
+    whole_bag: {perception: unused, dynamics: unused}   # one minute, no /drive_raw
+  2026-11-12T03-04-56_car_teleop:
+    units: current
+    whole_bag: {perception: heldout_layout, dynamics: legacy_70_30}
+  2026-11-12T02-57-50_car_teleop:
+    units: current
+    whole_bag: {perception: heldout_layout, dynamics: legacy_70_30}
+  2026-11-11T03-54-11_car_teleop_cw:
+    units: old_0_13_0
+    whole_bag: {perception: train, dynamics: legacy_70_30}
+  2026-11-11T04-20-19_car_teleop_v3:
+    units: old_0_13_0
+    whole_bag: {perception: train, dynamics: legacy_70_30}
+  2026-10-24T23-13-18_car_teleop:
+    units: old_0_13_0
+    whole_bag: {perception: train, dynamics: legacy_70_30}
+  2026-10-25T19-27-08_car_teleop:
+    units: old_0_13_0
+    whole_bag: {perception: train, dynamics: legacy_70_30}
+# Bags not named here (nested copies such as *_latest and 2026-11-11T03-54-11_car_teleop, and any
+# bag recorded after 2026-11-13) are unused for v0.2 training. Later sessions are new held-out data.

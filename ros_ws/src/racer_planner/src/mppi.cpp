@@ -85,6 +85,22 @@ MppiSolver::Ctx MppiSolver::make_ctx(const SolveInput& in) const {
     ctx.phi_start = in.freespace->phi(in.x0.x + wheelbase_m_ * std::cos(in.x0.yaw),
                                       in.x0.y + wheelbase_m_ * std::sin(in.x0.yaw));
   }
+  if (in.gate != nullptr && in.gate->valid() && p_.w_gate > 0.0 &&
+      gate_limits_are_usable(in.gate->limits()) && p_.gate_ttc_margin > 0.0 &&
+      p_.gate_clear_margin > 0.0) {
+    ctx.use_gate = true;
+    ctx.gate_travel_m = std::isfinite(in.gate_travel_since_scan_m)
+                            ? clamp_double(in.gate_travel_since_scan_m, 0.0, 10.0)
+                            : 0.0;
+    ctx.gate_ttc_ref_s = p_.gate_ttc_margin * in.gate->limits().ttc_warning_s;
+    ctx.gate_clear_ref_m = p_.gate_clear_margin * in.gate->limits().min_forward_clearance_m;
+  }
+  if (in.lap != nullptr && in.lap->active && in.lap->n >= kLapProfileMinStations) {
+    ctx.use_lap = true;
+    const double since = std::isfinite(in.lap_station_now_m) ? in.lap_station_now_m : 0.0;
+    ctx.lap_s_now = in.lap->s0_m + since;
+    ctx.lap_q_now = in.lap->q_at(ctx.lap_s_now);
+  }
   return ctx;
 }
 
@@ -97,6 +113,8 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   double sn = std::sin(s.yaw);
   int hint = ctx.hint0;
   double j_clear = 0.0, j_bound = 0.0, j_lat = 0.0, j_du = 0.0, j_sr = 0.0;
+  double j_gate = 0.0, j_trust = 0.0;
+  double path_m = 0.0;  // distance travelled by the scored steps so far
   double s_end = ctx.s_start;
   double min_clear = 1e9;
   bool collided = false;
@@ -114,6 +132,19 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
     }
     prev = ut;
     const double v_before = s.v;
+    // The gate's view of this command (gate_predictor.hpp): only a forward request is judged.
+    if (ctx.use_gate && !collided && t < kGateCostSteps && ut.speed_cmd > 0.0) {
+      const double v_k = t == 0 ? std::max(v_before, in.wheel_speed_mps) : v_before;
+      // A car already inside the band (d_k <= 0) has a time to collision of 0, and the distance
+      // term stops growing 0.5 m inside it: the cost stays finite for every input.
+      const double d_k =
+          std::max(in.gate->distance(ut.steering_cmd) - ctx.gate_travel_m - path_m, -0.5);
+      const double ttc_k = d_k > 0.0 ? d_k / std::max(std::max(ut.speed_cmd, v_k), 1e-3) : 0.0;
+      const double a = std::max(0.0, 1.0 - ttc_k / ctx.gate_ttc_ref_s);
+      const double b = std::max(0.0, 1.0 - d_k / ctx.gate_clear_ref_m);
+      j_gate += a * a + b * b;
+    }
+    if (!collided) path_m += v_before * dt;
     const double yaw_before = s.yaw;
     double yaw_rate = 0.0;
     s = model_.step_trig(s, ut, cs, sn, &yaw_rate);
@@ -147,6 +178,10 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
       const double e = d_soft - clearance;
       j_clear += e * e * dt;
     }
+    if (ctx.use_lap) {
+      const double over = s.v - in.lap->v_bound_at(ctx.lap_s_now + path_m);
+      if (over > 0.0) j_trust += over * over * dt;
+    }
     if (project) {
       const double side = pr.d >= 0.0 ? pr.half_left : pr.half_right;
       const double excess = std::fabs(pr.d) - (side - half_width_m_ - p_.m_bound_m);
@@ -172,6 +207,17 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   CostBreakdown local;
   CostBreakdown& o = bd != nullptr ? *bd : local;
   o.progress = -p_.w_progress * progress;
+  o.gate = p_.w_gate * j_gate;
+  o.lap_trust = 0.0;
+  o.lap_terminal = 0.0;
+  if (ctx.use_lap) {
+    // The cost-to-go replaces the progress term: seconds of the best lap gained, in metres at the
+    // cap in force.
+    o.lap_trust = p_.w_trust * j_trust;
+    const double q_end = in.lap->q_at(ctx.lap_s_now + path_m);
+    o.lap_terminal = -p_.w_progress * std::max(0.0, in.v_cap_mps) * (ctx.lap_q_now - q_end);
+    o.progress = 0.0;
+  }
   o.collision = collided ? p_.c_collision : 0.0;
   o.clearance = p_.w_clear * j_clear;
   o.boundary = c * p_.w_bound * j_bound;
@@ -187,7 +233,7 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   }
   o.terminal = terminal;
   o.total = o.progress + o.collision + o.clearance + o.boundary + o.lateral + o.smoothness +
-            o.steer_rate + o.terminal;
+            o.steer_rate + o.terminal + o.gate + o.lap_trust + o.lap_terminal;
   o.s_end_m = s_end;
   o.progress_m = progress;
   o.min_clearance_m = min_clear;
@@ -359,6 +405,10 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
     smooth_steering_3tap(u_new_.data(), T);
   }
   out.cmd = u_new_[0];
+  if (ctx.use_gate) {
+    out.cmd_would_trip = would_trip_exact(*in.gate, out.cmd.steering_cmd, out.cmd.speed_cmd,
+                                          in.wheel_speed_mps, in.gate->limits());
+  }
   {
     const int n =
         std::min(T, std::max(1, static_cast<int>(std::lround(p_.plan_window_s / model_.dt()))));

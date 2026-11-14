@@ -19,8 +19,11 @@ def lap_is_clean(
     min_clearance_m: float,
     min_clearance_clean_m: float,
 ) -> bool:
-    """A lap is clean when there was no safety brake, the planner stayed in DRIVING the whole
-    lap, and the smallest plan clearance was at least `min_clearance_clean_m`.
+    """A lap is clean when there was no obstacle-gate brake (`brake_count` is the number of
+    /safety/events ENGAGE records at BRAKE severity from the sources ttc and ttc_reverse: the
+    watchdog and rate_limit gates are timing events and are not passed here), the planner stayed
+    in DRIVING the whole lap, and the smallest plan clearance was at least
+    `min_clearance_clean_m`.
 
     A lap with no clearance data (NaN) is not clean: it cannot be verified.
     """

@@ -1,18 +1,22 @@
 import { createContext } from "preact";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
-import type { ActionReply, Api, BagInfo, LogEntry, Options, Status } from "./api";
+import type { ActionReply, Api, BagInfo, BagsReply, LogEntry, Options, Prefs, Status } from "./api";
 import { ActionRunner, type RunnerOptions } from "./feedback";
 import type { ToastStore } from "./feedback";
 import type { BeginSpec, OpsStore } from "./ops";
+import type { ProblemStore } from "./problems";
 import type { LinkStatus } from "./ros";
+import type { IconName } from "./ui";
 
-export type TabId = "drive" | "live" | "checks" | "logs" | "system";
-export const TABS: { id: TabId; label: string }[] = [
-  { id: "drive", label: "Drive" },
-  { id: "live", label: "Live" },
-  { id: "checks", label: "Checks" },
-  { id: "logs", label: "Logs" },
-  { id: "system", label: "System" },
+export type TabId = "drive" | "tune" | "live" | "data" | "logs" | "system";
+/** The sidebar, top to bottom. System sits apart at the bottom, like a settings gear. */
+export const TABS: { id: TabId; label: string; icon: IconName }[] = [
+  { id: "drive", label: "Drive", icon: "wheel" },
+  { id: "tune", label: "Tune", icon: "sliders" },
+  { id: "live", label: "Live", icon: "pulse" },
+  { id: "data", label: "Data", icon: "disk" },
+  { id: "logs", label: "Logs", icon: "list" },
+  { id: "system", label: "System", icon: "gear" },
 ];
 
 export interface Ctx {
@@ -20,7 +24,22 @@ export interface Ctx {
   status: Status | null;
   options: Options | null;
   bags: BagInfo[];
+  /** The whole GET /api/bags reply: disk usage and the copy hint's user and folder. */
+  bagsInfo: BagsReply | null;
   log: LogEntry[];
+  /** The saved drive settings (agent-side), and the agent's defaults for "reset". */
+  prefs: Prefs;
+  prefsDefaults: Prefs;
+  /** True once the car has answered GET /api/prefs. */
+  prefsLoaded: boolean;
+  /** Save the settings on the car; resolves with what the car stored. */
+  savePrefs: (p: Prefs) => Promise<Prefs>;
+  problems: ProblemStore;
+  /** The car's host name, for the copy command. */
+  carHost: string;
+  /** Raw output of the last cleanup, shown in Logs. */
+  lastOutput: { title: string; text: string } | null;
+  setLastOutput: (o: { title: string; text: string } | null) => void;
   agentUp: boolean;
   /** Date.now() of the last good status reply. */
   agentLastSeen: number | null;
@@ -32,7 +51,7 @@ export interface Ctx {
   now: number;
   refresh: () => void;
   /** Run a request, toast its outcome, refresh, and rethrow so the button shows the error. */
-  act: (fn: () => Promise<ActionReply>) => Promise<ActionReply>;
+  act: (fn: () => Promise<ActionReply>, title?: string) => Promise<ActionReply>;
   /** Like act, but also shows the target state at once with a timeline (see ops.ts). */
   runOp: (spec: BeginSpec, fn: () => Promise<ActionReply>) => Promise<ActionReply>;
   stopAll: () => Promise<ActionReply>;

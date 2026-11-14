@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from pathlib import Path
 
 from .bags import Run, calibration, load_run
@@ -15,7 +16,18 @@ LOG = logging.getLogger(__name__)
 # Bags recorded in the units of the current vehicle_params (0.14.0): nothing is converted. Every
 # other bag must be dated 2026-11-11 or earlier and was recorded under 0.13.0 (converted). A bag
 # in neither group is refused rather than guessed.
-CURRENT_UNITS_BAGS = frozenset({"2026-11-12T02-57-50_car_teleop", "2026-11-12T03-04-56_car_teleop"})
+CURRENT_UNITS_BAGS = frozenset(
+    {
+        "2026-11-12T02-57-50_car_teleop",
+        "2026-11-12T03-04-56_car_teleop",
+        # 2026-11-13 (vehicle_params 0.17.0): speeds are true m/s, steering the true road angle
+        "2026-11-13T22-00-40_car_teleop",
+        "2026-11-13T22-20-18_car_teleop",
+        "2026-11-13T23-18-49_car_teleop",
+        "2026-11-13T23-19-51_car_teleop",
+        "2026-11-13T23-27-23_car_teleop",
+    }
+)
 LAST_OLD_UNITS_DATE = "2026-11-11"
 
 
@@ -36,10 +48,16 @@ def bag_dirs(bags_dir: Path) -> list[Path]:  # pragma: no cover - real data
 
 
 def load_recordings(  # pragma: no cover - real data
-    bags_dir: Path, vehicle: Vehicle, cache_dir: Path, workers: int = 1
+    bags_dir: Path,
+    vehicle: Vehicle,
+    cache_dir: Path,
+    workers: int = 1,
+    only: Collection[str] | None = None,
 ) -> tuple[list[Run], dict[str, MotionSeries], list[str]]:
-    """Runs (nested copies dropped), their motion series and the names of the dropped bags."""
-    runs = [load_run(p, recorded_for(p.name)) for p in bag_dirs(bags_dir)]
+    """Runs (nested copies dropped), their motion series and the names of the dropped bags.
+    `only` limits the read to the bags of that name (the split file names the bags in use)."""
+    dirs = [p for p in bag_dirs(bags_dir) if only is None or p.name in only]
+    runs = [load_run(p, recorded_for(p.name)) for p in dirs]
     kept = drop_nested(runs)
     kept_names = {r.name for r in kept}
     dropped = sorted(r.name for r in runs if r.name not in kept_names)

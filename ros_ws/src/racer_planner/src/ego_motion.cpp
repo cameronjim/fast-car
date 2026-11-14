@@ -1,5 +1,6 @@
 #include "racer_planner/ego_motion.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace racer_planner {
@@ -58,6 +59,26 @@ Pose2 EgoMotion::forward(double t_from, double t_to, bool* covered) const {
   }
   advance(&pose, at(cur), t_to - t);
   return pose;
+}
+
+double EgoMotion::distance_between(double t0_s, double t1_s) const {
+  if (!std::isfinite(t0_s) || !std::isfinite(t1_s) || count_ == 0) return 0.0;
+  const double sign = t1_s >= t0_s ? 1.0 : -1.0;
+  const double t_from = std::min(t0_s, t1_s);
+  const double t_to = std::max(t0_s, t1_s);
+  std::size_t cur = 0;
+  while (cur + 1 < count_ && at(cur + 1).t <= t_from) ++cur;
+  double t = t_from;
+  double sum = 0.0;
+  for (std::size_t i = cur + 1; i < count_; ++i) {
+    const double ti = at(i).t;
+    if (ti >= t_to) break;
+    sum += at(cur).v * (ti - t);
+    t = ti;
+    cur = i;
+  }
+  sum += at(cur).v * (t_to - t);
+  return sign * sum;
 }
 
 Pose2 EgoMotion::relative_pose(double t_from_s, double t_to_s, bool* covered) const {

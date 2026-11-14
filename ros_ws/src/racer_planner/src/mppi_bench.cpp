@@ -4,7 +4,8 @@
 // free-space field of a scan. Prints p50 / p90 / p99 / max in ms per scene and the sample count;
 // exit code 1 when a scene's solve p99 is above --budget-ms (default 12, the Jetson budget) or the
 // field build p99 is above --field-budget-ms (default 3).
-// --background-threads N runs N busy threads for the length of the run, to measure the solve with
+// --background-threads N (or --background-load: one per CPU) runs busy threads for the length of
+// the run, to measure the solve with
 // the rest of the stack competing for cores.
 #include <algorithm>
 #include <atomic>
@@ -18,11 +19,15 @@
 #include <vector>
 
 #include "binding_geometry.hpp"
+#include "gate_binding.hpp"
 #include "racer_planner/bundle_loader.hpp"
 #include "racer_planner/distance_field.hpp"
 #include "racer_planner/freespace_field.hpp"
+#include "racer_planner/gate_predictor.hpp"
+#include "racer_planner/lap_profile.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/mppi.hpp"
+#include "racer_planner/planner.hpp"
 
 using namespace racer_planner;
 
@@ -31,7 +36,7 @@ void usage() {
   std::fprintf(stderr,
                "usage: mppi_bench --bundle DIR [--samples 512] [--solves 2000] [--horizon 30]\n"
                "                  [--speed 0.6] [--budget-ms 12] [--field-budget-ms 3]\n"
-               "                  [--background-threads 0]\n");
+               "                  [--background-threads 0 | --background-load]\n");
 }
 
 struct Stats {
@@ -73,6 +78,8 @@ int main(int argc, char** argv) {
       budget_ms = std::atof(next());
     else if (!std::strcmp(argv[i], "--field-budget-ms"))
       field_budget_ms = std::atof(next());
+    else if (!std::strcmp(argv[i], "--background-load"))
+      background_threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
     else if (!std::strcmp(argv[i], "--background-threads"))
       background_threads = std::atoi(next());
     else {
@@ -115,6 +122,51 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "mppi_bench: the synthetic scan gave no free-space field\n");
     return 3;
   }
+  // The same corridor as a 720 beam scan from the LiDAR head, for the gate table and the profile
+  // scenes: two side walls at y = +-0.5 and a wall across at x = 5 (base_link).
+  const auto gate_cfg = gate_from_binding(VEHICLE_PARAMS, &why);
+  if (!gate_cfg) {
+    std::fprintf(stderr, "mppi_bench: %s\n", why.c_str());
+    return 2;
+  }
+  std::vector<float> scan_ranges(720);
+  for (int i = 0; i < 720; ++i) {
+    const double b = -M_PI + i * (2.0 * M_PI / 720.0) + gate_cfg->geometry.lidar_mount_yaw_rad;
+    const double dx = std::cos(b), dy = std::sin(b);
+    const double ox = gate_cfg->geometry.lidar_mount_x_m, oy = gate_cfg->geometry.lidar_mount_y_m;
+    double best = 1e9;
+    for (double wy : {0.5, -0.5}) {
+      const double t = (wy - oy) / dy;
+      if (std::fabs(dy) > 1e-9 && t > 0.0) best = std::min(best, t);
+    }
+    if (std::fabs(dx) > 1e-9) {
+      const double t = (5.0 - ox) / dx;
+      if (t > 0.0) best = std::min(best, t);
+    }
+    scan_ranges[static_cast<std::size_t>(i)] = best < 12.0 ? static_cast<float>(best) : INFINITY;
+  }
+  GateScan gate_scan;
+  gate_scan.ranges = scan_ranges.data();
+  gate_scan.count = scan_ranges.size();
+  gate_scan.angle_min_rad = -M_PI;
+  gate_scan.angle_increment_rad = 2.0 * M_PI / 720.0;
+  gate_scan.range_min_m = 0.05;
+  gate_scan.range_max_m = 12.0;
+  GateTable gate_table(gate_cfg->geometry, gate_cfg->limits);
+  gate_table.build(gate_scan);
+  // A lap profile: bound 1.0 m/s, 0.9 s per metre of best lap.
+  LapProfile lap_profile;
+  {
+    std::vector<float> s, v, q;
+    for (int i = 0; i < 61; ++i) {
+      s.push_back(static_cast<float>(0.1 * i));
+      v.push_back(1.0f);
+      q.push_back(static_cast<float>(10.0 - 0.9 * 0.1 * i));
+    }
+    make_lap_profile(s.data(), v.data(), q.data(), s.size(), v.size(), q.size(), 0.0, 0.0,
+                     &lap_profile);
+  }
+
   LocalTrackData track;
   track.frame_id = "base_link";
   track.station_spacing_m = kTrackStationSpacingM;
@@ -152,11 +204,17 @@ int main(int argc, char** argv) {
     double confidence;
     bool use_track;
     bool use_free;
+    bool use_gate;
+    bool use_lap;
   };
-  const Scene scenes[] = {{"track c=1.0     ", 1.0, true, false},
-                          {"field only c=0  ", 0.0, false, true},
-                          {"blend c=0.5     ", 0.5, true, true}};
+  const Scene scenes[] = {{"track c=1.0     ", 1.0, true, false, false, false},
+                          {"field only c=0  ", 0.0, false, true, false, false},
+                          {"blend c=0.5     ", 0.5, true, true, false, false},
+                          {"track +gate term", 1.0, true, false, true, false},
+                          {"track +gate +lap", 1.0, true, false, true, true},
+                          {"blend +gate +lap", 0.5, true, true, true, true}};
   bool over_budget = false;
+  double base_p50 = 0.0;
   for (const Scene& scene : scenes) {
     MppiParams params;
     params.horizon_steps = horizon;
@@ -171,6 +229,9 @@ int main(int argc, char** argv) {
     in.confidence = scene.confidence;
     in.track = scene.use_track ? &projector : nullptr;
     in.freespace = scene.use_free ? &freespace : nullptr;
+    in.gate = scene.use_gate ? &gate_table : nullptr;
+    in.wheel_speed_mps = 0.5 * speed;
+    in.lap = scene.use_lap ? &lap_profile : nullptr;
     std::vector<double> ms;
     ms.reserve(static_cast<std::size_t>(solves));
     for (int i = 0; i < solves + 50; ++i) {
@@ -190,7 +251,94 @@ int main(int argc, char** argv) {
     }
     const Stats s = stats_of(ms);
     print_stats(scene.name, s, budget_ms);
+    if (!scene.use_gate && scene.confidence == 1.0) base_p50 = s.p50;
+    if (scene.use_gate && scene.confidence == 1.0) {
+      std::printf("  p50 against the same scene without the hooks: %+.3f ms\n", s.p50 - base_p50);
+    }
     if (s.p99 > budget_ms) over_budget = true;
+  }
+  {
+    // The gate table build: the scan thread's extra work per scan.
+    std::vector<double> gate_ms;
+    const int builds = std::max(200, solves / 5);
+    for (int i = 0; i < builds + 20; ++i) {
+      scan_ranges[static_cast<std::size_t>(i % 720)] = 1.0f + 0.001f * static_cast<float>(i % 7);
+      const auto t0 = std::chrono::steady_clock::now();
+      gate_table.build(gate_scan);
+      const auto t1 = std::chrono::steady_clock::now();
+      if (i >= 20) gate_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    const Stats gs = stats_of(gate_ms);
+    std::printf("gate table      build ms: p50 %.3f  p90 %.3f  p99 %.3f  max %.3f  (720 beams)\n",
+                gs.p50, gs.p90, gs.p99, gs.max);
+  }
+
+  // The whole planner pipeline on the same corridor: tick() (solve and output in one call, what the
+  // planner has always had) and, on the code with the solve / publish split, the two halves apart:
+  // solve() and publish(), the publish path being what the node's 50 Hz publisher timer runs.
+  {
+    PlannerConfig pc;
+    pc.logic.v_max_mps = speed;
+#ifndef RACER_BENCH_OLD
+    pc.logic.require_gated_for_start = false;
+    pc.logic.start_ticks = 5;
+#endif
+    pc.mppi.samples = samples;
+    pc.mppi.seed = 7;
+    pc.max_samples = samples;
+    Planner planner(pc, dyn, *geometry);
+    auto make_input = [&](double now) {
+      track.stamp_s = now - 0.1;
+      TickInput in;
+      in.now_s = now;
+      in.has_odom = true;
+      in.odom_stamp_s = now;
+      in.wheel_speed_mps = 0.5 * speed;
+      in.has_scan = true;
+      in.scan_stamp_s = now - 0.1;
+      in.field = &field;
+      in.freespace = &freespace;
+      in.track = &track;
+      in.has_gated = true;
+      in.gated_stamp_s = now;
+      in.gated_speed_mps = 1.0;
+      return in;
+    };
+    double t = 1000.0;
+    std::vector<double> tick_ms, solve_ms, publish_ms;
+    for (int i = 0; i < solves + 300; ++i) {
+      t += 0.02;
+      const TickInput in = make_input(t);
+      const bool measure = i >= 300;  // warm up: leave STARTING, ramp, warm start
+#ifdef RACER_BENCH_OLD
+      const auto a = std::chrono::steady_clock::now();
+      planner.tick(in);
+      const auto b = std::chrono::steady_clock::now();
+      if (measure) tick_ms.push_back(std::chrono::duration<double, std::milli>(b - a).count());
+#else
+      PublishInput pin;
+      pin.now_s = t;
+      pin.has_gated = true;
+      pin.gated_stamp_s = t;
+      const auto a = std::chrono::steady_clock::now();
+      planner.solve(in);
+      const auto b = std::chrono::steady_clock::now();
+      planner.publish(pin);
+      const auto c = std::chrono::steady_clock::now();
+      if (measure) {
+        solve_ms.push_back(std::chrono::duration<double, std::milli>(b - a).count());
+        publish_ms.push_back(std::chrono::duration<double, std::milli>(c - b).count());
+        tick_ms.push_back(std::chrono::duration<double, std::milli>(c - a).count());
+      }
+#endif
+    }
+    print_stats("planner tick (solve + output) ", stats_of(tick_ms), budget_ms);
+    if (!solve_ms.empty()) {
+      print_stats("planner solve()               ", stats_of(solve_ms), budget_ms);
+      const Stats ps = stats_of(publish_ms);
+      std::printf("planner publish() path ms: p50 %.4f  p90 %.4f  p99 %.4f  max %.4f\n", ps.p50,
+                  ps.p90, ps.p99, ps.max);
+    }
   }
 
   // The free-space field of one scan (the distance field is built by the same callback, timed

@@ -1,0 +1,12 @@
+{
+  "expected_crossings_s": [
+    6.388,
+    12.291
+  ],
+  "pose_reference_s": [
+    6.372,
+    12.269
+  ],
+  "tolerance_s": 0.1,
+  "source": "2026-11-13T23-27-23_car_teleop, T2a, 18 s from the first moving scan"
+}

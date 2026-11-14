@@ -14,6 +14,15 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra)
 endif()
 
+# ThreadSanitizer for the whole package (not part of CI: run locally, see the PR for the output):
+#   colcon build --packages-select racer_planner --cmake-args -DRACER_PLANNER_TSAN=ON
+# and run test_planner_threads and test_planner_closed_loop from the build directory.
+option(RACER_PLANNER_TSAN "build racer_planner with -fsanitize=thread" OFF)
+if(RACER_PLANNER_TSAN)
+  add_compile_options(-fsanitize=thread -g -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=thread)
+endif()
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
@@ -35,6 +44,8 @@ add_library(racer_planner_core
   src/freespace_field.cpp
   src/recovery.cpp
   src/ego_motion.cpp
+  src/gate_predictor.cpp
+  src/lap_profile.cpp
   src/mppi.cpp
   src/planner_logic.cpp
   src/planner.cpp
@@ -105,9 +116,13 @@ if(BUILD_TESTING)
     test/test_recovery.cpp
     test/test_ego_motion.cpp
     test/test_rng.cpp
+    test/test_gate_predictor.cpp
+    test/test_lap_profile.cpp
     test/test_mppi_costs.cpp
     test/test_planner_logic.cpp
     test/test_planner_properties.cpp
+    test/test_planner_timing.cpp
+    test/test_planner_timing_properties.cpp
     TIMEOUT 120
   )
   add_dependencies(test_racer_planner_core racer_planner_generate_vehicle_params)
@@ -127,6 +142,46 @@ if(BUILD_TESTING)
     RACER_PLANNER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
   )
 
+  # The gate tests compile racer_safety's OWN sources, read only, to compare the planner's
+  # reimplementation of the in-path distance and the gate decision against the real ones.
+  # Production code does not link them (that would be a change to racer_safety). A missing
+  # sibling package fails the configure step: no silent skip.
+  set(RACER_SAFETY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../racer_safety")
+  foreach(f src/forward_sector.cpp src/gate_logic.cpp src/gate_logic_formatting.cpp
+            include/racer_safety/forward_sector.hpp include/racer_safety/gate_logic.hpp)
+    if(NOT EXISTS "${RACER_SAFETY_DIR}/${f}")
+      message(FATAL_ERROR "racer_planner gate tests need ${RACER_SAFETY_DIR}/${f} (racer_safety sibling package)")
+    endif()
+  endforeach()
+  foreach(t test_gate_divergence test_gate_closed_loop)
+    ament_add_gtest(${t} test/${t}.cpp
+      "${RACER_SAFETY_DIR}/src/forward_sector.cpp"
+      "${RACER_SAFETY_DIR}/src/gate_logic.cpp"
+      "${RACER_SAFETY_DIR}/src/gate_logic_formatting.cpp"
+      TIMEOUT 1500
+    )
+    add_dependencies(${t} racer_planner_generate_vehicle_params)
+    target_include_directories(${t} PRIVATE "${RACER_GENERATED_DIR}" src test
+      "${RACER_SAFETY_DIR}/include")
+    target_link_libraries(${t} racer_planner_core)
+    target_compile_definitions(${t} PRIVATE
+      RACER_PLANNER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+    )
+  endforeach()
+
+  # The solve / publish split on real threads (run under ThreadSanitizer for the race check) and
+  # the no-heap-allocation check (its own binary: it replaces the global operator new).
+  find_package(Threads REQUIRED)
+  foreach(t test_planner_threads test_planner_noalloc)
+    ament_add_gtest(${t} test/${t}.cpp TIMEOUT 120)
+    add_dependencies(${t} racer_planner_generate_vehicle_params)
+    target_include_directories(${t} PRIVATE "${RACER_GENERATED_DIR}" src test)
+    target_link_libraries(${t} racer_planner_core Threads::Threads)
+    target_compile_definitions(${t} PRIVATE
+      RACER_PLANNER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+    )
+  endforeach()
+
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_test(
     NAME test_mppi_bench_smoke
@@ -144,6 +199,7 @@ if(BUILD_TESTING)
 
   find_package(launch_testing_ament_cmake REQUIRED)
   foreach(t test_planner_node_launch test_planner_node_silence_launch test_planner_node_refusal_launch
+                 test_planner_node_start_gate_launch test_planner_node_shutdown_launch
                  test_planner_node_params_file_launch)
     add_launch_test(test/${t}.py TARGET ${t} TIMEOUT 180)
   endforeach()

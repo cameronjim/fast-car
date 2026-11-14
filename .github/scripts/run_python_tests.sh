@@ -37,6 +37,11 @@ run "evaluation/analysis" line90
 run "config/pnp" line90
 run "training/racer_pnp_perception" report
 run "training/racer_pnp_dynamics" line90
+# Lap memory (D): the start-scan gate, the station set, the engine and the cap schedule are the
+# decision logic that raises the car's speed lap over lap. 90 percent line coverage; the ROS node
+# and the mcap reader are omitted in pyproject.toml and covered by the L3 and real-bag checks. The
+# generic ros_ws loop below runs the package again as report only.
+run "ros_ws/src/racer_laps" line90
 
 # Normal packages: reported, not gated.
 run "training/racer_train" report

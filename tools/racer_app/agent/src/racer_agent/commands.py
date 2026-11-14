@@ -64,6 +64,10 @@ GAP_FOLLOW_PROFILE_MAX_SPEED_MPS = {
 #: cap below that is refused here instead of at launch. The caller may also set min_speed_mps,
 #: in [0, the max speed in effect]; unset leaves this profile value.
 GAP_FOLLOW_MIN_SPEED_MPS = 0.36
+#: physics_speed's lateral acceleration limit in m/s^2: the node's declared range for
+#: a_lat_max_mps2 (gap_follow_node.cpp, mirrored in the launch file's description). Checked against
+#: the launch file by test_gap_follow_tuning_args_exist_in_the_launch_file.
+GAP_FOLLOW_A_LAT_RANGE = (0.1, 20.0)
 
 #: Pose rules of racer_apps' spiderbot (racer_apps/spiderbot/pose_rules.py). test_spiderbot_whitelist
 #: checks this against the source so the two cannot drift.
@@ -206,9 +210,20 @@ def stack_run_argv(
 
 
 def camera_run_argv(
-    host: HostInfo, repo_dir: Path, image: str, container: str, usb_device: str | None
+    host: HostInfo,
+    repo_dir: Path,
+    image: str,
+    container: str,
+    usb_device: str | None,
+    record_streams: bool = True,
 ) -> list[str]:
-    """`docker run -d --name car-camera --runtime nvidia ...`: docker/car/README.md "Cameras"."""
+    """`docker run -d --name car-camera --runtime nvidia ...`: docker/car/README.md "Cameras".
+
+    `record_streams=False` passes cameras.launch.py's own `record_streams:=false`: no
+    camera_record_node, so no /camera/<name>/record/compressed for the stack's recorder to take.
+    The live full-rate topics are unchanged, and so is the stack's bag (LiDAR, drive, telemetry,
+    rail voltage), which this never touches (CLAUDE.md invariant 5).
+    """
     argv = [
         "docker",
         "run",
@@ -239,6 +254,8 @@ def camera_run_argv(
             raise CommandError(f"not a video device: {usb_device!r}")
         argv += ["--device", usb_device]
         launch += f" usb_device:={usb_device}"
+    if not record_streams:
+        launch += " record_streams:=false"
     argv += [
         "-v",
         f"{repo_dir}:/workspace",
@@ -340,6 +357,8 @@ def ros_cmd_for(
     pnp_params_container_path: str = "",
     max_speed_mps: float | None = None,
     min_speed_mps: float | None = None,
+    a_lat_max_mps2: float | None = None,
+    side_cap_min_speed_mps: float | None = None,
 ) -> str:
     """The ros2 command for a driving mode. Raises CommandError for anything off the lists."""
     if mode == "gap_follow":
@@ -354,6 +373,14 @@ def ros_cmd_for(
             if isinstance(min_speed_mps, bool) or not isinstance(min_speed_mps, (int, float)):
                 raise CommandError("gap follow min speed must be a number")
             speed_arg += f" min_speed_mps:={float(min_speed_mps):.2f}"
+        for name, value in (
+            ("a_lat_max_mps2", a_lat_max_mps2),
+            ("side_cap_min_speed_mps", side_cap_min_speed_mps),
+        ):
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise CommandError(f"gap follow {name} must be a number")
+                speed_arg += f" {name}:={float(value):.2f}"
         return f"ros2 launch racer_control gap_follow.launch.py profile:={profile}{speed_arg}"
     if mode == "wall_follow":
         return "ros2 launch racer_control wall_follow.launch.py"
@@ -478,9 +505,14 @@ DRIVE_STATUS_SCRIPT = (
 def drive_signal_script(signal: str) -> str:
     if signal not in ("INT", "TERM", "KILL"):
         raise CommandError("bad signal")
+    # The children first, then the ros2 process: `ros2 run` (the tracker) does not pass a signal
+    # on to the node it started, so killing only the ros2 process left the node driving
+    # (2026-11-13). A terminal Ctrl-C reaches the whole process group; this does the same for the
+    # one level a ros2 command has. `ros2 launch` nodes get it twice, as with Ctrl-C.
     return (
         f'p=$(cat {DRIVE_PID_FILE} 2>/dev/null) && [ -n "$p" ] && '
-        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && kill -{signal} $p"
+        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && "
+        f"{{ pkill -{signal} -P $p; kill -{signal} $p; }}"
     )
 
 
@@ -566,8 +598,18 @@ def drive_pids_signal_script(pids: Sequence[int], signal: str) -> str:
     pid_list = " ".join(str(p) for p in clean)
     return (
         f"for p in {pid_list}; do "
-        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && kill -{signal} $p; done"
+        f"grep -aq ros2 /proc/$p/cmdline 2>/dev/null && "
+        f"{{ pkill -{signal} -P $p; kill -{signal} $p; }}; done"
     )
+
+
+#: `docker system` housekeeping the Data tab offers behind a confirm. `image prune -f` removes only
+#: dangling (untagged) images, never car:local or car:perception or an image a container uses;
+#: `builder prune -f` drops the build cache. Neither touches a bag, a volume or a container.
+CLEANUP_ARGVS: tuple[tuple[str, ...], ...] = (
+    ("docker", "image", "prune", "-f"),
+    ("docker", "builder", "prune", "-f"),
+)
 
 
 def park_service_script(service: str) -> str:

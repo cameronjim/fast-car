@@ -58,11 +58,15 @@ struct StaleCase {
   bool stale;
 };
 
+// Changed with the graceful staleness of planner v0.2 (design 14.7): the wheel speed row now
+// fails at odom_hard_timeout_s (0.20 s); between 0.10 and 0.20 s the planner keeps solving.
 TEST(Gate, OdomRowAtPassBoundaryAndFail) {
-  const LogicParams p;  // 0.10 s
+  const LogicParams p;  // 0.10 s soft, 0.20 s hard
   const StaleCase cases[] = {{"fresh", 0.02, false},
-                             {"at the limit", 0.10, false},
-                             {"just over", 0.101, true},
+                             {"at the soft limit", 0.10, false},
+                             {"just over the soft limit", 0.101, false},
+                             {"just inside the hard limit", 0.199, false},
+                             {"just over the hard limit", 0.201, true},
                              {"old", 5.0, true}};
   for (const auto& c : cases) {
     LogicInputs in = healthy();
@@ -74,10 +78,15 @@ TEST(Gate, OdomRowAtPassBoundaryAndFail) {
   EXPECT_EQ(gate_state(none), PlannerState::NoOdom);
 }
 
+// Changed with the graceful staleness of planner v0.2: the scan row now fails at
+// scan_hard_timeout_s (0.60 s); between 0.35 and 0.60 s the cap ramps down instead.
 TEST(Gate, ScanRowAtPassBoundaryAndFail) {
-  const LogicParams p;  // 0.35 s
-  const StaleCase cases[] = {
-      {"fresh", 0.1, false}, {"at the limit", 0.35, false}, {"just over", 0.351, true}};
+  const LogicParams p;  // 0.35 s soft, 0.60 s hard
+  const StaleCase cases[] = {{"fresh", 0.1, false},
+                             {"at the soft limit", 0.35, false},
+                             {"just over the soft limit", 0.351, false},
+                             {"at the hard limit", 0.60, false},
+                             {"just over the hard limit", 0.601, true}};
   for (const auto& c : cases) {
     LogicInputs in = healthy();
     in.scan_stamp_s = in.now_s - c.age;

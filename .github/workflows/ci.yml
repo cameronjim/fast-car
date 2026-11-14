@@ -384,6 +384,26 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_pnp_test.sh"
 
+  l5-pnp-laps:
+    name: L5 lap learning canary (Plug-and-Play driver plus lap memory, start-scan lap source scored against ground truth, tuning stadium, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # 2026-11-13 (brief 28, docs/notes/preregistration-pnp-v0.2.md section 5.1): lap_memory_node
+    # closes laps from the start scan and the wheel odometry (no map, no pose) and the planner takes
+    # its cap. On the tuning stadium, counter-clockwise, seed 11, D v0, 6 laps: the system's lap
+    # count equals ground truth, every lap time is within 0.3 s of it, no wall contact, the cap
+    # rises, one publisher each on /drive_raw and /drive; and the gate does not close at half a
+    # lap. A copy of the l5-pnp job with the package swapped (see .github/scripts/l5_pnp_laps_test.sh).
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 lap learning workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_pnp_laps_test.sh"
+
   l5-policy:
     name: L5 policy canary (tracker handoff + policy_node + safety_node on a stadium vs the tracker alone, ros-dev + gym + torch)
     runs-on: ubuntu-latest

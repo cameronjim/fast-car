@@ -44,6 +44,12 @@ def _context(**overrides: str) -> LaunchContext:
         "require_recorder": "true",
         "laser_yaw_from_vehicle_params": "true",
         "lap_memory": "false",
+        "v_lap1_mps": "",
+        "lap_mode": "v0",
+        "lap_source": "start_scan",
+        "lap_counter": "false",
+        "require_lap_counter": "false",
+        "shadow_perception_bundle": "",
         "params_file": "",
     }
     configs.update(overrides)
@@ -92,9 +98,17 @@ def test_argument_defaults() -> None:
         "require_recorder": "true",
         "laser_yaw_from_vehicle_params": "true",
         "lap_memory": "false",
+        "v_lap1_mps": "",
+        "lap_mode": "v0",
+        "lap_source": "start_scan",
+        "lap_counter": "true",
+        "require_lap_counter": "false",
+        "shadow_perception_bundle": "",
         "params_file": "",
     }
     assert declared["backend"].choices == ["net", "geometric"]
+    assert declared["lap_mode"].choices == ["v0", "v1"]
+    assert declared["lap_source"].choices == ["start_scan", "map_pose"]
 
 
 def test_launch_description_builds() -> None:
@@ -261,25 +275,82 @@ def test_lap_memory_is_off_by_default(monkeypatch) -> None:
     assert "use_lap_guidance" not in _flat_params(planner)
 
 
-def test_lap_memory_adds_the_node_with_the_bundle_validity_as_ceiling(
+def test_lap_memory_adds_the_node_with_the_cap_range_and_the_planner_fallback(
     monkeypatch, tmp_path
 ) -> None:
     m = _module()
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
-    ctx = _context(lap_memory="true", dynamics_bundle=_bundle(tmp_path, 0.9), v_max_mps="0.4")
+    ctx = _context(
+        lap_memory="true",
+        dynamics_bundle=_bundle(tmp_path, 0.9),
+        v_max_mps="0.8",
+        v_lap1_mps="0.4",
+        lap_mode="v1",
+    )
     actions = m._make_actions(ctx)
     laps = [a for a in actions if getattr(a, "node_package", "") == "racer_laps"]
     assert len(laps) == 1 and laps[0].node_executable == "lap_memory_node"
     p = _flat_params(laps[0])
-    assert float(p["v_cap_ceiling_mps"]) == 0.9 and float(p["v_cap_start_mps"]) == 0.4
+    assert float(p["v_cap_ceiling_mps"]) == 0.8 and float(p["v_cap_start_mps"]) == 0.4
+    assert p["lap_mode"] == "v1" and p["lap_source"] == "start_scan"
     planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
-    assert _flat_params(planner)["use_lap_guidance"] is True
+    q = _flat_params(planner)
+    assert q["use_lap_guidance"] is True
+    assert float(q["v_max_mps"]) == 0.8
+    assert float(q["v_no_guidance_mps"]) == 0.4  # a dead lap node leaves lap 1's cap, not 0.8
     assert len([a for a in actions if isinstance(a, RegisterEventHandler)]) == 3
 
 
-def test_lap_memory_start_cap_never_exceeds_the_ceiling(tmp_path) -> None:
-    params = _module().lap_memory_parameters(_bundle(tmp_path, 0.5), 0.8)
-    assert params == {"v_cap_ceiling_mps": 0.5, "v_cap_start_mps": 0.5}
+def test_v_lap1_defaults_to_v_max_so_a_launch_without_lap_memory_is_as_before(
+    monkeypatch, tmp_path
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    plain = m._make_actions(_context(v_max_mps="0.7", v_lap1_mps="0.3"))
+    planner = next(a for a in plain if getattr(a, "node_package", "") == "racer_planner")
+    assert "v_no_guidance_mps" not in _flat_params(planner)  # no lap memory: untouched
+    assert float(_flat_params(planner)["v_max_mps"]) == 0.7
+    ctx = _context(lap_memory="true", dynamics_bundle=_bundle(tmp_path, 0.9), v_max_mps="0.7")
+    actions = m._make_actions(ctx)
+    laps = next(a for a in actions if getattr(a, "node_package", "") == "racer_laps")
+    assert float(_flat_params(laps)["v_cap_start_mps"]) == 0.7  # empty v_lap1_mps: equal to v_max
+
+
+def test_lap_memory_ceiling_is_the_lower_of_v_max_and_the_bundle_validity(tmp_path) -> None:
+    m = _module()
+    params = m.lap_memory_parameters(_bundle(tmp_path, 0.5), 0.8)
+    assert params["v_cap_ceiling_mps"] == 0.5 and params["v_cap_start_mps"] == 0.5
+    params = m.lap_memory_parameters(_bundle(tmp_path, 1.5), 0.8, 0.3)
+    assert params["v_cap_ceiling_mps"] == 0.8 and params["v_cap_start_mps"] == 0.3
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"v_lap1_mps": 0.9, "v_max_mps": 0.8}, "v_lap1_mps"),
+        ({"lap_mode": "v1", "lap_source": "map_pose"}, "start_scan"),
+        ({"lap_mode": "v2"}, "lap_mode"),
+        ({"lap_source": "gps"}, "lap_source"),
+    ],
+)
+def test_lap_memory_refusals(tmp_path, kwargs, match) -> None:
+    m = _module()
+    args = {"v_max_mps": 0.8, "v_lap1_mps": None, "lap_mode": "v0", "lap_source": "start_scan"}
+    args.update(kwargs)
+    with pytest.raises(RuntimeError, match=match):
+        m.lap_memory_parameters(_bundle(tmp_path, 1.5), **args)
+
+
+def test_the_launch_refuses_v_lap1_above_v_max(monkeypatch, tmp_path) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    ctx = _context(
+        lap_memory="true", dynamics_bundle=_bundle(tmp_path, 1.5), v_max_mps="0.5", v_lap1_mps="0.6"
+    )
+    with pytest.raises(RuntimeError, match="v_lap1_mps"):
+        m._make_actions(ctx)
+    # without lap memory v_lap1_mps is unused and not checked
+    assert m._make_actions(_context(v_max_mps="0.5", v_lap1_mps="0.6"))
 
 
 def test_lap_memory_refuses_a_bundle_without_validity(monkeypatch, tmp_path) -> None:
@@ -290,3 +361,247 @@ def test_lap_memory_refuses_a_bundle_without_validity(monkeypatch, tmp_path) -> 
         m._make_actions(_context(lap_memory="true", dynamics_bundle=str(tmp_path)))
     with pytest.raises(RuntimeError, match="validity"):
         m._make_actions(_context(lap_memory="true", dynamics_bundle=str(tmp_path / "none")))
+
+
+def test_the_planner_declares_the_parameter_the_launch_sets() -> None:
+    """The launch hands the planner `v_no_guidance_mps` (the lap-1 cap used when the guidance is
+    missing, stale or malformed). The planner must DECLARE it: brief 25 adds it. Until that is on
+    main this test is red on purpose: with lap_memory:=true and no fallback, a dead lap node would
+    release the ceiling."""
+    path = _LAUNCH_DIR.parents[1] / "racer_planner" / "src" / "mppi_planner_node.cpp"
+    assert re.search(r"""["']v_no_guidance_mps["']""", path.read_text()), (
+        "mppi_planner_node.cpp does not declare v_no_guidance_mps"
+    )
+
+
+# -- the camera lap counter ----------------------------------------------------------------------
+
+
+def _with_perception_installed(monkeypatch) -> None:
+    """The launch includes racer_perception's lap_counter.launch.py from its share directory;
+    CI's L3 workspace may not have the package built, so make it findable."""
+    from ament_index_python import packages
+
+    monkeypatch.setattr(packages, "get_package_share_directory", lambda name: f"/fake/share/{name}")
+
+
+def _types():
+    from launch.actions import ExecuteProcess, IncludeLaunchDescription, LogInfo, TimerAction
+
+    return ExecuteProcess, IncludeLaunchDescription, LogInfo, TimerAction
+
+
+def _shutdown_handlers(actions) -> list:
+    return [
+        h
+        for h in actions
+        if isinstance(h, RegisterEventHandler)
+        and any(
+            isinstance(x, EmitEvent)
+            for x in getattr(h.event_handler, "_OnActionEventBase__actions_on_event", [])
+        )
+    ]
+
+
+def test_the_lap_counter_is_started_and_reset_by_default_and_the_driver_is_untouched(
+    monkeypatch,
+) -> None:
+    _with_perception_installed(monkeypatch)
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    execute, include, _log, timer = _types()
+    actions = m._make_actions(_context(lap_counter="true"))
+    includes = [a for a in actions if isinstance(a, include)]
+    assert len(includes) == 1
+    source = includes[0]._IncludeLaunchDescription__launch_description_source
+    location = "".join(t.text for t in source._LaunchDescriptionSource__location)
+    assert location.endswith("launch/lap_counter.launch.py")
+    resets = [a for a in actions if type(a) is execute]
+    assert len(resets) == 1
+    cmd = [str(c[0].text) if isinstance(c, (list, tuple)) else str(c) for c in resets[0].cmd]
+    assert cmd[0] == "timeout" and cmd[2:6] == ["ros2", "service", "call", "/lap_counter/reset"]
+    assert "std_srvs/srv/Trigger" in cmd
+    assert not [a for a in actions if isinstance(a, timer)]
+    # the driving nodes are exactly as before, and only they shut the launch down
+    nodes = [a for a in actions if hasattr(a, "node_package")]
+    assert [n.node_package for n in nodes] == ["racer_track_perception", "racer_planner"]
+    assert len(_shutdown_handlers(actions)) == 2
+
+
+def test_a_lap_counter_already_in_the_graph_is_not_started_again_but_is_reset(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
+    execute, include, _log, _timer = _types()
+    actions = m._make_actions(_context(lap_counter="true"))
+    assert not [a for a in actions if isinstance(a, include)]
+    assert len([a for a in actions if type(a) is execute]) == 1
+
+
+def test_lap_counter_false_starts_and_resets_nothing(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+
+    def boom(*a, **k):
+        raise AssertionError("the graph was probed for a counter although lap_counter is false")
+
+    monkeypatch.setattr(m, "lap_counter_in_graph", boom)
+    execute, include, _log, _timer = _types()
+    actions = m._make_actions(_context(lap_counter="false"))
+    assert not [a for a in actions if isinstance(a, include) or type(a) is execute]
+
+
+def test_a_missing_racer_perception_is_one_logged_error_and_the_driver_keeps_running(
+    monkeypatch,
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    from ament_index_python import packages
+
+    def missing(name):
+        raise packages.PackageNotFoundError(name)
+
+    monkeypatch.setattr(packages, "get_package_share_directory", missing)
+    _execute, include, log, _timer = _types()
+    actions = m._make_actions(_context(lap_counter="true"))
+    assert not [a for a in actions if isinstance(a, include)]
+    assert len([a for a in actions if isinstance(a, log)]) == 1
+    assert len([a for a in actions if hasattr(a, "node_package")]) == 2
+    assert len(_shutdown_handlers(actions)) == 2
+
+
+def test_the_counter_exiting_with_code_3_logs_the_opencv_error_and_does_not_shut_down(
+    monkeypatch,
+) -> None:
+    _with_perception_installed(monkeypatch)
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    _execute, _include, log, _timer = _types()
+    actions = m._make_actions(_context(lap_counter="true"))
+    handlers = [
+        h
+        for h in actions
+        if isinstance(h, RegisterEventHandler)
+        and getattr(h.event_handler, "_OnActionEventBase__action_matcher", None) is None
+    ]
+    assert len(handlers) == 1
+    on_exit = handlers[0].event_handler._OnActionEventBase__on_event
+    assert callable(on_exit)
+    event = types.SimpleNamespace(process_name="lap_counter_node-3", returncode=3)
+    out = on_exit(event, LaunchContext())
+    assert len(out) == 1 and isinstance(out[0], log)
+    assert not any(isinstance(x, EmitEvent) for x in out)
+    text = "".join(getattr(t, "text", str(t)) for t in out[0].msg)
+    assert "OpenCV" in text and "keeps running" in text
+    other = types.SimpleNamespace(process_name="mppi_planner_node-2", returncode=1)
+    assert on_exit(other, LaunchContext()) == []
+
+
+def test_require_lap_counter_with_the_counter_off_refuses_when_none_is_in_the_graph(
+    monkeypatch,
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    waited = []
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda t=0.0: waited.append(t) or False)
+    with pytest.raises(RuntimeError, match="no lap_counter_node"):
+        m._make_actions(_context(lap_counter="false", require_lap_counter="true"))
+    assert waited == [m.LAP_COUNTER_WAIT_S]  # it waited the five seconds
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda t=0.0: True)
+    assert m._make_actions(_context(lap_counter="false", require_lap_counter="true"))
+
+
+def test_require_lap_counter_with_the_counter_on_checks_five_seconds_after_start(
+    monkeypatch,
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    _execute, _include, log, timer = _types()
+    actions = m._make_actions(_context(lap_counter="true", require_lap_counter="true"))
+    timers = [a for a in actions if isinstance(a, timer)]
+    assert len(timers) == 1 and float(timers[0].period) == m.LAP_COUNTER_WAIT_S
+    # absent after the wait: one error and a shutdown; present: nothing
+    out = m.require_counter_check(LaunchContext())
+    assert any(isinstance(x, EmitEvent) and isinstance(x.event, Shutdown) for x in out)
+    assert any(isinstance(x, log) for x in out)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
+    assert m.require_counter_check(LaunchContext()) == []
+    # without require there is no timer
+    plain = m._make_actions(_context(lap_counter="true", require_lap_counter="false"))
+    assert not [a for a in plain if isinstance(a, timer)]
+
+
+@pytest.mark.parametrize(
+    "topic", ["/lap/event", "/lap/status", "/pnp/lap/event", "/pnp/shadow/local_track"]
+)
+def test_recorder_regex_takes_the_lap_and_shadow_topics(topic) -> None:
+    regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX
+    assert re.search(regex, topic), topic
+
+
+# -- the shadow perception node ------------------------------------------------------------------
+
+
+def test_shadow_perception_is_a_second_node_with_remapped_outputs_that_does_not_stop_the_launch(
+    monkeypatch,
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(_context(shadow_perception_bundle="/b/shadow", backend="geometric"))
+    nodes = [a for a in actions if hasattr(a, "node_package")]
+    assert [n.node_package for n in nodes] == [
+        "racer_track_perception",
+        "racer_planner",
+        "racer_track_perception",
+    ]
+    shadow = nodes[2]
+    assert shadow.node_executable == "track_perception_node"
+    assert "track_perception_shadow" in str(shadow._Node__node_name)
+    p = _flat_params(shadow)
+    assert p["backend"] == "net" and p[m.PERCEPTION_BUNDLE_PARAM] == "/b/shadow"
+    remaps = [
+        ("".join(t.text for t in a[0]), "".join(t.text for t in a[1]))
+        for a in shadow._Node__remappings
+    ]
+    assert remaps == [
+        ("/pnp/local_track", "/pnp/shadow/local_track"),
+        ("/pnp/perception/status", "/pnp/shadow/perception/status"),
+    ]
+    # the driving perception node is the geometric one and is NOT remapped
+    assert _flat_params(nodes[0])["backend"] == "geometric"
+    assert nodes[0]._Node__remappings is None or list(nodes[0]._Node__remappings) == []
+    # the shadow's exit logs and does not shut the launch down; the others still do
+    assert len(_shutdown_handlers(actions)) == 2
+    watching_shadow = [
+        h
+        for h in actions
+        if isinstance(h, RegisterEventHandler)
+        and h.event_handler._OnActionEventBase__action_matcher == shadow
+    ]
+    assert len(watching_shadow) == 1
+    assert callable(watching_shadow[0].event_handler._OnActionEventBase__on_event)
+
+
+def test_no_shadow_node_by_default(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    nodes = [a for a in m._make_actions(_context()) if hasattr(a, "node_package")]
+    assert len(nodes) == 2
+
+
+def test_nothing_in_the_planner_the_lap_memory_or_safety_reads_a_shadow_topic() -> None:
+    """The shadow outputs are recorded, never read: no mention of /pnp/shadow/ in the planner,
+    the lap memory or the safety node."""
+    src = _LAUNCH_DIR.parents[1]
+    for rel in (
+        "racer_planner/src/mppi_planner_node.cpp",
+        "racer_laps/src/racer_laps/lap_memory_node.py",
+        "racer_safety/src/safety_node.cpp",
+    ):
+        path = src / rel
+        assert path.is_file(), path
+        assert "/pnp/shadow" not in path.read_text(), rel

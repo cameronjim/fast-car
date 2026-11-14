@@ -3,8 +3,9 @@
 // and plays scripted transitions: a stack that starts in stages, a slow stop that "closes the bag",
 // a drive, a dropped connection and a failed start. Nothing here talks to a car.
 
-import type { ActionReply, BagInfo, Check, FetchLike, LogEntry, Options, Status } from "./api";
+import type { ActionReply, BagInfo, Check, FetchLike, LogEntry, Options, Prefs, Status } from "./api";
 import type { VehicleInfo } from "./model";
+import { DEFAULT_PREFS } from "./prefs";
 
 export type DemoPreset = "idle" | "running" | "driving" | "starting" | "offline" | "failed";
 
@@ -45,7 +46,10 @@ export class DemoCar {
   recorderUp = false;
   closing = false;
   cameras = false;
+  /** The running camera container's record_streams (what the real agent reads back). */
+  camerasRecord = true;
   perception = false;
+  prefs: Prefs = structuredClone(DEFAULT_PREFS);
   driveMode: string | null = null;
   autostart = true;
   flags: Record<string, string> = {};
@@ -59,9 +63,9 @@ export class DemoCar {
   private bornAt: number;
   private pendingEvents: DemoEvent[] = [];
   bags: BagInfo[] = [
-    { name: "run_2026-11-10_16-02-11", size_mb: 2480, mtime: 1_760_000_000, active: false },
-    { name: "run_2026-11-11_09-40-52", size_mb: 612, mtime: 1_760_100_000, active: false },
-    { name: "run_2026-11-11_14-18-03", size_mb: 4120, mtime: 1_760_200_000, active: false },
+    { name: "2026-11-12T14-18-03_car_teleop", size_mb: 4120, mtime: 1_762_982_283, active: false },
+    { name: "2026-11-12T09-40-52_car_teleop", size_mb: 612, mtime: 1_762_965_652, active: false },
+    { name: "2026-11-11T16-02-11_car_teleop", size_mb: 2480, mtime: 1_762_902_131, active: false },
   ];
   log: LogEntry[] = [];
 
@@ -109,7 +113,7 @@ export class DemoCar {
     this.bagStart = this.now();
     this.bagBaseMb = baseMb;
     this.bags = [
-      { name: "run_2026-11-12_10-31-27", size_mb: baseMb, mtime: this.now() / 1000, active: true, growth_mb_s: 0.52 },
+      { name: "2026-11-13T10-31-27_car_teleop", size_mb: baseMb, mtime: this.now() / 1000, active: true, growth_mb_s: 0.52 },
       ...this.bags.filter((b) => !b.active),
     ];
   }
@@ -184,7 +188,7 @@ export class DemoCar {
       time: this.now() / 1000,
       checks: { overall: anyRed ? "red" : anyAmber ? "amber" : "green", ready: !reqRed, checks },
       stack: { running: this.containerUp, recorder: this.recorderUp, flags: this.containerUp ? this.flags : {} },
-      cameras: { running: this.cameras },
+      cameras: { running: this.cameras, record: this.cameras ? this.camerasRecord : null },
       drive: { mode: this.driveMode, running: !!this.driveMode },
       containers: { "car-stack": this.containerUp ? "running" : "exited", "car-cameras": this.cameras ? "running" : "exited" },
       disk_free_gb: 142,
@@ -200,14 +204,17 @@ export class DemoCar {
 
   options(): Options {
     return {
-      gap_follow_profiles: ["lane-2026-10-25", "corridor-fast"],
-      park_profiles: ["floor-2026-10-07"],
-      maps: ["lab-2026-10-30", "garage-2026-11-02"],
-      racelines: ["lab-line-v3"],
+      gap_follow_profiles: ["none", "floor-2026-10-06", "lane-2026-10-25", "race-2026-11-12", "race-2026-11-13"],
+      park_profiles: ["none", "floor-2026-10-07"],
+      maps: ["lab-2026-10-30.yaml", "garage-2026-11-02.yaml"],
+      racelines: ["track:gym_oval", "data:lab-line-v3"],
       drive_modes: ["gap_follow", "wall_follow", "tracker", "park", "pnp", "ml_policy", "spiderbot"],
       gap_follow_speed: {
-        "lane-2026-10-25": { min: 0.2, max: 1.5 },
-        "corridor-fast": { min: 0.2, max: 2.5 },
+        none: { min: 0.36, max: 1.43 },
+        "floor-2026-10-06": { min: 0.36, max: 0.64 },
+        "lane-2026-10-25": { min: 0.36, max: 0.64 },
+        "race-2026-11-12": { min: 0.36, max: 1.0 },
+        "race-2026-11-13": { min: 0.36, max: 1.3 },
       },
       policy: { available: true, reason: "", valid: ["resid-v2"] },
       pnp: {
@@ -304,7 +311,21 @@ export class DemoCar {
       if (path.startsWith("/api/status")) return { status: 200, body: this.status() };
       if (path.startsWith("/api/options")) return { status: 200, body: this.options() };
       if (path.startsWith("/api/vehicle")) return { status: 200, body: this.vehicle() };
-      if (path.startsWith("/api/bags")) return { status: 200, body: { bags: this.grow(), disk_free_gb: 142 } };
+      if (path.startsWith("/api/bags")) {
+        const bags = this.grow();
+        return {
+          status: 200,
+          body: {
+            bags,
+            disk_free_gb: 142,
+            disk: { total_gb: 232.2, used_gb: 90.2, free_gb: 142 },
+            bags_mb: Math.round(bags.reduce((a, b) => a + b.size_mb, 0) * 10) / 10,
+            bag_dir: "/home/racer/car/data/bags",
+            user: "racer",
+          },
+        };
+      }
+      if (path.startsWith("/api/prefs")) return { status: 200, body: { prefs: this.prefs, defaults: DEFAULT_PREFS } };
       if (path.startsWith("/api/log")) return { status: 200, body: { entries: this.log } };
       if (path.startsWith("/api/drive/log")) return { status: 200, body: { log: "" } };
       return fail(404, "not found");
@@ -328,9 +349,30 @@ export class DemoCar {
       }
       case "/api/cameras/start":
         await f(1200);
+        if (this.cameras) return fail(409, "the cameras are already running");
         this.cameras = true;
-        this.addLog("cameras/start", true, "usb and csi");
-        return ok("cameras started");
+        this.camerasRecord = this.prefs.record_camera;
+        this.addLog("cameras.start", true, `usb /dev/video1, camera ${this.camerasRecord ? "recorded" : "NOT recorded"} in the bag`);
+        return ok("cameras starting", { record: this.camerasRecord });
+      case "/api/prefs": {
+        await f(400);
+        const next = body as unknown as Prefs;
+        const g = next.gap_follow;
+        const lim = this.options().gap_follow_speed?.[g?.profile ?? ""];
+        if (g && lim && g.max_speed_mps !== null && (g.max_speed_mps < lim.min || g.max_speed_mps > lim.max)) {
+          return fail(400, `gap follow max speed for profile ${g.profile} must be between ${lim.min} and ${lim.max} m/s`);
+        }
+        this.prefs = structuredClone(next);
+        this.addLog("prefs.save", true, `record camera ${next.record_camera ? "on" : "off"}`);
+        return ok("settings saved", { prefs: this.prefs });
+      }
+      case "/api/system/cleanup":
+        await f(1500);
+        if (body.confirm !== "cleanup") return fail(400, "type 'cleanup' to confirm");
+        this.addLog("system.cleanup", true, "reclaimed 1.2GB of images, 640MB of build cache");
+        return ok("reclaimed 1.2GB of images, 640MB of build cache", {
+          output: "$ docker image prune -f\nDeleted Images:\nsha256:3f1c...\n\nTotal reclaimed space: 1.2GB\n\n$ docker builder prune -f\nTotal reclaimed space: 640MB",
+        });
       case "/api/cameras/stop":
         await f(900);
         this.cameras = false;
@@ -364,6 +406,7 @@ export class DemoCar {
         return ok(`map ${String(body.name)} saved`);
       case "/api/bags/delete":
         await f(700);
+        if (this.bags.some((b) => b.active && b.name === body.name)) return fail(409, "that bag is being recorded right now");
         this.bags = this.bags.filter((b) => b.name !== body.name || b.active);
         this.addLog("bags/delete", true, String(body.name));
         return ok(`deleted ${String(body.name)}`);

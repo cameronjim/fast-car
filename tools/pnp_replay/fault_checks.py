@@ -369,7 +369,16 @@ def _short_fault(
             f"speed {v[k]:.3f} at t={now[k]:.2f} s exceeds {bound[k]:.3f} "
             f"(before the fault {v_before:.3f} plus one ramp step)"
         )
-    odd = np.nonzero(sel & ~np.isin(state, tuple(SHORT_FAULT_STATES)))[0]
+    # Planner v0.2 ramps the speed cap down while the scan is 0.35 to 0.60 s old; when the ramp
+    # reaches the speed floor the plan cannot move: BLOCKED with reason 2 (BelowSpeedFloor) on a
+    # scan older than the soft bound is that stop, not a fault of the planner.
+    reason = rows.get("block_reason")
+    ramp_stop = (
+        np.zeros(len(now), dtype=bool)
+        if reason is None
+        else (state == STATE_BLOCKED) & (reason == 2) & (rows["scan_age_s"] > 0.35)
+    )
+    odd = np.nonzero(sel & ~np.isin(state, tuple(SHORT_FAULT_STATES)) & ~ramp_stop)[0]
     if len(odd):
         out.append(f"state {rows['state_name'][odd[0]]} at t={now[odd[0]]:.2f} s in a short fault")
     return out

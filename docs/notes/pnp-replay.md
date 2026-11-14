@@ -176,3 +176,12 @@ recording on every run) over R0 to R8 of bag 2026-11-13T22-20-18 and the gap fol
         --set solve_halve_over_ms=200 --set stall_hold_s=600 --out 2026-11-13-v0.1.json
 
 The planner of brief 25 is accepted at zero violation pairs on every run.
+
+`tools/pnp_replay/baselines/2026-11-13-v0.2.json` is the same invocation with the planner of brief 25
+(v0.2: elapsed time slew, warm start gate, plan snapshot publisher, graceful staleness,
+`min_scan_points` 10): 0 rate allowance violation pairs on R0 to R8 and P0 (v0.1: see its file).
+The zero speed share there includes the 25 tick warm start. The two findings of the fault replay
+are fixed in the planner: F1, a scan with fewer than `min_scan_points` usable points is NO_SCAN
+(speed 0 within a tick, back to DRIVING through the warm start when good scans return), F2, a
+scan stamp a few ms ahead of the tick reports age 0. In a short fault BLOCKED with block reason 2
+on a scan older than 0.35 s is the end of the cap ramp (fault_checks `ramp_stop`), not a violation.

@@ -165,6 +165,10 @@ class MppiPlannerNode : public rclcpp::Node {
         "require_gated_for_start", true,
         "Warm start needs the gated /drive to have been seen (safety_node alive). false: sim "
         "tests that run without safety_node.");
+    lg.min_scan_points =
+        static_cast<int>(declare_int("min_scan_points", lg.min_scan_points, 0, 1000,
+                                     "A scan with fewer usable points than this is NO_SCAN (an "
+                                     "empty field is not free space)."));
     lg.start_gated_grace_s = declare_double(
         "start_gated_grace_s", 0.5, 0.0, 5.0,
         "While the gated /drive has not been seen, STARTING publishes no /drive_raw for up to "

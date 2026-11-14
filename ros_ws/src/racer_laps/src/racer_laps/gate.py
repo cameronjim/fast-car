@@ -18,10 +18,17 @@ it). The heading condition is what stops a symmetric track (a stadium looks the 
 later) from closing at half a lap. Only the lower bound is used: odometry that over-reads the
 turn must not disarm the gate.
 
-Match. While armed every scan is matched to the start scan by point-to-point ICP, seeded with the
-identity and, after a first success, with the previous result advanced by wheel odometry. A match
-is accepted when RMS <= `rms_max_m`, inlier share >= `inlier_min_share`, |lateral offset| <=
-`lateral_max_m` and |relative yaw| <= `yaw_max_rad`.
+Match. While tracking (about 60 percent of a lap round, so the matches chain on the approach) and
+while armed, every scan is matched to the start scan by point-to-point ICP. Seeds: the previous
+accepted result advanced by wheel odometry while it is fresh, else a grid of along-lane and yaw
+offsets around the dead-reckoned pose of the car in the start frame (the start pose is re-anchored
+at every closure), and the identity. The RMS and inlier share are scored on denser point sets than
+the ICP iterates on. A match within 2.5 m of the start pose is then re-scored shifted along the
+start heading: ICP slides along a straight lane (the walls match at any shift) and could be a
+metre off; only the lane ends and bends decide the shift, and a clearly better one replaces it. A
+match is accepted when RMS <= `rms_max_m`, inlier share >= `inlier_min_share`, |lateral offset| <=
+`lateral_max_m` and |relative yaw| <= `yaw_max_rad`. A closure needs the gate ARMED; tracking
+alone never closes a lap.
 
 Crossing. An accepted match is the car's pose in the start frame. The lap closes when the
 longitudinal offset goes from negative to non-negative between two accepted matches at most
@@ -106,7 +113,7 @@ class GateConfig:
     #: A match within this distance of the start pose is re-scored shifted along the start
     #: heading in steps of `along_step_m`; a shift whose dense inlier share is better by
     #: `along_min_gain` replaces it (0 turns the search off). See `_refine_along`.
-    along_search_m: float = 1.5
+    along_search_m: float = 2.5
     along_step_m: float = 0.1
     along_min_gain: float = 0.03
     #: When the first accepted match of an approach (none in the previous `max_match_gap_s`) is

@@ -11,11 +11,13 @@ PREROLL_S before it so a replay has a scan, a track and odometry before its firs
     R3  4.0 to 6.0 s                                         nose-in, no free forward arc
     L   bag time 1760 to 1770 s of the longest fast stretch  another driver's laps
 
-A second fixture, tests/fixtures/pnp_fault_2026-11-13.npz (`--fault-fixture`), holds two cuts of
+A second fixture, tests/fixtures/pnp_fault_2026-11-13.npz (`--fault-fixture`), holds three cuts of
 bag 2026-11-13T22-20-18_car_teleop for the fault injection tests, at absolute bag seconds:
 
     R2  625.5 to 633.5 s    a standing start to 1.0 m/s (the first 8 s of run R2)
     R7  2975.0 to 2981.0 s  the middle of run R7: cw at 1.0 m/s
+    R4  2822.0 to 2825.0 s  3 s of run R4 (cw at 0.5 m/s): a pair of scans whose swap gives a
+                            scan age of -0.5 ms (finding F2 of tools/tests/test_pnp_replay_faults.py)
 
 Keys are "<cut>__<recording key>", plus "<cut>__window" = [t_from, t_to] in bag seconds. The file
 stays under 450 kB: scans are uint16 quarter millimetres (lossless, see bag.py) and status
@@ -46,7 +48,7 @@ FAST_CUT = ("L", 1760.0, 1770.0)
 
 FAULT_OUT = REPO_ROOT / "tools" / "tests" / "fixtures" / "pnp_fault_2026-11-13.npz"
 FAULT_MAX_BYTES = 450_000
-FAULT_CUTS = {"R2": (625.5, 633.5), "R7": (2975.0, 2981.0)}
+FAULT_CUTS = {"R2": (625.5, 633.5), "R7": (2975.0, 2981.0), "R4": (2822.0, 2825.0)}
 
 
 def windows(found: list[segments.Segment]) -> dict[str, tuple[float, float]]:

@@ -104,10 +104,18 @@ another length, another frame, spacing 0.19: the `T` line is fixed at 16 station
 them.
 
 The per-push tests are `tools/tests/test_pnp_replay_faults.py` (`test_perception[<case>]` and
-`test_planner[<case>]` on `tools/tests/fixtures/pnp_fault_2026-11-13.npz`: 8 s from the start of R2
-and 6 s from the middle of R7 of bag 2026-11-13T22-20-18; `python -m pnp_replay.cut_fixture <bag>
+`test_planner[<case>]` on `tools/tests/fixtures/pnp_fault_2026-11-13.npz`: 8 s from the start of R2,
+6 s from the middle of R7 and 3 s of R4 of bag 2026-11-13T22-20-18; `python -m pnp_replay.cut_fixture <bag>
 --fault-fixture` regenerates it) and `.github/scripts/pnp_replay_test.sh` runs them with the built
 CLI. A finding against the planner is a strict xfail with the bag time and what was commanded.
+Two stand on main (planner v0.1): F1, a scan with no usable beam (every range NaN, inf or 0) builds
+an empty distance field and the planner keeps DRIVING at 0.9 to 1.0 m/s through the whole second
+(the free-space field has no reach, min clearance 9.85 m), where BLOCKED or NO_SCAN with speed 0 is
+expected (`test_planner[scan-nan_ranges-100-*]`, every one of 18 seeded windows of R2 and R7); F2,
+a scan stream with two messages swapped can give a scan age of -0.5 ms (a header stamp ahead of the
+tick, `test_planner[scan-out_of_order-pair-r4]`, bag time 2823.877 s; the planner takes the latest
+arrival whatever its stamp). Briefs 25 and 26 own the planner; the strict xfails flip to failures
+when it is fixed, which is the cue to remove the marks.
 
 The full-bag run, a local command (every case at three seeded windows inside each PnP run, both
 consumers, JSON of the violations and a table):

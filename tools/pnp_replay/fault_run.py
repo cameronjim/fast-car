@@ -22,6 +22,7 @@ import json
 import logging
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ log = logging.getLogger(__name__)
 # Open loop: the recorded wheel does not follow the replayed commands, so the wheel stall detector
 # is set out of reach (docs/notes/pnp-replay.md).
 REPLAY_PARAMS: dict[str, float | bool] = {"solve_halve_over_ms": 200.0, "stall_hold_s": 600.0}
+RETRIES = 3
 SETTLE_BEFORE_S = 1.0  # a fault starts at least this long after the replay's first tick
 RECOVER_AFTER_S = 1.5  # and ends at least this long before its last
 
@@ -86,6 +88,8 @@ CASES: tuple[Case, ...] = (
     _c("scan-stamp_jump_backward-0.3s", "stamp_jump_backward", "scan", 0.3),
     _c("scan-stamp_jump_backward-1.0s", "stamp_jump_backward", "scan", 1.0),
     _c("scan-out_of_order-1.0s", "out_of_order", "scan", 1.0),
+    # one swapped pair of R4 whose later-arriving stamp is 0.5 ms ahead of the planner tick
+    _c("scan-out_of_order-pair-r4", "out_of_order", "scan", ("scans", 2), cut="R4", start_s=1.87),
     _c("scan-frozen-0.3s", "frozen", "scan", 0.3),
     _c("scan-frozen-1.0s", "frozen", "scan", 1.0),
     _c("scan-frozen_fresh_stamp-1.0s", "frozen_fresh_stamp", "scan", 1.0),
@@ -205,9 +209,20 @@ def run_planner(
     lines = planner_stream.stream_lines(rec, t_from, t_to, tracks_mode=tracks_mode)
     stream = work / f"{name}.stream"
     planner_stream.write_stream(lines, stream)
-    rows = planner_stream.run_cli(
-        setup.cli, setup.bundle, setup.v_max_mps, setup.params, stream, work / f"{name}.csv"
-    )
+    for attempt in range(RETRIES):
+        try:
+            rows = planner_stream.run_cli(
+                setup.cli, setup.bundle, setup.v_max_mps, setup.params, stream,
+                work / f"{name}.csv",
+            )  # fmt: skip
+            break
+        except planner_stream.ReplayError as error:
+            # Docker on a Mac shares files lazily: a stream written a moment ago can be
+            # invisible to the container once in a few hundred runs. Never a planner answer.
+            if "cannot open" not in str(error) or attempt == RETRIES - 1:
+                raise
+            log.warning("%s; retrying", error)
+            time.sleep(1.0)
     stream.unlink(missing_ok=True)
     return rows
 
@@ -247,12 +262,25 @@ def run_bag(args: argparse.Namespace) -> int:
     chosen = [s for s in chosen if s.kind == "pnp"]
     cli = planner_stream.find_cli(args.cli)
     perceiver = perception.build_perceiver("geometric")
-    rng = np.random.default_rng(args.seed)
     rows_out: list[dict[str, Any]] = []
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    def save() -> None:
+        result = {
+            "tool": "pnp_replay.fault_run",
+            "bag": args.bag.name,
+            "seed": args.seed,
+            "windows_per_case": args.windows,
+            "dynamics_bundle": args.dynamics_bundle.name,
+            "rows": rows_out,
+        }
+        out.write_text(json.dumps(_json_safe(result), indent=1) + "\n", encoding="utf-8")
+
     with tempfile.TemporaryDirectory(prefix="pnp_faults_", dir=out.parent) as tmp:
         work = Path(tmp)
         for seg in chosen:
+            # one generator per run, so a single run can be repeated on its own
+            rng = np.random.default_rng([args.seed, int(seg.name.lstrip("R") or 0)])
             v_max = args.v_max_segment.get(seg.name, args.v_max)
             setup = planner_setup(cli, args.dynamics_bundle, v_max)
             a, b = seg.t_from, seg.t_to
@@ -263,10 +291,8 @@ def run_bag(args: argparse.Namespace) -> int:
                 log.warning("%s: the UNFAULTED replay breaks the always rules: %s", seg.name,
                             base_bad[0])  # fmt: skip
             for case in CASES:
-                if case.id.endswith("-start") or (
-                    case.target == "track" and not (rec["trk_t"] >= a).any()
-                ):
-                    continue  # "-start" cases are fixed windows of the fixture's R2
+                if case.cut != "R7" or (case.target == "track" and not (rec["trk_t"] >= a).any()):
+                    continue  # the other cuts hold fixed windows of the fixture
                 for k, t_start in enumerate(random_starts(rng, a, b, case, args.windows)):
                     t0, t1 = case.window(rec, t_start)
                     seed = int(rng.integers(0, 2**31 - 1))
@@ -298,15 +324,8 @@ def run_bag(args: argparse.Namespace) -> int:
                     log.info("%s %s w%d: %s", seg.name, case.id, k,
                              "ok" if not (row["planner_violations"] or
                                           row.get("perception_violations")) else "VIOLATION")  # fmt: skip
-    result = {
-        "tool": "pnp_replay.fault_run",
-        "bag": args.bag.name,
-        "seed": args.seed,
-        "windows_per_case": args.windows,
-        "dynamics_bundle": args.dynamics_bundle.name,
-        "rows": rows_out,
-    }
-    out.write_text(json.dumps(_json_safe(result), indent=1) + "\n", encoding="utf-8")
+            save()  # a crash in a later run keeps this one's rows
+    save()
     bad = [r for r in rows_out if r["planner_violations"] or r.get("perception_violations")]
     print(f"{len(rows_out)} injections, {len(bad)} with a violation; wrote {out}")
     tally: dict[str, list[int]] = {}

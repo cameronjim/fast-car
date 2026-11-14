@@ -7,7 +7,7 @@ Three parts:
 2. The rules of tools/pnp_replay/fault_checks.py, tested on hand-made data (a rule that cannot fail
    is not a rule).
 3. Every fault against both consumers on the committed fixture
-   (tools/tests/fixtures/pnp_fault_2026-11-13.npz, two cuts of bag 2026-11-13T22-20-18): one test
+   (tools/tests/fixtures/pnp_fault_2026-11-13.npz, three cuts of bag 2026-11-13T22-20-18): one test
    id per (fault, consumer, variant), `test_perception[...]` for the perception core
    (`TrackPerceiver.process`, what the node calls) and `test_planner[...]` for the real planner
    through planner_replay_cli (skipped, with the reason, unless the binary is built; the CI job
@@ -575,7 +575,7 @@ def test_perception_rules_pass_a_good_track_and_name_each_violation() -> None:
 # --- part 3: every fault against both consumers, on the fixture ------------------------------
 
 
-def test_fixture_is_small_and_has_the_two_cuts() -> None:
+def test_fixture_is_small_and_has_the_three_cuts() -> None:
     assert FIXTURE.stat().st_size < 500_000
     for name, (a, b) in cut_fixture.FAULT_CUTS.items():
         rec, wa, wb = cut_fixture.load_cut(FIXTURE, name)
@@ -692,7 +692,16 @@ _NAN_FINDING = (
     "2977.04 to 2978.0 s; the unfaulted replay commands 0.89 to 0.96 m/s there). Expected "
     "BLOCKED or NO_SCAN with speed 0."
 )
+_AGE_FINDING = (
+    "FINDING F2: two scans that arrive in swapped order (fixture R4, the pair arriving at bag time "
+    "2823.877 s) put a header stamp 0.5 ms AHEAD of a planner tick: the CSV's scan_age_s is "
+    "-0.00047 s at the tick of 2823.880 s. The planner takes the latest ARRIVAL as the current "
+    "scan, whatever its stamp, and only a stamp from the future by more than the timeout makes "
+    "it stale. About 13 percent of swapped pairs of this lidar stream carry a stamp ahead of "
+    "their arrival slot, by up to 6 ms; whether a tick lands inside that gap depends on its phase."
+)
 PLANNER_XFAIL = {
+    "scan-out_of_order-pair-r4": _AGE_FINDING,
     "scan-nan_ranges-100-nan": _NAN_FINDING,
     "scan-nan_ranges-100-inf": _NAN_FINDING,
     "scan-nan_ranges-100-zero": _NAN_FINDING,

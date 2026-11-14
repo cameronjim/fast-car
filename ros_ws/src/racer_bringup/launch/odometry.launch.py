@@ -44,6 +44,15 @@ def generate_launch_description() -> LaunchDescription:
         ),
     )
 
+    use_sim_time_arg = DeclareLaunchArgument(
+        "use_sim_time",
+        default_value="false",
+        description=(
+            "Run the nodes on /clock (the sim bridge's sim_time mode, GitHub issue 156). "
+            "false everywhere on the car."
+        ),
+    )
+
     wheel_twist_node = Node(
         package="racer_state",
         executable="wheel_twist_node",
@@ -51,6 +60,9 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {
+                "use_sim_time": ParameterValue(
+                    LaunchConfiguration("use_sim_time"), value_type=bool
+                ),
                 "wheel_odom_topic": LaunchConfiguration("wheel_odom_topic"),
                 "yaw_gain_override": ParameterValue(
                     LaunchConfiguration("yaw_gain_override"), value_type=float
@@ -63,10 +75,20 @@ def generate_launch_description() -> LaunchDescription:
         executable="ekf_node",
         name="ekf_node",
         output="screen",
-        parameters=[LaunchConfiguration("ekf_params_file")],
+        parameters=[
+            LaunchConfiguration("ekf_params_file"),
+            {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)},
+        ],
         # claude-docs/04-architecture.md: /odom comes from the EKF.
         remappings=[("odometry/filtered", "/odom")],
     )
     return LaunchDescription(
-        [ekf_params_arg, wheel_odom_topic_arg, yaw_gain_arg, wheel_twist_node, ekf_node]
+        [
+            ekf_params_arg,
+            wheel_odom_topic_arg,
+            yaw_gain_arg,
+            use_sim_time_arg,
+            wheel_twist_node,
+            ekf_node,
+        ]
     )

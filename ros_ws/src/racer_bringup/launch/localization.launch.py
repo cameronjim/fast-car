@@ -73,8 +73,19 @@ def generate_launch_description() -> LaunchDescription:
         ),
     ]
 
+    use_sim_time_arg = DeclareLaunchArgument(
+        "use_sim_time",
+        default_value="false",
+        description=(
+            "Run the nodes on /clock (the sim bridge's sim_time mode, GitHub issue 156). "
+            "false everywhere on the car."
+        ),
+    )
+    use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
+
     odometry_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(_ODOMETRY_LAUNCH_FILE),
+        launch_arguments={"use_sim_time": LaunchConfiguration("use_sim_time")}.items(),
         condition=IfCondition(LaunchConfiguration("odometry")),
     )
     map_server = Node(
@@ -82,7 +93,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="map_server",
         name="map_server",
         output="screen",
-        parameters=[{"yaml_filename": LaunchConfiguration("map")}],
+        parameters=[{"yaml_filename": LaunchConfiguration("map"), "use_sim_time": use_sim_time}],
     )
     amcl = Node(
         package="nav2_amcl",
@@ -92,6 +103,7 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             LaunchConfiguration("amcl_params_file"),
             {
+                "use_sim_time": use_sim_time,
                 "set_initial_pose": ParameterValue(
                     LaunchConfiguration("set_initial_pose"), value_type=bool
                 ),
@@ -113,11 +125,18 @@ def generate_launch_description() -> LaunchDescription:
         executable="lifecycle_manager",
         name="lifecycle_manager_localization",
         output="screen",
-        parameters=[{"autostart": True, "node_names": ["map_server", "amcl"]}],
+        parameters=[
+            {
+                "autostart": True,
+                "node_names": ["map_server", "amcl"],
+                "use_sim_time": use_sim_time,
+            }
+        ],
     )
     return LaunchDescription(
         [
             *args,
+            use_sim_time_arg,
             OpaqueFunction(function=_require_map),
             odometry_launch,
             map_server,

@@ -514,6 +514,195 @@ def write_v1_bundle(
     return out
 
 
+def default_model_id_v2(today: dt.date | None = None) -> str:
+    return f"trackperc-v2-{(today or dt.datetime.now(dt.timezone.utc).date()).isoformat()}"
+
+
+def data_lines_v2(
+    config: dict[str, Any], selection: dict[str, Any] | None, recipe_sha: str
+) -> list[str]:
+    lines = data_lines_v1(config, selection)
+    lines.append(
+        f"scale augmentation of real samples, factor uniform in {config.get('scale_range')} about "
+        f"the LiDAR position, probability {config.get('scale_probability')} (pre-registration "
+        "v0.3 section 3.1); the scan refinement runs after the net (io.arch.type "
+        "circ_conv1d_v0_refine_v1)"
+    )
+    lines.append(
+        "real self-labels include the two 2026-10 bags (role train in the frozen v0.2 split; "
+        "ICP ground speed at least 0.2 m/s is their moving test, they have no /odom/wheel)"
+    )
+    lines.append(f"recipe frozen at git {recipe_sha} before any fold was trained or scored")
+    return lines
+
+
+def _variant_lines(name: str, v: dict[str, Any]) -> list[str]:
+    lines = [
+        f"### {name}: {v['outcome']}",
+        "",
+        "| item | result | note |",
+        "|---|---|---|",
+    ]
+    for item in v["items"]:
+        lines.append(
+            f"| {item['number']}. {item['name']} | {'pass' if item['passed'] else 'FAIL'} "
+            f"| {item['note']} |"
+        )
+    lines += [
+        "",
+        (
+            "| set | backend | scans | E_c (m) | V | intrusion | residual median (m) "
+            "| deficit p90 (m) | C95 |"
+        ),
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for set_name in ("H-run", "A-run", "A-layout-2026-11-12"):
+        for backend, n in v[set_name].items():
+            lines.append(
+                f"| {set_name} | {backend} | {n['scans']} | {_fmt(n.get('e_c_m'))} | "
+                f"{_fmt(n.get('v'))} | {_fmt(n.get('intrusion_mean'))} | "
+                f"{_fmt(n.get('residual_median_m'))} | {_fmt(n.get('deficit_p90_m'))} | "
+                f"{_fmt(n.get('c95'))} |"
+            )
+    for fold, fr in v["folds"].items():
+        for backend in fr["labelled"]:
+            lab, free = fr["labelled"][backend], fr["free"][backend]
+            lines.append(
+                f"| fold {fold} | {backend} | {lab['scans']} labelled / {free['scans']} moving | "
+                f"{_fmt(lab['e_c_m'])} | {_fmt(lab['v'])} | {_fmt(free['intrusion_mean'])} | "
+                f"{_fmt(free['residual_median_m'])} | {_fmt(free['deficit_p90_m'])} | "
+                f"{_fmt(free['c95'])} |"
+            )
+    return lines + [""]
+
+
+def readme_v2(model_id: str, metrics: dict[str, Any]) -> str:
+    """README of the v2 pointer. The first line is the GP1b verdict (net plus scan refinement)."""
+    g = metrics["gp1b"]
+    lines = [
+        f"GP1b verdict: {g['refined']['outcome']}",
+        "",
+        f"# {model_id}",
+        "",
+        "Net plus scan refinement (`io.arch.type: circ_conv1d_v0_refine_v1`): the v1 network with",
+        "scale-augmented real samples, followed by `racer_track_perception.refine`. Weights are not",
+        "committed (`/Users/cameronjim/code/car-data/pnp/models/`). Decision rule:",
+        "`docs/notes/preregistration-pnp-v0.3.md` section 3.3, constants",
+        "`evaluation/prereg/pnp-v0.3.yaml`; thresholds are those of v0.2 section 2.",
+        f"Recipe frozen at git `{metrics.get('recipe_sha')}`. Split SHA-256 `{g['split_sha256']}`.",
+        f"Moving scans: {g['moving_rule']}; speed source per fold bag: {g['speed_source']}.",
+        "",
+        "The clearance deficit of the refined output holds BY CONSTRUCTION (per-side clearance cap",
+        "in the refinement); the variant without the cap and the unrefined net are printed next to",
+        "it. The decision below is the registered one, applied as written.",
+        "",
+    ]
+    lines += _variant_lines("refined (candidate)", g["refined"])
+    lines += _variant_lines("refined, without the clearance cap (report only)", g["refined_no_cap"])
+    lines += _variant_lines("unrefined (same weights, report only)", g["unrefined"])
+    lat = metrics.get("latency_ms")
+    if lat:
+        lines += [
+            f"Latency on the dev machine, {lat['scans']} real scans, preprocess + net + refinement:",
+            f"p50 {_fmt(lat['p50'])} ms, p99 {_fmt(lat['p99'])} ms. The Orin budget is p99 under 10 ms",
+            f"scan to message; {lat['proxy_note']}",
+            "",
+        ]
+    lines += ["Everything, as stored in the bundle manifest (`metrics.json` is the same):", ""]
+    return "\n".join(lines) + "\n"
+
+
+def export_v2(
+    run: Path,
+    model_id: str,
+    gp1b_result: dict[str, Any] | None,
+    extra: dict[str, Any],
+    repo: Path,
+    recipe_sha: str,
+    selection: dict[str, Any] | None = None,
+    models_dir: Path = MODELS_DIR,
+) -> Path:
+    """The v2 bundle (refine arch type) from a training run; a candidate without `gp1b_result`."""
+    import torch
+    from racer_track_perception.bundle import expected_io_refine
+
+    from racer_pnp_perception import model
+
+    live = load_live_vehicle(repo)
+    check_pinned(live)
+    net = model.build_model()
+    net.load_state_dict(torch.load(run / "model.pt", map_location="cpu"))
+    net.eval()
+    arrays = model.to_npz_arrays(net)
+    x = np.random.default_rng(0).uniform(0.0, 1.0, size=(8, 2, 360)).astype(np.float32)
+    with torch.no_grad():
+        want = net(torch.from_numpy(x)).numpy()
+    runtime = CircConv1dV0(arrays)
+    worst = max(float(np.abs(runtime.forward(x[i : i + 1]) - want[i]).max()) for i in range(8))
+    if worst > 1e-5:
+        raise RuntimeError(f"numpy runtime differs from torch by {worst}")
+    config = json.loads((run / "config.json").read_text())
+    metrics: dict[str, Any] = {
+        "numpy_vs_torch_max_abs_diff": worst,
+        "recipe_sha": recipe_sha,
+        **extra,
+    }
+    if gp1b_result is None:
+        metrics["status"] = "candidate: GP1b not yet decided"
+    else:
+        metrics["gp1b"] = gp1b_result
+    out = models_dir / model_id
+    out.mkdir(parents=True, exist_ok=True)
+    np.savez(out / "weights.npz", **arrays)
+    manifest = build_manifest(
+        live,
+        model_id,
+        hashlib.sha256((out / "weights.npz").read_bytes()).hexdigest(),
+        hashlib.sha256((run / "config.json").read_bytes()).hexdigest(),
+        git_sha(repo),
+        data_lines_v2(config, selection, recipe_sha),
+        _clean(metrics),
+    )
+    manifest["io"] = expected_io_refine(live)
+    write_manifest(out, manifest)
+    bundle = load_bundle(out, "track_perception", live)
+    if not bundle.refine:
+        raise RuntimeError("the v2 bundle does not declare the refinement")
+    return out
+
+
+def write_pointer_v2(repo: Path, bundle_dir: Path, metrics: dict[str, Any]) -> Path:
+    manifest = yaml.safe_load((bundle_dir / "manifest.yaml").read_text())
+    model_id = manifest["model_id"]
+    out = repo / "training" / "pnp_models" / model_id
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(bundle_dir / "manifest.yaml", out / "manifest.yaml")
+    clean = _clean(metrics)
+    (out / "metrics.json").write_text(json.dumps(clean, indent=2, allow_nan=False))
+    (out / "README.md").write_text(readme_v2(model_id, clean))
+    return out
+
+
+def main_v2(args: argparse.Namespace) -> int:
+    repo = find_repo_root()
+    result = json.loads(args.gp1b.read_text()) if args.gp1b else None
+    extra: dict[str, Any] = {}
+    if args.latency_json:
+        extra["latency_ms"] = json.loads(args.latency_json.read_text())
+    selection_path = args.run.parent / "selection.json"
+    selection = json.loads(selection_path.read_text()) if selection_path.is_file() else None
+    out = export_v2(
+        args.run, args.model_id, result, extra, repo, args.recipe_sha, selection, args.models_dir
+    )
+    if result is None:
+        print(out)
+        return 0
+    metrics = yaml.safe_load((out / "manifest.yaml").read_text())["metrics"]
+    write_pointer_v2(repo, out, metrics)
+    print(out)
+    return 0
+
+
 def main_v1(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     gp1_result = json.loads(args.gp1.read_text()) if args.gp1 else None
@@ -558,10 +747,19 @@ def main(argv: list[str] | None = None) -> int:
         "--v1", action="store_true", help="export the v1 bundle (see the docstring)"
     )
     parser.add_argument("--gp1", type=Path, default=None)
+    parser.add_argument("--v2", action="store_true", help="export the v2 bundle (scan refinement)")
+    parser.add_argument("--gp1b", type=Path, default=None)
+    parser.add_argument("--recipe-sha", default=None, help="git SHA the recipe was frozen at")
     parser.add_argument("--latency-json", type=Path, default=None)
     parser.add_argument("--copy-release-fixture", action="store_true")
     parser.add_argument("--models-dir", type=Path, default=MODELS_DIR)
     args = parser.parse_args(argv)
+    if args.v2:
+        if args.run is None or args.recipe_sha is None:
+            parser.error("--v2 needs --run and --recipe-sha")
+        if args.model_id == default_model_id():
+            args.model_id = default_model_id_v2()
+        return main_v2(args)
     if args.v1:
         if args.run is None:
             parser.error("--v1 needs --run")

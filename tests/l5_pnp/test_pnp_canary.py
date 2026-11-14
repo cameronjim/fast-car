@@ -282,6 +282,9 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
 TIMING_SEED = 13
 TIMING_STALL_SEED = 2026
 RATE_FRACTION = 0.45  # the planner's rate_limit_fraction (its default; the cases leave it alone)
+# Runs in parallel containers on one docker network see each other's DDS traffic unless their
+# domain ids differ: RACER_L5_PNP_DOMAIN_OFFSET shifts the ids of the timing cases.
+DOMAIN_OFFSET = int(os.environ.get("RACER_L5_PNP_DOMAIN_OFFSET", "0"))
 FULL = os.environ.get("RACER_L5_PNP_FULL") == "1"
 FULL_SKIP = pytest.mark.skipif(
     not FULL,
@@ -427,9 +430,13 @@ def run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domai
 
 @pytest.mark.parametrize(("track", "reverse", "v_max", "stalls", "laps"), TIMING_PUSH_CASES)
 def test_pnp_planner_timing(track, reverse, v_max, stalls, laps, tmp_path, capsys):
-    run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domain_id=83)
+    run_timing_case(
+        track, reverse, v_max, stalls, laps, tmp_path, capsys, domain_id=83 + DOMAIN_OFFSET
+    )
 
 
 @pytest.mark.parametrize(("track", "reverse", "v_max", "stalls", "laps"), TIMING_FULL_CASES)
 def test_pnp_planner_timing_full_matrix(track, reverse, v_max, stalls, laps, tmp_path, capsys):
-    run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domain_id=84)
+    run_timing_case(
+        track, reverse, v_max, stalls, laps, tmp_path, capsys, domain_id=84 + DOMAIN_OFFSET
+    )

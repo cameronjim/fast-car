@@ -130,6 +130,7 @@ class TrackPerceptionNode(Node):
             )
 
         net = None
+        refine_net = False
         model_id = core.GEOMETRIC_MODEL_ID
         payload_sha: str | None = None
         if backend == core.BACKEND_NET:
@@ -142,6 +143,7 @@ class TrackPerceptionNode(Node):
             except (BundleRefused, ModelFormatError) as exc:
                 raise StartupRefused(f"{type(exc).__name__}: {exc}") from exc
             model_id = bundle.model_id
+            refine_net = bundle.refine  # the bundle decides; no launch argument selects it
             payload_sha = bundle.weights_sha256
 
         self._perceiver = core.TrackPerceiver(
@@ -153,6 +155,7 @@ class TrackPerceptionNode(Node):
             hw_max_m=float(hw_max_m),
             net=net,
             model_id=model_id,
+            refine_net=refine_net,
         )
         self._backend_code = 0 if backend == core.BACKEND_NET else 1
         self._stats = PerceptionStats(backend, model_id, payload_sha)
@@ -177,6 +180,7 @@ class TrackPerceptionNode(Node):
         self.create_timer(1.0, self._on_status_timer)
         self.get_logger().info(
             f"track_perception_node: backend {backend}, model_id {model_id}, "
+            f"scan refinement {refine_net}, "
             f"payload sha256 {payload_sha}"
         )
 

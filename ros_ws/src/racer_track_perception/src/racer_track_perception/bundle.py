@@ -38,6 +38,10 @@ from racer_track_perception.vehicle import LiveVehicle, find_repo_root
 SUPPORTED_SCHEMA_MAJOR = 1
 KIND = "track_perception"
 ARCH_TYPE = "circ_conv1d_v0"
+# The same network followed by `refine.refine_track` (design 15.5). The bundle says what runs: a
+# loader that does not know the second value refuses it as an IoContractMismatch.
+ARCH_TYPE_REFINE_V1 = "circ_conv1d_v0_refine_v1"
+ARCH_TYPES = (ARCH_TYPE, ARCH_TYPE_REFINE_V1)
 MOUNT_TOLERANCE = 1e-6
 WEIGHTS_FILE = "weights.npz"
 SCHEMA_RELATIVE = Path("config") / "pnp" / "bundle.schema.json"
@@ -51,6 +55,11 @@ class Bundle:
     @property
     def model_id(self) -> str:
         return str(self.manifest["model_id"])
+
+    @property
+    def refine(self) -> bool:
+        """True when the bundle declares the scan refinement after the net."""
+        return str(self.manifest["io"]["arch"]["type"]) == ARCH_TYPE_REFINE_V1
 
     @property
     def weights_sha256(self) -> str:
@@ -103,6 +112,13 @@ def expected_io(vehicle: LiveVehicle) -> dict[str, Any]:
     }
 
 
+def expected_io_refine(vehicle: LiveVehicle) -> dict[str, Any]:
+    """`expected_io` of a bundle that declares the scan refinement."""
+    io = expected_io(vehicle)
+    io["arch"] = {"type": ARCH_TYPE_REFINE_V1}
+    return io
+
+
 def preprocess_tensor_shape() -> tuple[int, int, int]:
     return (1, 2, preprocess.N_BINS)
 
@@ -137,8 +153,10 @@ def _check_io(io: dict[str, Any], vehicle: LiveVehicle) -> None:
                 f"io.lidar_mount.{key} is {got!r}, the live vehicle_params has {value!r}"
             )
     arch = io.get("arch", {}).get("type")
-    if arch != ARCH_TYPE:
-        raise IoContractMismatch(f"io.arch.type is {arch!r}, this node implements {ARCH_TYPE!r}")
+    if arch not in ARCH_TYPES:
+        raise IoContractMismatch(
+            f"io.arch.type is {arch!r}, this node implements {' and '.join(ARCH_TYPES)}"
+        )
 
 
 def _sha256(path: Path) -> str:

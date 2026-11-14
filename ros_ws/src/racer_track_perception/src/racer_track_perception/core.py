@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from racer_track_perception import geometric, preprocess, selfcheck
+from racer_track_perception import geometric, preprocess, refine, selfcheck
 from racer_track_perception import track as tr
 from racer_track_perception.runtime import CircConv1dV0
 from racer_track_perception.vehicle import LiveVehicle
@@ -51,6 +51,7 @@ class TrackPerceiver:
         hw_max_m: float = geometric.DEFAULT_HW_MAX_M,
         net: CircConv1dV0 | None = None,
         model_id: str | None = None,
+        refine_net: bool = False,
     ) -> None:
         if backend not in (BACKEND_NET, BACKEND_GEOMETRIC):
             raise ValueError(f"backend must be 'net' or 'geometric', got {backend!r}")
@@ -60,7 +61,11 @@ class TrackPerceiver:
         self.vehicle = vehicle
         self.sigma_max_m = sigma_max_m
         self.net = net
+        # `Bundle.refine`: the bundle's io.arch.type says the net output is refined against the
+        # scan. Only the net backend has an output to refine; geometric-v1 is the scan itself.
+        self.refine_net = bool(refine_net) and backend == BACKEND_NET
         self.model_id = (model_id or "unknown") if backend == BACKEND_NET else GEOMETRIC_MODEL_ID
+        self._refine_cfg = refine.RefineConfig(sigma_max_m=sigma_max_m)
         self._geo_cfg = geometric.GeometricConfig(
             default_half_width_m=default_half_width_m, hw_min_m=hw_min_m, hw_max_m=hw_max_m
         )
@@ -86,6 +91,8 @@ class TrackPerceiver:
             if self.backend == BACKEND_NET:
                 assert self.net is not None
                 track = net_output_to_track(self.net.forward(tensor), self.sigma_max_m)
+                if self.refine_net:
+                    track = refine.refine_track(track, points, self._refine_cfg)
             else:
                 track = geometric.trace(
                     points, self.vehicle.body.half_width_m, self.sigma_max_m, self._geo_cfg

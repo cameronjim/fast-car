@@ -5,8 +5,8 @@
         dynamics_bundle:=/workspace/data/pnp/models/<dynamics model_id> v_max_mps:=0.5
 
 Started in a second terminal next to the running stack (`car_teleop.launch.py lidar:=true
-vesc:=true`, recorder on), exactly like racer_control's gap_follow.launch.py. It starts two nodes
-and nothing else:
+vesc:=true`, recorder on), exactly like racer_control's gap_follow.launch.py. It starts the
+driving nodes and nothing else that touches the command path:
 
     racer_track_perception/track_perception_node   /scan -> /pnp/local_track
     racer_planner/mppi_planner_node                /pnp/local_track + /odom/wheel -> /drive_raw
@@ -15,16 +15,41 @@ mppi_planner_node is the only publisher of /drive_raw and nothing here publishes
 anything onto it: the command still goes through safety_node and the hardware mux (CLAUDE.md
 invariant 1). One driver at a time: never start this next to gap_follow or the tracker.
 
+Speeds. `v_max_mps` is the absolute cap handed to the planner (the ceiling; the planner already
+refuses a value above the dynamics bundle's validity). `v_lap1_mps` (default: equal to `v_max_mps`,
+so a launch without lap memory behaves exactly as before) is the cap of lap 1: the lap memory's
+start cap and, with `lap_memory:=true`, the planner's `v_no_guidance_mps`, the speed it uses when
+the guidance is missing, stale or malformed. With lap memory a dead lap node therefore leaves the
+car at the lap-1 cap, never at the ceiling.
+
 Refusals (a launch that does not start is the safe outcome):
 
 * `require_recorder` (default true): the launch refuses to start unless a rosbag2 recorder node
   is in the ROS graph (CLAUDE.md invariant 5: every run is logged). The check waits up to 5 s.
   Only sim tests pass false.
 * `dynamics_bundle` is required, and `perception_bundle` is required with `backend:=net`.
-* `lap_memory` (default false) adds racer_laps' lap_memory_node and sets the planner's
-  `use_lap_guidance`. The first run is the two nodes only.
-* If either node exits for any reason the whole launch shuts down, so a node that refuses its
-  bundle leaves nothing running; safety_node's watchdog then brakes on the silent /drive_raw.
+* `lap_memory:=true` with `v_lap1_mps` above `v_max_mps`; `lap_mode:=v1` with
+  `lap_source:=map_pose` (D v1 is indexed by station).
+* `require_lap_counter:=true` (evaluation runs) refuses when no `lap_counter_node` is in the graph
+  within 5 s (checked at once with `lap_counter:=false`, five seconds after start otherwise, when
+  the launch shuts down).
+* If any driving node or `lap_memory_node` exits for any reason the whole launch shuts down, so a
+  node that refuses its bundle leaves nothing running; safety_node's watchdog then brakes on the
+  silent /drive_raw.
+
+Options that are measurements, not part of the command path:
+
+* `lap_memory` (default false) adds racer_laps' lap_memory_node (`lap_source:=start_scan|map_pose`,
+  `lap_mode:=v0|v1`) and sets the planner's `use_lap_guidance`.
+* `lap_counter` (default true) starts racer_perception's camera lap counter unless a node named
+  `lap_counter_node` is already in the graph, and calls `/lap_counter/reset` once so the
+  reference frame is this run's start line. If the package or OpenCV is missing (the node exits
+  with code 3) the launch logs one clear error and the driver keeps running. `/lap/event` and
+  `/lap/status` are in the stack recorder's regex.
+* `shadow_perception_bundle:=<dir>` starts a SECOND perception node, `track_perception_shadow`
+  (`backend:=net`), publishing `/pnp/shadow/local_track` and `/pnp/shadow/perception/status`.
+  Nothing subscribes to them; the recorder takes them (`/pnp/.*`). Its exit does not shut the
+  launch down.
 """
 
 from __future__ import annotations
@@ -36,39 +61,59 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    LogInfo,
     OpaqueFunction,
     RegisterEventHandler,
+    TimerAction,
 )
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.launch_context import LaunchContext
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 BACKENDS = ("net", "geometric")
+LAP_SOURCES = ("start_scan", "map_pose")
+LAP_MODES = ("v0", "v1")
 RECORDER_NODE_SUBSTRING = "rosbag2_recorder"
 RECORDER_WAIT_S = 5.0
 RECORDER_REFUSAL = "refusing to drive: no rosbag recorder in the graph (every run is logged)"
+LAP_COUNTER_NODE = "lap_counter_node"
+LAP_COUNTER_WAIT_S = 5.0
+LAP_COUNTER_PROBE_S = 1.0
+LAP_COUNTER_REFUSAL = (
+    "refusing to drive: require_lap_counter is true and no lap_counter_node is in the graph"
+)
+LAP_COUNTER_RESET_TIMEOUT_S = 30
+LAP_COUNTER_OPENCV_EXIT = 3
+SHADOW_NODE_NAME = "track_perception_shadow"
+SHADOW_REMAPPINGS = [
+    ("/pnp/local_track", "/pnp/shadow/local_track"),
+    ("/pnp/perception/status", "/pnp/shadow/perception/status"),
+]
 
 # Parameter names the two nodes declare for their bundle directories.
 PERCEPTION_BUNDLE_PARAM = "bundle_dir"
 DYNAMICS_BUNDLE_PARAM = "dynamics_bundle"
 
 
-def recorder_in_graph(timeout_s: float = RECORDER_WAIT_S) -> bool:
-    """True once a node whose name contains `rosbag2_recorder` is in the ROS graph, polling for
-    up to `timeout_s`. Uses a short-lived rclpy node in its own context, so it neither disturbs
-    nor depends on the launch's own rclpy state."""
+def _node_in_graph(matches, timeout_s: float) -> bool:
+    """True once a node whose name satisfies `matches` is in the ROS graph, polling for up to
+    `timeout_s`. Uses a short-lived rclpy node in its own context, so it neither disturbs nor
+    depends on the launch's own rclpy state."""
     import rclpy
 
     context = rclpy.Context()
     rclpy.init(context=context)
     try:
-        node = rclpy.create_node("pnp_launch_recorder_probe", context=context)
+        node = rclpy.create_node("pnp_launch_probe", context=context)
         try:
             deadline = time.monotonic() + timeout_s
             while True:
-                if any(RECORDER_NODE_SUBSTRING in name for name in node.get_node_names()):
+                if any(matches(name) for name in node.get_node_names()):
                     return True
                 if time.monotonic() >= deadline:
                     return False
@@ -77,6 +122,18 @@ def recorder_in_graph(timeout_s: float = RECORDER_WAIT_S) -> bool:
             node.destroy_node()
     finally:
         rclpy.shutdown(context=context)
+
+
+def recorder_in_graph(timeout_s: float = RECORDER_WAIT_S) -> bool:
+    """True once a node whose name contains `rosbag2_recorder` is in the ROS graph, polling for
+    up to `timeout_s`."""
+    return _node_in_graph(lambda name: RECORDER_NODE_SUBSTRING in name, timeout_s)
+
+
+def lap_counter_in_graph(timeout_s: float = LAP_COUNTER_PROBE_S) -> bool:
+    """True once a node named `lap_counter_node` is in the ROS graph, polling for up to
+    `timeout_s`."""
+    return _node_in_graph(lambda name: name == LAP_COUNTER_NODE, timeout_s)
 
 
 def parameters_for(
@@ -135,6 +192,28 @@ def nodes_for(perception_params: dict, planner_params: dict, params_file: str) -
     return perception, planner
 
 
+def shadow_node_for(
+    shadow_bundle: str, laser_yaw_from_vehicle_params: bool, params_file: str
+) -> Node:
+    """A second perception node (net backend) whose outputs nothing subscribes to."""
+    base = [params_file] if params_file else []
+    return Node(
+        package="racer_track_perception",
+        executable="track_perception_node",
+        name=SHADOW_NODE_NAME,
+        output="screen",
+        parameters=[
+            *base,
+            {
+                "backend": "net",
+                PERCEPTION_BUNDLE_PARAM: shadow_bundle,
+                "laser_yaw_from_vehicle_params": laser_yaw_from_vehicle_params,
+            },
+        ],
+        remappings=SHADOW_REMAPPINGS,
+    )
+
+
 def validity_v_max_mps(dynamics_bundle: str) -> float:
     """`io.validity.v_max_mps` of the dynamics bundle's manifest. Raises (so the launch fails
     before any node starts) if it cannot be read: the lap memory cap ceiling comes from here."""
@@ -148,13 +227,37 @@ def validity_v_max_mps(dynamics_bundle: str) -> float:
         raise RuntimeError(f"pnp.launch.py: no io.validity.v_max_mps in {path}") from exc
 
 
-def lap_memory_parameters(dynamics_bundle: str, v_max_mps: float) -> dict:
-    """Parameters of racer_laps' lap_memory_node: the cap starts at the launch's v_max_mps and
-    can rise to, never above, the dynamics bundle's validity range."""
-    ceiling = validity_v_max_mps(dynamics_bundle)
+def lap_memory_parameters(
+    dynamics_bundle: str,
+    v_max_mps: float,
+    v_lap1_mps: float | None = None,
+    lap_mode: str = "v0",
+    lap_source: str = "start_scan",
+) -> dict:
+    """Parameters of racer_laps' lap_memory_node. The cap starts at `v_lap1_mps` (default
+    `v_max_mps`) and can rise to, never above, the lower of `v_max_mps` and the dynamics
+    bundle's validity range. Refuses `v_lap1_mps` above `v_max_mps` and `lap_mode:=v1` with the
+    map-pose source."""
+    if lap_source not in LAP_SOURCES:
+        raise RuntimeError(f"pnp.launch.py: lap_source must be one of {list(LAP_SOURCES)}")
+    if lap_mode not in LAP_MODES:
+        raise RuntimeError(f"pnp.launch.py: lap_mode must be one of {list(LAP_MODES)}")
+    if lap_mode == "v1" and lap_source != "start_scan":
+        raise RuntimeError(
+            "pnp.launch.py: lap_mode:=v1 needs lap_source:=start_scan (D v1 is indexed by station)"
+        )
+    lap1 = float(v_max_mps) if v_lap1_mps is None else float(v_lap1_mps)
+    if lap1 > float(v_max_mps):
+        raise RuntimeError(
+            f"pnp.launch.py: v_lap1_mps {lap1} is above v_max_mps {v_max_mps} "
+            "(lap 1 can not be faster than the ceiling)"
+        )
+    ceiling = min(float(v_max_mps), validity_v_max_mps(dynamics_bundle))
     return {
         "v_cap_ceiling_mps": ceiling,
-        "v_cap_start_mps": min(float(v_max_mps), ceiling),
+        "v_cap_start_mps": min(lap1, ceiling),
+        "lap_mode": lap_mode,
+        "lap_source": lap_source,
     }
 
 
@@ -165,24 +268,115 @@ def _bool(value: str, name: str) -> bool:
     return value == "true"
 
 
+def _log_exit(label: str, note: str):
+    """An exit handler that logs and does NOT shut the launch down."""
+
+    def handler(event, context):
+        name = getattr(event, "process_name", "")
+        code = getattr(event, "returncode", None)
+        return [LogInfo(msg=f"[pnp.launch.py] {label} ({name}) exited with code {code}: {note}")]
+
+    return handler
+
+
+def lap_counter_actions(require: bool) -> list:
+    """Start the camera lap counter and reset it once. A failure of the counter (OpenCV missing,
+    exit code 3, or the package absent) is logged and never stops the driver."""
+    from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
+
+    try:
+        share = get_package_share_directory("racer_perception")
+    except PackageNotFoundError:
+        return [
+            LogInfo(
+                msg="[pnp.launch.py] ERROR: racer_perception is not installed, so there is no "
+                "camera lap counter in this run; the driver keeps running without one"
+            )
+        ]
+    include = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(str(Path(share) / "launch" / "lap_counter.launch.py"))
+    )
+
+    def on_exit(event, context):
+        if "lap_counter_node" not in getattr(event, "process_name", ""):
+            return []
+        code = getattr(event, "returncode", None)
+        why = (
+            "OpenCV is missing (install python3-opencv)"
+            if code == LAP_COUNTER_OPENCV_EXIT
+            else "see its log"
+        )
+        return [
+            LogInfo(
+                msg=f"[pnp.launch.py] ERROR: lap_counter_node exited with code {code}: {why}. "
+                "The counter is a measurement, not part of the command path: the driver keeps "
+                "running without lap times from the camera"
+            )
+        ]
+
+    return [include, RegisterEventHandler(OnProcessExit(on_exit=on_exit))]
+
+
+def lap_counter_reset_action() -> ExecuteProcess:
+    """One `/lap_counter/reset` call: `ros2 service call` waits for the service, `timeout` stops
+    it waiting for ever when the counter never comes up."""
+    return ExecuteProcess(
+        cmd=[
+            "timeout",
+            str(LAP_COUNTER_RESET_TIMEOUT_S),
+            "ros2",
+            "service",
+            "call",
+            "/lap_counter/reset",
+            "std_srvs/srv/Trigger",
+            "{}",
+        ],
+        output="screen",
+    )
+
+
+def require_counter_check(context: LaunchContext):
+    """After the counter had its five seconds: shut the launch down if it is not in the graph."""
+    if lap_counter_in_graph(0.5):
+        return []
+    return [
+        LogInfo(msg=f"[pnp.launch.py] ERROR: {LAP_COUNTER_REFUSAL}"),
+        EmitEvent(event=Shutdown(reason=LAP_COUNTER_REFUSAL)),
+    ]
+
+
 def _make_actions(context: LaunchContext) -> list:
     def arg(name: str) -> str:
         return LaunchConfiguration(name).perform(context).strip()
 
+    v_max = float(arg("v_max_mps"))
     perception_params, planner_params = parameters_for(
         arg("perception_bundle"),
         arg("dynamics_bundle"),
         arg("backend"),
-        float(arg("v_max_mps")),
+        v_max,
         _bool(arg("laser_yaw_from_vehicle_params"), "laser_yaw_from_vehicle_params"),
     )
     lap_memory = _bool(arg("lap_memory"), "lap_memory")
+    lap_counter = _bool(arg("lap_counter"), "lap_counter")
+    require_counter = _bool(arg("require_lap_counter"), "require_lap_counter")
+    v_lap1_text = arg("v_lap1_mps")
+    v_lap1 = float(v_lap1_text) if v_lap1_text else None
     lap_params = None
     if lap_memory:
-        lap_params = lap_memory_parameters(arg("dynamics_bundle"), float(arg("v_max_mps")))
+        lap_params = lap_memory_parameters(
+            arg("dynamics_bundle"), v_max, v_lap1, arg("lap_mode"), arg("lap_source")
+        )
         planner_params["use_lap_guidance"] = True
+        # missing, stale or malformed guidance: the lap-1 cap, never the ceiling
+        planner_params["v_no_guidance_mps"] = float(lap_params["v_cap_start_mps"])
+        lap_params["laser_yaw_from_vehicle_params"] = perception_params[
+            "laser_yaw_from_vehicle_params"
+        ]
     if _bool(arg("require_recorder"), "require_recorder") and not recorder_in_graph():
         raise RuntimeError(RECORDER_REFUSAL)
+    if require_counter and not lap_counter and not lap_counter_in_graph(LAP_COUNTER_WAIT_S):
+        raise RuntimeError(LAP_COUNTER_REFUSAL)
     perception, planner = nodes_for(perception_params, planner_params, arg("params_file"))
     stop_all = [
         RegisterEventHandler(
@@ -212,6 +406,40 @@ def _make_actions(context: LaunchContext) -> list:
                 )
             ),
         ]
+    shadow_bundle = arg("shadow_perception_bundle")
+    if shadow_bundle:
+        shadow = shadow_node_for(
+            shadow_bundle,
+            perception_params["laser_yaw_from_vehicle_params"],
+            arg("params_file"),
+        )
+        actions += [
+            shadow,
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=shadow,
+                    on_exit=_log_exit(
+                        "shadow perception",
+                        "a measurement only, nothing reads it: the driver keeps running",
+                    ),
+                )
+            ),
+        ]
+    if lap_counter:
+        if lap_counter_in_graph():
+            actions.append(
+                LogInfo(msg="[pnp.launch.py] a lap_counter_node is already running: not started")
+            )
+        else:
+            actions += lap_counter_actions(require_counter)
+        actions.append(lap_counter_reset_action())
+        if require_counter:
+            actions.append(
+                TimerAction(
+                    period=LAP_COUNTER_WAIT_S,
+                    actions=[OpaqueFunction(function=require_counter_check)],
+                )
+            )
     return actions
 
 
@@ -240,7 +468,19 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "v_max_mps",
                 default_value="0.5",
-                description="Speed cap in m/s passed to the planner.",
+                description=(
+                    "The absolute speed cap in m/s passed to the planner: the ceiling. With "
+                    "lap_memory the lap cap rises towards it."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "v_lap1_mps",
+                default_value="",
+                description=(
+                    "Cap of lap 1 in m/s: the lap memory's start cap and the planner's "
+                    "v_no_guidance_mps. Empty: equal to v_max_mps. Refused above v_max_mps "
+                    "with lap_memory:=true."
+                ),
             ),
             DeclareLaunchArgument(
                 "require_recorder",
@@ -265,15 +505,57 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="false",
                 choices=["true", "false"],
                 description=(
-                    "Also start racer_laps' lap_memory_node (needs the map -> base_link TF from "
-                    "mapping or localisation) and let the planner use its speed cap. The cap "
-                    "ceiling is the dynamics bundle's validity v_max_mps. Off for a first run."
+                    "Also start racer_laps' lap_memory_node and let the planner use its speed "
+                    "cap. The cap ceiling is the lower of v_max_mps and the dynamics bundle's "
+                    "validity v_max_mps. Off for a first run."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "lap_mode",
+                default_value="v0",
+                choices=list(LAP_MODES),
+                description="D v0 (cap schedule) or v1 (station set); v1 needs start_scan.",
+            ),
+            DeclareLaunchArgument(
+                "lap_source",
+                default_value="start_scan",
+                choices=list(LAP_SOURCES),
+                description=(
+                    "How a lap closes: start_scan (start-scan gate plus wheel odometry, no map "
+                    "after lap 1) or map_pose (TF map -> base_link, needs mapping or "
+                    "localisation)."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "lap_counter",
+                default_value="true",
+                choices=["true", "false"],
+                description=(
+                    "Start the camera lap counter (racer_perception) unless one is already in "
+                    "the graph, and reset it once. A measurement, not part of the command path."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "require_lap_counter",
+                default_value="false",
+                choices=["true", "false"],
+                description=(
+                    "Refuse to drive when no lap_counter_node is in the graph within 5 s "
+                    "(evaluation runs)."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "shadow_perception_bundle",
+                default_value="",
+                description=(
+                    "A perception bundle for a SECOND, shadow perception node (net backend) "
+                    "publishing /pnp/shadow/local_track. Nothing subscribes to it."
                 ),
             ),
             DeclareLaunchArgument(
                 "params_file",
                 default_value="",
-                description="Optional ROS parameter YAML applied to both nodes.",
+                description="Optional ROS parameter YAML applied to all nodes.",
             ),
             OpaqueFunction(function=_make_actions),
         ]

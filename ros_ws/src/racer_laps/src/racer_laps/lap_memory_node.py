@@ -40,6 +40,7 @@ from builtin_interfaces.msg import Time as TimeMsg
 from nav_msgs.msg import Odometry
 from racer_msgs.msg import SafetyEvent
 from racer_pnp_msgs.msg import LapEvent, LapGuidance, PlannerStatus
+from racer_tools.spin_guard import spin_until_shutdown
 from rcl_interfaces.msg import FloatingPointRange, IntegerRange, ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -649,7 +650,7 @@ def main(argv: list[str] | None = None) -> int:
         rclpy.try_shutdown()
         return 2
     try:
-        rclpy.spin(node)
+        spin_until_shutdown(node)
     except KeyboardInterrupt:
         pass
     finally:

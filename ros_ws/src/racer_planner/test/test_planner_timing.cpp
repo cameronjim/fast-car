@@ -626,6 +626,52 @@ TEST(PlannerStart, TheFirstCommandSteersFromTheGatedSteeringNotFromZero) {
   EXPECT_LT(std::fabs(prev), 0.40);
 }
 
+TEST(PlannerStart, WithoutTheGatedDriveNothingIsPublishedForTheGracePeriodThenSpeedZero) {
+  PlannerConfig cfg = small_config(0.5);
+  cfg.logic.start_gated_grace_s = 0.5;
+  Rig r(cfg);
+  r.gated = false;
+  double t = 1000.0;
+  int suppressed = 0;
+  for (int i = 0; i < 40; ++i, t += 0.02) {
+    const TickOutput out = r.tick(t);
+    EXPECT_EQ(out.cmd.speed_mps, 0.0);
+    if (out.drive_suppressed) {
+      ++suppressed;
+      EXPECT_LT(i, 26) << "still silent after the grace period";
+    } else {
+      EXPECT_GE(i, 25) << "published before the grace period was over";
+    }
+  }
+  EXPECT_GE(suppressed, 25);
+  EXPECT_LE(suppressed, 26);
+}
+
+TEST(PlannerStart, TheGatedDriveSeenDuringTheGraceSeedsTheSteeringAndEndsTheSilence) {
+  Rig r;
+  r.gated = false;
+  double t = 1000.0;
+  for (int i = 0; i < 5; ++i, t += 0.02) EXPECT_TRUE(r.tick(t).drive_suppressed);
+  r.gated = true;
+  r.gated_steering = 0.30;
+  const TickOutput out = r.tick(t);
+  EXPECT_FALSE(out.drive_suppressed);
+  EXPECT_LE(std::fabs(out.cmd.steering_rad - 0.30),
+            0.45 * r.g.steering_max_rate_rad_per_s * 0.02 + 1e-9);
+}
+
+TEST(PlannerStart, AStateOtherThanStartingStartsFromTheGatedSteeringToo) {
+  // NO_ODOM at the start (the wheel speed has not arrived yet) is published with the steering the
+  // gated /drive holds, not with 0.
+  Rig r;
+  r.odom = false;
+  r.gated_steering = 0.30;
+  const TickOutput out = r.tick(1000.0);
+  EXPECT_EQ(out.state, PlannerState::NoOdom);
+  EXPECT_FALSE(out.drive_suppressed);
+  EXPECT_NEAR(out.cmd.steering_rad, 0.30, 1e-9);
+}
+
 TEST(PlannerStart, WithNoGatedDriveTheSteeringStartsFromZero) {
   PlannerConfig cfg = small_config(0.5);
   cfg.logic.require_gated_for_start = false;

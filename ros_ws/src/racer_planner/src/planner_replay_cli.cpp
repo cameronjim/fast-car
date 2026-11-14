@@ -82,6 +82,7 @@ std::map<std::string, Param> default_params() {
   d("start_timeout_s", lg.start_timeout_s, 0.5, 120.0);
   d("start_stop_hold_s", lg.start_stop_hold_s, 0.2, 60.0);
   d("require_gated_for_start", 1.0, 0.0, 1.0);
+  d("start_gated_grace_s", lg.start_gated_grace_s, 0.0, 5.0);
   d("v_no_guidance_mps", 0.5, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps);
   d("conf_intrusion_full", lg.conf_intrusion_full, 0.0, 1.0);
   d("conf_intrusion_zero", lg.conf_intrusion_zero, 0.0, 1.0);
@@ -188,6 +189,7 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   lg.start_timeout_s = v("start_timeout_s");
   lg.start_stop_hold_s = v("start_stop_hold_s");
   lg.require_gated_for_start = v("require_gated_for_start") != 0.0;
+  lg.start_gated_grace_s = v("start_gated_grace_s");
   lg.v_no_guidance_mps = v("v_no_guidance_mps");
   lg.conf_intrusion_full = v("conf_intrusion_full");
   lg.conf_intrusion_zero = v("conf_intrusion_zero");
@@ -261,6 +263,15 @@ std::string csv_number(double v) {
   if (std::isinf(v)) return v > 0 ? "inf" : "-inf";
   char buf[48];
   std::snprintf(buf, sizeof buf, "%.9g", v);
+  return buf;
+}
+
+// The tick time with the microsecond resolution of the stream's K lines (a bag time of a few
+// thousand seconds does not survive %.9g at that resolution).
+std::string time_number(double v) {
+  if (!std::isfinite(v)) return csv_number(v);
+  char buf[48];
+  std::snprintf(buf, sizeof buf, "%.6f", v);
   return buf;
 }
 
@@ -515,7 +526,7 @@ int main(int argc, char** argv) {
       prev_now = now;
       prev_steer = o.cmd.steering_rad;
       prev_speed = o.cmd.speed_mps;
-      csv << csv_number(now) << ',' << static_cast<int>(o.state) << ',' << state_name(o.state)
+      csv << time_number(now) << ',' << static_cast<int>(o.state) << ',' << state_name(o.state)
           << ',' << csv_number(o.cmd.speed_mps) << ',' << csv_number(o.cmd.steering_rad) << ','
           << csv_number(o.solve_time_s) << ',' << csv_number(o.est_speed_mps) << ','
           << csv_number(o.est_steering_rad) << ',' << csv_number(o.v_cap_mps) << ','

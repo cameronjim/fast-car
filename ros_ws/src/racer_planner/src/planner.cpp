@@ -122,20 +122,22 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   SolveReport rep;
   const double tick = cfg_.tick_s;
   const double now = in.now_s;
-  bool gap_ok = false;  // this solve arrived within start_tick_gap_s of the previous one
+  bool gap_ok = false;  // this callback arrived within start_tick_gap_s of the previous callback
   if (std::isfinite(now)) {
     if (have_last_solve_) {
-      const double raw = now - last_solve_s_;
-      if (raw < 0.0) {  // the clock went backwards: start over
+      const double raw = now - last_solve_s_;        // since the last real solve
+      const double raw_cb = now - last_solve_cb_s_;  // since the last callback of any kind
+      if (raw < 0.0 || raw_cb < 0.0) {               // the clock went backwards: start over
         have_last_solve_ = false;
         solve_good_ticks_ = 0;
       } else if (raw < 0.5 * tick) {  // a catch-up callback just after a late one: nothing new
         bunched_ticks_.fetch_add(1, std::memory_order_relaxed);
+        last_solve_cb_s_ = now;
         rep.bunched = true;
         rep.state = last_solve_state_;
         return rep;
       } else {
-        gap_ok = raw <= cfg_.logic.start_tick_gap_s;
+        gap_ok = raw_cb <= cfg_.logic.start_tick_gap_s;
       }
     }
   }
@@ -360,6 +362,7 @@ SolveReport Planner::solve_impl(const TickInput& in) {
 
   if (std::isfinite(now)) {
     last_solve_s_ = now;
+    last_solve_cb_s_ = now;
     have_last_solve_ = true;
   }
   last_solve_state_ = state;
@@ -435,6 +438,10 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
       raw_any = raw_real = std::numeric_limits<double>::quiet_NaN();
     }
   }
+  // Consecutive callbacks within start_tick_gap_s of the previous one (a bunched one counts).
+  publish_good_ticks_ = (have_last_publish_ && raw_any <= lg.start_tick_gap_s)
+                            ? std::min(publish_good_ticks_ + 1, 1000000)
+                            : 0;
   if (have_last_publish_ && raw_real < 0.5 * tick) {
     // A callback just after a late one: the previous command again, nothing re-solved or
     // re-shaped. It is a message safety_node sees, so the next real publish measures its elapsed
@@ -450,8 +457,6 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
   const bool first = !have_last_publish_;
   const double elapsed = first ? tick : slew_elapsed_s(raw_any, tick);
   const bool gap = !first && lg.gap_reset_s > 0.0 && raw_any > lg.gap_reset_s;
-  publish_good_ticks_ =
-      (!first && raw_real <= lg.start_tick_gap_s) ? std::min(publish_good_ticks_ + 1, 1000000) : 0;
 
   PlanSnapshot snap;
   {
@@ -497,18 +502,32 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
     state = PlannerState::Fault;
   }
 
-  if (state == PlannerState::Starting && starting_) {
-    if (!start_seeded_) {
-      // The steering the gated /drive holds is where this run's output starts from.
-      last_published_.steering_rad =
-          in.has_gated ? in.gated_steering_rad : last_published_.steering_rad;
-      last_published_.steering_rad =
-          std::isfinite(last_published_.steering_rad)
-              ? std::min(std::max(last_published_.steering_rad, geometry_.steering_min_rad),
-                         geometry_.steering_max_rad)
-              : 0.0;
-      start_seeded_ = true;
+  if (starting_ && !start_seeded_) {
+    if (lg.require_gated_for_start && !in.has_gated && finite_now &&
+        now - starting_since_s_ < lg.start_gated_grace_s) {
+      // The gated /drive has not been seen yet, so where the steering starts from is not known:
+      // say nothing on /drive_raw (whatever the state) for a moment instead of guessing 0
+      // against a held steering.
+      out.state = state;
+      out.cmd = Command{0.0, last_published_.steering_rad};
+      out.drive_suppressed = true;
+      out.start_missing = StartMissing::Gated;
+      out.starting_s = std::max(0.0, now - starting_since_s_);
+      out.start_timed_out = out.starting_s >= lg.start_timeout_s;
+      return out;
     }
+    // The steering the gated /drive holds is where this run's output starts from.
+    last_published_.steering_rad =
+        in.has_gated ? in.gated_steering_rad : last_published_.steering_rad;
+    last_published_.steering_rad =
+        std::isfinite(last_published_.steering_rad)
+            ? std::min(std::max(last_published_.steering_rad, geometry_.steering_min_rad),
+                       geometry_.steering_max_rad)
+            : 0.0;
+    start_seeded_ = true;
+  }
+
+  if (state == PlannerState::Starting && starting_) {
     StartGateInputs gi;
     gi.plan_fresh = plan_fresh;
     gi.scan_fresh = have_snap && snap.scan_fresh;

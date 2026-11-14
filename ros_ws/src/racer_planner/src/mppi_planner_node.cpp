@@ -165,6 +165,10 @@ class MppiPlannerNode : public rclcpp::Node {
         "require_gated_for_start", true,
         "Warm start needs the gated /drive to have been seen (safety_node alive). false: sim "
         "tests that run without safety_node.");
+    lg.start_gated_grace_s = declare_double(
+        "start_gated_grace_s", 0.5, 0.0, 5.0,
+        "While the gated /drive has not been seen, STARTING publishes no /drive_raw for up to "
+        "this long, so the steering it starts from is the one safety_node holds (s).");
     lg.conf_intrusion_full = declare_double("conf_intrusion_full", lg.conf_intrusion_full, 0.0, 1.0,
                                             "Track intrusion fraction up to this: full trust.");
     lg.conf_intrusion_zero = declare_double("conf_intrusion_zero", lg.conf_intrusion_zero, 0.0, 1.0,
@@ -633,8 +637,10 @@ class MppiPlannerNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(drive_mutex_);
       if (stopping_.load(std::memory_order_acquire)) return;
-      drive_pub_->publish(drive);
-      last_cmd_steering_ = drive.drive.steering_angle;
+      if (!out.drive_suppressed) {
+        drive_pub_->publish(drive);
+        last_cmd_steering_ = drive.drive.steering_angle;
+      }
     }
 
     status_.header.stamp = stamp;

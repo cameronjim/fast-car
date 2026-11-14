@@ -112,6 +112,8 @@ struct TickOutput {
   bool start_timed_out = false;                     // STARTING for longer than start_timeout_s
   double starting_s = 0.0;                          // how long STARTING has lasted
   bool left_starting = false;                       // this publish ended STARTING
+  bool drive_suppressed =
+      false;  // STARTING before the gated /drive is known: publish no /drive_raw
 };
 
 struct SolveReport {
@@ -212,7 +214,8 @@ class Planner {
   double confidence_ = 0.0;
   int horizon_;
   int delay_ticks_;
-  double last_solve_s_ = 0.0;
+  double last_solve_s_ = 0.0;     // the last real solve
+  double last_solve_cb_s_ = 0.0;  // the last solve callback of any kind (a bunched one counts)
   bool have_last_solve_ = false;
   PlannerState last_solve_state_ = PlannerState::Starting;
   int solve_good_ticks_ = 0;

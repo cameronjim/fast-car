@@ -55,6 +55,10 @@ struct LogicParams {
   double start_timeout_s = 5.0;
   double start_stop_hold_s = 1.0;
   bool require_gated_for_start = true;
+  // While the gated /drive has not been seen yet (DDS discovery of safety_node takes a few ticks),
+  // STARTING does not publish /drive_raw for up to this long: the steering it would start from is
+  // not known, and a guess of 0 against safety_node's held steering is a rate limit clip.
+  double start_gated_grace_s = 0.5;
   // A gap between two planner ticks longer than this (s) means the planner was stalled long
   // enough for safety_node's /drive_raw watchdog (60 ms) to have braked: the speed ramp then
   // restarts from zero, as from rest, instead of asking safety for a jump from 0 to the old

@@ -115,7 +115,9 @@ class TestPlannerNodeNominal(unittest.TestCase):
     def test_b_publishers_and_qos(self):
         self.feeder.pump(1.0)
         pubs = self.node.get_publishers_info_by_topic("/drive_raw")
-        self.assertIn("mppi_planner_node", [p.node_name for p in pubs])
+        self.assertEqual(
+            [p.node_name for p in pubs], ["mppi_planner_node"], "not the only publisher"
+        )
         mine = next(p for p in pubs if p.node_name == "mppi_planner_node")
         self.assertEqual(mine.qos_profile.reliability, QoSReliabilityPolicy.RELIABLE)
         drive_pubs = self.node.get_publishers_info_by_topic("/drive")

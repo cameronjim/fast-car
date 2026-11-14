@@ -14,6 +14,15 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra)
 endif()
 
+# ThreadSanitizer for the whole package (not part of CI: run locally, see the PR for the output):
+#   colcon build --packages-select racer_planner --cmake-args -DRACER_PLANNER_TSAN=ON
+# and run test_planner_threads and test_planner_closed_loop from the build directory.
+option(RACER_PLANNER_TSAN "build racer_planner with -fsanitize=thread" OFF)
+if(RACER_PLANNER_TSAN)
+  add_compile_options(-fsanitize=thread -g -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=thread)
+endif()
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
@@ -129,6 +138,19 @@ if(BUILD_TESTING)
     RACER_PLANNER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
   )
 
+  # The solve / publish split on real threads (run under ThreadSanitizer for the race check) and
+  # the no-heap-allocation check (its own binary: it replaces the global operator new).
+  find_package(Threads REQUIRED)
+  foreach(t test_planner_threads test_planner_noalloc)
+    ament_add_gtest(${t} test/${t}.cpp TIMEOUT 120)
+    add_dependencies(${t} racer_planner_generate_vehicle_params)
+    target_include_directories(${t} PRIVATE "${RACER_GENERATED_DIR}" src test)
+    target_link_libraries(${t} racer_planner_core Threads::Threads)
+    target_compile_definitions(${t} PRIVATE
+      RACER_PLANNER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+    )
+  endforeach()
+
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_test(
     NAME test_mppi_bench_smoke
@@ -146,6 +168,7 @@ if(BUILD_TESTING)
 
   find_package(launch_testing_ament_cmake REQUIRED)
   foreach(t test_planner_node_launch test_planner_node_silence_launch test_planner_node_refusal_launch
+                 test_planner_node_start_gate_launch test_planner_node_shutdown_launch
                  test_planner_node_params_file_launch)
     add_launch_test(test/${t}.py TARGET ${t} TIMEOUT 180)
   endforeach()

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from racer_pnp_perception import dataset, prereg, real
 from racer_pnp_perception import split as sp
+from racer_track_perception.vehicle import find_repo_root
 from test_real import fake_labels
 
 SPLIT = sp.parse_split(
@@ -36,7 +37,8 @@ DOC = {
 
 
 def test_the_real_folds_are_the_pre_registered_ones() -> None:
-    folds = sp.load_folds(sp.load_split())
+    split_path = find_repo_root() / "evaluation" / "prereg" / "pnp-v0.2-split.yaml"
+    folds = sp.load_folds(sp.load_split(split_path))
     assert set(folds) == {"F1", "F2"}
     assert folds["F1"].heldout_bags == (
         "2026-11-11T03-54-11_car_teleop_cw",

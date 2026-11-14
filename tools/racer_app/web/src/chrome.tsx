@@ -1,68 +1,64 @@
-// The persistent frame: top bar with the status pills, tabs, the reconnecting banner, the
-// operations tray and the STOP ALL bar that is on screen on every tab.
+// The persistent frame: the top bar (car, connection, recording, battery, the problems badge and
+// the red STOP), the sidebar, the reconnecting banner and the operations tray. STOP is on screen
+// on every tab, and on the login screen too (it needs no token on purpose).
 
 import { useRunner, useApp, useStore, TABS, type TabId } from "./ctx";
 import { lastSeenText } from "./feedback";
 import { opSteps } from "./ops";
-import { Icon, OpRow, Pill, Skeleton, Spinner } from "./ui";
-import {
-  batteryPill,
-  connectionState,
-  freshness,
-  readyPill,
-  recordingPill,
-  type PillView,
-} from "./view";
+import { badgeCount, liveProblems } from "./problems";
+import { ErrorBadge, Icon, OpRow, Pill, Skeleton, Spinner } from "./ui";
+import { batteryPill, connectionState, freshness, recordingPill, type PillView } from "./view";
 import type { Live } from "./live";
 
-export function TopBar({ live, onTab }: { live: Live; onTab: (t: TabId) => void }) {
+export function TopBar({ live, onTab, tab }: { live: Live; onTab: (t: TabId) => void; tab: TabId }) {
   const c = useApp();
+  useStore((cb) => c.problems.subscribe(cb));
   const conn = connectionState(c.agentUp, c.link.connected, c.status?.stack.running ?? false);
   const connPill: PillView =
     conn === "connected"
       ? { level: "green", text: "Connected" }
       : conn === "reconnecting"
         ? { level: "amber", text: "Reconnecting" }
-        : { level: "amber", text: "Live data down", title: "The agent answers, the ROS link does not" };
+        : { level: "amber", text: "No live data", title: "The agent answers, the ROS link does not" };
   const loading = !c.status;
   const volts = freshness(live.voltage, c.now);
+  const count = badgeCount(liveProblems(c.status, c.now), tab === "logs" ? [] : c.problems.unseen());
   return (
     <header class="topbar">
       <div class="brand">
-        <span class="logo" aria-hidden="true"><Icon name="bolt" size={15} /></span>
+        <span class="logo" aria-hidden="true"><Icon name="bolt" size={16} /></span>
         <span class="name">{c.carName}</span>
-        <Pill view={connPill} />
       </div>
       <div class="pills" aria-label="Car status">
+        <Pill view={connPill} />
         {loading ? (
-          <>
-            <Skeleton w={84} h={24} />
-            <Skeleton w={110} h={24} />
-            <Skeleton w={72} h={24} />
-          </>
+          <Skeleton w={110} h={24} />
         ) : (
           <>
-            <Pill view={readyPill(c.status)} onClick={() => onTab("checks")} />
-            <Pill class={c.bags.some((b) => b.active) ? "rec" : ""} view={recordingPill(c.bags, c.status)} onClick={() => onTab("logs")} />
-            <Pill view={batteryPill(volts, c.status?.thresholds.battery_cells ?? 3)} onClick={() => onTab("live")} />
+            <Pill class={c.bags.some((b) => b.active) ? "rec" : ""} view={recordingPill(c.bags, c.status)} onClick={() => onTab("data")} />
+            <Pill class="hide-sm" view={batteryPill(volts, c.status?.thresholds.battery_cells ?? 3)} onClick={() => onTab("live")} />
           </>
         )}
+        {count > 0 && <ErrorBadge count={count} title={`${count} problem${count > 1 ? "s" : ""}`} onClick={() => onTab("logs")} />}
       </div>
+      <StopButton onStop={c.stopAll} />
     </header>
   );
 }
 
-export function Tabs({ tab, onTab }: { tab: TabId; onTab: (t: TabId) => void }) {
-  const c = useApp();
-  const failing = c.status?.checks.checks.filter((x) => x.required && x.level === "red").length ?? 0;
+export function Sidebar({ tab, onTab }: { tab: TabId; onTab: (t: TabId) => void }) {
   return (
-    <nav class="tabs" role="tablist" aria-label="Sections">
-      {TABS.map((t) => (
-        <button key={t.id} class="tab" role="tab" aria-selected={tab === t.id} onClick={() => onTab(t.id)}>
-          {t.label}
-          {t.id === "checks" && failing > 0 && <span class="badge" aria-label={`${failing} failing`}>{failing}</span>}
-        </button>
-      ))}
+    <nav class="sidebar" aria-label="Sections">
+      <ul role="tablist">
+        {TABS.map((t) => (
+          <li key={t.id} class={t.id === "system" ? "bottom" : ""}>
+            <button class="navitem" role="tab" aria-selected={tab === t.id} onClick={() => onTab(t.id)}>
+              <Icon name={t.icon} size={20} />
+              <span>{t.label}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </nav>
   );
 }
@@ -75,16 +71,14 @@ export function ReconnectBanner() {
   return (
     <div class="recon" role="status" aria-live="polite">
       <Spinner />
-      <span>{agentDown ? "Reconnecting to the car..." : "Live data link is down, retrying..."}</span>
-      <span class="muted">
-        {agentDown ? lastSeenText(c.agentLastSeen, c.now) : lastSeenText(c.linkLastSeen, c.now)}
-        {agentDown ? ". Values below are the last ones received." : ""}
-      </span>
+      <span>{agentDown ? "Reconnecting" : "Live data down"}</span>
+      <span class="muted">{agentDown ? lastSeenText(c.agentLastSeen, c.now) : lastSeenText(c.linkLastSeen, c.now)}</span>
     </div>
   );
 }
 
-export function OpsTray() {
+/** In-flight operations. Off the Logs tab a failure is a red badge; Logs shows the reason. */
+export function OpsTray({ tab }: { tab: TabId }) {
   const c = useApp();
   useStore((cb) => c.ops.subscribe(cb));
   const list = c.ops.all();
@@ -93,51 +87,52 @@ export function OpsTray() {
   return (
     <div class="ops" aria-label="In progress">
       {list.map((op) => (
-        <OpRow key={op.id} op={op} steps={opSteps(op, snap)} now={c.now} onDismiss={() => c.ops.dismiss(op.id)} />
+        <OpRow
+          key={op.id}
+          op={op}
+          steps={opSteps(op, snap)}
+          now={c.now}
+          onDismiss={() => c.ops.dismiss(op.id)}
+          onLogs={tab === "logs" ? undefined : () => c.setTab("logs")}
+        />
       ))}
     </div>
   );
 }
 
 /**
- * STOP ALL on every screen, including the login screen (it needs no token on purpose). It is a
- * software stop and says so in one line; the RC kill knob is the stop that always works.
+ * The red STOP in the top bar. A software stop: it SIGINTs every driving launch (STOP ALL). Wi-Fi
+ * can drop, so the RC kill knob is the stop that always works; the button's tooltip says so.
  */
-export function StopBar({ onStop }: { onStop: () => Promise<unknown> }) {
-  const runner = useRunner({ reentrant: true, successMs: 2500, errorMs: 0 });
+export function StopButton({ onStop }: { onStop: () => Promise<unknown> }) {
+  const runner = useRunner({ reentrant: true, successMs: 2500, errorMs: 8000 });
   const s = runner.state;
   const press = () => void runner.run(async () => (await onStop()) as { message?: string } | void);
+  const title =
+    s.phase === "error"
+      ? `Stop may not have arrived: ${s.error}. Use the RC kill knob.`
+      : "Stop all driving. Software stop: keep a hand on the RC kill knob.";
+  return (
+    <button
+      class={`stopbtn ${s.phase === "pending" ? "is-pending" : ""} ${s.phase === "success" ? "is-success" : ""} ${s.phase === "error" ? "is-error" : ""}`}
+      onClick={press}
+      title={title}
+      aria-label="Stop all driving"
+    >
+      {s.phase === "pending" ? <Spinner /> : s.phase === "success" ? <Icon name="check" size={18} /> : s.phase === "error" ? <Icon name="warn" size={18} /> : <Icon name="stop" size={18} />}
+      <span>{s.phase === "success" ? "SENT" : s.phase === "error" ? "RETRY" : "STOP"}</span>
+    </button>
+  );
+}
+
+/** The login screen's stop bar: same STOP, with the one-line warning spelled out. */
+export function StopBar({ onStop }: { onStop: () => Promise<unknown> }) {
   return (
     <div class="stopbar" role="region" aria-label="Emergency stop">
       <div class="note">
-        <div>
-          <b>Software stop only.</b> Wi-Fi can drop. Keep a hand on the RC kill knob.
-        </div>
-        <div class={`stopstate ${s.phase === "error" ? "lvl-red" : "lvl-green"}`} role="status">
-          {s.phase === "pending" && "Sending stop..."}
-          {s.phase === "success" && "Stop sent. Check the car has stopped."}
-          {s.phase === "error" && `Stop may not have arrived: ${s.error}. Use the knob.`}
-        </div>
+        <b>Software stop only.</b> Keep a hand on the RC kill knob.
       </div>
-      <button
-        class={`stopbtn ${s.phase === "pending" ? "is-pending" : ""} ${s.phase === "success" ? "is-success" : ""}`}
-        onClick={press}
-        aria-label="Stop all driving"
-      >
-        {s.phase === "pending" ? (
-          <>
-            <Spinner />
-            STOPPING
-          </>
-        ) : s.phase === "success" ? (
-          <>
-            <Icon name="check" size={26} />
-            STOP SENT
-          </>
-        ) : (
-          "STOP ALL"
-        )}
-      </button>
+      <StopButton onStop={onStop} />
     </div>
   );
 }

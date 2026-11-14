@@ -11,22 +11,32 @@
 //   every
 //                          state, so safety_node's watchdog only fires when this node dies.
 //   -> /pnp/planner/status PlannerStatus, reliable, keep last 50, every tick.
-//   -> /pnp/plan           nav_msgs/Path in base_link, reliable, keep last 5, every fifth tick.
+//   -> /pnp/plan           nav_msgs/Path in base_link, reliable, keep last 5, every fifth solve.
 //
 // NEVER /drive: racer_safety/safety_node is the sole publisher of /drive (CLAUDE.md invariant 1).
 //
 // Startup refuses before any publisher exists: a dynamics bundle that fails any row of the refusal
-// table, a speed cap above the bundle validity, or a null vehicle_params field logs FATAL
-// "<code>: <message>" and the process exits non-zero.
+// table, a speed cap above the bundle validity, a null vehicle_params field, or a non-empty
+// debug_stall_profile without use_sim_time logs FATAL "<code>: <message>" and the process exits
+// non-zero.
 //
-// Threading, as gap_follow_node does: scan processing runs in one callback group, the 50 Hz timer
-// and the small callbacks in the other, on a two thread executor. The finished distance field is
-// handed to the tick by swapping a shared_ptr under a short mutex, from a pool of three so the tick
-// never reads a buffer the scan thread is rebuilding.
+// Threading: scan processing runs in one callback group; the solve timer and the small callbacks
+// (odometry, track, guidance, the gated /drive) in a second; the 50 Hz publish timer in a third,
+// on a three thread executor. The publish timer only wakes, copies the latest plan snapshot and
+// publishes, so a late solve cannot starve /drive_raw (a plan older than plan_timeout_s stops the
+// car instead). It does not help when the whole process is descheduled. The finished distance
+// field is handed to the solve by swapping a shared_ptr under a short mutex, from a pool of three
+// so the solve never reads a buffer the scan thread is rebuilding.
+//
+// On SIGINT, before the context shuts down, one speed 0 command is published and the publish
+// timer stops (the hardware mux and safety_node's watchdog remain what stops the car).
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -40,8 +50,11 @@
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "binding_geometry.hpp"
@@ -67,6 +80,44 @@ struct ScanProducts {
   explicit ScanProducts(const VehicleGeometry& g) : freespace(g) {}
 };
 
+// The gated /drive as last seen (read only: never published here).
+struct GatedInfo {
+  bool has = false;
+  double stamp_s = 0.0;
+  double speed_mps = 0.0;
+  double steering_rad = 0.0;
+};
+
+// "T:D,T:D,...": T seconds after the first DRIVING solve the solve thread sleeps D seconds.
+// Sorted by T. False with a reason on a malformed list, a negative T or a D outside (0, 10].
+bool parse_stall_profile(const std::string& text, std::vector<std::pair<double, double>>* out,
+                         std::string* why) {
+  out->clear();
+  std::stringstream all(text);
+  std::string item;
+  while (std::getline(all, item, ',')) {
+    if (item.empty()) continue;
+    const auto colon = item.find(':');
+    if (colon == std::string::npos) {
+      *why = "'" + item + "' is not T:D";
+      return false;
+    }
+    char* end1 = nullptr;
+    char* end2 = nullptr;
+    const std::string a = item.substr(0, colon), b = item.substr(colon + 1);
+    const double t = std::strtod(a.c_str(), &end1);
+    const double d = std::strtod(b.c_str(), &end2);
+    if (a.empty() || b.empty() || *end1 != '\0' || *end2 != '\0' || !std::isfinite(t) ||
+        !std::isfinite(d) || t < 0.0 || !(d > 0.0) || d > 10.0) {
+      *why = "'" + item + "' needs T >= 0 and 0 < D <= 10";
+      return false;
+    }
+    out->emplace_back(t, d);
+  }
+  std::sort(out->begin(), out->end());
+  return true;
+}
+
 }  // namespace
 
 class MppiPlannerNode : public rclcpp::Node {
@@ -81,10 +132,39 @@ class MppiPlannerNode : public rclcpp::Node {
     lg.v_max_mps = declare_double(
         "v_max_mps", 0.5, 0.1, VEHICLE_PARAMS.limits.global_speed_cap_mps,
         "Speed cap (m/s). Above the bundle's validity v_max_mps the node refuses to start.");
-    lg.scan_timeout_s =
-        declare_double("scan_timeout_s", 0.35, 0.05, 5.0, "Scan older than this: NO_SCAN (s).");
-    lg.odom_timeout_s = declare_double("odom_timeout_s", 0.10, 0.02, 5.0,
-                                       "Wheel speed older than this: NO_ODOM (s).");
+    lg.scan_timeout_s = declare_double("scan_timeout_s", 0.35, 0.05, 5.0,
+                                       "Scan up to this old: full speed cap; older: the cap ramps "
+                                       "down to 0 at scan_hard_timeout_s (s).");
+    lg.scan_hard_timeout_s = declare_double(
+        "scan_hard_timeout_s", 0.60, 0.05, 0.60,
+        "Scan older than this: NO_SCAN; between scan_timeout_s and this the speed cap ramps 1 to 0 "
+        "(s).");
+    lg.odom_timeout_s = declare_double(
+        "odom_timeout_s", 0.10, 0.02, 5.0,
+        "Wheel speed older than this: the planner uses its own speed estimate and the cap may not "
+        "exceed the last measured wheel speed plus 0.05 m/s (s).");
+    lg.odom_hard_timeout_s = declare_double("odom_hard_timeout_s", 0.20, 0.02, 0.20,
+                                            "Wheel speed older than this: NO_ODOM (s).");
+    lg.plan_timeout_s = declare_double(
+        "plan_timeout_s", 0.12, 0.05, 0.12,
+        "A plan snapshot older than this while driving or recovering: speed 0, FAULT (s).");
+    lg.start_ticks = static_cast<int>(declare_int(
+        "start_ticks", 25, 1, 200,
+        "Warm start: consecutive on-time ticks (and solves on the real inputs) before moving."));
+    lg.start_tick_gap_s = declare_double("start_tick_gap_s", 0.03, 0.01, 0.2,
+                                         "Warm start: largest gap between two counted ticks (s).");
+    lg.start_timeout_s = declare_double(
+        "start_timeout_s", 5.0, 0.5, 120.0,
+        "STARTING longer than this logs the missing condition once a second (s). It never moves "
+        "without the conditions.");
+    lg.start_stop_hold_s = declare_double(
+        "start_stop_hold_s", 1.0, 0.2, 60.0,
+        "A return to DRIVING after the published speed was 0 for this long goes through STARTING "
+        "again (s).");
+    lg.require_gated_for_start = declare_bool(
+        "require_gated_for_start", true,
+        "Warm start needs the gated /drive to have been seen (safety_node alive). false: sim "
+        "tests that run without safety_node.");
     lg.conf_intrusion_full = declare_double("conf_intrusion_full", lg.conf_intrusion_full, 0.0, 1.0,
                                             "Track intrusion fraction up to this: full trust.");
     lg.conf_intrusion_zero = declare_double("conf_intrusion_zero", lg.conf_intrusion_zero, 0.0, 1.0,
@@ -110,6 +190,15 @@ class MppiPlannerNode : public rclcpp::Node {
                        "Share of the speed cap kept at track confidence 0.");
     lg.use_lap_guidance = declare_bool(
         "use_lap_guidance", false, "Cap the speed with /pnp/lap/guidance v_cap_mps when fresh.");
+    lg.v_no_guidance_mps = declare_double(
+        "v_no_guidance_mps", lg.v_max_mps, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps,
+        "With use_lap_guidance and no fresh, well formed guidance the speed cap is "
+        "min(v_max_mps, this) (m/s). Default: v_max_mps.");
+    const std::string stall_profile = declare_string(
+        "debug_stall_profile", "",
+        "TEST ONLY: 'T:D,T:D,...' makes the solve thread sleep D s once the planner has been "
+        "driving for T s. The node refuses to start with a non-empty profile unless "
+        "use_sim_time is true.");
     const double rate_hz =
         declare_double("control_rate_hz", 50.0, 20.0, 100.0, "Control tick rate (Hz).");
     cfg.tick_s = 1.0 / rate_hz;
@@ -234,6 +323,32 @@ class MppiPlannerNode : public rclcpp::Node {
       RCLCPP_FATAL(get_logger(), "%s", m.c_str());
       throw std::runtime_error(m);
     }
+    if (lg.scan_hard_timeout_s < lg.scan_timeout_s || lg.odom_hard_timeout_s < lg.odom_timeout_s) {
+      const std::string m =
+          "ParameterInvalid: scan_hard_timeout_s must be at least scan_timeout_s and "
+          "odom_hard_timeout_s at least odom_timeout_s";
+      RCLCPP_FATAL(get_logger(), "%s", m.c_str());
+      throw std::runtime_error(m);
+    }
+    if (!stall_profile.empty()) {
+      // A stall injected into the solve thread is for sim acceptance only: it can never be on by
+      // accident on the car, where use_sim_time is false.
+      if (!get_parameter("use_sim_time").as_bool()) {
+        const std::string m =
+            "StallProfileRefused: debug_stall_profile is set and use_sim_time is false; the "
+            "stall injection is for simulation only";
+        RCLCPP_FATAL(get_logger(), "%s", m.c_str());
+        throw std::runtime_error(m);
+      }
+      std::string perr;
+      if (!parse_stall_profile(stall_profile, &stalls_, &perr)) {
+        const std::string m = "StallProfileInvalid: " + perr;
+        RCLCPP_FATAL(get_logger(), "%s", m.c_str());
+        throw std::runtime_error(m);
+      }
+      RCLCPP_WARN(get_logger(), "debug_stall_profile with %zu stalls: SIMULATION ONLY",
+                  stalls_.size());
+    }
     const LoadResult loaded = load_dynamics_bundle(bundle_dir, geometry_, lg.v_max_mps);
     if (!loaded.ok()) {
       const std::string m =
@@ -261,6 +376,7 @@ class MppiPlannerNode : public rclcpp::Node {
     // -- I/O ----------------------------------------------------------------------------------
     scan_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     command_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    publish_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions scan_opts;
     scan_opts.callback_group = scan_group_;
     rclcpp::SubscriptionOptions command_opts;
@@ -290,9 +406,12 @@ class MppiPlannerNode : public rclcpp::Node {
     drive_pub_ = create_publisher<AckermannMsg>("/drive_raw", reliable_10);
     status_pub_ = create_publisher<PlannerStatusMsg>("/pnp/planner/status", reliable_50);
     plan_pub_ = create_publisher<nav_msgs::msg::Path>("/pnp/plan", reliable_5);
-    timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                   std::chrono::duration<double>(tick_s_)),
-                               std::bind(&MppiPlannerNode::on_timer, this), command_group_);
+    const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(tick_s_));
+    solve_timer_ = create_wall_timer(period, std::bind(&MppiPlannerNode::on_solve_timer, this),
+                                     command_group_);
+    publish_timer_ = create_wall_timer(period, std::bind(&MppiPlannerNode::on_publish_timer, this),
+                                       publish_group_);
     RCLCPP_INFO(get_logger(),
                 "mppi_planner_node up: %.0f Hz, %d samples, horizon %d x %.3f s, v_max %.2f m/s, "
                 "delay %d ticks, laser yaw %.3f rad",
@@ -381,7 +500,11 @@ class MppiPlannerNode : public rclcpp::Node {
     track_.valid_count = msg->valid_count;
     track_.boundary_residual_m = msg->boundary_residual_m;
     track_.intrusion_fraction = msg->intrusion_fraction;
-    perception_model_id_ = msg->model_id;
+    {
+      std::lock_guard<std::mutex> lock(meta_mutex_);
+      perception_model_id_ = msg->model_id;
+    }
+    perception_id_version_.fetch_add(1, std::memory_order_release);
     has_track_ = true;
   }
 
@@ -401,26 +524,43 @@ class MppiPlannerNode : public rclcpp::Node {
 
   void on_gated(const AckermannMsg::SharedPtr msg) {
     if (!std::isfinite(msg->drive.speed)) return;
-    gated_speed_mps_ = msg->drive.speed;
-    gated_stamp_s_ = now().seconds();
-    has_gated_ = true;
+    GatedInfo g;
+    g.has = true;
+    g.speed_mps = msg->drive.speed;
+    g.steering_rad = std::isfinite(msg->drive.steering_angle) ? msg->drive.steering_angle : 0.0;
+    g.stamp_s = now().seconds();
+    std::lock_guard<std::mutex> lock(gated_mutex_);
+    gated_ = g;
   }
 
-  void on_timer() {
+  GatedInfo gated_snapshot() {
+    std::lock_guard<std::mutex> lock(gated_mutex_);
+    return gated_;
+  }
+
+  // The solve: inputs in, one plan snapshot out. Runs in the command callback group, so it never
+  // overlaps the small callbacks that feed it.
+  void on_solve_timer() {
+    // TEST ONLY: a stall of the solve thread from debug_stall_profile (the node refused to start
+    // with one unless use_sim_time is true).
+    if (have_driving_ && next_stall_ < stalls_.size() &&
+        now().seconds() - driving_since_s_ >= stalls_[next_stall_].first) {
+      const double d = stalls_[next_stall_].second;
+      ++next_stall_;
+      RCLCPP_WARN(get_logger(), "debug stall: the solve thread sleeps %.3f s", d);
+      std::this_thread::sleep_for(std::chrono::duration<double>(d));
+    }
     TickInput in;
     in.now_s = now().seconds();
-    if (last_tick_s_ > 0.0 && in.now_s - last_tick_s_ > 0.040) ++tick_gaps_;
-    last_tick_s_ = in.now_s;
-    if (in.now_s - gap_log_s_ >= 10.0) {
-      if (gap_log_s_ > 0.0) {
-        RCLCPP_INFO(get_logger(), "tick gaps over 40 ms in the last 10 s: %u", tick_gaps_);
-      }
-      tick_gaps_ = 0;
-      gap_log_s_ = in.now_s;
+    if (last_solve_tick_s_ > 0.0 && in.now_s - last_solve_tick_s_ > 0.040) {
+      solve_gaps_.fetch_add(1, std::memory_order_relaxed);
     }
-    in.has_gated = has_gated_;
-    in.gated_stamp_s = gated_stamp_s_;
-    in.gated_speed_mps = gated_speed_mps_;
+    last_solve_tick_s_ = in.now_s;
+    const GatedInfo g = gated_snapshot();
+    in.has_gated = g.has;
+    in.gated_stamp_s = g.stamp_s;
+    in.gated_speed_mps = g.speed_mps;
+    in.gated_steering_rad = g.steering_rad;
     in.has_odom = has_odom_;
     in.odom_stamp_s = odom_stamp_s_;
     in.wheel_speed_mps = wheel_speed_mps_;
@@ -438,7 +578,46 @@ class MppiPlannerNode : public rclcpp::Node {
     in.guidance_stamp_s = guidance_stamp_s_;
     in.guidance_v_cap_mps = guidance_v_cap_mps_;
 
-    const TickOutput out = planner_->tick(in);
+    const SolveReport rep = planner_->solve(in);
+    if (rep.bunched) return;
+    if (rep.state == PlannerState::Driving && !have_driving_) {
+      have_driving_ = true;
+      driving_since_s_ = in.now_s;
+    }
+    if (rep.samples_halved && !halved_logged_) {
+      halved_logged_ = true;
+      RCLCPP_WARN(get_logger(), "a solve took %.1f ms, over the budget; the sample count is halved",
+                  rep.solve_time_s * 1e3);
+    }
+    if (++solve_cycle_ % 5 == 0) publish_plan(now());
+  }
+
+  // The 50 Hz output: the latest plan snapshot through the output shaping. No solve here.
+  void on_publish_timer() {
+    if (stopping_.load(std::memory_order_acquire)) return;
+    PublishInput pin;
+    pin.now_s = now().seconds();
+    const GatedInfo g = gated_snapshot();
+    pin.has_gated = g.has;
+    pin.gated_stamp_s = g.stamp_s;
+    pin.gated_steering_rad = g.steering_rad;
+    if (last_pub_tick_s_ > 0.0 && pin.now_s - last_pub_tick_s_ > 0.040) ++pub_gaps_;
+    last_pub_tick_s_ = pin.now_s;
+    if (pin.now_s - gap_log_s_ >= 10.0) {
+      if (gap_log_s_ > 0.0) {
+        const std::uint32_t bunched = planner_->bunched_ticks();
+        RCLCPP_INFO(
+            get_logger(),
+            "tick gaps over 40 ms in the last 10 s: publish %u, solve %u; bunched ticks: %u",
+            pub_gaps_, solve_gaps_.exchange(0, std::memory_order_relaxed),
+            bunched - bunched_logged_);
+        bunched_logged_ = bunched;
+      }
+      pub_gaps_ = 0;
+      gap_log_s_ = pin.now_s;
+    }
+
+    const TickOutput out = planner_->publish(pin);
     ++cycle_;
     const rclcpp::Time stamp = now();
 
@@ -451,7 +630,12 @@ class MppiPlannerNode : public rclcpp::Node {
                                        VEHICLE_PARAMS.limits.global_speed_cap_mps);
     drive.drive.steering_angle = float32_within(out.cmd.steering_rad, geometry_.steering_min_rad,
                                                 geometry_.steering_max_rad);
-    drive_pub_->publish(drive);
+    {
+      std::lock_guard<std::mutex> lock(drive_mutex_);
+      if (stopping_.load(std::memory_order_acquire)) return;
+      drive_pub_->publish(drive);
+      last_cmd_steering_ = drive.drive.steering_angle;
+    }
 
     status_.header.stamp = stamp;
     status_.state = static_cast<uint8_t>(out.state);
@@ -479,22 +663,61 @@ class MppiPlannerNode : public rclcpp::Node {
         out.has_freespace_goal ? static_cast<float>(out.freespace_reach_m) : nan;
     status_.block_reason = static_cast<uint8_t>(out.block_reason);
     status_.recovery_attempts = static_cast<uint8_t>(std::min(out.recovery_attempts, 255));
-    status_.perception_model_id = perception_model_id_;
+    const std::uint32_t id_version = perception_id_version_.load(std::memory_order_acquire);
+    if (id_version != status_id_version_) {
+      status_id_version_ = id_version;
+      std::lock_guard<std::mutex> lock(meta_mutex_);
+      status_.perception_model_id = perception_model_id_;
+    }
     status_pub_->publish(status_);
 
-    if (out.samples_halved && !halved_logged_) {
-      halved_logged_ = true;
-      RCLCPP_WARN(get_logger(), "a solve took %.1f ms, over the budget; the sample count is halved",
-                  out.solve_time_s * 1e3);
+    if (out.plan_stale && !stale_logged_) {
+      RCLCPP_WARN(get_logger(), "plan stale: the newest plan is %.3f s old, publishing speed 0",
+                  out.plan_age_s);
+    }
+    stale_logged_ = out.plan_stale;
+    if (out.left_starting) {
+      RCLCPP_INFO(get_logger(), "start gate passed after %.2f s", out.starting_s);
+    }
+    if (out.state == PlannerState::Starting && out.start_timed_out &&
+        pin.now_s - start_log_s_ >= 1.0) {
+      start_log_s_ = pin.now_s;
+      RCLCPP_WARN(get_logger(), "STARTING for %.1f s, still holding speed 0; missing: %s",
+                  out.starting_s, start_missing_name(out.start_missing));
     }
     if (out.state != last_state_) {
       RCLCPP_INFO(get_logger(), "state %d -> %d", static_cast<int>(last_state_),
                   static_cast<int>(out.state));
       last_state_ = out.state;
     }
-    if (cycle_ % 5 == 0) publish_plan(stamp);
   }
 
+  // Called once by the shutdown path before the context goes away: one speed 0 command, then the
+  // publish timer stays quiet. safety_node's watchdog and the hardware mux are what stop the car;
+  // this is only the polite end of a clean exit.
+  void publish_stop() {
+    if (stopping_.exchange(true)) return;
+    std::lock_guard<std::mutex> lock(drive_mutex_);
+    AckermannMsg m;
+    m.header.stamp = now();
+    m.drive.speed = 0.0f;
+    m.drive.steering_angle = last_cmd_steering_;
+    try {
+      drive_pub_->publish(m);
+    } catch (...) {
+    }
+  }
+
+ public:
+  void install_shutdown_hook() {
+    std::weak_ptr<MppiPlannerNode> weak =
+        std::static_pointer_cast<MppiPlannerNode>(shared_from_this());
+    get_node_base_interface()->get_context()->add_pre_shutdown_callback([weak] {
+      if (auto self = weak.lock()) self->publish_stop();
+    });
+  }
+
+ private:
   void publish_plan(const rclcpp::Time& stamp) {
     path_.header.stamp = stamp;
     if (!planner_->plan_valid()) {
@@ -533,6 +756,7 @@ class MppiPlannerNode : public rclcpp::Node {
 
   rclcpp::CallbackGroup::SharedPtr scan_group_;
   rclcpp::CallbackGroup::SharedPtr command_group_;
+  rclcpp::CallbackGroup::SharedPtr publish_group_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<racer_pnp_msgs::msg::LocalTrack>::SharedPtr track_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
@@ -541,9 +765,10 @@ class MppiPlannerNode : public rclcpp::Node {
   rclcpp::Publisher<AckermannMsg>::SharedPtr drive_pub_;
   rclcpp::Publisher<PlannerStatusMsg>::SharedPtr status_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr plan_pub_;
-  rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr solve_timer_;
+  rclcpp::TimerBase::SharedPtr publish_timer_;
 
-  // scan thread -> tick hand-off
+  // scan thread -> solve hand-off
   std::mutex field_mutex_;
   std::array<std::shared_ptr<ScanProducts>, 3> pool_;
   std::shared_ptr<ScanProducts> field_;
@@ -552,27 +777,48 @@ class MppiPlannerNode : public rclcpp::Node {
   double scan_stamp_s_ = 0.0;
   std::vector<PointXY> points_;
 
-  // command group state (timer and small callbacks never run concurrently)
+  // command group state (the solve timer and the small callbacks never run concurrently)
   LocalTrackData track_;
   bool has_track_ = false;
-  std::string perception_model_id_;
   double wheel_speed_mps_ = 0.0;
   double odom_stamp_s_ = 0.0;
   bool has_odom_ = false;
   double guidance_v_cap_mps_ = 0.0;
   double guidance_stamp_s_ = 0.0;
   bool has_guidance_ = false;
-  double gated_speed_mps_ = 0.0;
-  double gated_stamp_s_ = 0.0;
-  bool has_gated_ = false;
-  double last_tick_s_ = 0.0;
-  double gap_log_s_ = 0.0;
-  uint32_t tick_gaps_ = 0;
-  uint32_t cycle_ = 0;
+  double last_solve_tick_s_ = 0.0;
+  std::uint32_t solve_cycle_ = 0;
   bool halved_logged_ = false;
+  bool have_driving_ = false;  // solve thread: the first Driving solve has happened
+  double driving_since_s_ = 0.0;
+  std::vector<std::pair<double, double>> stalls_;  // (time since first Driving, stall) pairs
+  std::size_t next_stall_ = 0;
+  nav_msgs::msg::Path path_;
+
+  // read by the publish timer, written by the command group
+  std::mutex gated_mutex_;
+  GatedInfo gated_;
+  std::mutex meta_mutex_;
+  std::string perception_model_id_;
+  std::atomic<std::uint32_t> perception_id_version_{0};
+
+  // publish timer state
+  std::uint32_t status_id_version_ = 0;
+  double last_pub_tick_s_ = 0.0;
+  double gap_log_s_ = 0.0;
+  std::uint32_t pub_gaps_ = 0;
+  std::atomic<std::uint32_t> solve_gaps_{0};
+  std::uint32_t bunched_logged_ = 0;
+  std::uint32_t cycle_ = 0;
+  bool stale_logged_ = false;
+  double start_log_s_ = 0.0;
   PlannerState last_state_ = PlannerState::Starting;
   PlannerStatusMsg status_;
-  nav_msgs::msg::Path path_;
+
+  // shutdown
+  std::mutex drive_mutex_;
+  std::atomic<bool> stopping_{false};
+  float last_cmd_steering_ = 0.0f;
 };
 
 }  // namespace racer_planner
@@ -581,7 +827,8 @@ int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   try {
     auto node = std::make_shared<racer_planner::MppiPlannerNode>();
-    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+    node->install_shutdown_hook();
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 3);
     executor.add_node(node);
     executor.spin();
   } catch (const std::exception& e) {

@@ -108,7 +108,9 @@ if(BUILD_TESTING)
     test/test_mppi_costs.cpp
     test/test_planner_logic.cpp
     test/test_planner_properties.cpp
-    TIMEOUT 120
+    test/test_planner_timing.cpp
+    test/test_planner_timing_properties.cpp
+    TIMEOUT 300
   )
   add_dependencies(test_racer_planner_core racer_planner_generate_vehicle_params)
   target_include_directories(test_racer_planner_core PRIVATE "${RACER_GENERATED_DIR}" src test)

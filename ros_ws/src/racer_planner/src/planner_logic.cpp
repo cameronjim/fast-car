@@ -55,17 +55,28 @@ double track_confidence(double c_raw, double c_prev, double tick_s, double rise_
   return std::min(raw, prev + rise);
 }
 
+Age classify_age(double now_s, double stamp_s, double timeout_s, double hard_timeout_s) {
+  const double a = age_s(now_s, stamp_s);
+  if (!std::isfinite(a)) return Age::Hard;
+  if (a < -timeout_s) return Age::Hard;  // a timestamp jump into the future
+  if (a <= timeout_s) return Age::Fresh;
+  if (a <= std::max(hard_timeout_s, timeout_s)) return Age::Soft;
+  return Age::Hard;
+}
+
 Gate evaluate_gate(const LogicInputs& in, const LogicParams& p) {
   Gate g;
   if (in.internal_error) {
     g.state = PlannerState::Fault;
     return g;
   }
-  if (!in.has_odom || is_stale(in.now_s, in.odom_stamp_s, p.odom_timeout_s)) {
+  if (!in.has_odom || classify_age(in.now_s, in.odom_stamp_s, p.odom_timeout_s,
+                                   p.odom_hard_timeout_s) == Age::Hard) {
     g.state = PlannerState::NoOdom;
     return g;
   }
-  if (!in.has_scan || is_stale(in.now_s, in.scan_stamp_s, p.scan_timeout_s)) {
+  if (!in.has_scan || classify_age(in.now_s, in.scan_stamp_s, p.scan_timeout_s,
+                                   p.scan_hard_timeout_s) == Age::Hard) {
     g.state = PlannerState::NoScan;
     return g;
   }
@@ -76,14 +87,55 @@ Gate evaluate_gate(const LogicInputs& in, const LogicParams& p) {
 
 double speed_cap(const LogicParams& p, const LogicInputs& in, double confidence) {
   double cap = p.v_max_mps;
-  if (p.use_lap_guidance && in.has_guidance && std::isfinite(in.guidance_v_cap_mps) &&
-      !is_stale(in.now_s, in.guidance_stamp_s, p.guidance_timeout_s)) {
-    cap = std::min(cap, in.guidance_v_cap_mps);
+  if (p.use_lap_guidance) {
+    const bool guidance_ok = in.has_guidance && std::isfinite(in.guidance_v_cap_mps) &&
+                             !in.guidance_profile_bad &&
+                             !is_stale(in.now_s, in.guidance_stamp_s, p.guidance_timeout_s);
+    if (guidance_ok) {
+      cap = std::min(cap, in.guidance_v_cap_mps);
+    } else {
+      // NaN is not a limit anyone meant: it counts as 0.
+      const double fallback = std::isnan(p.v_no_guidance_mps) ? 0.0 : p.v_no_guidance_mps;
+      cap = std::min(cap, fallback);
+    }
   }
   if (!std::isfinite(cap)) cap = 0.0;
   const double c = std::isfinite(confidence) ? std::min(std::max(confidence, 0.0), 1.0) : 0.0;
   const double f = std::min(std::max(p.freespace_speed_fraction, 0.0), 1.0);
   cap *= f + (1.0 - f) * c;
+  // Scan staleness: full up to scan_timeout_s, a linear ramp to 0 at scan_hard_timeout_s.
+  if (!in.has_scan) {
+    cap = 0.0;
+  } else {
+    switch (classify_age(in.now_s, in.scan_stamp_s, p.scan_timeout_s, p.scan_hard_timeout_s)) {
+      case Age::Fresh:
+        break;
+      case Age::Soft:
+        cap *= ramp_down(age_s(in.now_s, in.scan_stamp_s), p.scan_timeout_s, p.scan_hard_timeout_s);
+        break;
+      case Age::Hard:
+        cap = 0.0;
+        break;
+    }
+  }
+  // Wheel speed staleness: no acceleration on a guess.
+  if (!in.has_odom) {
+    cap = 0.0;
+  } else {
+    switch (classify_age(in.now_s, in.odom_stamp_s, p.odom_timeout_s, p.odom_hard_timeout_s)) {
+      case Age::Fresh:
+        break;
+      case Age::Soft: {
+        const double last =
+            std::isfinite(in.wheel_speed_mps) ? std::max(in.wheel_speed_mps, 0.0) : 0.0;
+        cap = std::min(cap, last + std::max(p.odom_stale_cap_margin_mps, 0.0));
+        break;
+      }
+      case Age::Hard:
+        cap = 0.0;
+        break;
+    }
+  }
   return std::min(std::max(0.0, cap), std::max(0.0, p.v_max_mps));
 }
 
@@ -159,6 +211,85 @@ Command rate_limit(const Command& wanted, const Command& previous, double max_st
         std::min(wanted.speed_mps, std::min(speed_floor_mps, base + speed_floor_mps / steps));
   }
   return c;
+}
+
+double slew_elapsed_s(double elapsed_s, double tick_s) {
+  if (!(elapsed_s > 0.0)) return 0.0;  // negative, zero and NaN
+  return std::min(elapsed_s, std::max(tick_s, 0.0));
+}
+
+Command slew_limit(const Command& wanted, const Command& previous, double elapsed_s,
+                   const SlewLimits& limits) {
+  const double e = slew_elapsed_s(elapsed_s, limits.tick_s);
+  const double steer_step = limits.fraction * limits.steering_rate_rad_per_s * e;
+  const double up_step = limits.fraction * limits.max_acceleration_mps2 * e;
+  Command c = rate_limit(wanted, previous, steer_step, up_step, 0.0);
+  const double nominal_up = limits.fraction * limits.max_acceleration_mps2 * limits.tick_s;
+  const double base = std::max(previous.speed_mps, 0.0);
+  if (limits.speed_floor_mps > 0.0 && nominal_up > 0.0 && e > 0.0 && wanted.speed_mps >= 0.0 &&
+      base < limits.speed_floor_mps && wanted.speed_mps >= limits.speed_floor_mps) {
+    // The start from rest: equal steps of the on-time ramp, scaled by the elapsed share of a tick.
+    const double steps = std::ceil(limits.speed_floor_mps / nominal_up - 1e-9);
+    const double step = limits.speed_floor_mps / steps * (e / limits.tick_s);
+    c.speed_mps = std::min(wanted.speed_mps, std::min(limits.speed_floor_mps, base + step));
+  }
+  return c;
+}
+
+Control interpolate_plan(const Control* seq, int n, double dt_s, double age_s) {
+  if (seq == nullptr || n <= 0) return Control{};
+  if (n == 1 || !(age_s > 0.0) || !(dt_s > 0.0)) return seq[0];
+  const double pos = age_s / dt_s;
+  if (!(pos < static_cast<double>(n - 1))) return seq[n - 1];
+  const int k = static_cast<int>(pos);
+  const double w = pos - static_cast<double>(k);
+  Control c;
+  c.speed_cmd = (1.0 - w) * seq[k].speed_cmd + w * seq[k + 1].speed_cmd;
+  c.steering_cmd = (1.0 - w) * seq[k].steering_cmd + w * seq[k + 1].steering_cmd;
+  return c;
+}
+
+const char* start_missing_name(StartMissing m) {
+  switch (m) {
+    case StartMissing::None:
+      return "none";
+    case StartMissing::NoPlan:
+      return "no fresh plan snapshot (the solver has not produced one in time)";
+    case StartMissing::Scan:
+      return "scan not fresh";
+    case StartMissing::Odom:
+      return "wheel speed not fresh";
+    case StartMissing::Track:
+      return "local track not fresh";
+    case StartMissing::TickTiming:
+      return "publish ticks not arriving on time (need consecutive ticks within the gap limit)";
+    case StartMissing::SolverWarmup:
+      return "solver not yet warm on the real inputs (need consecutive on-time solves)";
+    case StartMissing::Gated:
+      return "gated /drive not seen (safety_node not alive?)";
+  }
+  return "unknown";
+}
+
+StartGateResult start_gate(const StartGateInputs& in, const LogicParams& p) {
+  StartGateResult r;
+  if (!in.plan_fresh) {
+    r.missing = StartMissing::NoPlan;
+  } else if (!in.scan_fresh) {
+    r.missing = StartMissing::Scan;
+  } else if (!in.odom_fresh) {
+    r.missing = StartMissing::Odom;
+  } else if (in.track_ever && !in.track_fresh) {
+    r.missing = StartMissing::Track;
+  } else if (in.publish_good_ticks < p.start_ticks) {
+    r.missing = StartMissing::TickTiming;
+  } else if (in.solve_good_ticks < p.start_ticks) {
+    r.missing = StartMissing::SolverWarmup;
+  } else if (p.require_gated_for_start && !in.gated_seen) {
+    r.missing = StartMissing::Gated;
+  }
+  r.leave = r.missing == StartMissing::None;
+  return r;
 }
 
 float float32_within(double x, double lo, double hi) {

@@ -1040,3 +1040,40 @@ TEST(PlannerGuidance, ADeadLapMemoryNodeGivesTheFallbackCapNotTheCeiling) {
   out = r.planner.tick(in);
   EXPECT_NEAR(out.v_cap_mps, 0.4, 1e-9);
 }
+
+// F1 of the fault replay: a scan with no usable point builds an empty distance field, which must
+// never read as free space.
+TEST(PlannerFaults, AScanWithNoUsablePointIsNoScanWithSpeedZeroAndRecovers) {
+  PlannerConfig cfg = small_config(0.5);
+  cfg.logic.require_gated_for_start = false;
+  cfg.logic.start_ticks = 3;
+  Rig r(cfg);
+  double t = 1000.0;
+  TickOutput out = run_ticks(r, &t, 80);
+  ASSERT_EQ(out.state, PlannerState::Driving);
+  ASSERT_GT(out.cmd.speed_mps, 0.1);
+  const std::vector<PointXY> good = r.points;
+  r.set_points({});
+  out = r.tick(t);
+  t += 0.02;
+  EXPECT_EQ(out.state, PlannerState::NoScan);
+  EXPECT_EQ(out.cmd.speed_mps, 0.0);
+  for (int i = 0; i < 20; ++i, t += 0.02) EXPECT_EQ(r.tick(t).cmd.speed_mps, 0.0);
+  r.set_points(good);
+  for (int i = 0; i < 120; ++i) out = r.tick(t), t += 0.02;
+  EXPECT_EQ(out.state, PlannerState::Driving);
+  EXPECT_GT(out.cmd.speed_mps, 0.0);
+  // a handful of points is still not a scan
+  r.set_points({{1.0, 0.5}, {2.0, 0.5}, {3.0, -0.5}});
+  EXPECT_EQ(r.tick(t).state, PlannerState::NoScan);
+}
+
+// F2: a stamp a few ms ahead of the tick is reported as age 0, never negative.
+TEST(PlannerFaults, ASlightlyFutureScanStampReportsAgeZero) {
+  Rig r;
+  TickInput in = r.input(1000.0);
+  in.scan_stamp_s = 1000.0 + 0.0047;
+  const TickOutput out = r.planner.tick(in);
+  EXPECT_GE(out.scan_age_s, 0.0);
+  EXPECT_NE(out.state, PlannerState::NoScan);
+}

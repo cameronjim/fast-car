@@ -49,3 +49,11 @@ def toy_nominal() -> Nominal:
         command_delay_s=0.08,
         understeer_s2_per_m2=0.0,
     )
+
+
+@pytest.fixture(scope="module")
+def toy_vehicle_module() -> Vehicle:
+    """The same toy vehicle for fixtures that live for a whole test module."""
+    return Vehicle(
+        0.5, -0.4, 0.4, 2.0, 2.0, "9.9.9", "toy", 0.5, -0.4, 0.6, 0.1, 0.15, 0.3, 0.0, 3.141593
+    )

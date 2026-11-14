@@ -55,6 +55,9 @@ struct LogicParams {
   double start_timeout_s = 5.0;
   double start_stop_hold_s = 1.0;
   bool require_gated_for_start = true;
+  // Fewer usable scan points than this make the scan unusable (NO_SCAN, speed 0): an empty distance
+  // field must never read as free space. A scan of the 720 beam lidar in a lane has hundreds.
+  int min_scan_points = 10;
   // While the gated /drive has not been seen yet (DDS discovery of safety_node takes a few ticks),
   // STARTING does not publish /drive_raw for up to this long: the steering it would start from is
   // not known, and a guess of 0 against safety_node's held steering is a rate limit clip.

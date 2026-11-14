@@ -85,6 +85,7 @@ std::map<std::string, Param> default_params() {
   d("start_stop_hold_s", lg.start_stop_hold_s, 0.2, 60.0);
   d("require_gated_for_start", 1.0, 0.0, 1.0);
   d("start_gated_grace_s", lg.start_gated_grace_s, 0.0, 5.0);
+  i("min_scan_points", lg.min_scan_points, 0, 1000);
   d("v_no_guidance_mps", 0.5, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps);
   d("conf_intrusion_full", lg.conf_intrusion_full, 0.0, 1.0);
   d("conf_intrusion_zero", lg.conf_intrusion_zero, 0.0, 1.0);
@@ -196,6 +197,7 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   lg.start_stop_hold_s = v("start_stop_hold_s");
   lg.require_gated_for_start = v("require_gated_for_start") != 0.0;
   lg.start_gated_grace_s = v("start_gated_grace_s");
+  lg.min_scan_points = static_cast<int>(v("min_scan_points"));
   lg.v_no_guidance_mps = v("v_no_guidance_mps");
   lg.conf_intrusion_full = v("conf_intrusion_full");
   lg.conf_intrusion_zero = v("conf_intrusion_zero");

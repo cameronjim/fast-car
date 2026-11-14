@@ -11,6 +11,7 @@ That is a software stop. Wi-Fi can drop; the RC kill knob is the stop that alway
 
 from __future__ import annotations
 
+import getpass
 import ipaddress
 import socket
 import threading
@@ -31,6 +32,7 @@ from .commands import StackFlags
 from .config import Settings, token_matches
 from .controller import ActionError, Controller
 from .diskguard import DiskGuard
+from .prefs import Prefs
 from .rosstate import FoxgloveClient
 
 FAIL_LIMIT = 10
@@ -70,6 +72,8 @@ class DriveBody(Body):
     pnp_params: str = ""
     max_speed_mps: float | None = None
     min_speed_mps: float | None = None
+    a_lat_max_mps2: float | None = None
+    side_cap_min_speed_mps: float | None = None
 
 
 class PerceptionBody(Body):
@@ -126,6 +130,13 @@ class AuthGate:
             with self._lock:
                 self._recent(ip).append(self._clock())
             raise ActionError("missing or wrong token", 401)
+
+
+def _user() -> str:
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):
+        return ""
 
 
 def client_ip(request: Request) -> str:
@@ -236,7 +247,24 @@ def create_app(
 
     @guarded.get("/bags")
     def bags() -> dict[str, Any]:
-        return {"bags": c.list_bags(), "disk_free_gb": c.host.disk_free_gb(settings.bags)}
+        listed = c.list_bags()
+        return {
+            "bags": listed,
+            "disk_free_gb": c.host.disk_free_gb(settings.bags),
+            "disk": c.disk_usage(),
+            "bags_mb": round(sum(b["size_mb"] for b in listed), 1),
+            # for the "copy to your computer" hint: scp -r USER@CAR:BAG_DIR/NAME .
+            "bag_dir": str(settings.bags),
+            "user": _user(),
+        }
+
+    @guarded.get("/prefs")
+    def prefs_get() -> dict[str, Any]:
+        return c.get_prefs()
+
+    @guarded.post("/prefs")
+    def prefs_post(body: Prefs, actor: str = Depends(need_auth)) -> dict[str, Any]:
+        return ok(c.set_prefs(body, actor))
 
     @guarded.get("/drive/log")
     def drive_log() -> dict[str, Any]:
@@ -294,6 +322,10 @@ def create_app(
     @guarded.post("/system/shutdown")
     def shutdown(body: ConfirmBody, actor: str = Depends(need_auth)) -> dict[str, Any]:
         return ok(c.power("shutdown", body.confirm, actor))
+
+    @guarded.post("/system/cleanup")
+    def cleanup(body: ConfirmBody, actor: str = Depends(need_auth)) -> dict[str, Any]:
+        return ok(c.cleanup_docker(body.confirm, actor))
 
     @guarded.post("/settings")
     def settings_post(body: SettingsBody, actor: str = Depends(need_auth)) -> dict[str, Any]:

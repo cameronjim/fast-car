@@ -194,12 +194,14 @@ def pnp_timing_summary(recording, planner_status: list[tuple[float, int]]) -> di
                           watchdog engagement after the planner has stopped is the stop mechanism
                           and is not counted).
     drive_raw             the command stream: the largest gap between two messages, the largest
-                          rate at which the speed rose over a window of at least 50 ms (m/s^2, the
-                          planner's allowance is its rate_limit_fraction times max_acceleration),
+                          rate at which the speed magnitude rose over a window of at least 50 ms
+                          (m/s^2, the planner's allowance is its rate_limit_fraction times
+                          max_acceleration),
                           and the largest first non-zero speed after the command had been 0.
     """
     out: dict = {}
-    drive = recording.drive_raw  # (stamp, speed, steering)
+    # (stamp, speed, steering); a planner on use_sim_time stamps 0 until its first /clock arrives
+    drive = [d for d in recording.drive_raw if d[0] > 0.0]
     first_nonzero = next((t for t, v, _ in drive if v != 0.0), None)
     last_status = planner_status[-1][0] if planner_status else None
     if first_nonzero is not None and last_status is not None:
@@ -212,12 +214,13 @@ def pnp_timing_summary(recording, planner_status: list[tuple[float, int]]) -> di
     if len(drive) >= 2:
         t = np.array([d[0] for d in drive])
         v = np.array([d[1] for d in drive])
+        mag = np.abs(v)  # the planner limits the growth of the magnitude (a reverse is slowing)
         gaps = np.diff(t)
         max_rate = 0.0
         j0 = 0
         for j in range(1, len(t)):
             while j0 < j and t[j] - t[j0] >= 0.05:
-                max_rate = max(max_rate, (v[j] - v[j0]) / (t[j] - t[j0]))
+                max_rate = max(max_rate, (mag[j] - mag[j0]) / (t[j] - t[j0]))
                 j0 += 1
         starts = [float(v[i]) for i in range(1, len(v)) if v[i - 1] == 0.0 and v[i] > 0.0]
         out["drive_raw"] = {

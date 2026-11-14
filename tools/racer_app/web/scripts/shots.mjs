@@ -1,4 +1,4 @@
-// Screenshots of every tab in demo mode, light and dark, desktop and phone width.
+// Screenshots of every tab in demo mode, desktop and phone width.
 //   npm run shots -- <output dir>
 // Starts its own vite dev server, drives the in-browser demo car (no car needed) and uses the
 // system Chrome (set CHROME_PATH to override), so nothing is downloaded.
@@ -23,8 +23,8 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const written = [];
 
-async function open(scheme, size, tab, state, extra = "") {
-  const ctx = await browser.newContext({ viewport: size, colorScheme: scheme, deviceScaleFactor: 1 });
+async function open(size, tab, state, extra = "") {
+  const ctx = await browser.newContext({ viewport: size, colorScheme: "dark", deviceScaleFactor: 1 });
   await ctx.addInitScript((t) => {
     try {
       localStorage.setItem("racer-tab", t);
@@ -35,94 +35,105 @@ async function open(scheme, size, tab, state, extra = "") {
   return { ctx, page };
 }
 
-async function shot(page, name) {
+async function shot(page, name, fullPage = false) {
   const file = join(out, `${name}.png`);
-  await page.screenshot({ path: file });
+  await page.screenshot({ path: file, fullPage });
   written.push(file);
 }
 
 const DESKTOP = { width: 1280, height: 860 };
 const PHONE = { width: 390, height: 844 };
 
-for (const scheme of ["light", "dark"]) {
-  // the five tabs on a driving car
-  for (const tab of ["drive", "live", "checks", "logs", "system"]) {
-    const { ctx, page } = await open(scheme, DESKTOP, tab, "driving");
-    await sleep(3200);
-    if (tab === "checks") await page.getByRole("button", { name: "Battery OK" }).click();
-    await sleep(300);
-    await shot(page, `${tab}-${scheme}`);
-    await ctx.close();
-  }
+// every tab on a driving car
+for (const tab of ["drive", "tune", "live", "data", "logs", "system"]) {
+  const { ctx, page } = await open(DESKTOP, tab, "driving");
+  await sleep(3200);
+  await shot(page, `${tab}`, tab === "system" || tab === "logs");
+  await ctx.close();
+}
 
-  // first load (skeletons): shot taken before the first status reply
-  {
-    const { ctx, page } = await open(scheme, DESKTOP, "drive", "running");
-    await sleep(60);
-    await shot(page, `loading-skeleton-${scheme}`);
-    await ctx.close();
-  }
+// an idle car: Start car, the lights off
+{
+  const { ctx, page } = await open(DESKTOP, "drive", "idle");
+  await sleep(1200);
+  await shot(page, "drive-idle");
+  await page.getByRole("button", { name: "Start car", exact: true }).click();
+  await sleep(2200);
+  await shot(page, "drive-starting");
+  await sleep(4000);
+  await shot(page, "drive-ready");
+  await page.getByRole("button", { name: /^Gap follow/ }).click();
+  await sleep(300);
+  await shot(page, "drive-gap-starting");
+  await sleep(2500);
+  await shot(page, "drive-gap-running");
+  await ctx.close();
+}
 
-  // stack start in progress: optimistic state and the timeline
-  {
-    const { ctx, page } = await open(scheme, DESKTOP, "system", "idle");
-    await sleep(900);
-    await page.getByRole("button", { name: "Start stack", exact: true }).click();
-    await sleep(2600);
-    await shot(page, `stack-starting-${scheme}`);
-    await ctx.close();
-  }
+// a failed start: the red badge, then the Logs tab it opens
+{
+  const { ctx, page } = await open(DESKTOP, "drive", "idle", "&panel=1");
+  await sleep(900);
+  await page.getByRole("button", { name: "Fail next start" }).click();
+  await page.getByRole("button", { name: "Start car", exact: true }).click();
+  await sleep(2600);
+  await shot(page, "drive-start-failed");
+  await page.getByRole("button", { name: /Open Logs/ }).first().click();
+  await sleep(600);
+  await shot(page, "logs-after-failure");
+  await ctx.close();
+}
 
-  // a failed start, with the reason
-  {
-    const { ctx, page } = await open(scheme, DESKTOP, "system", "idle", "&panel=1");
-    await sleep(900);
-    await page.getByRole("button", { name: "Fail next start" }).click();
-    await page.getByRole("button", { name: "Start stack", exact: true }).click();
-    await sleep(2600);
-    await shot(page, `stack-start-failed-${scheme}`);
-    await ctx.close();
-  }
+// the override flow: low battery refuses a drive
+{
+  const { ctx, page } = await open(DESKTOP, "drive", "running", "&panel=1");
+  await sleep(1500);
+  await page.getByRole("button", { name: /Battery: ok/ }).click();
+  await page.getByRole("button", { name: /^Gap follow/ }).click();
+  await sleep(1800);
+  await shot(page, "drive-override");
+  await ctx.close();
+}
 
-  // a slow stop: "closing the bag"
-  {
-    const { ctx, page } = await open(scheme, DESKTOP, "system", "running");
-    await sleep(1500);
-    await page.getByRole("button", { name: "Stop stack", exact: true }).click();
-    await page.getByRole("button", { name: "Stop stack", exact: true }).click();
-    await sleep(1800);
-    await shot(page, `stack-stopping-${scheme}`);
-    await ctx.close();
-  }
+// tune: an out-of-bounds value is marked and not saved
+{
+  const { ctx, page } = await open(DESKTOP, "tune", "running");
+  await sleep(1500);
+  await page.getByRole("spinbutton", { name: "Max speed in m/s" }).fill("3");
+  await sleep(900);
+  await shot(page, "tune-invalid");
+  await page.getByRole("spinbutton", { name: "Max speed in m/s" }).fill("0.5");
+  await sleep(1600);
+  await shot(page, "tune-saved");
+  await ctx.close();
+}
 
-  // the agent link drops: reconnecting banner, values greyed with their age
-  {
-    const { ctx, page } = await open(scheme, DESKTOP, "live", "driving", "&panel=1");
-    await sleep(2500);
-    await page.getByRole("button", { name: "Drop link 10 s" }).click();
-    await sleep(7000);
-    await shot(page, `reconnecting-${scheme}`);
-    await ctx.close();
-  }
+// data: delete asks twice
+{
+  const { ctx, page } = await open(DESKTOP, "data", "running");
+  await sleep(1500);
+  await page.getByRole("button", { name: /^Delete 2026-11-11/ }).click();
+  await sleep(200);
+  await shot(page, "data-delete-confirm");
+  await ctx.close();
+}
 
-  // the override flow: low battery refuses a drive, the panel offers an override
-  {
-    const { ctx, page } = await open(scheme, DESKTOP, "drive", "running", "&panel=1");
-    await sleep(1500);
-    await page.getByRole("button", { name: /Battery: ok/ }).click();
-    await page.getByRole("button", { name: "Start Wall follow" }).click();
-    await sleep(1800);
-    await shot(page, `drive-override-${scheme}`);
-    await ctx.close();
-  }
+// the agent link drops
+{
+  const { ctx, page } = await open(DESKTOP, "drive", "driving", "&panel=1");
+  await sleep(2500);
+  await page.getByRole("button", { name: "Drop link 10 s" }).click();
+  await sleep(7000);
+  await shot(page, "reconnecting");
+  await ctx.close();
+}
 
-  // phone width
-  for (const tab of ["drive", "live", "checks"]) {
-    const { ctx, page } = await open(scheme, PHONE, tab, "driving");
-    await sleep(3200);
-    await shot(page, `phone-${tab}-${scheme}`);
-    await ctx.close();
-  }
+// phone width
+for (const tab of ["drive", "tune", "live", "data"]) {
+  const { ctx, page } = await open(PHONE, tab, "driving");
+  await sleep(3200);
+  await shot(page, `phone-${tab}`, true);
+  await ctx.close();
 }
 
 await browser.close();

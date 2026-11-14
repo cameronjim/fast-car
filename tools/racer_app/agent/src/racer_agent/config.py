@@ -116,6 +116,10 @@ class Settings:
         return self.state_dir / "autostart.enabled"
 
     @property
+    def prefs_path(self) -> Path:
+        return self.state_dir / "prefs.json"
+
+    @property
     def run_marker(self) -> Path:
         return self.state_dir / "run.marker"
 

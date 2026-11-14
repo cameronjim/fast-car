@@ -1,0 +1,932 @@
+{
+  "tool": "tools/pnp_replay.py",
+  "bag": "2026-11-13T22-20-18_car_teleop",
+  "backend": "geometric",
+  "perception_model_id": "geometric-v1",
+  "tracks": "replay",
+  "track_latency_s": 0.03,
+  "clip_speed_to_cap": false,
+  "v_max_mps": 0.5,
+  "dynamics_bundle": "dyn-car-2026-11-12",
+  "segments": {
+    "R0": {
+      "kind": "pnp",
+      "t_from": 430.1377503871918,
+      "t_to": 481.4248399734497,
+      "duration_s": 51.287089586257935,
+      "v_max_mps": 0.5,
+      "perception": {
+        "scans": 510,
+        "scans_with_track": 510,
+        "intrusion_mean": 0.002293511843212266,
+        "intrusion_p90": 0.007555223680984368,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.02552556737060436,
+        "boundary_residual_p90_m": 0.04648646262938786,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.02454321179111351,
+        "clearance_deficit_share_over_0.15": 0.0055312580396192435,
+        "clearance_deficit_stations": 7774,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 489,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 2563,
+        "eligible_ticks": 2563,
+        "state_counts": {
+          "STARTING": 57,
+          "DRIVING": 2506
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.0222395630120952,
+        "speed_below_dead_zone_share": 0.005072181037846274,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.005243665203511572,
+        "steering_change": {
+          "std_rad": 0.008111724755558382,
+          "sign_flips_per_s": 2.498883249075583,
+          "p99_abs_rad": 0.028799999999999992
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.5136885,
+          "p99": 0.8064382
+        },
+        "rate_allowance": {
+          "pairs": 2562,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.984609906311744,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.9777604369879048,
+          "ticks_compared": 2563,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 2506,
+            "STARTING->DRIVING": 57
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 2563
+      },
+      "planner_csv": "2026-11-13-v0.2.R0.planner.csv"
+    },
+    "R1": {
+      "kind": "pnp",
+      "t_from": 500.21244192123413,
+      "t_to": 552.8529644012451,
+      "duration_s": 52.640522480010986,
+      "v_max_mps": 0.5,
+      "perception": {
+        "scans": 511,
+        "scans_with_track": 511,
+        "intrusion_mean": 0.003998190311603807,
+        "intrusion_p90": 0.017369727047146403,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.02444474283944842,
+        "boundary_residual_p90_m": 0.05319639036259868,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.02366468816040323,
+        "clearance_deficit_share_over_0.15": 0.008707723372034326,
+        "clearance_deficit_stations": 7924,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 485,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 2614,
+        "eligible_ticks": 2614,
+        "state_counts": {
+          "STARTING": 105,
+          "DRIVING": 2509
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.04016832440703902,
+        "speed_below_dead_zone_share": 0.004973221117061974,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.005169670436428856,
+        "steering_change": {
+          "std_rad": 0.009599383986459728,
+          "sign_flips_per_s": 2.6335541129505424,
+          "p99_abs_rad": 0.028800000000000003
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.519584,
+          "p99": 0.604084
+        },
+        "rate_allowance": {
+          "pairs": 2613,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9787049706606733,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.9590665646518746,
+          "ticks_compared": 2614,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 2507,
+            "DRIVING->NO_ODOM": 2,
+            "STARTING->DRIVING": 57,
+            "STARTING->NO_ODOM": 1,
+            "STARTING->NO_SCAN": 47
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 2564,
+        "NO_SCAN": 47,
+        "NO_ODOM": 3
+      },
+      "planner_csv": "2026-11-13-v0.2.R1.planner.csv"
+    },
+    "R2": {
+      "kind": "pnp",
+      "t_from": 625.5320913791656,
+      "t_to": 645.7941544055939,
+      "duration_s": 20.262063026428223,
+      "v_max_mps": 1.0,
+      "perception": {
+        "scans": 194,
+        "scans_with_track": 194,
+        "intrusion_mean": 0.003182690003574133,
+        "intrusion_p90": 0.01352011958629606,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.026711587370144313,
+        "boundary_residual_p90_m": 0.05441831864207799,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.020308703849090216,
+        "clearance_deficit_share_over_0.15": 0.007855973813420621,
+        "clearance_deficit_stations": 3055,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 191,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 1012,
+        "eligible_ticks": 1012,
+        "state_counts": {
+          "STARTING": 66,
+          "DRIVING": 946
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.06521739130434782,
+        "speed_below_dead_zone_share": 0.005928853754940711,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.02353453686575053,
+        "steering_change": {
+          "std_rad": 0.005038729160244671,
+          "sign_flips_per_s": 4.235557345075433,
+          "p99_abs_rad": 0.019756484319999948
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.546251,
+          "p99": 0.6181671499999998
+        },
+        "rate_allowance": {
+          "pairs": 1011,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9692523221294467,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.9347826086956522,
+          "ticks_compared": 1012,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 946,
+            "STARTING->DRIVING": 39,
+            "STARTING->NO_SCAN": 27
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 985,
+        "NO_SCAN": 27
+      },
+      "planner_csv": "2026-11-13-v0.2.R2.planner.csv"
+    },
+    "R3": {
+      "kind": "pnp",
+      "t_from": 2729.682541847229,
+      "t_to": 2786.289731502533,
+      "duration_s": 56.607189655303955,
+      "v_max_mps": 0.5,
+      "perception": {
+        "scans": 561,
+        "scans_with_track": 561,
+        "intrusion_mean": 0.0034914688425878044,
+        "intrusion_p90": 0.014005602240896359,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.023585051802136544,
+        "boundary_residual_p90_m": 0.05460808581750484,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.022417192082090278,
+        "clearance_deficit_share_over_0.15": 0.009080459770114943,
+        "clearance_deficit_stations": 8700,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 555,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 2832,
+        "eligible_ticks": 2832,
+        "state_counts": {
+          "STARTING": 37,
+          "DRIVING": 2795
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.013064971751412429,
+        "speed_below_dead_zone_share": 0.006709039548022599,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.005697255143112701,
+        "steering_change": {
+          "std_rad": 0.010222655474430716,
+          "sign_flips_per_s": 2.663897357632766,
+          "p99_abs_rad": 0.02880000000000002
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.523168,
+          "p99": 0.619709
+        },
+        "rate_allowance": {
+          "pairs": 2831,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9781851668435734,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.9869350282485876,
+          "ticks_compared": 2832,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 2795,
+            "STARTING->DRIVING": 28,
+            "STARTING->NO_SCAN": 9
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 2823,
+        "NO_SCAN": 9
+      },
+      "planner_csv": "2026-11-13-v0.2.R3.planner.csv"
+    },
+    "R4": {
+      "kind": "pnp",
+      "t_from": 2812.7485020160675,
+      "t_to": 2852.7889111042023,
+      "duration_s": 40.040409088134766,
+      "v_max_mps": 0.5,
+      "perception": {
+        "scans": 394,
+        "scans_with_track": 394,
+        "intrusion_mean": 0.0019520010321864237,
+        "intrusion_p90": 0.006999565311888719,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.024694625377106726,
+        "boundary_residual_p90_m": 0.04383785140333034,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.02360207685912482,
+        "clearance_deficit_share_over_0.15": 0.005045572916666667,
+        "clearance_deficit_stations": 6144,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 370,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 2010,
+        "eligible_ticks": 2010,
+        "state_counts": {
+          "STARTING": 75,
+          "DRIVING": 1935
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.03731343283582089,
+        "speed_below_dead_zone_share": 0.005472636815920398,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.0030048853359173127,
+        "steering_change": {
+          "std_rad": 0.008155227439116694,
+          "sign_flips_per_s": 2.6169257993109616,
+          "p99_abs_rad": 0.028799999999999992
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.510126,
+          "p99": 0.61206172
+        },
+        "rate_allowance": {
+          "pairs": 2009,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9790229083935322,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.9626865671641791,
+          "ticks_compared": 2010,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 1935,
+            "STARTING->DRIVING": 66,
+            "STARTING->NO_ODOM": 1,
+            "STARTING->NO_SCAN": 8
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 2001,
+        "NO_SCAN": 8,
+        "NO_ODOM": 1
+      },
+      "planner_csv": "2026-11-13-v0.2.R4.planner.csv"
+    },
+    "R5": {
+      "kind": "pnp",
+      "t_from": 2868.0395498275757,
+      "t_to": 2895.5055577754974,
+      "duration_s": 27.466007947921753,
+      "v_max_mps": 0.7,
+      "perception": {
+        "scans": 268,
+        "scans_with_track": 268,
+        "intrusion_mean": 0.0015128280107627042,
+        "intrusion_p90": 0.0045049887631246205,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.025667538109673826,
+        "boundary_residual_p90_m": 0.04319380788851989,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.020620801970826264,
+        "clearance_deficit_share_over_0.15": 0.004278583313525077,
+        "clearance_deficit_stations": 4207,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 256,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 1373,
+        "eligible_ticks": 1373,
+        "state_counts": {
+          "STARTING": 86,
+          "DRIVING": 1287
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.06263656227239621,
+        "speed_below_dead_zone_share": 0.003641660597232338,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.010093422202797202,
+        "steering_change": {
+          "std_rad": 0.007245909246372255,
+          "sign_flips_per_s": 3.159648002751656,
+          "p99_abs_rad": 0.028799999999999992
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.537626,
+          "p99": 0.6295175
+        },
+        "rate_allowance": {
+          "pairs": 1372,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9800587389701384,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.9373634377276038,
+          "ticks_compared": 1373,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 1287,
+            "STARTING->DRIVING": 59,
+            "STARTING->NO_SCAN": 27
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 1346,
+        "NO_SCAN": 27
+      },
+      "planner_csv": "2026-11-13-v0.2.R5.planner.csv"
+    },
+    "R6": {
+      "kind": "pnp",
+      "t_from": 2914.1021139621735,
+      "t_to": 2940.5581061840057,
+      "duration_s": 26.455992221832275,
+      "v_max_mps": 0.7,
+      "perception": {
+        "scans": 256,
+        "scans_with_track": 256,
+        "intrusion_mean": 0.002456753640749108,
+        "intrusion_p90": 0.007888299195621527,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.024547276169147127,
+        "boundary_residual_p90_m": 0.05387481753148066,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.0205490305498131,
+        "clearance_deficit_share_over_0.15": 0.008485150985774894,
+        "clearance_deficit_stations": 4007,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 253,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 1320,
+        "eligible_ticks": 1320,
+        "state_counts": {
+          "STARTING": 100,
+          "DRIVING": 1220
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.07575757575757576,
+        "speed_below_dead_zone_share": 0.004545454545454545,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.011552254098360656,
+        "steering_change": {
+          "std_rad": 0.0074615010596950785,
+          "sign_flips_per_s": 4.51234623047299,
+          "p99_abs_rad": 0.028799999999999992
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.5384175,
+          "p99": 0.74396044
+        },
+        "rate_allowance": {
+          "pairs": 1319,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9747831188310604,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.9242424242424242,
+          "ticks_compared": 1320,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 1220,
+            "STARTING->DRIVING": 78,
+            "STARTING->NO_ODOM": 22
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 1298,
+        "NO_ODOM": 22
+      },
+      "planner_csv": "2026-11-13-v0.2.R6.planner.csv"
+    },
+    "R7": {
+      "kind": "pnp",
+      "t_from": 2967.283400774002,
+      "t_to": 2991.601154088974,
+      "duration_s": 24.317753314971924,
+      "v_max_mps": 1.0,
+      "perception": {
+        "scans": 242,
+        "scans_with_track": 242,
+        "intrusion_mean": 0.0026951426791114535,
+        "intrusion_p90": 0.01053240093240094,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.026132490092429836,
+        "boundary_residual_p90_m": 0.04419377796835075,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.026172444608353815,
+        "clearance_deficit_share_over_0.15": 0.006758513127112035,
+        "clearance_deficit_stations": 3847,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 229,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 1222,
+        "eligible_ticks": 1222,
+        "state_counts": {
+          "STARTING": 127,
+          "DRIVING": 1095
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.1039279869067103,
+        "speed_below_dead_zone_share": 0.004909983633387889,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.021277468607305935,
+        "steering_change": {
+          "std_rad": 0.005772060157619379,
+          "sign_flips_per_s": 3.7907651115553245,
+          "p99_abs_rad": 0.028240214399999974
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.559,
+          "p99": 0.6882295399999994
+        },
+        "rate_allowance": {
+          "pairs": 1221,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9698795821489362,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.8960720130932897,
+          "ticks_compared": 1222,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 1095,
+            "STARTING->DRIVING": 125,
+            "STARTING->NO_ODOM": 2
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 1220,
+        "NO_ODOM": 2
+      },
+      "planner_csv": "2026-11-13-v0.2.R7.planner.csv"
+    },
+    "R8": {
+      "kind": "pnp",
+      "t_from": 3012.430965423584,
+      "t_to": 3029.6735570430756,
+      "duration_s": 17.242591619491577,
+      "v_max_mps": 1.0,
+      "perception": {
+        "scans": 172,
+        "scans_with_track": 172,
+        "intrusion_mean": 0.002429100669403236,
+        "intrusion_p90": 0.008888888888888889,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.025242750337967274,
+        "boundary_residual_p90_m": 0.05670443516234187,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.015851739697800807,
+        "clearance_deficit_share_over_0.15": 0.005609573672400898,
+        "clearance_deficit_stations": 2674,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "matched": 160,
+        "unmatched_recorded": 0,
+        "max_centreline_diff_m": 0.0,
+        "max_half_width_diff_m": 0.0,
+        "valid_count_mismatches": 0,
+        "tolerance_m": 1e-05,
+        "ok": true
+      },
+      "ticks": "recorded",
+      "planner": {
+        "ticks": 862,
+        "eligible_ticks": 862,
+        "state_counts": {
+          "STARTING": 165,
+          "DRIVING": 697
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.191415313225058,
+        "speed_below_dead_zone_share": 0.008120649651972157,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.02414645355093257,
+        "steering_change": {
+          "std_rad": 0.006785929560033111,
+          "sign_flips_per_s": 4.5378874707108725,
+          "p99_abs_rad": 0.028799999999999992
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.569751,
+          "p99": 0.7787599999999995
+        },
+        "rate_allowance": {
+          "pairs": 861,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9655410282784221,
+        "block_reason_counts": {},
+        "agreement_with_recorded": {
+          "share": 0.808584686774942,
+          "ticks_compared": 862,
+          "replayed_to_recorded": {
+            "DRIVING->DRIVING": 697,
+            "STARTING->DRIVING": 165
+          }
+        },
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "recorded_status_state_counts": {
+        "DRIVING": 862
+      },
+      "planner_csv": "2026-11-13-v0.2.R8.planner.csv"
+    },
+    "P0": {
+      "kind": "window",
+      "t_from": 16.6,
+      "t_to": 113.9,
+      "duration_s": 97.30000000000001,
+      "v_max_mps": 0.55,
+      "perception": {
+        "scans": 970,
+        "scans_with_track": 970,
+        "intrusion_mean": 0.0023530893037366665,
+        "intrusion_p90": 0.005333333333333333,
+        "intrusion_share_over_0.10": 0.0,
+        "boundary_residual_p50_m": 0.028000778203090305,
+        "boundary_residual_p90_m": 0.051755446986684175,
+        "valid_count_p10": 16.0,
+        "valid_count_share_under_6": 0.0,
+        "clearance_deficit_p90_m": 0.021497571123127848,
+        "clearance_deficit_share_over_0.15": 0.005166553365057783,
+        "clearance_deficit_stations": 14710,
+        "moving_threshold_mps": 0.05,
+        "scan_stride": 1
+      },
+      "fidelity": {
+        "skipped": "no recorded /pnp/local_track in this segment"
+      },
+      "ticks": "uniform",
+      "planner": {
+        "ticks": 4866,
+        "eligible_ticks": 4866,
+        "state_counts": {
+          "STARTING": 26,
+          "DRIVING": 4840
+        },
+        "recovering_ticks": 0,
+        "speed_zero_share": 0.005343197698314837,
+        "speed_below_dead_zone_share": 0.0004110152075626798,
+        "speed_negative_outside_recovering": 0,
+        "dead_zone_mps": 0.2,
+        "collision_fraction_mean": 0.008998902376033058,
+        "steering_change": {
+          "std_rad": 0.008473897745493352,
+          "sign_flips_per_s": 2.6038437693743557,
+          "p99_abs_rad": 0.02880000000000002
+        },
+        "solve_time_ms_this_machine": {
+          "p50": 0.5279805,
+          "p99": 0.6710776199999988
+        },
+        "rate_allowance": {
+          "pairs": 4865,
+          "steering": 0,
+          "speed_up": 0,
+          "violation_pairs": 0,
+          "fraction": 0.45
+        },
+        "track_confidence_mean": 0.9847022265885736,
+        "block_reason_counts": {},
+        "parameters": {
+          "solve_halve_over_ms": 200.0,
+          "stall_hold_s": 600.0
+        }
+      },
+      "planner_csv": "2026-11-13-v0.2.P0.planner.csv"
+    }
+  },
+  "planner_config": {
+    "dynamics_model_id": "dyn-car-2026-11-12",
+    "parameters": {
+      "a_lat_max_mps2": 2,
+      "c_collision": 10000,
+      "conf_age_full_s": 0.25,
+      "conf_age_zero_s": 0.6,
+      "conf_intrusion_full": 0.03,
+      "conf_intrusion_zero": 0.15,
+      "conf_residual_full_m": 0.1,
+      "conf_residual_zero_m": 0.3,
+      "conf_rise_per_s": 1,
+      "conf_valid_full": 8,
+      "conf_valid_zero": 3,
+      "control_rate_hz": 50,
+      "corner_radius_m": 0.06,
+      "cost_scale_floor": 0.2,
+      "d_hard_m": 0.03,
+      "d_soft_base_m": 0.15,
+      "freespace_speed_fraction": 0.7,
+      "gap_reset_s": 0.05,
+      "gate_hold_s": 1,
+      "horizon_steps": 30,
+      "lambda": 0.15,
+      "laser_yaw_from_vehicle_params": 1,
+      "laser_yaw_offset_rad": 0,
+      "m_bound_m": 0.05,
+      "max_samples": 768,
+      "min_scan_points": 10,
+      "move_margin": 0.3,
+      "noise_beta": 0.8,
+      "odom_hard_timeout_s": 0.2,
+      "odom_timeout_s": 0.1,
+      "plan_timeout_s": 0.12,
+      "rate_limit_fraction": 0.45,
+      "recover_distance_m": 0.35,
+      "recover_exhausted_hold_s": 30,
+      "recover_gate_debounce_s": 0.1,
+      "recover_margin_m": 0.03,
+      "recover_max_attempts": 3,
+      "recover_max_s": 2.5,
+      "recover_progress_m": 0.5,
+      "recover_retry_s": 3,
+      "recover_speed_mps": 0.3,
+      "require_gated_for_start": 1,
+      "samples": 512,
+      "scan_hard_timeout_s": 0.6,
+      "scan_timeout_s": 0.35,
+      "seed": 1,
+      "sigma_speed_mps": 0.15,
+      "sigma_steering_rad": 0.12,
+      "solve_halve_over_ms": 200,
+      "solve_restore_under_ms": 6,
+      "speed_floor_margin_mps": 0.03,
+      "stall_hold_s": 600,
+      "start_gated_grace_s": 0.5,
+      "start_stop_hold_s": 1,
+      "start_tick_gap_s": 0.03,
+      "start_ticks": 25,
+      "start_timeout_s": 5,
+      "steer_output_hysteresis_rad": 0.0015,
+      "steer_output_tau_s": 0.04,
+      "t_headway_s": 0.25,
+      "v_max_mps": 0.5,
+      "v_no_guidance_mps": 0.5,
+      "w_bound": 200,
+      "w_clear": 200,
+      "w_du": 0.5,
+      "w_lat": 5,
+      "w_progress": 10,
+      "w_steer_rate": 0.1,
+      "w_term": 50
+    },
+    "laser_yaw_rad": 3.141593,
+    "horizon_steps": 30,
+    "delay_ticks": 0,
+    "tick_s": 0.02,
+    "steering_max_rate_rad_per_s": 3.2,
+    "max_acceleration_mps2": 9.51
+  },
+  "pooled": {
+    "segments": [
+      "R0",
+      "R1",
+      "R2",
+      "R3",
+      "R4",
+      "R5",
+      "R6",
+      "R7",
+      "R8"
+    ],
+    "perception": {
+      "scans": 3108,
+      "scans_with_track": 3108,
+      "intrusion_mean": 0.002787132322951383,
+      "intrusion_p90": 0.010106331839944641,
+      "intrusion_share_over_0.10": 0.0,
+      "boundary_residual_p50_m": 0.02506809461700192,
+      "boundary_residual_p90_m": 0.049791164373419065,
+      "valid_count_p10": 16.0,
+      "valid_count_share_under_6": 0.0,
+      "clearance_deficit_p90_m": 0.02255712676962685,
+      "clearance_deficit_share_over_0.15": 0.007013986592733593,
+      "clearance_deficit_stations": 48332
+    }
+  }
+}

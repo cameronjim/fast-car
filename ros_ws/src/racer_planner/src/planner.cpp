@@ -168,7 +168,10 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   li.has_odom = odom_valid;
   li.odom_stamp_s = in.odom_stamp_s;
   li.wheel_speed_mps = in.wheel_speed_mps;
-  li.has_scan = in.has_scan && in.field != nullptr;
+  // A scan with fewer than min_scan_points usable points (every beam NaN, inf or 0, a covered
+  // lidar) is not a free road: it is no scan.
+  li.has_scan = in.has_scan && in.field != nullptr &&
+                in.field->seed_count() >= static_cast<std::size_t>(std::max(0, lg.min_scan_points));
   li.scan_stamp_s = in.scan_stamp_s;
   if (in.track != nullptr) {
     li.track.present = true;
@@ -193,7 +196,9 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   out.est_steering_rad = est.delta;
   auto age_or_neg = [&](bool present, double stamp) {
     const double a = present ? age_s(now, stamp) : -1.0;
-    return std::isfinite(a) ? a : -1.0;
+    // A stamp a few ms ahead of the tick (a swapped pair of scans) is clock skew, not a negative
+    // age: it counts as 0 (the staleness classes already treat it as fresh).
+    return std::isfinite(a) ? std::max(a, 0.0) : -1.0;
   };
   out.track_age_s = age_or_neg(in.track != nullptr, in.track != nullptr ? in.track->stamp_s : 0.0);
   out.scan_age_s = age_or_neg(li.has_scan, in.scan_stamp_s);

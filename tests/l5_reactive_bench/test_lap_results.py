@@ -4,6 +4,10 @@ ground-truth lap by source, the system's events and the guidance cap per lap. No
 
 from __future__ import annotations
 
+import math
+
+import numpy as np
+import pytest
 import track_family_runner as runner
 
 
@@ -90,3 +94,62 @@ def test_count_by_source() -> None:
         "b": 1,
     }
     assert runner._count_by_source([]) == {}
+
+
+# -- ground truth counted from the system's own start line ---------------------------------------
+
+
+def circle_odom(laps: float, period_s: float, t0: float = 100.0, hz: float = 50.0):
+    """Ground-truth odometry (t, x, y, yaw, v) of a car on a circle of radius 1 m that stands for
+    1 s, then goes round once per `period_s`."""
+    n = int((1.0 + laps * period_s) * hz)
+    out = []
+    for i in range(n):
+        t = i / hz
+        a = 0.0 if t < 1.0 else 2 * math.pi * (t - 1.0) / period_s
+        out.append((t0 + t, math.cos(a), math.sin(a), a + math.pi / 2, 0.0))
+    return out
+
+
+def circle_centreline():
+    a = np.linspace(0, 2 * math.pi, 400, endpoint=False)
+    return np.cos(a), np.sin(a)
+
+
+def test_the_truth_is_recounted_from_the_pose_of_the_systems_start_scan() -> None:
+    xs, ys = circle_centreline()
+    odom = circle_odom(3.2, 10.0)
+    start_stamp = 103.0  # the start scan: 2 s into the first lap
+    first = {"lap_index": 1, "t_cross_s": 111.0 + 0.05, "lap_time_s": 111.0 - start_stamp}
+    rescored = runner.rescore_from_start_scan(odom, xs, ys, [first], sweep_s=0.1)
+    assert rescored is not None
+    times, crossings, start = rescored
+    assert start == pytest.approx(start_stamp, abs=1e-9)
+    # counted from the pose reached at 103.0: the first crossing is a whole 10 s later, then
+    # every 10 s
+    assert times[0] == pytest.approx(10.0, abs=0.1)
+    assert all(t == pytest.approx(10.0, abs=0.1) for t in times[1:])
+    assert crossings[0] == pytest.approx(113.0, abs=0.1)
+
+
+def test_no_lap_events_means_no_rescoring() -> None:
+    xs, ys = circle_centreline()
+    assert runner.rescore_from_start_scan(circle_odom(1.5, 10.0), xs, ys, []) is None
+
+
+def test_lap_results_prefers_the_rescored_truth_and_keeps_the_first_odometry_numbers() -> None:
+    tracker = Tracker([110.0, 130.0], [11.0, 20.0])
+    out = runner.lap_results(
+        tracker,
+        [],
+        [],
+        [],
+        {},
+        driving_first_s=100.0,
+        lap1_start_s=100.4,
+        rescored=([9.9, 20.1], [110.3, 130.4], 100.4),
+    )
+    assert out["gt_lap_times_s"] == [9.9, 20.1]
+    assert out["gt_lap_crossings_s"] == [110.3, 130.4]
+    assert out["gt_lap_times_from_first_odom_s"] == [11.0, 20.0]
+    assert out["gt_rescored_from_start_scan"] is True

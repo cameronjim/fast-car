@@ -93,6 +93,11 @@ class GateConfig:
     heading_slack_rad: float = 1.2
     #: Matching starts (without permission to close a lap) at this share of the arming distance
     #: and with this heading slack: about 60 percent of a lap.
+    #: A closure needs the heading since the last one to be at least 2 pi minus this (tighter
+    #: than `heading_slack_rad`, which only arms the gate) and, from lap 2, a wheel distance of
+    #: at least `closure_min_length_fraction` of the reference lap length.
+    closure_heading_slack_rad: float = 0.9
+    closure_min_length_fraction: float = 0.9
     track_distance_fraction: float = 0.6
     track_slack_rad: float = 2.4
     rms_max_m: float = 0.03
@@ -562,7 +567,11 @@ class StartScanGate:
             # distance x back instead of interpolating.
             first = self._run[0]
             t_cross = self._time_at_total(first[2] - first[1].x_m)
-            if t_cross is not None and t_cross > self._t_lap_start:
+            if (
+                t_cross is not None
+                and t_cross > self._t_lap_start
+                and self._closure_plausible(t_cross)
+            ):
                 crossing = self._finish(t_cross, first[1].y_m, first[1].yaw_rad)
         if crossing is not None:
             self._run = []
@@ -614,13 +623,29 @@ class StartScanGate:
                 return a.t + w * (b.t - a.t)
         return h[-1].t if total_m >= h[-1].total_m else None
 
-    def _close(self, t0: float, m0: MatchResult, t1: float, m1: MatchResult) -> GateCrossing:
+    def _close(self, t0: float, m0: MatchResult, t1: float, m1: MatchResult) -> GateCrossing | None:
         f = -m0.x_m / (m1.x_m - m0.x_m)
+        t_cross = t0 + f * (t1 - t0)
+        if not self._closure_plausible(t_cross):
+            return None
         return self._finish(
-            t0 + f * (t1 - t0),
+            t_cross,
             m0.y_m + f * (m1.y_m - m0.y_m),
             m0.yaw_rad + f * wrap(m1.yaw_rad - m0.yaw_rad),
         )
+
+    def _closure_plausible(self, t_cross: float) -> bool:
+        """A lap closes only where odometry says a lap was driven: the integrated heading has
+        turned at least 2 pi minus `closure_heading_slack_rad` (tighter than the arming slack:
+        a match on an alias of the start scan a fifth of a lap early is refused) and, from lap 2,
+        the wheel distance is at least `closure_min_length_fraction` of the reference length."""
+        c = self.cfg
+        at = self._at(t_cross)
+        if abs(at.heading - self._heading_origin) < TWO_PI - c.closure_heading_slack_rad:
+            return False
+        if math.isfinite(self._l_ref):
+            return at.total_m - self._origin_m >= c.closure_min_length_fraction * self._l_ref
+        return True
 
     def _finish(self, t_cross: float, lateral_m: float, yaw_rad: float) -> GateCrossing:
         at = self._at(t_cross)

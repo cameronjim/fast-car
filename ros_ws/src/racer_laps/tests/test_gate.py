@@ -452,6 +452,52 @@ def test_the_late_rules_share_a_switch(monkeypatch: pytest.MonkeyPatch) -> None:
         t = advance(g, t, 0.1)
 
 
+def gate_at_heading(target: float) -> tuple[StartScanGate, float]:
+    g = make_gate()
+    g.on_odom(0.0, 0.0)
+    g.set_start(0.0, PTS)
+    g.on_steering(math.atan(WHEELBASE_M / 0.9))
+    t = 0.0
+    while g.heading_since_closure_rad < target:
+        t += 0.01
+        g.on_odom(t, 1.0)
+    return g, t
+
+
+def test_a_closure_needs_the_heading_of_a_lap_not_just_an_armed_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # armed (heading above 2 pi - 1.2) but short of 2 pi - 0.9: 5.2 rad is 83 percent of a turn
+    g, t = gate_at_heading(5.2)
+    assert g.armed
+    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
+    assert g.on_scan(t - 0.05, PTS) is None
+    assert g.on_scan(t, PTS) is None  # a pair that crosses, but not after a lap
+    assert g.laps_completed == 0
+    # a little further round it is a lap
+    h, t = gate_at_heading(5.6)
+    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
+    h.on_scan(t - 0.05, PTS)
+    assert h.on_scan(t, PTS) is not None
+
+
+def test_from_lap_2_a_closure_needs_nine_tenths_of_the_reference_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    g, t, _ = lap2_gate(monkeypatch)
+    l_ref = g.l_ref_m
+    g._origin_m += 0.15 * l_ref  # the lap is only 85 percent of the reference so far
+    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
+    assert g.on_scan(t - 0.05, PTS) is None
+    assert g.on_scan(t, PTS) is None
+    assert g.laps_completed == 1
+    h, t, _ = lap2_gate(monkeypatch)
+    h._origin_m += 0.05 * h.l_ref_m  # 95 percent: fine
+    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(-0.1), result(0.1)]))
+    h.on_scan(t - 0.05, PTS)
+    assert h.on_scan(t, PTS) is not None
+
+
 # -- the along-lane support check ------------------------------------------------------------------
 
 

@@ -198,6 +198,46 @@ def make_raceline(args, synthetic, map_yaml: Path, work: Path) -> tuple[Path, di
     return out, result.report
 
 
+#: The simulated LiDAR's sweep (bridge scan_time: scan_divider / step rate at 10 Hz). The lap node
+#: stamps a scan at its stamp plus half the sweep; the simulator's scans are instantaneous.
+SIM_SCAN_SWEEP_S = 0.1
+
+
+def rescore_from_start_scan(
+    odom: list[tuple],
+    xs,
+    ys,
+    lap_events: list[dict],
+    sweep_s: float = SIM_SCAN_SWEEP_S,
+):
+    """Ground-truth laps counted from the pose of the system's own start scan.
+
+    The simulator's lap tracker counts from the first odometry sample. From a standstill a few
+    centimetres of start line are a few tenths of a second, so lap 1 of the truth and lap 1 of a
+    system whose start line is the pose of its start scan differ by that, without either being
+    wrong. The start scan's stamp comes from the system's first LapEvent (crossing time minus lap
+    time is the start's effective time, the stamp plus half a sweep); the truth is then re-counted
+    over the recorded ground-truth odometry from that instant. Returns (lap times, crossing
+    stamps, start stamp) or None when the system closed no lap."""
+    import bench_metrics as bm
+
+    if not lap_events:
+        return None
+    first = lap_events[0]
+    start_stamp = first["t_cross_s"] - first["lap_time_s"] - 0.5 * sweep_s
+    tracker = bm.LapTracker(xs, ys)
+    previous = None
+    for sample in odom:
+        t, x, y = sample[0], sample[1], sample[2]
+        if t < start_stamp:
+            continue
+        if previous is not None and bm.is_teleport(previous, (x, y)):
+            tracker.reset()
+        tracker.update(x, y, t)
+        previous = (x, y)
+    return list(tracker.lap_times_s), list(getattr(tracker, "_crossings", [])), start_stamp
+
+
 def lap_results(
     lap_tracker,
     events: list[tuple],
@@ -206,6 +246,7 @@ def lap_results(
     lap_status: dict,
     driving_first_s: float | None,
     lap1_start_s: float | None = None,
+    rescored: tuple | None = None,
 ) -> dict:
     """Ground truth against the system for a run with the lap memory: the ground-truth crossing
     stamps, lap times, the system's LapEvents, the interventions per ground-truth lap by source
@@ -219,7 +260,11 @@ def lap_results(
     crossings = list(getattr(lap_tracker, "_crossings", []))
     gt_times = list(lap_tracker.lap_times_s)
     start_s = lap1_start_s if lap1_start_s is not None else driving_first_s
-    if gt_times and crossings and start_s is not None:
+    first_odom_times = list(gt_times)
+    if rescored is not None:
+        # truth counted from the pose of the system's start scan (see rescore_from_start_scan)
+        gt_times, crossings, start_s = rescored
+    elif gt_times and crossings and start_s is not None:
         gt_times[0] = crossings[0] - start_s
     edges = [start_s if start_s is not None else -math.inf, *crossings]
     engage: list[dict] = []
@@ -241,6 +286,8 @@ def lap_results(
         "gt_lap_crossings_s": [round(c, 3) for c in crossings],
         "gt_lap_times_s": [round(t, 3) for t in gt_times],
         "gt_lap1_start_s": start_s,
+        "gt_lap_times_from_first_odom_s": [round(t, 3) for t in first_odom_times],
+        "gt_rescored_from_start_scan": rescored is not None,
         "driving_first_s": driving_first_s,
         "system_lap_events": lap_events,
         "system_laps": len(lap_events),
@@ -833,6 +880,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                         lap_status,
                         driving_first[0] if driving_first else None,
                         first_scan_after_driving[0] if first_scan_after_driving else None,
+                        rescore_from_start_scan(
+                            recording.odom, lap_tracker._xs, lap_tracker._ys, lap_events
+                        ),
                     )
                 )
         t_first = recording.odom[0][0] if recording.odom else 0.0

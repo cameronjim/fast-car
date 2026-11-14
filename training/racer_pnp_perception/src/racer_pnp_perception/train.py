@@ -18,7 +18,8 @@ rest is simulation. Stations past a real label's valid_count carry no loss. Each
 the sim validation loss and the internal validation centreline error E_c (the GP1 definition, on
 the net's own valid stations), which is what model selection uses. With `--seeds` one run per seed
 goes to `<out>/seed<k>`, and `<out>/selection.json` names the seed with the lowest final internal
-validation E_c: decided from the internal validation alone.
+validation E_c: decided from the internal validation alone. `--select-only` writes that file for
+seed runs made one by one (`--seed k --out <out>/seed<k>`, for example in parallel).
 """
 
 from __future__ import annotations
@@ -219,10 +220,22 @@ def select_seed(runs: dict[int, list[dict[str, float]]]) -> dict[str, Any]:
     return {"criterion": f"final {SELECTION_KEY}", "per_seed": final, "selected_seed": best}
 
 
+def select_from_dir(out: Path) -> dict[str, Any]:
+    """`select_seed` over the `<out>/seed<k>/history.json` of runs made one by one (for example
+    in parallel processes), written to `<out>/selection.json`."""
+    runs = {
+        int(p.parent.name.removeprefix("seed")): json.loads(p.read_text())
+        for p in sorted(out.glob("seed*/history.json"))
+    }
+    selection = select_seed(runs)
+    (out / "selection.json").write_text(json.dumps(selection, indent=2))
+    return selection
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--train", type=Path, required=True)
-    parser.add_argument("--val", type=Path, required=True)
+    parser.add_argument("--train", type=Path, default=None)
+    parser.add_argument("--val", type=Path, default=None)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -234,8 +247,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--real-fraction", type=float, default=0.0)
     parser.add_argument("--split", type=Path, default=None)
     parser.add_argument("--init", type=Path, default=None)
+    parser.add_argument(
+        "--select-only",
+        action="store_true",
+        help="only write <out>/selection.json from the <out>/seed<k> runs that exist",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if args.select_only:
+        print(json.dumps(select_from_dir(args.out), indent=2))
+        return 0
+    if args.train is None or args.val is None:
+        parser.error("--train and --val are required unless --select-only")
 
     def run(seed: int, out: Path) -> list[dict[str, float]]:
         result = train(

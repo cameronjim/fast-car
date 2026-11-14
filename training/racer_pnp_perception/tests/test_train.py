@@ -55,6 +55,18 @@ def test_select_seed_uses_only_the_final_internal_validation_error() -> None:
         train.select_seed({0: [{train.SELECTION_KEY: float("nan")}]})
 
 
+def test_select_from_dir_reads_seed_runs_made_one_by_one(tmp_path: Path) -> None:
+    for seed, ec in ((0, 0.09), (1, 0.07), (2, 0.08)):
+        run = tmp_path / f"seed{seed}"
+        run.mkdir()
+        (run / "history.json").write_text(
+            json.dumps([{train.SELECTION_KEY: 0.5}, {train.SELECTION_KEY: ec}])
+        )
+    sel = train.select_from_dir(tmp_path)
+    assert sel["selected_seed"] == 1
+    assert json.loads((tmp_path / "selection.json").read_text())["selected_seed"] == 1
+
+
 @pytest.mark.torch
 def test_a_run_with_real_labels_records_its_segments_and_never_sees_heldout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

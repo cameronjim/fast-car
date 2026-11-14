@@ -1,3 +1,7 @@
+Deployment verdict: the deployed model stays dyn-v0.1 with the residual disabled (3.1 failed for the v0.2 nominal, and the strict GP2a on top of dyn-v0.1 failed, see ../dyn-v0.1r-2026-11-14/README.md). This bundle is for information only, do not deploy.
+
+Addendum 2 (2026-11-14), written before any scoring of the strict residual: 3.2 nominal ambiguity resolved strictly: the residual is evaluated on top of the deployed nominal dyn-v0.1 because 3.1 failed; the residual on v0.2 is reported for information only, it cannot ship.
+
 not better than dyn-v0.1 on held-out, do not deploy
 
 # dyn-v0.2-2026-11-14

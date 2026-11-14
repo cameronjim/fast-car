@@ -312,8 +312,22 @@ def r_evaluate(args) -> int:  # pragma: no cover - real data
     return 0
 
 
+def confirm_cmd(args) -> int:  # pragma: no cover - real data
+    """The fresh confirmation of pre-registration 2.4 on a new session bag."""
+    from . import confirm
+
+    if args.bag is None or args.candidate is None or args.deployed is None:
+        raise SystemExit("confirm needs --bag, --candidate and --deployed")
+    result = confirm.run_confirmation(
+        args.bag, args.candidate, args.deployed, args.cache, args.workers
+    )
+    print(confirm.format_confirmation(result, args.candidate.name, args.deployed.name))
+    return 0 if result.verdict == "PASS" else 1
+
+
 COMMANDS = {
     "mb1": mb1,
+    "confirm": confirm_cmd,
     "y-fit": y_fit,
     "y-evaluate": y_evaluate,
     "r-fit": r_fit,
@@ -335,6 +349,9 @@ def main(argv: list[str]) -> int:  # pragma: no cover - real data
     parser.add_argument("--models", type=Path, default=DATA_ROOT / "pnp" / "models")
     parser.add_argument("--cache", type=Path, default=DATA_ROOT / "pnp" / "cache")
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--bag", type=Path, default=None, help="confirm: the session bag")
+    parser.add_argument("--candidate", type=Path, default=None, help="confirm: candidate bundle")
+    parser.add_argument("--deployed", type=Path, default=None, help="confirm: deployed bundle")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     args.split_path = default_split_path(repo_root())

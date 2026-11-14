@@ -46,6 +46,13 @@ Options that are measurements, not part of the command path:
   reference frame is this run's start line. If the package or OpenCV is missing (the node exits
   with code 3) the launch logs one clear error and the driver keeps running. `/lap/event` and
   `/lap/status` are in the stack recorder's regex.
+* `deskew` (default false) starts racer_track_perception's scan_deskew_node (`/scan`, `/odom/wheel`
+  and the gated `/drive` steering in, `/pnp/scan_deskewed` out) and points the scan subscription
+  of track_perception_node, mppi_planner_node, lap_memory_node and the shadow perception node at
+  it. safety_node is not in this launch and keeps reading the raw `/scan`. The node's `stamp_is`
+  and `beam_order` are what the measurement M-DSK chose on real bags (DESKEW_STAMP_IS and
+  DESKEW_BEAM_ORDER below, docs/notes/scan-deskew-2026-11.md); until they are set the launch
+  refuses `deskew:=true`. With `deskew:=false` the launch is the one it was before this option.
 * `shadow_perception_bundle:=<dir>` starts a SECOND perception node, `track_perception_shadow`
   (`backend:=net`), publishing `/pnp/shadow/local_track` and `/pnp/shadow/perception/status`.
   Nothing subscribes to them; the recorder takes them (`/pnp/.*`). Its exit does not shut the
@@ -89,6 +96,13 @@ LAP_COUNTER_REFUSAL = (
 )
 LAP_COUNTER_RESET_TIMEOUT_S = 30
 LAP_COUNTER_OPENCV_EXIT = 3
+DESKEW_NODE_NAME = "scan_deskew_node"
+DESKEW_TOPIC = "/pnp/scan_deskewed"
+DESKEW_REMAPPING = ("/scan", DESKEW_TOPIC)
+# What M-DSK step A chose on the train role (docs/notes/scan-deskew-2026-11.md). None until then:
+# the launch refuses deskew:=true, so a node never starts on a guess.
+DESKEW_STAMP_IS: str | None = "sweep_end"
+DESKEW_BEAM_ORDER: str | None = "index_descending"
 SHADOW_NODE_NAME = "track_perception_shadow"
 SHADOW_REMAPPINGS = [
     ("/pnp/local_track", "/pnp/shadow/local_track"),
@@ -172,15 +186,46 @@ def parameters_for(
     return perception, planner
 
 
-def nodes_for(perception_params: dict, planner_params: dict, params_file: str) -> tuple[Node, Node]:
-    # A params file comes first so the explicit launch values above it win.
+def deskew_parameters() -> dict:
+    """Parameters of scan_deskew_node: the choices of M-DSK step A. Refuses (so the launch fails
+    before any node starts) while they are not set."""
+    if DESKEW_STAMP_IS is None or DESKEW_BEAM_ORDER is None:
+        raise RuntimeError(
+            "pnp.launch.py: deskew:=true needs DESKEW_STAMP_IS and DESKEW_BEAM_ORDER, the "
+            "choices of the M-DSK selection step, and they are not set"
+        )
+    return {"stamp_is": DESKEW_STAMP_IS, "beam_order": DESKEW_BEAM_ORDER}
+
+
+def deskew_node_for(params_file: str) -> Node:
     base = [params_file] if params_file else []
+    return Node(
+        package="racer_track_perception",
+        executable="scan_deskew_node",
+        name=DESKEW_NODE_NAME,
+        output="screen",
+        parameters=[*base, deskew_parameters()],
+    )
+
+
+def nodes_for(
+    perception_params: dict,
+    planner_params: dict,
+    params_file: str,
+    scan_remapping: tuple[str, str] | None = None,
+) -> tuple[Node, Node]:
+    # A params file comes first so the explicit launch values above it win. `scan_remapping`
+    # (deskew:=true) points each node's /scan subscription at /pnp/scan_deskewed; None leaves the
+    # node exactly as it was.
+    base = [params_file] if params_file else []
+    remappings = [scan_remapping] if scan_remapping else None
     perception = Node(
         package="racer_track_perception",
         executable="track_perception_node",
         name="track_perception_node",
         output="screen",
         parameters=[*base, perception_params],
+        remappings=remappings,
     )
     planner = Node(
         package="racer_planner",
@@ -188,12 +233,16 @@ def nodes_for(perception_params: dict, planner_params: dict, params_file: str) -
         name="mppi_planner_node",
         output="screen",
         parameters=[*base, planner_params],
+        remappings=remappings,
     )
     return perception, planner
 
 
 def shadow_node_for(
-    shadow_bundle: str, laser_yaw_from_vehicle_params: bool, params_file: str
+    shadow_bundle: str,
+    laser_yaw_from_vehicle_params: bool,
+    params_file: str,
+    scan_remapping: tuple[str, str] | None = None,
 ) -> Node:
     """A second perception node (net backend) whose outputs nothing subscribes to."""
     base = [params_file] if params_file else []
@@ -210,7 +259,7 @@ def shadow_node_for(
                 "laser_yaw_from_vehicle_params": laser_yaw_from_vehicle_params,
             },
         ],
-        remappings=SHADOW_REMAPPINGS,
+        remappings=[*SHADOW_REMAPPINGS, *([scan_remapping] if scan_remapping else [])],
     )
 
 
@@ -358,6 +407,9 @@ def _make_actions(context: LaunchContext) -> list:
         _bool(arg("laser_yaw_from_vehicle_params"), "laser_yaw_from_vehicle_params"),
     )
     lap_memory = _bool(arg("lap_memory"), "lap_memory")
+    deskew_on = _bool(arg("deskew"), "deskew")
+    scan_remapping = DESKEW_REMAPPING if deskew_on else None
+    deskew_node = deskew_node_for(arg("params_file")) if deskew_on else None
     lap_counter = _bool(arg("lap_counter"), "lap_counter")
     require_counter = _bool(arg("require_lap_counter"), "require_lap_counter")
     v_lap1_text = arg("v_lap1_mps")
@@ -377,7 +429,9 @@ def _make_actions(context: LaunchContext) -> list:
         raise RuntimeError(RECORDER_REFUSAL)
     if require_counter and not lap_counter and not lap_counter_in_graph(LAP_COUNTER_WAIT_S):
         raise RuntimeError(LAP_COUNTER_REFUSAL)
-    perception, planner = nodes_for(perception_params, planner_params, arg("params_file"))
+    perception, planner = nodes_for(
+        perception_params, planner_params, arg("params_file"), scan_remapping
+    )
     stop_all = [
         RegisterEventHandler(
             OnProcessExit(
@@ -388,6 +442,16 @@ def _make_actions(context: LaunchContext) -> list:
         for node, name in ((perception, "track_perception_node"), (planner, "mppi_planner_node"))
     ]
     actions = [perception, planner, *stop_all]
+    if deskew_node is not None:
+        actions += [
+            deskew_node,
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=deskew_node,
+                    on_exit=[EmitEvent(event=Shutdown(reason="scan_deskew_node exited"))],
+                )
+            ),
+        ]
     if lap_params is not None:
         base = [arg("params_file")] if arg("params_file") else []
         laps = Node(
@@ -396,6 +460,7 @@ def _make_actions(context: LaunchContext) -> list:
             name="lap_memory_node",
             output="screen",
             parameters=[*base, lap_params],
+            remappings=[scan_remapping] if scan_remapping else None,
         )
         actions += [
             laps,
@@ -412,6 +477,7 @@ def _make_actions(context: LaunchContext) -> list:
             shadow_bundle,
             perception_params["laser_yaw_from_vehicle_params"],
             arg("params_file"),
+            scan_remapping,
         )
         actions += [
             shadow,
@@ -542,6 +608,16 @@ def generate_launch_description() -> LaunchDescription:
                 description=(
                     "Refuse to drive when no lap_counter_node is in the graph within 5 s "
                     "(evaluation runs)."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "deskew",
+                default_value="false",
+                choices=["true", "false"],
+                description=(
+                    "Start scan_deskew_node and point perception, the planner, lap memory and "
+                    "the shadow perception at /pnp/scan_deskewed. safety_node keeps the raw "
+                    "/scan. Off unless M-DSK passed (docs/notes/scan-deskew-2026-11.md)."
                 ),
             ),
             DeclareLaunchArgument(

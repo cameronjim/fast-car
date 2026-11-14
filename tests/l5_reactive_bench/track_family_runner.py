@@ -49,6 +49,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -246,7 +247,7 @@ def crossing_lap_times(crossings: list[float], start_stamp: float | None) -> lis
     if start_stamp is None or not crossings:
         return []
     edges = [float(start_stamp), *[float(c) for c in crossings]]
-    return [round(b - a, 3) for a, b in zip(edges, edges[1:])]
+    return [round(b - a, 3) for a, b in pairwise(edges)]
 
 
 def lap_results(

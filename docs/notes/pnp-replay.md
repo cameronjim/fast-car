@@ -125,6 +125,11 @@ consumers, JSON of the violations and a table):
         --dynamics-bundle /abs/path/config/pnp/fixtures/dyn-car-2026-11-12 --v-max 0.5 \
         --v-max-segment R2=1.0 R5=0.7 R6=0.7 R7=1.0 R8=1.0 --seed 20261113 --windows 3
 
+Result of that command on 2026-11-13 (seed 20261113, R0 to R8, three windows per case, 783
+injections): 0 violations in every case but the three 100 percent unusable scan cases (F1), which
+violated in all 81 of their windows. Each run has its own generator, seeded from the seed and the
+run number, so one run can be repeated alone (`--segment R4`).
+
 There the short-fault speed bound is max(speed before, the unfaulted replay's speed at that tick)
 plus one step, so a fault is not blamed for an acceleration the run was making anyway; the pytest
 cases use the literal rule on the steady 1.0 m/s stretch of R7. On a Mac under docker every path

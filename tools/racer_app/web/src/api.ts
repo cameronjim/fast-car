@@ -51,6 +51,9 @@ export interface PnpOptions {
   default_speed: number;
   /** Planner parameter files found under data/pnp/*.yaml (names only). */
   params_files?: string[];
+  /** Lap modes and lap sources the car's pnp.launch.py declares (absent on an older agent). */
+  lap_modes?: string[];
+  lap_sources?: string[];
 }
 
 export interface Options {
@@ -92,6 +95,9 @@ export interface BagsReply {
   user?: string;
 }
 
+export type LapMode = "v0" | "v1" | "observe";
+export type LapSource = "start_scan" | "map_pose";
+
 /** The owner's saved drive settings (the Tune tab), kept on the car. null: the profile's own. */
 export interface Prefs {
   record_camera: boolean;
@@ -103,7 +109,22 @@ export interface Prefs {
     a_lat_max_mps2: number | null;
     side_cap_min_speed_mps: number | null;
   };
-  pnp: { v_max_mps: number; backend: string; dynamics: string; perception: string; params_file: string };
+  pnp: {
+    v_max_mps: number;
+    backend: string;
+    dynamics: string;
+    perception: string;
+    params_file: string;
+    /** Lap 1 cap in m/s; null: equal to the speed cap (not sent). */
+    v_lap1_mps: number | null;
+    lap_memory: boolean;
+    lap_mode: LapMode;
+    lap_source: LapSource;
+    lap_counter: boolean;
+    require_lap_counter: boolean;
+    /** A perception bundle for the shadow net, or "" for none. */
+    shadow_perception: string;
+  };
   tracker: { raceline: string };
 }
 
@@ -281,6 +302,13 @@ export class Api {
     pnp_backend?: string;
     pnp_v_max_mps?: number;
     pnp_params?: string;
+    pnp_v_lap1_mps?: number;
+    pnp_lap_memory?: boolean;
+    pnp_lap_mode?: LapMode;
+    pnp_lap_source?: LapSource;
+    pnp_lap_counter?: boolean;
+    pnp_require_lap_counter?: boolean;
+    pnp_shadow_perception?: string;
     max_speed_mps?: number;
     min_speed_mps?: number;
     a_lat_max_mps2?: number;

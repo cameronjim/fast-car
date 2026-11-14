@@ -156,7 +156,7 @@ export function DriveTab() {
             mode="pnp"
             label="ML driver"
             icon="chip"
-            summary={pnpSummary(prefs)}
+            summary={pnpSummary(prefs, options)}
             why={blocked || pnpWhy(prefs, options)}
             onStart={() => drive("ML driver", pnpBody(prefs, options) as DriveBody)}
           />

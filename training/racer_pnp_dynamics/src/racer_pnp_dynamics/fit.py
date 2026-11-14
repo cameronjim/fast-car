@@ -76,6 +76,7 @@ YAW_PARAMS = (
     "understeer_s2_per_m2",
 )
 BOUND_TOLERANCE = 0.005  # of the bound range
+START_INSIDE_BOUND = 1e-3  # of the bound range: where a start that is on a bound is moved to
 
 
 @dataclass
@@ -116,6 +117,11 @@ def _fit_params(
     best = None
     for s in starts or [start]:
         x0 = np.clip(_vector(s, names), lo, hi)
+        # A start exactly on a bound does not leave it (least_squares stays at 2e-10 for a start
+        # of 0.0 on [0, 2] although the optimum is 0.5), so it is nudged a thousandth of the range
+        # inside. A start that is not on a bound is untouched. Found in brief 31.
+        inner = START_INSIDE_BOUND * (hi - lo)
+        x0 = np.where(x0 <= lo, lo + inner, np.where(x0 >= hi, hi - inner, x0))
 
         def fun(x: np.ndarray) -> np.ndarray:
             return residual_fn(start.replace(**dict(zip(names, x, strict=True))))

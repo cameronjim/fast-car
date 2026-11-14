@@ -8,7 +8,7 @@ thresholds are module constants quoting the pre-registration. They never change 
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -234,3 +234,165 @@ def decide_residual(
         )
     )
     return Decision("3.2 GP2a residual", tuple(items))
+
+
+# ---- GP2c, docs/notes/preregistration-pnp-v0.3.md section 2.3 ---------------------------------
+
+# GP2c-Y item 1 "P1(Y) at most 1.00 times P1(v0.1) and the upper end of the bootstrap interval of
+# the ratio below 1.00."
+YAW_REFIT_P1_MAX_RATIO = 1.00
+YAW_REFIT_P1_CI_HI_BELOW = 1.00
+# item 2 "Y1(Y) at most 1.00 times Y1(v0.1)."
+YAW_REFIT_Y1_MAX_RATIO = 1.00
+# item 3 "Every stratum: position RMSE at 1.0 s at most 1.05 times dyn-v0.1's."
+YAW_REFIT_STRATUM_MAX_RATIO = 1.05
+# item 4 "Yp(Y) at most 1.00 times Yp(v0.1)."
+YAW_REFIT_YP_MAX_RATIO = 1.00
+# item 5 "S1(Y) equals S1(v0.1) within 1e-6 (the speed channel was not touched)."
+S1_EQUAL_TOLERANCE_MPS = 1e-6
+# item 6 "No refit parameter on a bound."
+YAW_REFIT_MAX_ON_BOUND = 0
+
+# GP2c-R item 1 "P1(R) at most 0.95 times P1(nominal) and the bootstrap upper end below 1.00."
+YAW_RESIDUAL_P1_MAX_RATIO = 0.95
+YAW_RESIDUAL_P1_CI_HI_BELOW = 1.00
+# item 2 "Y1(R) at most 1.00 times Y1(nominal). S1(R) equals S1(nominal) within 1e-6."
+YAW_RESIDUAL_Y1_MAX_RATIO = 1.00
+# item 3 "Every seed: P1 at most 1.00 times P1(nominal)."
+YAW_RESIDUAL_SEED_P1_MAX_RATIO = 1.00
+# item 4 "Every stratum: position RMSE at 1.0 s at most 1.05 times the nominal's."
+YAW_RESIDUAL_STRATUM_MAX_RATIO = 1.05
+# item 6 "Yp(R) at most 1.00 times Yp(nominal)."
+YAW_RESIDUAL_YP_MAX_RATIO = 1.00
+
+YP_CANNOT_BE_APPLIED = "Yp cannot be applied: no usable /pose interval in G1b or T2b"
+
+
+def _yp_item(name: str, candidate: float, nominal: float, limit: float) -> Item:
+    if not (np.isfinite(candidate) and np.isfinite(nominal)):
+        return Item(name, float("nan"), "<=", limit, False, YP_CANNOT_BE_APPLIED)
+    return _item(name, candidate / nominal, "<=", limit)
+
+
+def _s1_item(name: str, candidate: float, nominal: float) -> Item:
+    diff = abs(candidate - nominal)
+    return _item(name, diff, "<=", S1_EQUAL_TOLERANCE_MPS, "absolute difference in m/s")
+
+
+def decide_yaw_refit(
+    nominal: Mapping[str, float],
+    candidate: Mapping[str, float],
+    ratio_ci_hi: float,
+    stratum_nominal_pos: Mapping[str, float],
+    stratum_candidate_pos: Mapping[str, float],
+    yp_nominal: float,
+    yp_candidate: float,
+    on_bound: Sequence[str],
+) -> Decision:
+    """GP2c-Y items 1 to 6 on the held-out segments under T2. `nominal` is dyn-v0.1 and
+    `candidate` the yaw refit, each with the macro `P1`, `Y1`, `S1`; `ratio_ci_hi` is the upper
+    end of the bootstrap interval of P1(Y) / P1(v0.1); `on_bound` lists the refit parameters that
+    sit on a bound (unidentified)."""
+    items = [
+        _item(
+            "1a P1 ratio Y / v0.1",
+            candidate["P1"] / nominal["P1"],
+            "<=",
+            YAW_REFIT_P1_MAX_RATIO,
+        ),
+        _item(
+            "1b upper end of the bootstrap interval of the P1 ratio",
+            ratio_ci_hi,
+            "<",
+            YAW_REFIT_P1_CI_HI_BELOW,
+        ),
+        _item("2 Y1 ratio Y / v0.1", candidate["Y1"] / nominal["Y1"], "<=", YAW_REFIT_Y1_MAX_RATIO),
+    ]
+    for name, nom in stratum_nominal_pos.items():
+        items.append(
+            _item(
+                f"3 stratum {name} position RMSE ratio",
+                stratum_candidate_pos[name] / nom,
+                "<=",
+                YAW_REFIT_STRATUM_MAX_RATIO,
+            )
+        )
+    items.append(_yp_item("4 Yp ratio Y / v0.1", yp_candidate, yp_nominal, YAW_REFIT_YP_MAX_RATIO))
+    items.append(_s1_item("5 S1(Y) minus S1(v0.1)", candidate["S1"], nominal["S1"]))
+    items.append(
+        _item(
+            "6 refit parameters on a bound",
+            float(len(on_bound)),
+            "<=",
+            float(YAW_REFIT_MAX_ON_BOUND),
+            ", ".join(on_bound) if on_bound else "none",
+        )
+    )
+    return Decision("GP2c-Y yaw refit", tuple(items))
+
+
+def decide_yaw_residual(
+    nominal: Mapping[str, float],
+    residual: Mapping[str, float],
+    ratio_ci_hi: float,
+    seed_p1: Mapping[int, float],
+    stratum_nominal_pos: Mapping[str, float],
+    stratum_residual_pos: Mapping[str, float],
+    sweep: SweepResult,
+    yp_nominal: float,
+    yp_residual: float,
+) -> Decision:
+    """GP2c-R items 1 to 6 on the held-out segments under T2, against the shipping nominal."""
+    items = [
+        _item(
+            "1a P1 ratio R / nominal",
+            residual["P1"] / nominal["P1"],
+            "<=",
+            YAW_RESIDUAL_P1_MAX_RATIO,
+        ),
+        _item(
+            "1b upper end of the bootstrap interval of the P1 ratio",
+            ratio_ci_hi,
+            "<",
+            YAW_RESIDUAL_P1_CI_HI_BELOW,
+        ),
+        _item(
+            "2a Y1 ratio R / nominal",
+            residual["Y1"] / nominal["Y1"],
+            "<=",
+            YAW_RESIDUAL_Y1_MAX_RATIO,
+        ),
+        _s1_item("2b S1(R) minus S1(nominal)", residual["S1"], nominal["S1"]),
+    ]
+    for seed, p1 in sorted(seed_p1.items()):
+        items.append(
+            _item(
+                f"3 seed {seed} P1 ratio to nominal",
+                p1 / nominal["P1"],
+                "<=",
+                YAW_RESIDUAL_SEED_P1_MAX_RATIO,
+            )
+        )
+    for name, nom in stratum_nominal_pos.items():
+        items.append(
+            _item(
+                f"4 stratum {name} position RMSE ratio",
+                stratum_residual_pos[name] / nom,
+                "<=",
+                YAW_RESIDUAL_STRATUM_MAX_RATIO,
+            )
+        )
+    items.append(
+        Item(
+            "5 random sweep of the validity box: finite, inside the state bounds",
+            float(sweep.nonfinite + sweep.steering_violations + sweep.speed_violations),
+            "<=",
+            0.0,
+            sweep.passed,
+            f"{sweep.samples} rollouts of {sweep.steps} steps; max v {sweep.max_speed_mps:.3f} m/s",
+        )
+    )
+    items.append(
+        _yp_item("6 Yp ratio R / nominal", yp_residual, yp_nominal, YAW_RESIDUAL_YP_MAX_RATIO)
+    )
+    return Decision("GP2c-R yaw-only residual", tuple(items))

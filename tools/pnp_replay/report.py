@@ -35,6 +35,7 @@ ROWS: list[tuple[str, str, str]] = [
     ("planner.steering_change.std_rad", "steering change std (rad)", "{:.3f}"),
     ("planner.steering_change.sign_flips_per_s", "steering sign flips per s", "{:.1f}"),
     ("planner.steering_change.p99_abs_rad", "steering change p99 (rad)", "{:.3f}"),
+    ("planner.rate_allowance.violation_pairs", "rate allowance violation pairs", "{:.0f}"),
     ("planner.solve_time_ms_this_machine.p50", "solve p50 (ms, this machine)", "{:.2f}"),
     ("planner.solve_time_ms_this_machine.p99", "solve p99 (ms, this machine)", "{:.2f}"),
     ("planner.agreement_with_recorded.share", "state agrees with recorded", "{:.2f}"),
@@ -70,9 +71,15 @@ def format_table(result: dict[str, Any], baseline: dict[str, Any] | None = None)
     segments: dict[str, Any] = result["segments"]
     flat = {name: flatten(seg) for name, seg in segments.items()}
     lines: list[str] = []
+    caps = {name: seg["v_max_mps"] for name, seg in segments.items() if "v_max_mps" in seg}
+    cap_text = (
+        "v_max per segment (" + ", ".join(f"{n} {v:g}" for n, v in caps.items()) + ") m/s"
+        if len(set(caps.values())) > 1
+        else f"v_max {result.get('v_max_mps', '?')} m/s"
+    )
     head = (
         f"{result.get('backend', '?')} perception ({result.get('perception_model_id', '?')}), "
-        f"tracks {result.get('tracks', '?')}, planner v_max {result.get('v_max_mps', '?')} m/s"
+        f"tracks {result.get('tracks', '?')}, planner {cap_text}"
     )
     lines.append(head)
     if result.get("clip_speed_to_cap"):

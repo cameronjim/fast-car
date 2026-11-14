@@ -94,6 +94,11 @@ def dequantise_ranges(q: NDArray[np.integer]) -> NDArray[np.float32]:
 
 
 def scan_ranges(rec: Recording, index: int) -> NDArray[np.float32]:
+    """The float32 ranges of scan `index`. A recording a fault mutation wrote (faults.py) may
+    carry `scan_f`, float ranges that hold NaN and 0 (which the uint16 `scan_q` cannot); those
+    win over `scan_q`."""
+    if "scan_f" in rec:
+        return np.asarray(rec["scan_f"][index], dtype=np.float32)
     return dequantise_ranges(rec["scan_q"][index])
 
 

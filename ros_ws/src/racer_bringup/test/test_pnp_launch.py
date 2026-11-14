@@ -377,6 +377,14 @@ def test_the_planner_declares_the_parameter_the_launch_sets() -> None:
 # -- the camera lap counter ----------------------------------------------------------------------
 
 
+def _with_perception_installed(monkeypatch) -> None:
+    """The launch includes racer_perception's lap_counter.launch.py from its share directory;
+    CI's L3 workspace may not have the package built, so make it findable."""
+    from ament_index_python import packages
+
+    monkeypatch.setattr(packages, "get_package_share_directory", lambda name: f"/fake/share/{name}")
+
+
 def _types():
     from launch.actions import ExecuteProcess, IncludeLaunchDescription, LogInfo, TimerAction
 
@@ -398,6 +406,7 @@ def _shutdown_handlers(actions) -> list:
 def test_the_lap_counter_is_started_and_reset_by_default_and_the_driver_is_untouched(
     monkeypatch,
 ) -> None:
+    _with_perception_installed(monkeypatch)
     m = _module()
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
     monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
@@ -466,6 +475,7 @@ def test_a_missing_racer_perception_is_one_logged_error_and_the_driver_keeps_run
 def test_the_counter_exiting_with_code_3_logs_the_opencv_error_and_does_not_shut_down(
     monkeypatch,
 ) -> None:
+    _with_perception_installed(monkeypatch)
     m = _module()
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
     monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)

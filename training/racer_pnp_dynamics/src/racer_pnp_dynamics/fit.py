@@ -37,7 +37,7 @@ from scipy.optimize import least_squares
 
 from .bags import Run
 from .dataset import Segment, by_split
-from .deadzone import RESOLVED_WIDTH_MPS, find_launches
+from .deadzone import RESOLVED_WIDTH_MPS, Launch, find_launches
 from .identify import TAU_GRID_S, Verdict, assess, profile_table
 from .model import PLACEHOLDER_NOMINAL, Nominal
 from .vehicle import Vehicle
@@ -257,14 +257,34 @@ DEADBAND_ROUND_MPS = 0.01
 HELD_WIDTH_MPS = 0.01  # a launch interval narrower than this: the car was held under that command
 
 
-def launch_deadband(runs: Sequence[Run], delay_s: float = 0.0) -> dict[str, object]:
+def launches_in_segments(segments: Sequence[Segment], delay_s: float = 0.0) -> list[Launch]:
+    """Launches from rest whose launch instant (the wheels first turning) lies inside one of the
+    segments. The rest the detector looks back over (0.7 s plus the delay) may start before the
+    segment; the split file leaves at least 2 s between a held-out segment and the train segment
+    that follows it, so that look back never reaches held-out data."""
+    out: list[Launch] = []
+    by_run: dict[int, list[Segment]] = {}
+    for seg in segments:
+        if seg.run.has_odom:
+            by_run.setdefault(id(seg.run), []).append(seg)
+    for segs in by_run.values():
+        for launch in find_launches(segs[0].run, delay_s):
+            if any(s.t0_s <= launch.t_s <= s.t1_s for s in segs):
+                out.append(launch)
+    return out
+
+
+def launch_deadband(
+    runs: Sequence[Run], delay_s: float = 0.0, launches: Sequence[Launch] | None = None
+) -> dict[str, object]:
     """The launch side dead zone: the median command at which the wheels first turned over every
     launch from rest (deadzone.find_launches), rounded to DEADBAND_ROUND_MPS. Launches whose
     command was already as high for the whole rest (zero interval: the car was held or blocked,
     not an observation of a threshold) are left out. A launch whose command jumped over the zone
     is an upper bound and stays in; that makes the estimate lean high when most launches are
     jumps. Zero (no dead zone) when no launch is left."""
-    launches = [x for r in runs if r.has_odom for x in find_launches(r, delay_s)]
+    if launches is None:
+        launches = [x for r in runs if r.has_odom for x in find_launches(r, delay_s)]
     kept = [x for x in launches if abs(x.width_mps) > HELD_WIDTH_MPS]
     resolved = [x for x in kept if 0.0 < x.width_mps <= RESOLVED_WIDTH_MPS]
     out: dict[str, object] = {
@@ -525,17 +545,33 @@ def fit_nominal(
     deadbands: Sequence[float] = DEADBAND_GRID_MPS,
     tau_grid: Sequence[float] = TAU_GRID_S,
     deadband: str | float | None = "launch",
+    fit_split: str = "train",
+    score_split: str = "heldout",
+    launch_splits: Sequence[str] | None = None,
 ) -> FitResult:
     """The whole fit: speed channel, delay and dead zone (odometry bags), then the yaw channel,
     then the profiles that say which parameters the data identify. `yaw_training` is "all",
     "odom_only" or "auto" (choose_yaw_training). `deadband` is "launch" (the median launch
     command, `launch_deadband`), a number (given), or None (searched on the grid by held-out
-    error)."""
-    train, heldout = by_split(segments, "train"), by_split(segments, "heldout")
+    error).
+
+    `fit_split` is the role the parameters are fitted on and `score_split` the role that scores
+    the delay and the profiles (the dyn-v0.1 defaults: "train" and "heldout"; v0.2 fits on
+    "train" and scores on its internal validation role "val", never on held-out). `launch_splits`
+    limits the launches and steady bins of the dead zone estimates to those roles (None: every
+    segment's whole run, the v0.1 behaviour)."""
+    train, heldout = by_split(segments, fit_split), by_split(segments, score_split)
     estimate: dict[str, object] | None = None
     runs = list({id(s.run): s.run for s in segments if s.run.has_odom}.values())
+    launch_segs = (
+        None if launch_splits is None else [x for r in launch_splits for x in by_split(segments, r)]
+    )
+
+    def launches_for(delay_s: float) -> list[Launch] | None:
+        return None if launch_segs is None else launches_in_segments(launch_segs, delay_s)
+
     if deadband == "launch":
-        estimate = launch_deadband(runs, 0.0)
+        estimate = launch_deadband(runs, 0.0, launches_for(0.0))
         deadband = float(estimate["value_mps"])  # type: ignore[arg-type]
     speed = fit_speed(
         train,
@@ -550,7 +586,9 @@ def fit_nominal(
     if estimate is not None and speed.nominal.command_delay_s > 0.0:
         # The launch command is paired with the command the wheels were answering, so it needs
         # the delay; estimate again with the fitted delay and refit once.
-        estimate = launch_deadband(runs, speed.nominal.command_delay_s)
+        estimate = launch_deadband(
+            runs, speed.nominal.command_delay_s, launches_for(speed.nominal.command_delay_s)
+        )
         estimate["estimated_with_delay_s"] = speed.nominal.command_delay_s
         deadband = float(estimate["value_mps"])  # type: ignore[arg-type]
         speed = fit_speed(

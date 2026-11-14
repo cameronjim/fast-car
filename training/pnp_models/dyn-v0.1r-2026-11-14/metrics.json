@@ -1,0 +1,709 @@
+{
+  "split_id": "pnp-v0.2",
+  "split_sha256": "bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83",
+  "vehicle_params": "0.17.0 / none-preliminary",
+  "nominal": {
+    "speed_gain": 0.9482438088762631,
+    "speed_deadband_mps": 0.22,
+    "speed_tau_s": 0.22460632746810144,
+    "accel_max_mps2": 2.0,
+    "decel_max_mps2": 0.6731081096112491,
+    "steer_gain_left": 0.9166243626015708,
+    "steer_gain_right": 1.0114633713998802,
+    "steer_offset_rad": 0.015222998571431204,
+    "steer_tau_s": 0.02787697420940658,
+    "command_delay_s": 0.0,
+    "understeer_s2_per_m2": 0.10938200992093731
+  },
+  "validity": {
+    "v_max_mps": 1.3,
+    "source": "the dyn-v0.1 bundle"
+  },
+  "selection": {
+    "one_step_wd1e-2": {
+      "mean": 0.1223934476765619,
+      "min": 0.11967068951742965,
+      "seed0": 0.11967068951742965,
+      "seed1": 0.123728002200395,
+      "seed2": 0.12378165131186109
+    },
+    "multi_step_wd1e-3": {
+      "mean": 0.11495844505903859,
+      "min": 0.11439951956475969,
+      "seed0": 0.11439951956475969,
+      "seed1": 0.1151762299394902,
+      "seed2": 0.1152995856728659
+    },
+    "multi_step_wd1e-2": {
+      "mean": 0.11429564244600793,
+      "min": 0.11383621726957044,
+      "seed0": 0.11432317794308976,
+      "seed1": 0.11383621726957044,
+      "seed2": 0.11472753212536357
+    },
+    "multi_step_from_one_wd1e-2": {
+      "mean": 0.11477576839001119,
+      "min": 0.11346237130021024,
+      "seed0": 0.11559728428535858,
+      "seed1": 0.11526764958446475,
+      "seed2": 0.11346237130021024
+    },
+    "multi_step_capped_wd1e-2": {
+      "mean": 0.11518208390791039,
+      "min": 0.11384159251849392,
+      "seed0": 0.11566657488677164,
+      "seed1": 0.11384159251849392,
+      "seed2": 0.11603808431846561
+    },
+    "multi_step_nonorm_wd1e-2": {
+      "mean": 0.11614865830064587,
+      "min": 0.11481914920848876,
+      "seed0": 0.11668050596827555,
+      "seed1": 0.11694631972517336,
+      "seed2": 0.11481914920848876
+    },
+    "_nominal_validation_P1": {
+      "value": 0.1344448175805588
+    }
+  },
+  "residual_samples": {
+    "one_step_samples_train": 13143,
+    "one_step_samples_val": 1961,
+    "windows_train": 11635,
+    "windows_val_loss": 1422,
+    "windows_val_p1": 573
+  },
+  "frozen_before_heldout": {
+    "nominal": {
+      "speed_gain": 0.9482438088762631,
+      "speed_deadband_mps": 0.22,
+      "speed_tau_s": 0.22460632746810144,
+      "accel_max_mps2": 2.0,
+      "decel_max_mps2": 0.6731081096112491,
+      "steer_gain_left": 0.9166243626015708,
+      "steer_gain_right": 1.0114633713998802,
+      "steer_offset_rad": 0.015222998571431204,
+      "steer_tau_s": 0.02787697420940658,
+      "command_delay_s": 0.0,
+      "understeer_s2_per_m2": 0.10938200992093731
+    },
+    "v_max_mps": 1.3,
+    "shipping_config": "multi_step_wd1e-2",
+    "shipping_seed": 1
+  },
+  "heldout": {
+    "windows": 1453,
+    "window_rule": "every 0.25 s inside a held-out segment (snapped to the nearest scan), start wheel speed at least 0.25 m/s, 1.5 s of data after the start for every horizon",
+    "horizons_s": [
+      0.5,
+      1.0,
+      1.5
+    ],
+    "strata": {
+      "names": [
+        "ccw:0.25-0.6",
+        "ccw:0.6-0.85",
+        "ccw:0.85+",
+        "cw:0.25-0.6",
+        "cw:0.6-0.85",
+        "cw:0.85+"
+      ],
+      "windows": {
+        "ccw:0.25-0.6": 641,
+        "ccw:0.6-0.85": 93,
+        "ccw:0.85+": 47,
+        "cw:0.25-0.6": 527,
+        "cw:0.6-0.85": 91,
+        "cw:0.85+": 54
+      },
+      "windows_by_original_bin": {
+        "ccw:0.25-0.6": 641,
+        "ccw:0.6-0.85": 93,
+        "ccw:0.85-1.25": 46,
+        "ccw:1.25+": 1,
+        "cw:0.25-0.6": 527,
+        "cw:0.6-0.85": 91,
+        "cw:0.85-1.25": 51,
+        "cw:1.25+": 3
+      },
+      "merges": [
+        {
+          "direction": "ccw",
+          "from": "1.25+",
+          "windows": 1,
+          "into": "0.85-1.25"
+        },
+        {
+          "direction": "cw",
+          "from": "1.25+",
+          "windows": 3,
+          "into": "0.85-1.25"
+        }
+      ],
+      "unmerged_small": []
+    },
+    "macro": {
+      "dyn-v0.1 (reference)": {
+        "0.5": {
+          "P": 0.07478855345893623,
+          "Y": 0.07127943523720247,
+          "S": 0.03719600623097685
+        },
+        "1.0": {
+          "P": 0.14752586930846898,
+          "Y": 0.13966136281013797,
+          "S": 0.03710282095081024
+        },
+        "1.5": {
+          "P": 0.21808954901440838,
+          "Y": 0.2059749167026852,
+          "S": 0.03704918595008153
+        }
+      },
+      "dyn-v0.1 nominal (deployed)": {
+        "0.5": {
+          "P": 0.07478855345893623,
+          "Y": 0.07127943523720247,
+          "S": 0.03719600623097685
+        },
+        "1.0": {
+          "P": 0.14752586930846898,
+          "Y": 0.13966136281013797,
+          "S": 0.03710282095081024
+        },
+        "1.5": {
+          "P": 0.21808954901440838,
+          "Y": 0.2059749167026852,
+          "S": 0.03704918595008153
+        }
+      },
+      "dyn-v0.1 + residual seed 0": {
+        "0.5": {
+          "P": 0.06681960198522964,
+          "Y": 0.03349206396144846,
+          "S": 0.051667990268968685
+        },
+        "1.0": {
+          "P": 0.12701972919212892,
+          "Y": 0.06413483547229727,
+          "S": 0.05568747939892465
+        },
+        "1.5": {
+          "P": 0.18707665353207933,
+          "Y": 0.09453063184125354,
+          "S": 0.05761780648309486
+        }
+      },
+      "dyn-v0.1 + residual seed 1": {
+        "0.5": {
+          "P": 0.07068362649413,
+          "Y": 0.033310368533483424,
+          "S": 0.039549987011975055
+        },
+        "1.0": {
+          "P": 0.13600881522176703,
+          "Y": 0.056224285860279756,
+          "S": 0.040419167441203545
+        },
+        "1.5": {
+          "P": 0.19763283374693108,
+          "Y": 0.07701084921044872,
+          "S": 0.04216690593718411
+        }
+      },
+      "dyn-v0.1 + residual seed 2": {
+        "0.5": {
+          "P": 0.07000579457992978,
+          "Y": 0.03299948334051118,
+          "S": 0.038942512023792716
+        },
+        "1.0": {
+          "P": 0.13502184817916607,
+          "Y": 0.05680214227309325,
+          "S": 0.039130289825916396
+        },
+        "1.5": {
+          "P": 0.1972378398786049,
+          "Y": 0.07777551179425501,
+          "S": 0.04126637931602087
+        }
+      }
+    },
+    "per_stratum_position_rmse_1s_m": {
+      "ccw:0.25-0.6": {
+        "windows": 641,
+        "dyn-v0.1 (reference)": 0.10391246671207975,
+        "dyn-v0.1 nominal (deployed)": 0.10391246671207975,
+        "dyn-v0.1 + residual seed 0": 0.08218094259745122,
+        "dyn-v0.1 + residual seed 1": 0.08120569071148993,
+        "dyn-v0.1 + residual seed 2": 0.08178169439428438
+      },
+      "ccw:0.6-0.85": {
+        "windows": 93,
+        "dyn-v0.1 (reference)": 0.10489867269541026,
+        "dyn-v0.1 nominal (deployed)": 0.10489867269541026,
+        "dyn-v0.1 + residual seed 0": 0.10674684125929458,
+        "dyn-v0.1 + residual seed 1": 0.12124559296480743,
+        "dyn-v0.1 + residual seed 2": 0.10120441008514772
+      },
+      "ccw:0.85+": {
+        "windows": 47,
+        "dyn-v0.1 (reference)": 0.18546750796512598,
+        "dyn-v0.1 nominal (deployed)": 0.18546750796512598,
+        "dyn-v0.1 + residual seed 0": 0.1725199192714981,
+        "dyn-v0.1 + residual seed 1": 0.1718632761770309,
+        "dyn-v0.1 + residual seed 2": 0.18620314426394766
+      },
+      "cw:0.25-0.6": {
+        "windows": 527,
+        "dyn-v0.1 (reference)": 0.12037655390974392,
+        "dyn-v0.1 nominal (deployed)": 0.12037655390974392,
+        "dyn-v0.1 + residual seed 0": 0.1011282788692667,
+        "dyn-v0.1 + residual seed 1": 0.10205428937769857,
+        "dyn-v0.1 + residual seed 2": 0.09996513054182486
+      },
+      "cw:0.6-0.85": {
+        "windows": 91,
+        "dyn-v0.1 (reference)": 0.14359949916977469,
+        "dyn-v0.1 nominal (deployed)": 0.14359949916977469,
+        "dyn-v0.1 + residual seed 0": 0.07904499395929744,
+        "dyn-v0.1 + residual seed 1": 0.11799108394358279,
+        "dyn-v0.1 + residual seed 2": 0.12004972174559231
+      },
+      "cw:0.85+": {
+        "windows": 54,
+        "dyn-v0.1 (reference)": 0.22690051539867925,
+        "dyn-v0.1 nominal (deployed)": 0.22690051539867925,
+        "dyn-v0.1 + residual seed 0": 0.22049739919596562,
+        "dyn-v0.1 + residual seed 1": 0.2216929581559925,
+        "dyn-v0.1 + residual seed 2": 0.22092698804419947
+      }
+    },
+    "per_stratum_yaw_rmse_1s_rad": {
+      "ccw:0.25-0.6": {
+        "windows": 641,
+        "dyn-v0.1 (reference)": 0.11823024461806057,
+        "dyn-v0.1 nominal (deployed)": 0.11823024461806057,
+        "dyn-v0.1 + residual seed 0": 0.03285923585907278,
+        "dyn-v0.1 + residual seed 1": 0.03341410131727977,
+        "dyn-v0.1 + residual seed 2": 0.03305753971644429
+      },
+      "ccw:0.6-0.85": {
+        "windows": 93,
+        "dyn-v0.1 (reference)": 0.08241037690456408,
+        "dyn-v0.1 nominal (deployed)": 0.08241037690456408,
+        "dyn-v0.1 + residual seed 0": 0.04554276971082785,
+        "dyn-v0.1 + residual seed 1": 0.08621116051798677,
+        "dyn-v0.1 + residual seed 2": 0.07263671357164402
+      },
+      "ccw:0.85+": {
+        "windows": 47,
+        "dyn-v0.1 (reference)": 0.15786538358138533,
+        "dyn-v0.1 nominal (deployed)": 0.15786538358138533,
+        "dyn-v0.1 + residual seed 0": 0.06788231775754211,
+        "dyn-v0.1 + residual seed 1": 0.06954347433676655,
+        "dyn-v0.1 + residual seed 2": 0.07444912092335046
+      },
+      "cw:0.25-0.6": {
+        "windows": 527,
+        "dyn-v0.1 (reference)": 0.1415844363203494,
+        "dyn-v0.1 nominal (deployed)": 0.1415844363203494,
+        "dyn-v0.1 + residual seed 0": 0.049055837526348615,
+        "dyn-v0.1 + residual seed 1": 0.04396385726626148,
+        "dyn-v0.1 + residual seed 2": 0.0444919215753837
+      },
+      "cw:0.6-0.85": {
+        "windows": 91,
+        "dyn-v0.1 (reference)": 0.14285368149804795,
+        "dyn-v0.1 nominal (deployed)": 0.14285368149804795,
+        "dyn-v0.1 + residual seed 0": 0.12661771143676623,
+        "dyn-v0.1 + residual seed 1": 0.043174913927705255,
+        "dyn-v0.1 + residual seed 2": 0.055804229777975826
+      },
+      "cw:0.85+": {
+        "windows": 54,
+        "dyn-v0.1 (reference)": 0.19502405393842048,
+        "dyn-v0.1 nominal (deployed)": 0.19502405393842048,
+        "dyn-v0.1 + residual seed 0": 0.06285114054322606,
+        "dyn-v0.1 + residual seed 1": 0.061038207795678714,
+        "dyn-v0.1 + residual seed 2": 0.06037332807376125
+      }
+    },
+    "per_stratum_speed_rmse_1s_mps": {
+      "ccw:0.25-0.6": {
+        "windows": 641,
+        "dyn-v0.1 (reference)": 0.03807612976266405,
+        "dyn-v0.1 nominal (deployed)": 0.03807612976266405,
+        "dyn-v0.1 + residual seed 0": 0.02352617700096369,
+        "dyn-v0.1 + residual seed 1": 0.02489702018683361,
+        "dyn-v0.1 + residual seed 2": 0.024723774894023175
+      },
+      "ccw:0.6-0.85": {
+        "windows": 93,
+        "dyn-v0.1 (reference)": 0.02537049318748517,
+        "dyn-v0.1 nominal (deployed)": 0.02537049318748517,
+        "dyn-v0.1 + residual seed 0": 0.028538960743019797,
+        "dyn-v0.1 + residual seed 1": 0.03876125896061143,
+        "dyn-v0.1 + residual seed 2": 0.045692037168455706
+      },
+      "ccw:0.85+": {
+        "windows": 47,
+        "dyn-v0.1 (reference)": 0.032669508811716715,
+        "dyn-v0.1 nominal (deployed)": 0.032669508811716715,
+        "dyn-v0.1 + residual seed 0": 0.036735385521233205,
+        "dyn-v0.1 + residual seed 1": 0.036412065824304486,
+        "dyn-v0.1 + residual seed 2": 0.03303990838521386
+      },
+      "cw:0.25-0.6": {
+        "windows": 527,
+        "dyn-v0.1 (reference)": 0.03759004597808701,
+        "dyn-v0.1 nominal (deployed)": 0.03759004597808701,
+        "dyn-v0.1 + residual seed 0": 0.037358408256420866,
+        "dyn-v0.1 + residual seed 1": 0.029755215106436823,
+        "dyn-v0.1 + residual seed 2": 0.02724167756976709
+      },
+      "cw:0.6-0.85": {
+        "windows": 91,
+        "dyn-v0.1 (reference)": 0.026460786404343708,
+        "dyn-v0.1 nominal (deployed)": 0.026460786404343708,
+        "dyn-v0.1 + residual seed 0": 0.1522576759539035,
+        "dyn-v0.1 + residual seed 1": 0.06032616940840489,
+        "dyn-v0.1 + residual seed 2": 0.05185973345323556
+      },
+      "cw:0.85+": {
+        "windows": 54,
+        "dyn-v0.1 (reference)": 0.06244996156056478,
+        "dyn-v0.1 nominal (deployed)": 0.06244996156056478,
+        "dyn-v0.1 + residual seed 0": 0.05570826891800683,
+        "dyn-v0.1 + residual seed 1": 0.052363275160630024,
+        "dyn-v0.1 + residual seed 2": 0.052224607484803016
+      }
+    },
+    "bootstrap_p1_ratio_v02_nominal_over_v01": {
+      "ratio": 1.0,
+      "lo": 1.0,
+      "hi": 1.0,
+      "resamples": 2000,
+      "blocks": 82,
+      "seed": 0,
+      "empty_stratum_share": 0.0021666666666666666
+    },
+    "bootstrap_p1_ratio_residual_over_nominal": {
+      "ratio": 0.9219319693509456,
+      "lo": 0.8960976019611913,
+      "hi": 0.9397228169617419,
+      "resamples": 2000,
+      "blocks": 82,
+      "seed": 0,
+      "empty_stratum_share": 0.0021666666666666666
+    },
+    "decision_3_1_refit": {
+      "gate": "3.1 refit",
+      "passed": true,
+      "items": [
+        {
+          "name": "P1 ratio v0.2 / v0.1",
+          "value": 1.0,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "S1 ratio v0.2 / v0.1",
+          "value": 1.0,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "Y1 ratio v0.2 / v0.1",
+          "value": 1.0,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        }
+      ]
+    },
+    "decision_3_2_residual": {
+      "gate": "3.2 GP2a residual",
+      "passed": false,
+      "items": [
+        {
+          "name": "1a P1 ratio residual / nominal",
+          "value": 0.9219319693509456,
+          "comparison": "<=",
+          "threshold": 0.95,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "1b upper end of the bootstrap interval of the P1 ratio",
+          "value": 0.9397228169617419,
+          "comparison": "<",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "2a Y1 ratio residual / nominal",
+          "value": 0.4025758071451273,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "2b S1 ratio residual / nominal",
+          "value": 1.0893825969402708,
+          "comparison": "<=",
+          "threshold": 1.02,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "3 seed 0 P1 ratio to nominal",
+          "value": 0.8609996998325576,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "3 seed 1 P1 ratio to nominal",
+          "value": 0.9219319693509456,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "3 seed 2 P1 ratio to nominal",
+          "value": 0.9152418407163719,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum ccw:0.25-0.6 position RMSE ratio",
+          "value": 0.7814816959017472,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum ccw:0.6-0.85 position RMSE ratio",
+          "value": 1.1558353394695757,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "4 stratum ccw:0.85+ position RMSE ratio",
+          "value": 0.9266489751366416,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum cw:0.25-0.6 position RMSE ratio",
+          "value": 0.8477920829517762,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum cw:0.6-0.85 position RMSE ratio",
+          "value": 0.8216677956800141,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum cw:0.85+ position RMSE ratio",
+          "value": 0.9770491608027565,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "5 random sweep of the validity box: finite, inside the state bounds",
+          "value": 0.0,
+          "comparison": "<=",
+          "threshold": 0.0,
+          "passed": true,
+          "note": "100000 rollouts of 30 steps; max v 1.305 m/s"
+        }
+      ]
+    },
+    "refit_ships": true,
+    "residual_ships": false,
+    "sweep": {
+      "samples": 100000,
+      "steps": 30,
+      "nonfinite": 0,
+      "steering_violations": 0,
+      "speed_violations": 0,
+      "max_speed_mps": 1.3048990565948306,
+      "max_abs_delta_rad": 0.4489969477297093,
+      "passed": true
+    },
+    "shipping_seed": 1,
+    "shipping_config": "multi_step_wd1e-2",
+    "exported_limits": {
+      "dyn-v0.1 (reference)": {
+        "P1": 0.14752586930846898,
+        "Y1": 0.13966136281013797,
+        "S1": 0.03710282095081024
+      },
+      "dyn-v0.1 nominal (deployed)": {
+        "P1": 0.14752586930846898,
+        "Y1": 0.13966136281013797,
+        "S1": 0.03710282095081024
+      },
+      "dyn-v0.1 + residual seed 0": {
+        "P1": 0.12701972919212892,
+        "Y1": 0.06413483547229727,
+        "S1": 0.05568747939892465
+      },
+      "dyn-v0.1 + residual seed 1": {
+        "P1": 0.13600881522176703,
+        "Y1": 0.056224285860279756,
+        "S1": 0.040419167441203545
+      },
+      "dyn-v0.1 + residual seed 2": {
+        "P1": 0.13502184817916607,
+        "Y1": 0.05680214227309325,
+        "S1": 0.039130289825916396
+      }
+    }
+  },
+  "data": {
+    "seconds_by_bag": {
+      "2026-10-24T23-13-18_car_teleop": {
+        "train": 257.8,
+        "val": 41.0,
+        "legacy_heldout": 132.9
+      },
+      "2026-10-25T19-27-08_car_teleop": {
+        "train": 18.8,
+        "legacy_heldout": 16.3
+      },
+      "2026-11-11T03-54-11_car_teleop_cw": {
+        "train": 151.2,
+        "val": 25.0,
+        "legacy_heldout": 69.6
+      },
+      "2026-11-11T04-20-19_car_teleop_v3": {
+        "train": 148.6,
+        "val": 7.7,
+        "legacy_heldout": 71.3
+      },
+      "2026-11-12T03-04-56_car_teleop": {
+        "train": 187.0,
+        "val": 29.5,
+        "legacy_heldout": 97.5
+      },
+      "2026-11-13T22-00-40_car_teleop": {
+        "train": 516.6,
+        "val": 91.5,
+        "heldout": 123.4
+      },
+      "2026-11-13T22-20-18_car_teleop": {
+        "heldout": 271.1,
+        "train": 115.3,
+        "val": 20.3
+      },
+      "2026-11-13T23-19-51_car_teleop": {
+        "train": 11.2
+      },
+      "2026-11-13T23-27-23_car_teleop": {
+        "train": 295.8,
+        "val": 50.1,
+        "heldout": 8.8
+      }
+    },
+    "seconds_by_role_direction_speed_bin": {
+      "train": {
+        "legacy": {
+          "<0.25": 70.3,
+          "0.25-0.6": 365.6,
+          "0.6-0.85": 2.7,
+          "0.85-1.25": 30.5,
+          "1.25+": 8.9
+        },
+        "ccw": {
+          "<0.25": 5.7,
+          "0.25-0.6": 608.2,
+          "0.6-0.85": 2.4,
+          "0.85-1.25": 82.2,
+          "1.25+": 35.4
+        },
+        "cw": {
+          "<0.25": 2.4,
+          "0.25-0.6": 178.1,
+          "0.6-0.85": 2.1,
+          "0.85-1.25": 20.9,
+          "1.25+": 1.7
+        }
+      },
+      "val": {
+        "legacy": {
+          "<0.25": 9.7,
+          "0.25-0.6": 46.7,
+          "0.6-0.85": 0.4,
+          "0.85-1.25": 4.5,
+          "1.25+": 0.4
+        },
+        "ccw": {
+          "<0.25": 0.4,
+          "0.25-0.6": 105.9,
+          "0.6-0.85": 0.2,
+          "0.85-1.25": 13.9,
+          "1.25+": 5.1
+        },
+        "cw": {
+          "<0.25": 0.1,
+          "0.25-0.6": 31.3,
+          "0.6-0.85": 0.1,
+          "0.85-1.25": 5.1,
+          "1.25+": 0.0
+        }
+      },
+      "legacy_heldout": {
+        "legacy": {
+          "<0.25": 13.3,
+          "0.25-0.6": 140.0,
+          "0.6-0.85": 8.9,
+          "0.85-1.25": 62.6,
+          "1.25+": 9.9
+        }
+      },
+      "heldout": {
+        "ccw": {
+          "<0.25": 2.3,
+          "0.25-0.6": 165.0,
+          "0.6-0.85": 25.9,
+          "0.85-1.25": 16.9,
+          "1.25+": 6.7
+        },
+        "cw": {
+          "<0.25": 1.6,
+          "0.25-0.6": 137.3,
+          "0.6-0.85": 24.9,
+          "0.85-1.25": 21.4,
+          "1.25+": 1.4
+        }
+      }
+    }
+  }
+}

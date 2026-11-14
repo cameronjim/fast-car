@@ -1,0 +1,209 @@
+bundle_schema_version: 1.1.0
+kind: dynamics
+model_id: dyn-v0.3yr-2026-11-14
+created_utc: '2026-11-14T19:43:04Z'
+git_sha: ab433cdc32291e9e3f422c4c1ad0f3d2c1cf143b
+training_config_sha256: 47aee22df35c3f16a7edea756bb64906b45c67c80d1da6d34f17a98af674e158
+vehicle_params: {schema_version: 0.17.0, sysid_session_id: none-preliminary}
+payload:
+- {file: residual_mlp.f32, sha256: 89e2dd02641cc4e034859c11332a58057b0d7d8c7b4f9926560c8c9e3cd404d1}
+- {file: golden_rollouts.csv, sha256: 5b0ad02437b7431942c6e4590418fcd73d4f73e516186cfa49c585e5a5822514}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9482438088762631, speed_deadband_mps: 0.22, speed_tau_s: 0.22460632746810144,
+    accel_max_mps2: 2.0, decel_max_mps2: 0.6731081096112491, steer_gain_left: 0.9166243626015708,
+    steer_gain_right: 1.0114633713998802, steer_offset_rad: 0.015222998571431204,
+    steer_tau_s: 0.02787697420940658, command_delay_s: 0.0, understeer_s2_per_m2: 0.10938200992093731}
+  residual:
+    enabled: true
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers:
+    - [4, 32]
+    - [32, 32]
+    - [32, 2]
+    activation: tanh
+    input_mean: [0.510531981314795, 0.11400213083588502, 0.5521511309065094, 0.11824561291179726]
+    input_std: [0.2504551792282611, 0.3131536296895807, 0.2523970963001878, 0.3261677591876834]
+    output_scale: [0.0, 0.07366152890025662]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['yaw-only residual on dyn-v0.1, train role under T2']
+metrics:
+  split_sha256: bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83
+  vehicle_params: 0.17.0 / none-preliminary
+  addenda: ['Base nominal decided before any residual was trained: GP2c-Y FAILED (pointer
+      dyn-v0.3y-2026-11-14), so the residual is trained on top of dyn-v0.1.']
+  selection:
+    yaw_one_step_wd1e-2: {mean: 0.07174935907614831, min: 0.07153314898619371, seed0: 0.07153314898619371,
+      seed1: 0.07205097718559766, seed2: 0.07166395105665353}
+    yaw_multi_step_wd1e-3: {mean: 0.07105477461994761, min: 0.07092473825240642, seed0: 0.07095696508369503,
+      seed1: 0.07092473825240642, seed2: 0.07128262052374137}
+    yaw_multi_step_wd1e-2: {mean: 0.071165823091252, min: 0.07101103577413041, seed0: 0.07101103577413041,
+      seed1: 0.0711465224511823, seed2: 0.07133991104844326}
+    yaw_multi_step_from_one_wd1e-2: {mean: 0.07103549710193507, min: 0.07067802428570419,
+      seed0: 0.07121579624318912, seed1: 0.07067802428570419, seed2: 0.07121267077691192}
+    yaw_multi_step_capped_wd1e-2: {mean: 0.07119384465596616, min: 0.07105147293699823,
+      seed0: 0.07117942974018183, seed1: 0.07105147293699823, seed2: 0.07135063129071839}
+    yaw_multi_step_nonorm_wd1e-2: {mean: 0.07199770438665723, min: 0.07186484483851774,
+      seed0: 0.07186484483851774, seed1: 0.07190154888740564, seed2: 0.07222671943404832}
+    _nominal_validation_P1: {value: 0.07823506613585127}
+  heldout:
+    nominal: dyn-v0.1
+    T2:
+      truth: T2
+      windows: 1479
+      strata:
+        names: ['ccw:0.25-0.6', 'ccw:0.6-0.85', 'ccw:0.85+', 'cw:0.25-0.6', 'cw:0.6-0.85',
+          'cw:0.85+']
+        windows: {'ccw:0.25-0.6': 641, 'ccw:0.6-0.85': 93, 'ccw:0.85+': 59, 'cw:0.25-0.6': 527,
+          'cw:0.6-0.85': 92, 'cw:0.85+': 67}
+      merges:
+      - {direction: ccw, from: 1.25+, windows: 7, into: 0.85-1.25}
+      - {direction: cw, from: 1.25+, windows: 3, into: 0.85-1.25}
+      macro:
+        dyn-v0.1:
+          '0.5': {P: 0.04405784618969074, Y: 0.038980967154990574, S: 0.0373906116955867}
+          '1.0': {P: 0.08866860901627503, Y: 0.07393622579584501, S: 0.03869356258269287}
+          '1.5': {P: 0.132789690218579, Y: 0.10511096165973553, S: 0.037823594109752834}
+        R seed 0:
+          '0.5': {P: 0.04354751979020083, Y: 0.027520851269093927, S: 0.0373906116955867}
+          '1.0': {P: 0.08622209304820255, Y: 0.04579908179473457, S: 0.03869356258269287}
+          '1.5': {P: 0.1259805436248695, Y: 0.060156168491605676, S: 0.037823594109752834}
+        R seed 1:
+          '0.5': {P: 0.04358472418423947, Y: 0.0275555780959305, S: 0.0373906116955867}
+          '1.0': {P: 0.08616845116295824, Y: 0.04513639819044598, S: 0.03869356258269287}
+          '1.5': {P: 0.1259055812807073, Y: 0.05898008579975436, S: 0.037823594109752834}
+        R seed 2:
+          '0.5': {P: 0.043585154481508605, Y: 0.026536561149215928, S: 0.0373906116955867}
+          '1.0': {P: 0.08625797983876433, Y: 0.04370902297344407, S: 0.03869356258269287}
+          '1.5': {P: 0.12595985467361173, Y: 0.05719428904161708, S: 0.037823594109752834}
+      per_stratum_position_rmse_1s_m:
+        ccw:0.25-0.6: {windows: 641, dyn-v0.1: 0.06256938893463773, R seed 0: 0.06195793975296829,
+          R seed 1: 0.06205666318897329, R seed 2: 0.061991694998879465}
+        ccw:0.6-0.85: {windows: 93, dyn-v0.1: 0.060778164724739396, R seed 0: 0.061303424629980306,
+          R seed 1: 0.060908923891189924, R seed 2: 0.06111121853857376}
+        ccw:0.85+: {windows: 59, dyn-v0.1: 0.08650033700911079, R seed 0: 0.07659652285241453,
+          R seed 1: 0.07721815634401087, R seed 2: 0.07780691182184934}
+        cw:0.25-0.6: {windows: 527, dyn-v0.1: 0.07684370267900222, R seed 0: 0.07517025233291338,
+          R seed 1: 0.0751899762918397, R seed 2: 0.07526891606613334}
+        cw:0.6-0.85: {windows: 92, dyn-v0.1: 0.09431149247006411, R seed 0: 0.09333135663680743,
+          R seed 1: 0.09346038678267664, R seed 2: 0.09302705753066957}
+        cw:0.85+: {windows: 67, dyn-v0.1: 0.15100856828009596, R seed 0: 0.14897306208413133,
+          R seed 1: 0.148176600479059, R seed 2: 0.14834208007648056}
+      yp: {dyn-v0.1: 0.025668317434183553, R seed 0: 0.017134739092717514, R seed 1: 0.01781346642581151,
+        R seed 2: 0.01771921644557078}
+      yp_segments:
+        dyn-v0.1:
+          G1b: {yp: 0.03171532081273834, intervals: 185.0}
+          T2b: {yp: 0.019621314055628766, intervals: 87.0}
+        R seed 0:
+          G1b: {yp: 0.020698132960421806, intervals: 185.0}
+          T2b: {yp: 0.01357134522501322, intervals: 87.0}
+        R seed 1:
+          G1b: {yp: 0.020408182892504043, intervals: 185.0}
+          T2b: {yp: 0.01521874995911898, intervals: 87.0}
+        R seed 2:
+          G1b: {yp: 0.020987638460411347, intervals: 185.0}
+          T2b: {yp: 0.014450794430730213, intervals: 87.0}
+    T1:
+      truth: T1
+      windows: 1453
+      strata:
+        names: ['ccw:0.25-0.6', 'ccw:0.6-0.85', 'ccw:0.85+', 'cw:0.25-0.6', 'cw:0.6-0.85',
+          'cw:0.85+']
+        windows: {'ccw:0.25-0.6': 641, 'ccw:0.6-0.85': 93, 'ccw:0.85+': 47, 'cw:0.25-0.6': 527,
+          'cw:0.6-0.85': 91, 'cw:0.85+': 54}
+      merges:
+      - {direction: ccw, from: 1.25+, windows: 1, into: 0.85-1.25}
+      - {direction: cw, from: 1.25+, windows: 3, into: 0.85-1.25}
+      macro:
+        dyn-v0.1:
+          '0.5': {P: 0.07478855345893623, Y: 0.07127943523720247, S: 0.03719600623097685}
+          '1.0': {P: 0.14752586930846898, Y: 0.13966136281013797, S: 0.03710282095081024}
+          '1.5': {P: 0.21808954901440838, Y: 0.2059749167026852, S: 0.03704918595008153}
+        R seed 0:
+          '0.5': {P: 0.07482942517273612, Y: 0.058567395559209944, S: 0.03719600623097685}
+          '1.0': {P: 0.1478904121512088, Y: 0.11329404215045191, S: 0.03710282095081024}
+          '1.5': {P: 0.21879393518041254, Y: 0.16650184580166696, S: 0.03704918595008153}
+        R seed 1:
+          '0.5': {P: 0.07486241542942007, Y: 0.056417220461065405, S: 0.03719600623097685}
+          '1.0': {P: 0.14775134867365608, Y: 0.10862296709173293, S: 0.03710282095081024}
+          '1.5': {P: 0.21829389993462736, Y: 0.1594017383177089, S: 0.03704918595008153}
+        R seed 2:
+          '0.5': {P: 0.07483378389522129, Y: 0.05730446791443541, S: 0.03719600623097685}
+          '1.0': {P: 0.14772819274224155, Y: 0.1110696008582845, S: 0.03710282095081024}
+          '1.5': {P: 0.21830905297947, Y: 0.16350556347650397, S: 0.03704918595008153}
+      per_stratum_position_rmse_1s_m:
+        ccw:0.25-0.6: {windows: 641, dyn-v0.1: 0.10391246671207975, R seed 0: 0.10351467099954954,
+          R seed 1: 0.10355180327648236, R seed 2: 0.10348669525974469}
+        ccw:0.6-0.85: {windows: 93, dyn-v0.1: 0.10489867269541026, R seed 0: 0.10601417247433412,
+          R seed 1: 0.10489223312748035, R seed 2: 0.10556558416025912}
+        ccw:0.85+: {windows: 47, dyn-v0.1: 0.18546750796512598, R seed 0: 0.18952369663318222,
+          R seed 1: 0.1898523337420665, R seed 2: 0.18962161662390045}
+        cw:0.25-0.6: {windows: 527, dyn-v0.1: 0.12037655390974392, R seed 0: 0.11915017042080711,
+          R seed 1: 0.11913996564759037, R seed 2: 0.11922848076073055}
+        cw:0.6-0.85: {windows: 91, dyn-v0.1: 0.14359949916977469, R seed 0: 0.14250981132422072,
+          R seed 1: 0.14246932170992177, R seed 2: 0.14217885638845562}
+        cw:0.85+: {windows: 54, dyn-v0.1: 0.22690051539867925, R seed 0: 0.22662995105515907,
+          R seed 1: 0.22660243453839513, R seed 2: 0.22628792326035893}
+      yp: {dyn-v0.1: 0.025668317434183553, R seed 0: 0.017134739092717514, R seed 1: 0.01781346642581151,
+        R seed 2: 0.01771921644557078}
+      yp_segments:
+        dyn-v0.1:
+          G1b: {yp: 0.03171532081273834, intervals: 185.0}
+          T2b: {yp: 0.019621314055628766, intervals: 87.0}
+        R seed 0:
+          G1b: {yp: 0.020698132960421806, intervals: 185.0}
+          T2b: {yp: 0.01357134522501322, intervals: 87.0}
+        R seed 1:
+          G1b: {yp: 0.020408182892504043, intervals: 185.0}
+          T2b: {yp: 0.01521874995911898, intervals: 87.0}
+        R seed 2:
+          G1b: {yp: 0.020987638460411347, intervals: 185.0}
+          T2b: {yp: 0.014450794430730213, intervals: 87.0}
+    bootstrap_p1_ratio_R_over_nominal: {ratio: 0.971803348659074, lo: 0.9346366028673839,
+      hi: 1.0194133685338722, resamples: 2000, blocks: 83, seed: 0, empty_stratum_share: 0.0008333333333333334}
+    sweep: {samples: 100000, steps: 30, nonfinite: 0, steering_violations: 0, speed_violations: 0,
+      max_speed_mps: 1.2999814831915344, max_abs_delta_rad: 0.4489969477297093, passed: true}
+    shipping_seed: 1
+    shipping_config: yaw_multi_step_from_one_wd1e-2
+    decision_GP2c_R:
+      gate: GP2c-R yaw-only residual
+      passed: false
+      items:
+      - {name: 1a P1 ratio R / nominal, value: 0.971803348659074, comparison: <=,
+        threshold: 0.95, passed: false, note: ''}
+      - {name: 1b upper end of the bootstrap interval of the P1 ratio, value: 1.0194133685338722,
+        comparison: <, threshold: 1.0, passed: false, note: ''}
+      - {name: 2a Y1 ratio R / nominal, value: 0.6104774446436851, comparison: <=,
+        threshold: 1.0, passed: true, note: ''}
+      - {name: 2b S1(R) minus S1(nominal), value: 0.0, comparison: <=, threshold: 1.0e-06,
+        passed: true, note: absolute difference in m/s}
+      - {name: 3 seed 0 P1 ratio to nominal, value: 0.9724083190746409, comparison: <=,
+        threshold: 1.0, passed: true, note: ''}
+      - {name: 3 seed 1 P1 ratio to nominal, value: 0.971803348659074, comparison: <=,
+        threshold: 1.0, passed: true, note: ''}
+      - {name: 3 seed 2 P1 ratio to nominal, value: 0.9728130484479774, comparison: <=,
+        threshold: 1.0, passed: true, note: ''}
+      - {name: '4 stratum ccw:0.25-0.6 position RMSE ratio', value: 0.9918054858071245,
+        comparison: <=, threshold: 1.05, passed: true, note: ''}
+      - {name: '4 stratum ccw:0.6-0.85 position RMSE ratio', value: 1.0021514168294277,
+        comparison: <=, threshold: 1.05, passed: true, note: ''}
+      - {name: '4 stratum ccw:0.85+ position RMSE ratio', value: 0.8926919710830461,
+        comparison: <=, threshold: 1.05, passed: true, note: ''}
+      - {name: '4 stratum cw:0.25-0.6 position RMSE ratio', value: 0.9784793505582285,
+        comparison: <=, threshold: 1.05, passed: true, note: ''}
+      - {name: '4 stratum cw:0.6-0.85 position RMSE ratio', value: 0.9909755888164147,
+        comparison: <=, threshold: 1.05, passed: true, note: ''}
+      - {name: '4 stratum cw:0.85+ position RMSE ratio', value: 0.9812463105021689,
+        comparison: <=, threshold: 1.05, passed: true, note: ''}
+      - {name: '5 random sweep of the validity box: finite, inside the state bounds',
+        value: 0.0, comparison: <=, threshold: 0.0, passed: true, note: 100000 rollouts
+          of 30 steps; max v 1.300 m/s}
+      - {name: 6 Yp ratio R / nominal, value: 0.6939865252752635, comparison: <=,
+        threshold: 1.0, passed: true, note: ''}
+    passes: false

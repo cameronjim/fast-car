@@ -167,7 +167,7 @@ def train(
             loss.backward()
             opt.step()
             sched.step()
-            running += float(loss)
+            running += float(loss.detach())
         net.eval()
         with torch.no_grad():
             pred = torch.cat([net(xv[i : i + 2000]) for i in range(0, len(xv), 2000)])

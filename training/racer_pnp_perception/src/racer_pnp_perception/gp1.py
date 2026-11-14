@@ -501,38 +501,49 @@ def collect_bag(
             label=lab[0] if lab else None,
             label_valid=lab[1] if lab else 0,
         )
-        pts = None
-        for backend, perceiver in perceivers.items():
-            track = perceiver.process(
-                scans.ranges[i],
-                scans.angle_min,
-                scans.angle_increment,
-                scans.range_min,
-                scans.range_max,
-            )
-            if pts is None:
-                pts = scan_to_points(
-                    scans.ranges[i],
-                    scans.angle_min,
-                    scans.angle_increment,
-                    scans.range_min,
-                    scans.range_max,
-                    live.mount,
-                    live.body,
-                )
-            row.valid[backend] = track.valid_count
-            row.intrusion[backend] = track.intrusion_fraction
-            row.residual[backend] = track.boundary_residual_m
-            row.deficit[backend] = clearance_deficit(track, pts)
-            if path is not None:
-                c = sl.path_containment(track, path, live.body.half_width_m)
-                row.containment[backend] = 0.0 if not math.isfinite(c) else c
-            if lab is not None:
-                ec, ef, _ = scan_centreline_errors(track, lab[0], lab[1])
-                row.e_c[backend], row.e_far[backend] = ec, ef
+        score_row(row, scans, int(i), perceivers, live)
         rows.append(row)
     log.info("%s: %d moving scans in held-out segments", name, len(rows))
     return rows
+
+
+def score_row(
+    row: ScanRow,
+    scans: sl.ScanSet,
+    i: int,
+    perceivers: dict[str, TrackPerceiver],
+    live: LiveVehicle,
+) -> None:
+    """Run every backend on scan `i` through `TrackPerceiver.process` and fill the row's numbers:
+    valid_count, the self-checks, the clearance deficit, the path containment when the row has a
+    driven path, and the centreline errors when it has a label."""
+    pts = scan_to_points(
+        scans.ranges[i],
+        scans.angle_min,
+        scans.angle_increment,
+        scans.range_min,
+        scans.range_max,
+        live.mount,
+        live.body,
+    )
+    for backend, perceiver in perceivers.items():
+        track = perceiver.process(
+            scans.ranges[i],
+            scans.angle_min,
+            scans.angle_increment,
+            scans.range_min,
+            scans.range_max,
+        )
+        row.valid[backend] = track.valid_count
+        row.intrusion[backend] = track.intrusion_fraction
+        row.residual[backend] = track.boundary_residual_m
+        row.deficit[backend] = clearance_deficit(track, pts)
+        if row.path is not None:
+            c = sl.path_containment(track, row.path, live.body.half_width_m)
+            row.containment[backend] = 0.0 if not math.isfinite(c) else c
+        if row.label is not None:
+            ec, ef, _ = scan_centreline_errors(track, row.label, row.label_valid)
+            row.e_c[backend], row.e_far[backend] = ec, ef
 
 
 # ---------------------------------------------------------------------------------------------

@@ -40,6 +40,8 @@ DEAD_SECTOR_MAX_RAD = nz.DEAD_SECTOR_MAX_RAD
 N_BINS = 360
 BIN_WIDTH_RAD = 2.0 * math.pi / N_BINS
 REQUIRED_KEYS = (
+    "index",
+    "path_xy",
     "tensor",
     "label",
     "valid_count",
@@ -64,6 +66,8 @@ class RealSet:
     role: NDArray[np.str_]
     window_first_s: NDArray[np.float64]
     window_last_s: NDArray[np.float64]
+    scan_index: NDArray[np.int64]  # index into the bag's scans (the scan cache)
+    path_xy: NDArray[np.float64]  # [n, 21, 2] the car's own next 2 m, in the scan's frame
 
     def __len__(self) -> int:
         return len(self.valid_count)
@@ -78,6 +82,8 @@ class RealSet:
             self.role[mask],
             self.window_first_s[mask],
             self.window_last_s[mask],
+            self.scan_index[mask],
+            self.path_xy[mask],
         )
 
 
@@ -98,6 +104,8 @@ def read_label_file(path: Path) -> RealSet:
             z["role"].astype(np.str_),
             z["window_first_s"].astype(np.float64),
             z["window_last_s"].astype(np.float64),
+            z["index"].astype(np.int64),
+            z["path_xy"].astype(np.float64),
         )
 
 
@@ -113,6 +121,8 @@ def concat(sets: list[RealSet]) -> RealSet:
         np.concatenate([s.role for s in sets]),
         np.concatenate([s.window_first_s for s in sets]),
         np.concatenate([s.window_last_s for s in sets]),
+        np.concatenate([s.scan_index for s in sets]),
+        np.concatenate([s.path_xy for s in sets]),
     )
 
 

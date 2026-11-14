@@ -48,6 +48,7 @@ def fake_labels(
         tensor=rng.uniform(size=(n, 1, 2, 360)).astype(np.float32),
         label=label,
         valid_count=np.full(n, 14),
+        path_xy=np.zeros((n, 21, 2)),
         window_first_s=np.array([w[0] for w in windows]),
         window_last_s=np.array([w[1] for w in windows]),
         segment=np.array(segments),

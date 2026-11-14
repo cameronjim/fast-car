@@ -9,6 +9,16 @@ ros_ws/src/racer_track_perception/test/fixtures/bundle_release/ (about 250 kB, s
 can drive with it) and a pointer (manifest.yaml, metrics.json, README.md, never the weights) is
 written to training/pnp_models/<model_id>/. `finalize` rewrites the metrics and verdict after the
 real-bag gate has run.
+
+    uv run --group train python -m racer_pnp_perception.export --v1 --run <run dir> \\
+        --gp1 <gp1.json> [--sim-json <eval_sim.json>] [--latency-json <latency.json>] \\
+        [--model-id trackperc-v1-<UTC date>] [--models-dir <dir>] [--copy-release-fixture]
+
+Without --gp1 it writes a candidate bundle only (for the GP1 run, which needs a bundle to load).
+With it, it writes the v1 bundle (vehicle_params pinned to the live 0.17.0 / none-preliminary, the training
+data listed, the whole gp1.json and the split SHA-256 in `metrics`) and its pointer, whose README
+starts with the GP1 verdict. The release fixture is replaced only with `--copy-release-fixture`,
+and the code refuses that unless the GP1 outcome is a pass.
 """
 
 from __future__ import annotations
@@ -33,6 +43,8 @@ from racer_track_perception.vehicle import LiveVehicle, find_repo_root, load_liv
 
 MODELS_DIR = Path("/Users/cameronjim/code/car-data/pnp/models")
 SCHEMA_VERSION = "1.0.0"
+# Every v0.2 bundle pins exactly this identity (it must also equal the live vehicle_params).
+PINNED_VEHICLE_PARAMS = ("0.17.0", "none-preliminary")
 
 
 def git_sha(repo: Path) -> str:
@@ -259,7 +271,7 @@ def export(
         want = net(torch.from_numpy(x)).numpy()
     runtime = CircConv1dV0(arrays)
     worst = max(float(np.abs(runtime.forward(x[i : i + 1]) - want[i]).max()) for i in range(8))
-    if worst > 1e-4:
+    if worst > 1e-5:
         raise RuntimeError(f"numpy runtime differs from torch by {worst}")
     config_sha = hashlib.sha256((run / "config.json").read_bytes()).hexdigest()
     live = load_live_vehicle(repo)
@@ -277,6 +289,234 @@ def export(
     return out
 
 
+# ---------------------------------------------------------------------------------------------
+# v1: bundle and pointer for the net trained on sim plus real self-labels
+# ---------------------------------------------------------------------------------------------
+
+
+def default_model_id_v1(today: dt.date | None = None) -> str:
+    return f"trackperc-v1-{(today or dt.datetime.now(dt.timezone.utc).date()).isoformat()}"
+
+
+def check_pinned(live: LiveVehicle) -> None:
+    """A v0.2 bundle is only ever written for the pinned vehicle_params identity."""
+    if (live.schema_version, live.sysid_session_id) != PINNED_VEHICLE_PARAMS:
+        raise RuntimeError(
+            f"live vehicle_params is {live.schema_version} / {live.sysid_session_id}, a v0.2 "
+            f"bundle pins {PINNED_VEHICLE_PARAMS[0]} / {PINNED_VEHICLE_PARAMS[1]}"
+        )
+
+
+def data_lines_v1(config: dict[str, Any], selection: dict[str, Any] | None) -> list[str]:
+    """What the net was trained on, for the manifest `data` field."""
+    real = config.get("real") or {}
+    lines = [
+        (
+            f"simulated lanes: {Path(config['train']).name} ({config['epochs']} epochs, batch "
+            f"{config['batch_size']}, seed {config['seed']}), validation "
+            f"{Path(config['val']).name}; nuisances per racer_pnp_perception.nuisance"
+        ),
+        (
+            "real self-labels (geometry seen later by the same sensor, no command topic read): "
+            f"{real.get('train_labels', 0)} train labels, share {config.get('real_fraction')} of "
+            f"each batch, mirrored and bin dropout; {real.get('val_labels', 0)} labels held "
+            "back as internal validation"
+        ),
+        "real segments used (role train only): " + ", ".join(real.get("segments_used", [])),
+        f"split pnp-v0.2 SHA-256 {real.get('split_sha256', 'none')}",
+        "never trained on held-out or cross-layout data; held-out scored once, see metrics.gp1",
+    ]
+    if config.get("init"):
+        lines.append(f"initialised from {config['init']} (sim-only v0 weights)")
+    if selection:
+        lines.append(
+            f"seed {selection['selected_seed']} of {sorted(selection['per_seed'])} chosen by "
+            f"{selection['criterion']} (internal validation only)"
+        )
+    return lines
+
+
+def readme_v1(model_id: str, metrics: dict[str, Any]) -> str:
+    """README of the v1 pointer. The first line is the GP1 verdict."""
+    gp1 = metrics["gp1"]
+    lines = [
+        f"GP1 verdict: {gp1['outcome']}",
+        "",
+        f"# {model_id}",
+        "",
+        "Track perception net (`circ_conv1d_v0`) trained on simulated lanes and on self-labels of",
+        "the car's own scans (geometry seen later by the same sensor), role `train` of the",
+        "pre-registered split only. The weights are not committed; the bundle lives in",
+        "`/Users/cameronjim/code/car-data/pnp/models/` on the dev machine. Decision rule:",
+        "`docs/notes/preregistration-pnp-v0.2.md` section 2, evaluated once on the held-out sets.",
+        "",
+        f"Split SHA-256: `{gp1['split_sha256']}`.",
+        "",
+        "| set | backend | labelled scans | E_c (m) | E_far (m) | V | C95 |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for name in ("H-run", "H-layout"):
+        for backend, v in gp1[name].items():
+            lines.append(
+                f"| {name} | {backend} | {v['scans']} | {_fmt(v['e_c_m'])} | {_fmt(v['e_far_m'])} "
+                f"| {_fmt(v['v'])} | {_fmt(v['c95'])} |"
+            )
+    lines += [
+        "",
+        (
+            "| set | backend | moving scans | mean intrusion | residual median (m) "
+            "| deficit p90 (m) | C95 |"
+        ),
+        "|---|---|---|---|---|---|---|",
+    ]
+    for name in ("A-run", "A-layout"):
+        for backend, v in gp1[name].items():
+            lines.append(
+                f"| {name} | {backend} | {v['scans']} | {_fmt(v['intrusion_mean'])} "
+                f"| {_fmt(v['residual_median_m'])} | {_fmt(v['deficit_p90_m'])} "
+                f"| {_fmt(v['c95'])} |"
+            )
+    boot = gp1["bootstrap_e_c_ratio_net_over_geometric_h_run"]
+    lines += [
+        "",
+        (
+            f"Bootstrap of E_c(net) / E_c(geometric) on H-run: {_fmt(boot['ratio'])}, 95 percent "
+            f"interval [{_fmt(boot['lo'])}, {_fmt(boot['hi'])}] ({boot['blocks']} blocks of "
+            f"{boot['block_s']} s, {boot['resamples']} resamples, seed {boot['seed']})."
+        ),
+        "",
+        "| item | result | value |",
+        "|---|---|---|",
+    ]
+    for item in gp1["items"]:
+        lines.append(
+            f"| {item['number']}. {item['name']} | {'pass' if item['passed'] else 'FAIL'} "
+            f"| `{json.dumps(item['value'])}` |"
+        )
+    lines += ["", "| cell | labelled scans | E_c ratio | judged |", "|---|---|---|---|"]
+    for c in gp1["cells"]:
+        lines.append(
+            f"| {c['set']} {c['direction']} {c['speed_bin']} | {c['scans']} | "
+            f"{_fmt(c['ratio'])} | {'yes' if c['judged'] else 'no'} |"
+        )
+    lat = metrics.get("latency_numpy_forward_ms")
+    if lat:
+        lines += [
+            "",
+            (
+                f"Numpy forward latency on the dev Mac, single thread, {lat['scans']} real "
+                f"scans: p50 {_fmt(lat['p50'])} ms, p99 {_fmt(lat['p99'])} ms (a proxy; the "
+                "Orin number is taken at the car)."
+            ),
+        ]
+    lines += ["", "Everything, as stored in the bundle manifest (`metrics.json` is the same):", ""]
+    return "\n".join(lines) + "\n"
+
+
+def write_pointer_v1(repo: Path, bundle_dir: Path, metrics: dict[str, Any]) -> Path:
+    manifest = yaml.safe_load((bundle_dir / "manifest.yaml").read_text())
+    model_id = manifest["model_id"]
+    out = repo / "training" / "pnp_models" / model_id
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(bundle_dir / "manifest.yaml", out / "manifest.yaml")
+    clean = _clean(metrics)
+    (out / "metrics.json").write_text(json.dumps(clean, indent=2, allow_nan=False))
+    (out / "README.md").write_text(readme_v1(model_id, clean))
+    return out
+
+
+def export_v1(
+    run: Path,
+    model_id: str,
+    gp1_result: dict[str, Any] | None,
+    extra_metrics: dict[str, Any],
+    repo: Path,
+    selection: dict[str, Any] | None = None,
+    models_dir: Path = MODELS_DIR,
+) -> Path:
+    """The v1 bundle from a training run directory. `metrics` carries the whole gp1 result. With
+    no gp1 result the bundle is a candidate (GP1 needs a bundle to load, and runs once on it);
+    the final bundle is written again from the same run once GP1 has been decided."""
+    import torch
+
+    from racer_pnp_perception import model
+
+    live = load_live_vehicle(repo)
+    check_pinned(live)
+    net = model.build_model()
+    net.load_state_dict(torch.load(run / "model.pt", map_location="cpu"))
+    net.eval()
+    arrays = model.to_npz_arrays(net)
+    rng = np.random.default_rng(0)
+    x = rng.uniform(0.0, 1.0, size=(8, 2, 360)).astype(np.float32)
+    with torch.no_grad():
+        want = net(torch.from_numpy(x)).numpy()
+    runtime = CircConv1dV0(arrays)
+    worst = max(float(np.abs(runtime.forward(x[i : i + 1]) - want[i]).max()) for i in range(8))
+    if worst > 1e-5:
+        raise RuntimeError(f"numpy runtime differs from torch by {worst}")
+    config = json.loads((run / "config.json").read_text())
+    metrics: dict[str, Any] = {"numpy_vs_torch_max_abs_diff": worst, **extra_metrics}
+    if gp1_result is None:
+        metrics["status"] = "candidate: GP1 not yet decided"
+    else:
+        metrics = {"gp1": gp1_result, "split_sha256": gp1_result["split_sha256"], **metrics}
+    return write_v1_bundle(
+        models_dir / model_id,
+        arrays,
+        live,
+        model_id,
+        hashlib.sha256((run / "config.json").read_bytes()).hexdigest(),
+        git_sha(repo),
+        data_lines_v1(config, selection),
+        metrics,
+    )
+
+
+def write_v1_bundle(
+    out: Path,
+    arrays: dict[str, NDArray[Any]],
+    live: LiveVehicle,
+    model_id: str,
+    config_sha256: str,
+    sha: str,
+    data_lines: list[str],
+    metrics: dict[str, Any],
+) -> Path:
+    """Write the bundle for the pinned identity and check that it loads. Refuses an unpinned
+    vehicle_params."""
+    check_pinned(live)
+    write_bundle_dir(out, arrays, live, model_id, config_sha256, sha, data_lines, _clean(metrics))
+    load_bundle(out, "track_perception", live)
+    return out
+
+
+def main_v1(args: argparse.Namespace) -> int:
+    repo = find_repo_root()
+    gp1_result = json.loads(args.gp1.read_text()) if args.gp1 else None
+    extra: dict[str, Any] = {}
+    if args.sim_json:
+        extra["sim"] = json.loads(args.sim_json.read_text())
+    if args.latency_json:
+        extra["latency_numpy_forward_ms"] = json.loads(args.latency_json.read_text())
+    selection_path = args.run.parent / "selection.json"
+    selection = json.loads(selection_path.read_text()) if selection_path.is_file() else None
+    out = export_v1(args.run, args.model_id, gp1_result, extra, repo, selection, args.models_dir)
+    if gp1_result is None:  # a candidate bundle: no pointer, no fixture
+        print(out)
+        return 0
+    metrics = yaml.safe_load((out / "manifest.yaml").read_text())["metrics"]
+    write_pointer_v1(repo, out, metrics)
+    if args.copy_release_fixture:
+        from racer_pnp_perception import gp1 as gp1_module
+
+        if gp1_result["outcome"] != gp1_module.OUTCOME_PASS:
+            raise SystemExit("GP1 did not pass: the release fixture is not replaced")
+        copy_release_fixture(repo, out)
+    print(out)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--finalize", type=Path, default=None, help="bundle dir to finalize")
@@ -287,7 +527,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--metrics", type=Path, default=None, help="json file of numbers")
     parser.add_argument("--data", action="append", default=[])
     parser.add_argument("--no-copy", action="store_true")
+    parser.add_argument(
+        "--v1", action="store_true", help="export the v1 bundle (see the docstring)"
+    )
+    parser.add_argument("--gp1", type=Path, default=None)
+    parser.add_argument("--latency-json", type=Path, default=None)
+    parser.add_argument("--copy-release-fixture", action="store_true")
+    parser.add_argument("--models-dir", type=Path, default=MODELS_DIR)
     args = parser.parse_args(argv)
+    if args.v1:
+        if args.run is None:
+            parser.error("--v1 needs --run")
+        if args.model_id == default_model_id():
+            args.model_id = default_model_id_v1()
+        return main_v1(args)
     repo = find_repo_root()
     if args.finalize is not None:
         sim = json.loads(args.sim_json.read_text())

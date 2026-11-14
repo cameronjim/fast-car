@@ -101,8 +101,8 @@ DESKEW_TOPIC = "/pnp/scan_deskewed"
 DESKEW_REMAPPING = ("/scan", DESKEW_TOPIC)
 # What M-DSK step A chose on the train role (docs/notes/scan-deskew-2026-11.md). None until then:
 # the launch refuses deskew:=true, so a node never starts on a guess.
-DESKEW_STAMP_IS: str | None = None
-DESKEW_BEAM_ORDER: str | None = None
+DESKEW_STAMP_IS: str | None = "sweep_end"
+DESKEW_BEAM_ORDER: str | None = "index_descending"
 SHADOW_NODE_NAME = "track_perception_shadow"
 SHADOW_REMAPPINGS = [
     ("/pnp/local_track", "/pnp/shadow/local_track"),

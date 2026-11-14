@@ -12,6 +12,7 @@ import {
   patch,
   pnpBody,
   pnpErrors,
+  pnpSpeedLimit,
   pnpSummary,
   pnpWhy,
   prefsProblems,
@@ -76,6 +77,52 @@ describe("ML driver bounds", () => {
     expect(pnpErrors(DEFAULT_PREFS.pnp, options)).toEqual({});
     expect(pnpErrors({ ...DEFAULT_PREFS.pnp, v_max_mps: 1.6 }, options).v_max_mps).toBe("0.2 to 1.5");
     expect(pnpErrors({ ...DEFAULT_PREFS.pnp, v_max_mps: Number.NaN }, options).v_max_mps).toBeDefined();
+  });
+});
+
+describe("ML driver speed cap against the dynamics bundle's validity", () => {
+  // 2026-11-14 on the car: 1.5 m/s was offered, the planner refused it (bundle validity 1.3)
+  // and the launch exited, so the car never moved.
+  const withValidity = {
+    ...options,
+    pnp: {
+      ...options.pnp!,
+      dynamics: ["dyn-v0.1-2026-11-12", "dyn-fast", "dyn-unknown"],
+      dynamics_v_max_mps: { "dyn-v0.1-2026-11-12": 1.3, "dyn-fast": 2.0, "dyn-unknown": null },
+    },
+  } as Options;
+  const cap = (dynamics: string, v_max_mps: number) => pnpErrors({ ...DEFAULT_PREFS.pnp, dynamics, v_max_mps }, withValidity);
+  it("refuses a cap above the selected bundle's validity, naming the bundle", () => {
+    expect(cap("dyn-v0.1-2026-11-12", 1.5).v_max_mps).toBe("max 1.3 m/s for dyn-v0.1-2026-11-12");
+    expect(cap("dyn-v0.1-2026-11-12", 1.31).v_max_mps).toBe("max 1.3 m/s for dyn-v0.1-2026-11-12");
+    expect(prefsProblems(prefs({ pnp: { ...DEFAULT_PREFS.pnp, dynamics: "dyn-v0.1-2026-11-12", v_max_mps: 1.5 } }), withValidity)).toEqual([
+      "ML driver v_max_mps: max 1.3 m/s for dyn-v0.1-2026-11-12",
+    ]);
+  });
+  it("accepts the validity itself and a cap that is sent as it", () => {
+    expect(cap("dyn-v0.1-2026-11-12", 1.3)).toEqual({});
+    expect(cap("dyn-v0.1-2026-11-12", 1.304)).toEqual({});
+  });
+  it("keeps the agent's range when the bundle covers more, or reports nothing", () => {
+    expect(cap("dyn-fast", 1.5)).toEqual({});
+    expect(cap("dyn-fast", 1.6).v_max_mps).toBe("0.2 to 1.5");
+    expect(cap("dyn-unknown", 1.5)).toEqual({});
+    expect(pnpErrors({ ...DEFAULT_PREFS.pnp, v_max_mps: 1.5 }, options)).toEqual({});
+  });
+  it("gives the card's slider range per selected bundle", () => {
+    expect(pnpSpeedLimit({ dynamics: "dyn-v0.1-2026-11-12" }, withValidity)).toEqual({ min: 0.2, max: 1.3, bundle: "dyn-v0.1-2026-11-12" });
+    expect(pnpSpeedLimit({ dynamics: "dyn-fast" }, withValidity)).toEqual({ min: 0.2, max: 1.5, bundle: "" });
+    expect(pnpSpeedLimit({ dynamics: "" }, withValidity)).toEqual({ min: 0.2, max: 1.5, bundle: "" });
+    expect(pnpSpeedLimit({ dynamics: "dyn-a" }, options)).toEqual({ min: 0.2, max: 1.5, bundle: "" });
+  });
+  it("uses the only bundle on offer when none is picked", () => {
+    const one = { ...withValidity, pnp: { ...withValidity.pnp!, dynamics: ["dyn-v0.1-2026-11-12"] } } as Options;
+    expect(pnpSpeedLimit({ dynamics: "" }, one).max).toBe(1.3);
+    expect(pnpErrors({ ...DEFAULT_PREFS.pnp, v_max_mps: 1.5 }, one).v_max_mps).toBe("max 1.3 m/s for dyn-v0.1-2026-11-12");
+  });
+  it("stops the ML driver button", () => {
+    const p = prefs({ pnp: { ...DEFAULT_PREFS.pnp, backend: "geometric", dynamics: "dyn-v0.1-2026-11-12", v_max_mps: 1.5 } });
+    expect(pnpWhy(p, withValidity)).toBe("Fix Tune values");
   });
 });
 

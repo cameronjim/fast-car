@@ -91,6 +91,7 @@
 
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <chrono>
+#include <functional>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <memory>
 #include <nav_msgs/msg/odometry.hpp>
@@ -160,9 +161,28 @@ class TrackerNode : public rclcpp::Node {
         "is a generous ~3x the nominal >=100 Hz /odom period (claude-docs/04-architecture.md), "
         "erring toward not tripping on ordinary jitter.");
 
+    rcl_interfaces::msg::ParameterDescriptor ros_timers_descriptor;
+    ros_timers_descriptor.description =
+        "false (default, and always on the car): the control and lookup timers are WALL timers. "
+        "true: they tick on this node's ROS clock, so with use_sim_time:=true the control loop "
+        "follows /clock (the sim canaries, GitHub issue 156, where sim time must not depend on "
+        "CPU scheduling). Elapsed-time measurement stays on the steady clock either way.";
+    const bool ros_clock_timers =
+        this->declare_parameter<bool>("ros_clock_timers", false, ros_timers_descriptor);
+    // One factory for both timers: wall (the car) or ROS clock (sim canaries).
+    const auto make_timer = [this, ros_clock_timers](
+                                std::chrono::nanoseconds period,
+                                std::function<void()> callback) -> rclcpp::TimerBase::SharedPtr {
+      if (ros_clock_timers) {
+        return rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration(period),
+                                    std::move(callback));
+      }
+      return this->create_wall_timer(period, std::move(callback));
+    };
+
     const auto period = std::chrono::duration<double>(1.0 / control_rate_hz);
-    timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-                                     std::bind(&TrackerNode::on_timer, this));
+    timer_ = make_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+                        std::bind(&TrackerNode::on_timer, this));
 
     if (!pose_frame_.empty()) {
       tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
@@ -170,10 +190,9 @@ class TrackerNode : public rclcpp::Node {
       const double lookup_rate_hz = declare_positive_double(
           "pose_frame_lookup_rate_hz", 25.0,
           "With pose_frame set: how often the pose_frame -> odom transform is looked up.");
-      lookup_timer_ =
-          this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::duration<double>(1.0 / lookup_rate_hz)),
-                                  std::bind(&TrackerNode::on_lookup_timer, this));
+      lookup_timer_ = make_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::duration<double>(1.0 / lookup_rate_hz)),
+                                 std::bind(&TrackerNode::on_lookup_timer, this));
     }
 
     RCLCPP_INFO(this->get_logger(),

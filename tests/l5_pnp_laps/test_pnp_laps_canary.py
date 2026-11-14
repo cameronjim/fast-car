@@ -106,6 +106,7 @@ def run_runner(
         str(SEED),
         "--stop-after-laps",
         str(laps),
+        "--sim-time",
         "--duration",
         str(duration_s),
         "--domain-id",

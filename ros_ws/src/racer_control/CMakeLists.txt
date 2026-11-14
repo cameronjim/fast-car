@@ -264,6 +264,12 @@ if(BUILD_TESTING)
     TARGET test_tracker_node_clock_launch
     TIMEOUT 120
   )
+  # ros_clock_timers (GitHub issue 156): the opt-in sim-time control loop; default (wall
+  # timers) is covered by the tests above.
+  add_launch_test(test/test_tracker_node_ros_clock_launch.py
+    TARGET test_tracker_node_ros_clock_launch
+    TIMEOUT 120
+  )
   # odom_topic + pose_frame (2026-11-03 localisation): the pose is /odom composed with
   # map -> odom from TF; no map -> odom (or a stale one) stops /drive_raw.
   add_launch_test(test/test_tracker_node_pose_frame_launch.py

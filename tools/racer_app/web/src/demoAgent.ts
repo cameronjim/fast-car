@@ -221,7 +221,8 @@ export class DemoCar {
         available: true,
         reason: "",
         perception: ["net-2026-11-04"],
-        dynamics: ["dyn-2026-10-20"],
+        dynamics: ["dyn-2026-10-20", "dyn-v0.1-2026-11-12"],
+        dynamics_v_max_mps: { "dyn-2026-10-20": null, "dyn-v0.1-2026-11-12": 1.3 },
         backends: ["geometric", "net"],
         speed_range: [0.2, 1.5],
         default_speed: 0.5,
@@ -318,12 +319,22 @@ export class DemoCar {
     return null;
   }
 
+  /** The agent's validity refusal (commands.check_pnp_validity), word for word: a cap above the
+   *  dynamics bundle's io.validity.v_max_mps is refused by the planner and the launch exits. */
+  private checkPnpValidity(v: unknown, dynamics: unknown): string | null {
+    const validity = this.options().pnp?.dynamics_v_max_mps?.[String(dynamics ?? "")];
+    const cap = Number(v ?? 0.5);
+    if (typeof validity !== "number" || !Number.isFinite(cap)) return null;
+    if (Number(cap.toFixed(2)) <= validity) return null;
+    return `speed cap ${cap.toFixed(2)} m/s is too fast for ${dynamics}: max ${validity} m/s (the bundle's validity range)`;
+  }
+
   private checkDrive(body: Record<string, unknown>): Reply | null {
     if (!this.containerUp) return fail(409, "the stack is not running");
     if (!this.recorderUp) return fail(409, "the bag recorder is not running (cannot be overridden)", { overridable: false });
     if (this.driveMode) return fail(409, `already driving: ${this.driveMode}`);
     if (body.mode === "pnp") {
-      const bad = this.checkPnpLaps(body);
+      const bad = this.checkPnpLaps(body) ?? this.checkPnpValidity(body.pnp_v_max_mps, body.pnp_dynamics);
       if (bad) return fail(400, bad);
     }
     if (this.lowBattery && !body.override) {
@@ -394,6 +405,8 @@ export class DemoCar {
         if (g && lim && g.max_speed_mps !== null && (g.max_speed_mps < lim.min || g.max_speed_mps > lim.max)) {
           return fail(400, `gap follow max speed for profile ${g.profile} must be between ${lim.min} and ${lim.max} m/s`);
         }
+        const tooFast = next.pnp?.dynamics ? this.checkPnpValidity(next.pnp.v_max_mps, next.pnp.dynamics) : null;
+        if (tooFast) return fail(400, tooFast);
         this.prefs = structuredClone(next);
         this.addLog("prefs.save", true, `record camera ${next.record_camera ? "on" : "off"}`);
         return ok("settings saved", { prefs: this.prefs });

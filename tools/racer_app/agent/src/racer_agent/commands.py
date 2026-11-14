@@ -363,6 +363,8 @@ def ros_cmd_for(
     pnp_params_container_path: str = "",
     pnp_lap: PnpLap | None = None,
     pnp_launch: dict[str, tuple[str, ...] | None] | None = None,
+    pnp_dynamics_name: str = "",
+    pnp_dynamics_v_max_mps: float | None = None,
     max_speed_mps: float | None = None,
     min_speed_mps: float | None = None,
     a_lat_max_mps2: float | None = None,
@@ -425,6 +427,8 @@ def ros_cmd_for(
             pnp_params_container_path,
             pnp_lap or PnpLap(),
             pnp_launch,
+            pnp_dynamics_name,
+            pnp_dynamics_v_max_mps,
         )
     raise CommandError(f"unknown driving mode {mode!r}")
 
@@ -602,6 +606,21 @@ def check_pnp_lap(lap: PnpLap, driving_bundle: str, v_max_mps: float) -> None:
     _pnp_lap_args(lap, driving_bundle, v_max_mps, None)
 
 
+def check_pnp_validity(v_max_mps: float, dynamics_name: str, validity_v_max: float | None) -> None:
+    """Refuse a speed cap above the dynamics bundle's io.validity.v_max_mps: mppi_planner_node
+    refuses it (ValidityExceeded) and the whole launch exits, so the car would never move. The cap
+    is compared as it is sent (two decimals). None means the agent read no validity from the
+    manifest; the planner then refuses the bundle itself."""
+    if validity_v_max is None:
+        return
+    if round(float(v_max_mps), 2) > validity_v_max:
+        name = dynamics_name or "the dynamics bundle"
+        raise CommandError(
+            f"speed cap {float(v_max_mps):.2f} m/s is too fast for {name}: "
+            f"max {validity_v_max:g} m/s (the bundle's validity range)"
+        )
+
+
 def _pnp_cmd(
     perception: str,
     dynamics: str,
@@ -610,6 +629,8 @@ def _pnp_cmd(
     params_file: str = "",
     lap: PnpLap | None = None,
     launch: dict[str, tuple[str, ...] | None] | None = None,
+    dynamics_name: str = "",
+    dynamics_v_max_mps: float | None = None,
 ) -> str:
     """`ros2 launch racer_bringup pnp.launch.py ...` from checked bundle paths, a fixed backend
     and a speed cap formatted here. The nodes refuse any bundle that does not match this car;
@@ -622,6 +643,7 @@ def _pnp_cmd(
     low, high = PNP_SPEED_RANGE
     if not (low <= float(v_max_mps) <= high):
         raise CommandError(f"pnp speed cap must be between {low} and {high} m/s")
+    check_pnp_validity(v_max_mps, dynamics_name, dynamics_v_max_mps)
     dynamics_arg = _pnp_bundle(dynamics, "dynamics bundle")
     if backend == "net":
         driving = _pnp_bundle(perception, "perception bundle")

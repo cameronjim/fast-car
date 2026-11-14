@@ -8,6 +8,7 @@ import pytest
 from fakes import healthy_ros
 from racer_agent import commands as cmd
 from racer_agent.controller import ActionError
+from racer_agent.prefs import Prefs
 
 
 def detached_execs(env):
@@ -608,10 +609,10 @@ def test_heartbeat_unknown_when_systemctl_is_missing(env):
 # -- Plug-and-Play -------------------------------------------------------------------------------
 
 
-def make_pnp_bundle(env, name, kind="dynamics"):
+def make_pnp_bundle(env, name, kind="dynamics", extra=""):
     folder = env.settings.pnp_models_dir / name
     folder.mkdir(parents=True)
-    (folder / "manifest.yaml").write_text(f"kind: {kind}\n")
+    (folder / "manifest.yaml").write_text(f"kind: {kind}\n{extra}")
     return folder
 
 
@@ -724,6 +725,92 @@ def test_pnp_refuses_a_bad_backend_or_speed_before_anything_starts(car):
             )
         assert exc.value.status == 400
     assert not detached_execs(car)
+
+
+VALIDITY_1_3 = "io:\n  validity: {v_min_mps: 0.0, v_max_mps: 1.3}\n"
+
+
+def test_pnp_options_carry_each_dynamics_bundles_validity(car):
+    wire_pnp(car, dynamics=())
+    make_pnp_bundle(car, "dyn-v0.1-2026-11-12", extra=VALIDITY_1_3)
+    make_pnp_bundle(car, "dyn-int", extra="io:\n  validity: {v_max_mps: 1}\n")
+    make_pnp_bundle(car, "dyn-none")
+    make_pnp_bundle(car, "dyn-text", extra="io:\n  validity: {v_max_mps: fast}\n")
+    make_pnp_bundle(car, "dyn-zero", extra="io:\n  validity: {v_max_mps: 0}\n")
+    make_pnp_bundle(car, "dyn-bool", extra="io:\n  validity: {v_max_mps: true}\n")
+    make_pnp_bundle(car, "dyn-io-list", extra="io: [1]\n")
+    make_pnp_bundle(car, "trackperc-x", "track_perception", extra=VALIDITY_1_3)
+    status = car.controller.options()["pnp"]
+    assert status["dynamics_v_max_mps"] == {
+        "dyn-bool": None,
+        "dyn-int": 1.0,
+        "dyn-io-list": None,
+        "dyn-none": None,
+        "dyn-text": None,
+        "dyn-v0.1-2026-11-12": 1.3,
+        "dyn-zero": None,
+    }
+
+
+def test_pnp_refuses_a_cap_above_the_selected_bundles_validity(car):
+    # 2026-11-14 on the car: the app offered 1.5 m/s, mppi_planner_node refused it
+    # (ValidityExceeded, bundle validity 1.3) and the whole launch exited.
+    wire_pnp(car, dynamics=())
+    make_pnp_bundle(car, "dyn-v0.1-2026-11-12", extra=VALIDITY_1_3)
+    with pytest.raises(ActionError) as exc:
+        car.controller.start_drive(
+            "pnp", pnp_backend="geometric", pnp_v_max_mps=1.5, pnp_dynamics="dyn-v0.1-2026-11-12"
+        )
+    assert exc.value.status == 400
+    assert exc.value.message == (
+        "speed cap 1.50 m/s is too fast for dyn-v0.1-2026-11-12: "
+        "max 1.3 m/s (the bundle's validity range)"
+    )
+    assert not detached_execs(car)
+    assert car.last_log()["action"] == "drive.start.pnp" and not car.last_log()["ok"]
+
+
+@pytest.mark.parametrize("speed", [1.3, 1.304])
+def test_pnp_cap_at_the_validity_starts(car, speed):
+    # exactly at the validity starts, and so does a cap that is sent as 1.30
+    wire_pnp(car, dynamics=())
+    make_pnp_bundle(car, "dyn-v0.1-2026-11-12", extra=VALIDITY_1_3)
+    car.controller.start_drive(
+        "pnp", pnp_backend="geometric", pnp_v_max_mps=speed, pnp_dynamics="dyn-v0.1-2026-11-12"
+    )
+    assert "v_max_mps:=1.30" in detached_execs(car)[-1][-1]
+
+
+def test_pnp_cap_above_validity_by_rounding_is_refused(car):
+    wire_pnp(car, dynamics=())
+    make_pnp_bundle(car, "dyn-a", extra=VALIDITY_1_3)
+    with pytest.raises(ActionError, match="too fast for dyn-a"):
+        car.controller.start_drive(
+            "pnp", pnp_backend="geometric", pnp_v_max_mps=1.306, pnp_dynamics="dyn-a"
+        )
+
+
+def test_pnp_validity_is_per_selected_bundle(car):
+    wire_pnp(car, dynamics=())
+    make_pnp_bundle(car, "dyn-slow", extra=VALIDITY_1_3)
+    make_pnp_bundle(car, "dyn-fast", extra="io:\n  validity: {v_max_mps: 1.5}\n")
+    car.controller.start_drive(
+        "pnp", pnp_backend="geometric", pnp_v_max_mps=1.5, pnp_dynamics="dyn-fast"
+    )
+    assert "v_max_mps:=1.50" in detached_execs(car)[-1][-1]
+
+
+def test_pnp_saved_settings_refuse_a_cap_above_the_bundles_validity(car):
+    wire_pnp(car, dynamics=())
+    make_pnp_bundle(car, "dyn-v0.1-2026-11-12", extra=VALIDITY_1_3)
+    prefs = Prefs()
+    prefs.pnp.dynamics = "dyn-v0.1-2026-11-12"
+    prefs.pnp.v_max_mps = 1.5
+    with pytest.raises(ActionError, match="max 1.3 m/s") as exc:
+        car.controller.set_prefs(prefs)
+    assert exc.value.status == 400
+    prefs.pnp.v_max_mps = 1.3
+    car.controller.set_prefs(prefs)
 
 
 def test_pnp_goes_through_the_same_pre_drive_gate_and_recorder_check(car):

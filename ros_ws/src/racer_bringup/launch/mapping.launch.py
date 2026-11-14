@@ -22,6 +22,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 _ODOMETRY_LAUNCH_FILE = str(Path(__file__).resolve().parent / "odometry.launch.py")
@@ -41,8 +42,19 @@ def generate_launch_description() -> LaunchDescription:
         description="slam_toolbox parameters (racer_state/config/slam_toolbox.yaml).",
     )
 
+    use_sim_time_arg = DeclareLaunchArgument(
+        "use_sim_time",
+        default_value="false",
+        description=(
+            "Run the nodes on /clock (the sim bridge's sim_time mode, GitHub issue 156). "
+            "false everywhere on the car."
+        ),
+    )
+    use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
+
     odometry_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(_ODOMETRY_LAUNCH_FILE),
+        launch_arguments={"use_sim_time": LaunchConfiguration("use_sim_time")}.items(),
         condition=IfCondition(LaunchConfiguration("odometry")),
     )
     slam_toolbox_node = Node(
@@ -50,6 +62,8 @@ def generate_launch_description() -> LaunchDescription:
         executable="async_slam_toolbox_node",
         name="slam_toolbox",
         output="screen",
-        parameters=[LaunchConfiguration("slam_params_file")],
+        parameters=[LaunchConfiguration("slam_params_file"), {"use_sim_time": use_sim_time}],
     )
-    return LaunchDescription([odometry_arg, slam_params_arg, odometry_launch, slam_toolbox_node])
+    return LaunchDescription(
+        [odometry_arg, slam_params_arg, use_sim_time_arg, odometry_launch, slam_toolbox_node]
+    )

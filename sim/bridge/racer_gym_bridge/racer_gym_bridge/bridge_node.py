@@ -58,6 +58,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import math
+import time
 
 import gymnasium as gym
 import numpy as np
@@ -68,10 +69,21 @@ from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from racer_tools.spin_guard import spin_until_shutdown
 from rcl_interfaces.msg import FloatingPointRange, IntegerRange, ParameterDescriptor
+from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
+from rclpy.time import Time
+from rosgraph_msgs.msg import Clock as ClockMsg
+from rosidl_runtime_py.utilities import get_message
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from racer_gym_bridge import track_loader
@@ -86,6 +98,7 @@ from racer_gym_bridge.conversions import (
     mirrored_speed_to_accel,
     yaw_to_quaternion,
 )
+from racer_gym_bridge.lockstep import LagGate, SimClock, WallPacer, parse_ack_key
 from racer_gym_bridge.sensor_noise import WheelSpeedNoise, degrade_scan, publish_divider
 from racer_gym_bridge.track_loader import (
     SYNTHETIC_TRACK_NAMES,
@@ -94,6 +107,12 @@ from racer_gym_bridge.track_loader import (
     carve_pocket,
     load_raceline_xy_speed,
     rasterize_walls,
+)
+
+# What rclcpp::ClockQoS is (rclpy in Humble has no qos_profile_clock): the QoS every node's
+# use_sim_time subscription to /clock asks for.
+_CLOCK_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1
 )
 
 _MAP_FRAME_ID = "map"
@@ -389,6 +408,7 @@ class BridgeNode(Node):
             self.declare_parameter("step_rate_hz", 0.0, step_rate_descriptor).value
         )
         self._step_rate_hz = requested_rate if requested_rate > 0.0 else 1.0 / self._env_timestep
+        self._declare_sim_time_parameters()
         self._scan_divider = publish_divider(self._step_rate_hz, self._scan_rate_hz)
         self._wheel_odom_divider = publish_divider(self._step_rate_hz, self._wheel_odom_rate_hz)
         if self._scan_range_max_m > 0.0:
@@ -451,7 +471,17 @@ class BridgeNode(Node):
         self._reset_env()
         self._publish_map_once()
 
-        self._timer = self.create_timer(1.0 / self._step_rate_hz, self._on_timer)
+        if self._sim_clock is None:
+            self._timer = self.create_timer(1.0 / self._step_rate_hz, self._on_timer)
+        else:
+            # Polled finer than the step period; WallPacer and LagGate decide when a step is
+            # taken. A STEADY clock, so the pacing never depends on /clock, which this node
+            # itself publishes.
+            poll_s = max(self._pacer.wall_period_s, 1.0 / self._step_rate_hz) / 4.0
+            self._timer = self.create_timer(
+                poll_s, self._on_timer, clock=Clock(clock_type=ClockType.STEADY_TIME)
+            )
+            self._publish_clock()
 
         self.get_logger().info(
             f"racer_gym_bridge up: stepping at {self._step_rate_hz:.1f} Hz "
@@ -490,6 +520,18 @@ class BridgeNode(Node):
         return target
 
     def _on_timer(self) -> None:
+        if self._sim_clock is None:
+            self._step_once()
+            return
+        wall_s = time.monotonic()
+        if not self._pacer.due(wall_s):
+            return
+        if self._gate is not None and not self._gate.open(self._sim_clock.now_ns, wall_s):
+            return
+        self._pacer.taken(wall_s)
+        self._step_once()
+
+    def _step_once(self) -> None:
         # plant_command_delay_s (default 0): the /drive command acts this long after it arrived.
         speed_command, steering_command = self._plant_command_delay.push(
             (self._latest_speed, self._latest_steering_angle)
@@ -522,6 +564,9 @@ class BridgeNode(Node):
         steering = self._plant_steer_lag.step(steering)
         action = drive_cmd_to_action(steering, longitudinal)
         obs, _reward, terminated, truncated, _info = self.env.step(action)
+        if self._sim_clock is not None:
+            self._sim_clock.tick()
+            self._publish_clock()
         if terminated or truncated:
             if not self._warned_terminated:
                 self.get_logger().warn(
@@ -546,7 +591,7 @@ class BridgeNode(Node):
 
     def _publish(self, obs: dict) -> None:
         agent_obs = obs[_EGO_AGENT_ID]
-        now = self.get_clock().now().to_msg()
+        now = self._stamp()
         step = self._step_count
         self._step_count += 1
 
@@ -1189,6 +1234,139 @@ class BridgeNode(Node):
             "(s); 0 is off.",
         )
 
+    def _declare_sim_time_parameters(self) -> None:
+        """sim_time and its pacing (GitHub issue 156). All off by default: the bridge then
+        stamps with the node clock and steps on a timer, exactly as before."""
+        self._sim_clock: SimClock | None = None
+        self._pacer: WallPacer | None = None
+        self._gate: LagGate | None = None
+        self._clock_pub = None
+        sim_time = bool(
+            self.declare_parameter(
+                "sim_time",
+                False,
+                ParameterDescriptor(
+                    description=(
+                        "Own the clock of the sim: publish /clock, stamp every message with "
+                        "it (one env timestep per step) and pace the steps. Nodes under test "
+                        "run with use_sim_time:=true. See racer_gym_bridge/lockstep.py."
+                    )
+                ),
+            ).value
+        )
+        rtf = float(
+            self.declare_parameter(
+                "real_time_factor_max",
+                1.0,
+                ParameterDescriptor(
+                    description=(
+                        "sim_time: sim time advances at most this many times faster than wall "
+                        "time (1.0: the controllers' wall timers see the command rate they have "
+                        "on the car); 0 = unpaced."
+                    ),
+                    floating_point_range=[
+                        FloatingPointRange(from_value=0.0, to_value=100.0, step=0.0)
+                    ],
+                ),
+            ).value
+        )
+        ack_specs = list(
+            self.declare_parameter(
+                "lockstep_ack",
+                [""],
+                ParameterDescriptor(
+                    description=(
+                        "sim_time: estimator outputs sim time must not lead by more than "
+                        "lockstep_max_lag_s: '<Odometry topic>[:lead_s]', "
+                        "'tf:<child frame>[:lead_s]' or '<pkg>/msg/<Type>@<topic>[:lead_s]' (any "
+                        "message with a header; lead_s: how far ahead of its data the output is "
+                        "stamped, e.g. 0.2 for AMCL's map -> odom). Empty: no gate."
+                    )
+                ),
+            ).value
+        )
+        max_lag_s = float(
+            self.declare_parameter(
+                "lockstep_max_lag_s",
+                0.1,
+                ParameterDescriptor(
+                    description="sim_time: the largest lead of sim time over an acknowledged output (s).",
+                    floating_point_range=[
+                        FloatingPointRange(from_value=0.0, to_value=10.0, step=0.0)
+                    ],
+                ),
+            ).value
+        )
+        timeout_s = float(
+            self.declare_parameter(
+                "lockstep_timeout_s",
+                0.2,
+                ParameterDescriptor(
+                    description=(
+                        "sim_time: wall seconds a shut lockstep gate holds the sim before it "
+                        "opens anyway (a dead node must not hang a run). Kept below the "
+                        "controllers' 0.3 s /odom watchdog."
+                    ),
+                    floating_point_range=[
+                        FloatingPointRange(from_value=0.001, to_value=60.0, step=0.0)
+                    ],
+                ),
+            ).value
+        )
+        if not sim_time:
+            return
+        self._sim_clock = SimClock(1.0 / self._step_rate_hz)
+        self._pacer = WallPacer(1.0 / self._step_rate_hz, rtf)
+        self._clock_pub = self.create_publisher(ClockMsg, "/clock", _CLOCK_QOS)
+        keys = dict(parse_ack_key(spec) for spec in ack_specs if spec)
+        if keys:
+            self._gate = LagGate(keys, max_lag_s, timeout_s)
+            tf_children = {key[3:] for key in keys if key.startswith("tf:")}
+            for key in keys:
+                if key.startswith("tf:"):
+                    continue
+                # "<pkg>/msg/<Type>@<topic>" for any message with a header; a bare topic
+                # is a nav_msgs/Odometry.
+                type_name, at, topic = key.partition("@")
+                msg_type = get_message(type_name) if at else Odometry
+                self.create_subscription(
+                    msg_type,
+                    topic if at else key,
+                    lambda msg, key=key: self._gate.ack(
+                        key, Time.from_msg(msg.header.stamp).nanoseconds
+                    ),
+                    qos_profile_sensor_data,
+                )
+            if tf_children:
+                self.create_subscription(
+                    TFMessage,
+                    "/tf",
+                    lambda msg: self._on_tf_ack(msg, tf_children),
+                    QoSProfile(
+                        reliability=ReliabilityPolicy.BEST_EFFORT,
+                        history=HistoryPolicy.KEEP_LAST,
+                        depth=100,
+                    ),
+                )
+
+    def _on_tf_ack(self, msg: TFMessage, children: set[str]) -> None:
+        for transform in msg.transforms:
+            child = transform.child_frame_id.lstrip("/")
+            if child in children:
+                stamp = Time.from_msg(transform.header.stamp).nanoseconds
+                self._gate.ack(f"tf:{child}", stamp)
+
+    def _stamp(self):
+        """Message stamp: the simulated time with sim_time, the node clock otherwise."""
+        if self._sim_clock is None:
+            return self.get_clock().now().to_msg()
+        return Time(nanoseconds=self._sim_clock.now_ns).to_msg()
+
+    def _publish_clock(self) -> None:
+        msg = ClockMsg()
+        msg.clock = Time(nanoseconds=self._sim_clock.now_ns).to_msg()
+        self._clock_pub.publish(msg)
+
     def _publish_map_once(self) -> None:
         """Publish ``/sim/map`` once (transient_local latches it for later subscribers).
 
@@ -1208,7 +1386,7 @@ class BridgeNode(Node):
             free_thresh=track.spec.free_thresh,
         )
         msg = OccupancyGrid()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = self._stamp()
         msg.header.frame_id = _MAP_FRAME_ID
         msg.info.resolution = fields.resolution
         msg.info.width = fields.width
@@ -1237,7 +1415,7 @@ class BridgeNode(Node):
         physical constant.
         """
         transform = TransformStamped()
-        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.stamp = self._stamp()
         transform.header.frame_id = _BASE_LINK_FRAME_ID
         transform.child_frame_id = _LASER_FRAME_ID
         # The mounted LiDAR's pose relative to the gym's pose when one is configured (roadmap
@@ -1252,6 +1430,12 @@ class BridgeNode(Node):
         self._static_tf_broadcaster.sendTransform(transform)
 
     def destroy_node(self) -> bool:
+        if self._gate is not None:
+            self.get_logger().info(
+                f"lockstep: {self._gate.timeouts} gate timeout(s), "
+                f"{self._gate.blocked_checks} blocked check(s), sim time "
+                f"{self._sim_clock.now_ns * 1e-9:.2f} s."
+            )
         self.env.close()
         return super().destroy_node()
 

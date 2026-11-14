@@ -57,9 +57,10 @@ def internal_validation(net: Any, val: real.RealSet, batch: int = 1000) -> dict[
 
     if len(val) == 0:
         return {SELECTION_KEY: float("nan"), "val_real_efar_m": float("nan"), "val_real_v": 0.0}
-    x = torch.from_numpy(val.tensor)
+    dev = next(net.parameters()).device
+    x = torch.from_numpy(val.tensor).to(dev)
     with torch.no_grad():
-        out = torch.cat([net(x[i : i + batch]) for i in range(0, len(x), batch)]).numpy()
+        out = torch.cat([net(x[i : i + batch]) for i in range(0, len(x), batch)]).cpu().numpy()
     ec, ef, v = [], [], []
     for k in range(len(val)):
         track = net_output_to_track(out[k], 0.25)
@@ -91,6 +92,7 @@ def train(
     scale_aug: bool = False,
     scale_probability: float = 1.0,
     fold: str | None = None,
+    device: str = "cpu",
 ) -> dict[str, Any]:
     import torch
 
@@ -144,16 +146,19 @@ def train(
     n_sim = batch_size - n_real
     if real_train is not None and len(real_train) == 0 and n_real > 0:
         raise ValueError("no real training labels after the role filter")
+    # The device is how the same recipe is run, not part of it; it is recorded in config.json.
+    dev = torch.device(device)
     net = model.build_model()
     if init is not None:
         net.load_state_dict(torch.load(init, map_location="cpu"))
+    net.to(dev)
     log.info("parameters: %d", model.count_parameters(net))
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     steps_per_epoch = len(x_train) // n_sim
     sched = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=lr, total_steps=epochs * steps_per_epoch, pct_start=0.1
     )
-    xv, yv = torch.from_numpy(x_val), torch.from_numpy(y_val)
+    xv, yv = torch.from_numpy(x_val).to(dev), torch.from_numpy(y_val).to(dev)
     history: list[dict[str, float]] = []
     t0 = time.time()
     for epoch in range(epochs):
@@ -162,9 +167,9 @@ def train(
         running = 0.0
         for b in range(steps_per_epoch):
             idx = order[b * n_sim : (b + 1) * n_sim]
-            xb, yb = torch.from_numpy(x_train[idx]), torch.from_numpy(y_train[idx])
+            xb, yb = torch.from_numpy(x_train[idx]).to(dev), torch.from_numpy(y_train[idx]).to(dev)
             if hflip:
-                flip = torch.rand(len(idx)) < 0.5
+                flip = torch.rand(len(idx), device=dev) < 0.5
                 xb = torch.where(flip[:, None, None], xb.flip(-1), xb)
                 yf = yb.clone()
                 yf[..., 1] = -yb[..., 1]
@@ -184,8 +189,8 @@ def train(
                         rt, rl, rv, rng, scale_range, scale_probability, limits, lidar_xy
                     )
                 rx, ry = real.augment_real(rt, rl, rng)
-                xb = torch.cat([xb, torch.from_numpy(rx)])
-                yb = torch.cat([yb, torch.from_numpy(ry)])
+                xb = torch.cat([xb, torch.from_numpy(rx).to(dev)])
+                yb = torch.cat([yb, torch.from_numpy(ry).to(dev)])
                 weight = torch.from_numpy(
                     np.concatenate(
                         [
@@ -193,7 +198,7 @@ def train(
                             station_weights(rv),
                         ]
                     )
-                )
+                ).to(dev)
             loss = model.loss_fn(net(xb), yb, station_weight=weight)
             opt.zero_grad()
             loss.backward()
@@ -219,7 +224,7 @@ def train(
         history.append(row)
         log.info(json.dumps(row))
     out.mkdir(parents=True, exist_ok=True)
-    torch.save(net.state_dict(), out / "model.pt")
+    torch.save({k: v.cpu() for k, v in net.state_dict().items()}, out / "model.pt")
     config = {
         "train": str(train_path),
         "val": str(val_path),
@@ -227,6 +232,8 @@ def train(
         "batch_size": batch_size,
         "lr": lr,
         "seed": seed,
+        "device": device,
+        "torch": torch.__version__,
         "hflip": hflip,
         "real_fraction": real_fraction,
         "init": str(init) if init else None,
@@ -291,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--scale-aug", action="store_true", help="isotropic scale augmentation of real samples"
     )
+    parser.add_argument("--device", default="cpu", help="cpu, mps or cuda (not part of the recipe)")
     parser.add_argument("--scale-probability", type=float, default=1.0)
     parser.add_argument(
         "--fold", default=None, help="a fold of pnp-v0.3.yaml: its held-out bags are not trained on"
@@ -325,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
             args.scale_aug,
             args.scale_probability,
             args.fold,
+            args.device,
         )
         return result["history"]
 

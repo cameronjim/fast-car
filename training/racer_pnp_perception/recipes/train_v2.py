@@ -1,6 +1,6 @@
 """Train one model of the frozen recipe (recipes/v2.yaml).
 
-    uv run --group train --group bags python recipes/train_v2.py <full|F1|F2> <seed> [--out-root DIR]
+    uv run --group train --group bags python recipes/train_v2.py <full|F1|F2> <seed> [--out-root DIR] [--device mps]
 
 Runs `racer_pnp_perception.train.train` with exactly the arguments of the recipe file; nothing is
 typed here. Output: <out-root>/<model>/seed<seed>/ (model.pt, config.json, history.json).
@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("model", choices=["full", "F1", "F2"])
     parser.add_argument("seed", type=int)
     parser.add_argument("--out-root", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--device", default="cpu", help="how it is run, not part of the recipe")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     from racer_pnp_perception import train
@@ -47,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         scale_aug=bool(recipe["added"]["scale_augmentation"]["enabled"]),
         scale_probability=float(recipe["added"]["scale_augmentation"]["probability"]),
         fold=recipe["models"][args.model]["fold"],
+        device=args.device,
     )
     return 0
 

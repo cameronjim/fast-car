@@ -89,10 +89,13 @@ def stream_lines(
     clip_speed_mps: float | None = None,
     preroll_s: float = PREROLL_S,
     tick_s: float = TICK_S,
+    tick_times: Iterable[float] | None = None,
 ) -> list[str]:
     """The stream of a segment [t_from, t_to] (bag seconds). `tracks` is required for mode
     replay and must cover the scans of [t_from - preroll_s, t_to]. `clip_speed_mps` feeds
-    min(wheel speed, clip) as the odometry (replay only: it is not what the car measured)."""
+    min(wheel speed, clip) as the odometry (replay only: it is not what the car measured).
+    `tick_times` (bag seconds) replaces the uniform tick grid: the recorded publish times of a
+    run, with the bunching and gaps the car had (the rate limit allowance metric needs them)."""
     if tracks_mode not in TRACK_MODES:
         raise ValueError(f"tracks must be one of {TRACK_MODES}, got {tracks_mode!r}")
     if tracks_mode == "replay" and tracks is None:
@@ -164,9 +167,12 @@ def stream_lines(
                     ),
                 )
             )
-    n_ticks = math.floor((t_to - t_from) / tick_s + 1e-9) + 1
-    for k in range(n_ticks):
-        t = t_from + k * tick_s
+    if tick_times is None:
+        n_ticks = math.floor((t_to - t_from) / tick_s + 1e-9) + 1
+        grid = [t_from + k * tick_s for k in range(n_ticks)]
+    else:
+        grid = sorted(float(t) for t in tick_times if t_from <= t <= t_to)
+    for t in grid:
         events.append((t, 1, f"K {t:.6f}"))
     events.sort(key=lambda e: (e[0], e[1]))
     return [line for _, _, line in events]

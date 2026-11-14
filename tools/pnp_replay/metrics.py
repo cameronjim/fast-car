@@ -15,7 +15,9 @@ Planner, over the ticks that had a scan under 0.35 s old and odometry under 0.10
   tick to tick change of the steering command over DRIVING ticks (std, sign flips per second,
   p99 of the absolute value), the solve time (of the machine that ran the replay) and, when the
   segment has a recorded status, the share of ticks in the same state as the recorded one
-  nearest in time.
+  nearest in time. And the rate allowance count (`rate_allowance`): the consecutive-publish pairs
+  whose steering step, or growth of the speed's magnitude, exceeds 0.45 of the vehicle's rate
+  limit times the elapsed time between the two publishes (elapsed clamped to one tick).
 """
 
 from __future__ import annotations
@@ -57,6 +59,10 @@ BLOCK_REASONS = {
 }
 STATE_BLOCKED = 5
 STATE_RECOVERING = 7
+RATE_ALLOWANCE_FRACTION = 0.45
+# Float noise of the CSV (9 significant digits) and of the float32 the planner publishes.
+ALLOWANCE_REL_TOL = 1e-6
+ALLOWANCE_ABS_TOL = 1e-9
 
 
 def _nan() -> float:
@@ -184,6 +190,46 @@ def steering_change_stats(
     }
 
 
+def rate_allowance(
+    now_s: NDArray[np.float64],
+    steering: NDArray[np.float64],
+    speed: NDArray[np.float64],
+    steering_max_rate_rad_per_s: float,
+    max_acceleration_mps2: float,
+    tick_s: float,
+    fraction: float = RATE_ALLOWANCE_FRACTION,
+) -> dict[str, Any]:
+    """Over every pair of consecutive publishes (planner ticks): how many steered by more than
+    fraction * steering rate limit * elapsed, how many sped up (the speed's magnitude grew, a
+    reverse command too; a change of sign counts as growth from zero) by more than
+    fraction * acceleration limit * elapsed, and how many did either. `elapsed` is the time
+    between the two ticks clamped to one tick (`tick_s`), so two ticks bunched together get a
+    smaller allowance and a gap does not get a larger one. Non finite commands are skipped."""
+    n = len(now_s)
+    if n < 2:
+        return {"pairs": 0, "steering": 0, "speed_up": 0, "violation_pairs": 0,
+                "fraction": fraction}  # fmt: skip
+    elapsed = np.clip(np.diff(np.asarray(now_s, dtype=np.float64)), 0.0, tick_s)
+    steer = np.asarray(steering, dtype=np.float64)
+    v = np.asarray(speed, dtype=np.float64)
+    ds = np.abs(np.diff(steer))
+    same_sign = np.sign(v[1:]) * np.sign(v[:-1]) >= 0
+    grow = np.where(same_sign, np.abs(v[1:]) - np.abs(v[:-1]), np.abs(v[1:]))
+    allow_s = fraction * steering_max_rate_rad_per_s * elapsed
+    allow_v = fraction * max_acceleration_mps2 * elapsed
+    finite = np.isfinite(steer[1:] + steer[:-1]) & np.isfinite(v[1:] + v[:-1])
+    with np.errstate(invalid="ignore"):
+        bad_s = finite & (ds > allow_s * (1.0 + ALLOWANCE_REL_TOL) + ALLOWANCE_ABS_TOL)
+        bad_v = finite & (grow > allow_v * (1.0 + ALLOWANCE_REL_TOL) + ALLOWANCE_ABS_TOL)
+    return {
+        "pairs": n - 1,
+        "steering": int(bad_s.sum()),
+        "speed_up": int(bad_v.sum()),
+        "violation_pairs": int((bad_s | bad_v).sum()),
+        "fraction": fraction,
+    }
+
+
 def planner_metrics(
     now_s: NDArray[np.float64],
     state: NDArray[np.integer],
@@ -198,11 +244,13 @@ def planner_metrics(
     recorded_state: NDArray[np.integer] | None = None,
     track_confidence: NDArray[np.float64] | None = None,
     block_reason: NDArray[np.integer] | None = None,
+    rate_limits: tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
     """Planner numbers over the eligible ticks of a replay (see the module docstring). The
     speed shares do not count RECOVERING ticks (a reverse command is neither a stop nor a
     crawl); those are counted on their own, and the steering change statistics use only the
-    changes between two consecutive DRIVING ticks."""
+    changes between two consecutive DRIVING ticks. `rate_limits` is (steering max rate rad/s,
+    max acceleration m/s^2, tick s) for the rate allowance count, which covers every tick."""
     ok = eligible_ticks(now_s, scan_age_s, odom_t)
     t, st = now_s[ok], np.asarray(state)[ok]
     v, steer = cmd_speed_mps[ok], cmd_steering_rad[ok]
@@ -233,6 +281,10 @@ def planner_metrics(
             "p99": _stat(np.percentile, solve_time_s[ok][solved] * 1e3, 99),
         },
     }
+    if rate_limits is not None:
+        out["rate_allowance"] = rate_allowance(
+            now_s, cmd_steering_rad, cmd_speed_mps, rate_limits[0], rate_limits[1], rate_limits[2]
+        )
     if track_confidence is not None and n:
         out["track_confidence_mean"] = _stat(np.mean, track_confidence[ok])
     if block_reason is not None and n:

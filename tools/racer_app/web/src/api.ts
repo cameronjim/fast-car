@@ -26,7 +26,8 @@ export interface Status {
   time: number;
   checks: { overall: "green" | "amber" | "red"; ready: boolean; checks: Check[] };
   stack: { running: boolean; recorder: boolean; flags: Record<string, string> };
-  cameras: { running: boolean };
+  /** record: does the RUNNING camera container feed the bag (null while the cameras are off). */
+  cameras: { running: boolean; record?: boolean | null };
   drive: { mode: string | null; running: boolean; external?: ExternalDrive[] };
   containers: Record<string, string>;
   disk_free_gb: number | null;
@@ -79,6 +80,36 @@ export interface BagInfo {
   active: boolean;
   /** MB/s over the last 30 s; only on the active bag, null until two samples exist. */
   growth_mb_s?: number | null;
+}
+
+/** GET /api/bags: the runs, the disk they are on, and what the copy hint needs. */
+export interface BagsReply {
+  bags: BagInfo[];
+  disk_free_gb: number | null;
+  disk?: { total_gb: number | null; used_gb: number | null; free_gb: number | null };
+  bags_mb?: number;
+  bag_dir?: string;
+  user?: string;
+}
+
+/** The owner's saved drive settings (the Tune tab), kept on the car. null: the profile's own. */
+export interface Prefs {
+  record_camera: boolean;
+  stack: { mode: "teleop" | "mapping" | "localization"; map: string };
+  gap_follow: {
+    profile: string;
+    max_speed_mps: number | null;
+    min_speed_mps: number | null;
+    a_lat_max_mps2: number | null;
+    side_cap_min_speed_mps: number | null;
+  };
+  pnp: { v_max_mps: number; backend: string; dynamics: string; perception: string; params_file: string };
+  tracker: { raceline: string };
+}
+
+export interface PrefsReply {
+  prefs: Prefs;
+  defaults: Prefs;
 }
 
 export interface LogEntry {
@@ -219,7 +250,10 @@ export class Api {
   status = () => this.call<Status>("GET", "/api/status");
   options = () => this.call<Options>("GET", "/api/options");
   vehicle = () => this.call<import("./model").VehicleInfo>("GET", "/api/vehicle");
-  bags = () => this.call<{ bags: BagInfo[]; disk_free_gb: number | null }>("GET", "/api/bags");
+  bags = () => this.call<BagsReply>("GET", "/api/bags");
+  prefs = () => this.call<PrefsReply>("GET", "/api/prefs");
+  savePrefs = (p: Prefs) => this.call<ActionReply & { prefs?: Prefs }>("POST", "/api/prefs", p);
+  cleanup = () => this.call<ActionReply & { output?: string }>("POST", "/api/system/cleanup", { confirm: "cleanup" });
   log = (limit = 40) => this.call<{ entries: LogEntry[] }>("GET", `/api/log?limit=${limit}`);
   driveLog = () => this.call<{ log: string }>("GET", "/api/drive/log");
 
@@ -249,6 +283,8 @@ export class Api {
     pnp_params?: string;
     max_speed_mps?: number;
     min_speed_mps?: number;
+    a_lat_max_mps2?: number;
+    side_cap_min_speed_mps?: number;
   }) => this.call<ActionReply>("POST", "/api/drive/start", b);
   startPerception = (b: { mode: string; device: string }) =>
     this.call<ActionReply>("POST", "/api/perception/start", b);

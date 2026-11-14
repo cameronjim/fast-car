@@ -31,7 +31,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pnp_replay import bag as bagmod
-from pnp_replay import metrics, perception, planner_stream, report, segments
+from pnp_replay import metrics, perception, planner_stream, report, segments, vehicle
 
 log = logging.getLogger("pnp_replay")
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +77,29 @@ def parse_strides(items: list[str]) -> tuple[int, dict[str, int]]:
     return default, per
 
 
+def parse_windows(items: list[str]) -> list[segments.Segment]:
+    out = []
+    for item in items:
+        name, sep, span = item.partition("=")
+        a, sep2, b = span.partition(":")
+        if not sep or not sep2 or not name.strip():
+            raise ValueError(f"--window wants NAME=FROM:TO (bag seconds), got {item!r}")
+        if float(b) <= float(a):
+            raise ValueError(f"--window {name}: TO must be after FROM")
+        out.append(segments.Segment(name.strip(), "window", float(a), float(b)))
+    return out
+
+
+def parse_v_max_segments(items: list[str]) -> dict[str, float]:
+    out = {}
+    for item in items:
+        name, sep, v = item.partition("=")
+        if not sep or not name.strip():
+            raise ValueError(f"--v-max-segment wants SEGMENT=m_per_s, got {item!r}")
+        out[name.strip()] = float(v)
+    return out
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("bag", type=Path, help="bag directory, .mcap file, or a recording .npz")
@@ -110,6 +133,28 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-planner", action="store_true", help="perception only")
     ap.add_argument("--dynamics-bundle", type=Path, help="dynamics bundle (the planner's)")
     ap.add_argument("--v-max", type=float, default=0.4, help="planner speed cap (m/s)")
+    ap.add_argument(
+        "--v-max-segment",
+        action="append",
+        default=[],
+        metavar="SEG=M_S",
+        help="planner speed cap for one segment (runs with different caps in one file)",
+    )
+    ap.add_argument(
+        "--window",
+        action="append",
+        default=[],
+        metavar="NAME=FROM:TO",
+        help="a named window in bag seconds, selectable with --segment (e.g. P0=16.6:113.9)",
+    )
+    ap.add_argument(
+        "--ticks",
+        choices=("uniform", "recorded"),
+        default="uniform",
+        help="planner ticks every 0.02 s (default), or at the arrival times of the recorded\n"
+        "/pnp/planner/status of a PnP run (the car's bunching and gaps; the rate\n"
+        "allowance count needs them). Segments with no status use the uniform grid.",
+    )
     ap.add_argument(
         "--set",
         action="append",
@@ -167,6 +212,7 @@ def run_segment(
     work: Path,
     params: dict[str, float | bool],
     stride: int,
+    v_max: float,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
     """One segment: perception metrics, fidelity, planner replay. Returns the segment's result,
     the per-scan arrays for pooling and whether the fidelity check (if asked) passed."""
@@ -176,6 +222,8 @@ def run_segment(
         "t_to": seg.t_to,
         "duration_s": seg.duration_s,
     }
+    if not args.no_planner:
+        result["v_max_mps"] = v_max
     log.info("%s: bag %.1f-%.1f s", seg.name, seg.t_from, seg.t_to)
     ext = planner_stream.scan_indices(rec, seg.t_from - planner_stream.PREROLL_S, seg.t_to)
     log.info("%s: perception over %d scans", seg.name, len(ext))
@@ -207,6 +255,13 @@ def run_segment(
     if args.no_planner:
         return result, arrays, fidelity_ok
 
+    limits = vehicle.load_vehicle_limits()
+    recorded_ticks = None
+    if args.ticks == "recorded":
+        in_seg = (rec["st_t"] >= seg.t_from) & (rec["st_t"] <= seg.t_to)
+        if in_seg.any():
+            recorded_ticks = rec["st_t"][in_seg]
+    result["ticks"] = "recorded" if recorded_ticks is not None else "uniform"
     lines = planner_stream.stream_lines(
         rec,
         seg.t_from,
@@ -214,16 +269,15 @@ def run_segment(
         tracks_mode=args.tracks,
         tracks=tracks,
         track_latency_s=args.track_latency_s,
-        clip_speed_mps=(
-            args.v_max if args.clip_speed_to_cap and not seg.has_planner_status else None
-        ),
+        clip_speed_mps=(v_max if args.clip_speed_to_cap and not seg.has_planner_status else None),
+        tick_times=recorded_ticks,
     )
     stream_path = work / f"{seg.name}.stream.txt"
     planner_stream.write_stream(lines, stream_path)
     csv_path = work / f"{seg.name}.planner.csv"
     log.info("%s: planner replay, %d stream lines", seg.name, len(lines))
     rows = planner_stream.run_cli(
-        args.cli_obj, args.dynamics_bundle, args.v_max, params, stream_path, csv_path
+        args.cli_obj, args.dynamics_bundle, v_max, params, stream_path, csv_path
     )
     if not args.keep_stream:
         stream_path.unlink(missing_ok=True)
@@ -242,6 +296,11 @@ def run_segment(
         recorded_state=recorded[1] if recorded else None,
         track_confidence=rows.get("track_confidence"),
         block_reason=rows.get("block_reason"),
+        rate_limits=(
+            limits.steering_max_rate_rad_per_s,
+            limits.max_acceleration_mps2,
+            planner_stream.TICK_S,
+        ),
     )
     result["planner"]["parameters"] = {k: v for k, v in sorted(params.items())}
     if recorded:
@@ -267,6 +326,7 @@ def _main(args: argparse.Namespace) -> int:
     cache = args.cache or out.parent / f"{args.bag.name}.recording.npz"
     rec = bagmod.load_recording(args.bag, cache)
     found = segments.find_segments(rec["st_t"], rec["odom_t"], rec["odom_v"])
+    found += parse_windows(args.window)
     if args.list_segments:
         for s in found:
             print(
@@ -287,6 +347,7 @@ def _main(args: argparse.Namespace) -> int:
         args.cli_obj = planner_stream.find_cli(args.cli)
     params = parse_sets(args.set)
     seg_params = parse_segment_sets(args.set_segment)
+    v_max_segments = parse_v_max_segments(args.v_max_segment)
     default_stride, strides = parse_strides(args.stride)
     perceiver = perception.build_perceiver(args.backend, args.perception_bundle)
 
@@ -320,7 +381,14 @@ def _main(args: argparse.Namespace) -> int:
         for seg in chosen:
             p = {**params, **seg_params.get(seg.name, {})}
             seg_result, arrays, ok = run_segment(
-                seg, rec, args, perceiver, work, p, strides.get(seg.name, default_stride)
+                seg,
+                rec,
+                args,
+                perceiver,
+                work,
+                p,
+                strides.get(seg.name, default_stride),
+                v_max_segments.get(seg.name, args.v_max),
             )
             all_ok = all_ok and ok
             result["segments"][seg.name] = seg_result

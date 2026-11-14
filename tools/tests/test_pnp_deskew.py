@@ -172,3 +172,55 @@ def test_the_hypotheses_are_the_four_combinations() -> None:
         for s in ("sweep_start", "sweep_end")
         for o in ("index_ascending", "index_descending")
     }
+
+
+# -- step B, items 1 and 2 with a stub scorer ---------------------------------------------------------
+
+
+class _StubEv:
+    """Stands in for pnp_deskew_eval: recordings are small dicts and pair_scores returns RMS values
+    that are 0.6 times raw for the deskewed condition (corner scans) and equal (other scans)."""
+
+    def recording(self, bag):
+        return {"bag": bag}
+
+    def pair_scores(self, rec, fast, slow, condition, which, fast_corner, ignore, veh, workers):
+        n = 40 if which == "corner" else 10
+        rng = np.random.default_rng(7 if which == "corner" else 8)
+        raw = rng.uniform(0.012, 0.016, n)
+        gain = 0.6 if (condition != "raw" and which == "corner") else 1.0
+        return {
+            "scan_index": np.arange(n),
+            "t_s": fast.t_from + np.arange(n) * 0.1,
+            "rms_m": raw * gain,
+            "passed_through": 0,
+        }
+
+
+def test_items_1_and_2_pass_a_clear_gain_and_report_the_bootstrap(monkeypatch) -> None:
+    import yaml
+    from pnp_deskew import stepb
+
+    monkeypatch.setattr(stepb.vehicle, "load_vehicle", lambda: None)
+    monkeypatch.setattr(stepb.matching, "self_returns", lambda rec, veh: frozenset())
+    split = yaml.safe_load((stepb.REPO_ROOT / "evaluation/prereg/pnp-v0.2-split.yaml").read_text())
+    cfg = {
+        "result_pairs": [
+            {"fast": "R8", "slow": "R3", "direction": "ccw"},
+            {"fast": "R7b", "slow": "R4", "direction": "cw"},
+        ],
+        "fast_corner": {"min_wheel_speed_mps": 0.6, "min_abs_yaw_rate_radps": 0.5},
+    }
+    out = stepb.items_1_2(_StubEv(), cfg, split, "sweep_end/index_descending", 1)
+    assert out["item1"]["ratio"] == pytest.approx(0.6, abs=1e-9)
+    assert out["item1"]["ci95_hi"] < 1.0 and out["item1"]["passed"] is True
+    assert out["item2"]["ratio"] == pytest.approx(1.0) and out["item2"]["passed"] is True
+    assert out["item1"]["paired_scored"] == 80 and out["item1"]["blocks"] == 4  # 4 s per pair, 2 s blocks
+    assert set(out["pairs"]) == {"R8/R3", "R7b/R4"}
+
+
+def test_clean_turns_nan_into_null() -> None:
+    from pnp_deskew import stepb
+
+    cleaned = stepb._clean({"a": np.float64("nan"), "b": [np.int64(2)], "c": np.bool_(True)})
+    assert cleaned == {"a": None, "b": [2], "c": True}

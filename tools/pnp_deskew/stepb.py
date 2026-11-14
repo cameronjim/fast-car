@@ -212,13 +212,18 @@ def item_3(ev: Any, split: dict[str, Any], chosen: str) -> dict[str, Any]:
 
 
 def item_4(
-    ev: Any, split: dict[str, Any], chosen: str, out_dir: Path, cli_path: str | None, bundle: Path
+    ev: Any,
+    split: dict[str, Any],
+    chosen: str,
+    out_dir: Path,
+    cli_path: str | None,
+    bundle: Path,
+    names: tuple[str, ...] = tuple(f"R{i}" for i in range(9)),
 ) -> dict[str, Any]:
     from pnp_replay import bag as bagmod
     from pnp_replay import perception, planner_stream
 
     bag_name = "2026-11-13T22-20-18_car_teleop"
-    names = tuple(f"R{i}" for i in range(9))
     specs = yaw_run.split_segments(split, names)
     caps = {
         s["name"]: float(s["cap_mps"])

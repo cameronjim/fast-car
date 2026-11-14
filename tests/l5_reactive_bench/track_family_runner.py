@@ -200,7 +200,8 @@ def pnp_timing_summary(recording, planner_status: list[tuple[float, int]]) -> di
                           and the largest first non-zero speed after the command had been 0.
     """
     out: dict = {}
-    drive = recording.drive_raw  # (stamp, speed, steering)
+    # (stamp, speed, steering); a planner on use_sim_time stamps 0 until its first /clock arrives
+    drive = [d for d in recording.drive_raw if d[0] > 0.0]
     first_nonzero = next((t for t, v, _ in drive if v != 0.0), None)
     last_status = planner_status[-1][0] if planner_status else None
     if first_nonzero is not None and last_status is not None:

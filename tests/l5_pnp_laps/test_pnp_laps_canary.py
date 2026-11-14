@@ -71,7 +71,14 @@ def ceiling_mps() -> float:
     )
 
 
-def run_runner(tmp_path: Path, domain: int, mode: str, laps: int, duration_s: float) -> dict:
+def run_runner(
+    tmp_path: Path,
+    domain: int,
+    mode: str,
+    laps: int,
+    duration_s: float,
+    v_max_mps: float | None = None,
+) -> dict:
     out = tmp_path / "result.json"
     command = [
         sys.executable,
@@ -88,7 +95,7 @@ def run_runner(tmp_path: Path, domain: int, mode: str, laps: int, duration_s: fl
         str(BUNDLE),
         *plant_flags(),
         "--v-max-mps",
-        str(ceiling_mps()),
+        str(ceiling_mps() if v_max_mps is None else v_max_mps),
         "--v-lap1-mps",
         str(LAP1_CAP_MPS),
         "--lap-memory",
@@ -154,7 +161,11 @@ def test_the_lap_memory_counts_the_laps_with_the_start_scan_source_and_the_cap_r
 
 
 def test_the_gate_does_not_close_at_half_a_lap(tmp_path, capsys):
-    result = run_runner(tmp_path, domain=84, mode="off", laps=1, duration_s=13.0)
+    # D off at the lap-1 cap (condition a): the car drives about 0.45 m/s, so 15 s from the first
+    # odometry sample is about 0.6 of the 9.65 m lap
+    result = run_runner(
+        tmp_path, domain=84, mode="off", laps=1, duration_s=15.0, v_max_mps=LAP1_CAP_MPS
+    )
     loop = result["loop_length_m"]
     with capsys.disabled():
         print(

@@ -409,6 +409,29 @@ def readme_v1(model_id: str, metrics: dict[str, Any]) -> str:
                 "Orin number is taken at the car)."
             ),
         ]
+    sim = metrics.get("sim") or {}
+    v0 = metrics.get("sim_v0_held_out_net_raw") or {}
+    if sim.get("held_out"):
+        keys = (
+            "centreline_err_median_stations_0_7_m",
+            "centreline_err_median_stations_8_15_m",
+            "half_width_err_median_m",
+        )
+        lines += [
+            "",
+            (
+                "Simulation, held-out family tracks, net raw output, median error in metres "
+                "(v1 next to v0, no threshold):"
+            ),
+            "",
+            "| track | centreline 0-7 v1 / v0 | centreline 8-15 v1 / v0 | half width v1 / v0 |",
+            "|---|---|---|---|",
+        ]
+        for name, res in sim["held_out"].items():
+            cells = [
+                f"{_fmt(res['net_raw'][k])} / {_fmt((v0.get(name) or {}).get(k))}" for k in keys
+            ]
+            lines.append(f"| {name} | " + " | ".join(cells) + " |")
     lines += ["", "Everything, as stored in the bundle manifest (`metrics.json` is the same):", ""]
     return "\n".join(lines) + "\n"
 
@@ -497,6 +520,10 @@ def main_v1(args: argparse.Namespace) -> int:
     extra: dict[str, Any] = {}
     if args.sim_json:
         extra["sim"] = json.loads(args.sim_json.read_text())
+        v0 = repo / "training" / "pnp_models" / "trackperc-v0-2026-11-11" / "metrics.json"
+        if v0.is_file():  # the sim-only v0 net's numbers, for the comparison in the README
+            held = json.loads(v0.read_text()).get("sim_held_out", {})
+            extra["sim_v0_held_out_net_raw"] = {k: v["net_raw"] for k, v in held.items()}
     if args.latency_json:
         extra["latency_numpy_forward_ms"] = json.loads(args.latency_json.read_text())
     selection_path = args.run.parent / "selection.json"

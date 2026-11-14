@@ -83,6 +83,12 @@ def fake_gp1(outcome: str = gp1.OUTCOME_NO_BETTER) -> dict[str, Any]:
     }
 
 
+SIM_NET = {
+    "centreline_err_median_stations_0_7_m": 0.012,
+    "centreline_err_median_stations_8_15_m": 0.044,
+    "half_width_err_median_m": 0.02,
+}
+
 CONFIG = {
     "train": "/x/trackperc-v0-train-s0-n300000.npz",
     "val": "/x/trackperc-v0-val-s0-n20000.npz",
@@ -106,6 +112,8 @@ def v1_bundle(tmp_path: Path, live: LiveVehicle) -> Path:
         "gp1": fake_gp1(),
         "split_sha256": SPLIT_SHA,
         "latency_numpy_forward_ms": {"p50": 0.9, "p99": 1.4, "scans": 2000},
+        "sim": {"held_out": {"trackA": {"net_raw": SIM_NET}}},
+        "sim_v0_held_out_net_raw": {"trackA": {**SIM_NET, "half_width_err_median_m": 0.01}},
     }
     return ex.write_v1_bundle(
         tmp_path / "trackperc-v1-2026-11-14",
@@ -161,6 +169,7 @@ def test_the_pointer_has_the_verdict_first_and_no_weights(v1_bundle: Path, tmp_p
     readme = (out / "README.md").read_text()
     assert readme.splitlines()[0] == f"GP1 verdict: {gp1.OUTCOME_NO_BETTER}"
     assert "| H-run | net | 700 |" in readme and "FAIL" in readme and "p99 1.400 ms" in readme
+    assert "| trackA | 0.012 / 0.012 | 0.044 / 0.044 | 0.020 / 0.010 |" in readme
     assert "—" not in readme
     assert json.loads((out / "metrics.json").read_text())["split_sha256"] == SPLIT_SHA
 

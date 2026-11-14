@@ -91,6 +91,11 @@ def test_yaw_gain_is_piecewise_linear_and_held_outside_the_knots() -> None:
         {"wheelbase_m": 0.33, "arm_fraction": 0.0},
         {"wheelbase_m": 0.33, "arm_fraction": 1.5},
         {"wheelbase_m": 0.33, "missed_factor": 1.0},
+        {"wheelbase_m": 0.33, "strong_max_violation": 1.5},
+        {"wheelbase_m": 0.33, "strong_max_violation": -0.1},
+        {"wheelbase_m": 0.33, "consensus_window_m": 0.0},
+        {"wheelbase_m": 0.33, "consensus_past_m": -0.1},
+        {"wheelbase_m": 0.33, "consensus_wait_s": -1.0},
     ],
 )
 def test_bad_configs_are_refused(kw: dict) -> None:

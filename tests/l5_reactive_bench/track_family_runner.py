@@ -242,10 +242,12 @@ def rescore_from_start_scan(
 def first_scan_at_or_after(scan_stamps: list[float], t_s: float | None) -> float | None:
     """The header stamp of the first /scan stamped at or after `t_s`, or None. The start line of
     the ground truth is the pose at this stamp (pre-registration 1.3: the first /scan after the
-    planner first reported DRIVING, `t_s` being that report's header stamp). Defined by stamps, not
-    by the order in which this process happened to receive the messages: its own spin loop lags
-    the scan subscription by seconds in a busy run (a_S1_ccw_13 of the 2026-11-14 acceptance run
-    saw the first scan 1.9 s late)."""
+    planner first reported DRIVING, `t_s` being the wall time this process received that report; every
+    node and the simulator's scans share that clock). Defined by stamps, not by the order in which
+    this process happened to receive the scans: its own spin loop lags the scan subscription by
+    seconds in a busy run (a_S1_ccw_13 of the 2026-11-14 acceptance run saw the first scan 1.9 s
+    late). The report's own header stamp is not used: the planner stamps its first DRIVING status
+    about 2 s after it was received (a_T2_ccw_12)."""
     if t_s is None:
         return None
     later = [t for t in scan_stamps if t >= t_s]
@@ -981,7 +983,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                         lap_status,
                         driving_first[0] if driving_first else None,
                         first_scan_at_or_after(
-                            scan_stamps, next((t for t, st in planner_status if st == 1), None)
+                            scan_stamps, driving_first[0] if driving_first else None
                         ),
                         rescore_from_start_scan(
                             recording.odom, lap_tracker._xs, lap_tracker._ys, lap_events

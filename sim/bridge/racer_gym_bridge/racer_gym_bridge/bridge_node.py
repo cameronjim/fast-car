@@ -67,6 +67,7 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from f1tenth_gym.envs.track import Track
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
+from racer_tools.spin_guard import spin_until_shutdown
 from rcl_interfaces.msg import FloatingPointRange, IntegerRange, ParameterDescriptor
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
@@ -1443,15 +1444,8 @@ def main(args: list[str] | None = None) -> None:
     rclpy.init(args=args)
     node = BridgeNode()
     try:
-        rclpy.spin(node)
-    except RuntimeError:
-        # GitHub issue 50: a SIGINT that lands while rclpy is taking a message surfaces as
-        # "RuntimeError: Unable to convert call argument to Python object" from inside rclpy's
-        # take_message, after rclpy's own SIGINT handler has already shut the context down. Seen
-        # twice in one local run of the L5 jobs (2026-11-03), always at test teardown. Only that
-        # case is swallowed: with the context still up it is a real error and is re-raised.
-        if rclpy.ok():
-            raise
+        # GitHub issue 50: spin_until_shutdown swallows the shutdown-race RuntimeError.
+        spin_until_shutdown(node)
     finally:
         node.destroy_node()
         # rclpy installs its own SIGINT handler that already calls

@@ -34,6 +34,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 
 from racer_tools.raceline_loader import RacelineLoadError, load_raceline_points
 from racer_tools.raceline_path_builder import raceline_path_fields
+from racer_tools.spin_guard import spin_until_shutdown
 
 _MAP_FRAME_ID = "map"
 
@@ -115,7 +116,7 @@ def main(args: list[str] | None = None) -> None:
     rclpy.init(args=args)
     node = RacelinePublisherNode()
     try:
-        rclpy.spin(node)
+        spin_until_shutdown(node)
     finally:
         node.destroy_node()
         if rclpy.ok():

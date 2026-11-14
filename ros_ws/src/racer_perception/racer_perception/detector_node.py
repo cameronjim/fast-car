@@ -40,6 +40,7 @@ import time
 
 import rclpy
 from racer_msgs.msg import Keypoint2D, PoseDetection, PoseDetectionArray
+from racer_tools.spin_guard import spin_until_shutdown
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.logging import get_logger
 from rclpy.node import Node
@@ -242,7 +243,7 @@ def main(args: list | None = None) -> None:
     code = 0
     try:
         node = DetectorNode()
-        rclpy.spin(node)
+        spin_until_shutdown(node)
     except DetectorUnavailable as exc:
         get_logger("detector_node").error(str(exc))
         code = EXIT_DETECTOR_UNAVAILABLE

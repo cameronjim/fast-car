@@ -32,6 +32,7 @@ from .actionlog import ActionLog
 from .checks import Report, Snapshot, evaluate
 from .config import Settings
 from .hostinfo import HostInfo
+from .prefs import Prefs, PrefsStore
 from .rosstate import RosState
 from .runner import CmdResult, Runner
 
@@ -91,10 +92,14 @@ def _describe(mode: str, params: dict[str, Any]) -> str:
     if mode == "gap_follow":
         cap = params.get("max_speed_mps")
         floor = params.get("min_speed_mps")
-        return (
+        text = (
             f" max_speed={'profile default' if cap is None else f'{cap:.2f} m/s'}"
             f" min_speed={'profile default' if floor is None else f'{floor:.2f} m/s'}"
         )
+        for key, unit in (("a_lat_max_mps2", "m/s^2"), ("side_cap_min_speed_mps", "m/s")):
+            if params.get(key) is not None:
+                text += f" {key}={params[key]:.2f} {unit}"
+        return text
     return ""
 
 
@@ -128,6 +133,7 @@ class Controller:
         self._growth_bag: str | None = None
         self._growth_samples: deque[tuple[float, int]] = deque()
         self.last_stopped_external = 0  # terminal-started launches the last _kill_drive saw
+        self.prefs_store = PrefsStore(settings.prefs_path)
 
     @staticmethod
     def _timer_defer(delay: float, fn: Callable[[], None]) -> None:
@@ -154,12 +160,22 @@ class Controller:
         return states
 
     def _stack_flags(self) -> dict[str, str]:
+        return self._container_flags(self.s.stack_container)
+
+    def _container_flags(self, container: str) -> dict[str, str]:
         res = self.runner.run(
-            ["docker", "inspect", "-f", "{{json .Config.Cmd}}", self.s.stack_container], timeout=10
+            ["docker", "inspect", "-f", "{{json .Config.Cmd}}", container], timeout=10
         )
         if not res.ok:
             return {}
         return cmd.parse_launch_flags(res.stdout)
+
+    def camera_recording(self, cameras_running: bool) -> bool | None:
+        """Does the running camera container publish the stream the bag records? None: off."""
+        if not cameras_running:
+            return None
+        flags = self._container_flags(self.s.camera_container)
+        return flags.get("record_streams", "true") != "false"
 
     def _recorder_running(self) -> bool:
         res = self.runner.run(cmd.recorder_check_argv(self.s.stack_container), timeout=10)
@@ -228,6 +244,7 @@ class Controller:
         report = evaluate(snap, self.s.thresholds)
         drive = self.drive_state() if snap.stack_running else DriveState(None, [])
         mode = drive.mode
+        cameras_running = snap.containers.get(self.s.camera_container) == "running"
         return {
             "time": self._clock(),
             "checks": report.as_dict(),
@@ -236,7 +253,11 @@ class Controller:
                 "recorder": snap.recorder_running,
                 "flags": snap.stack_flags,
             },
-            "cameras": {"running": snap.containers.get(self.s.camera_container) == "running"},
+            "cameras": {
+                "running": cameras_running,
+                # the running container's real setting (None while the cameras are off)
+                "record": self.camera_recording(cameras_running),
+            },
             "drive": {
                 "mode": mode,
                 "running": mode is not None,
@@ -563,7 +584,10 @@ class Controller:
                     raise ActionError("the cameras are already running", 409)
                 if name in states:
                     self.runner.run(["docker", "rm", name], timeout=20)
-                argv = cmd.camera_run_argv(self.host, self.s.repo_dir, self.s.image, name, usb)
+                record = self.prefs_store.load().record_camera
+                argv = cmd.camera_run_argv(
+                    self.host, self.s.repo_dir, self.s.image, name, usb, record_streams=record
+                )
                 res = self.runner.run(argv, timeout=120)
                 if not res.ok:
                     raise ActionError(f"docker run failed: {res.tail()}", 500)
@@ -576,8 +600,9 @@ class Controller:
                 if self.container_states().get(self.s.stack_container) == "running"
                 else (" (the stack is not running, so nothing is being recorded)")
             )
-            self._log("cameras.start", True, actor, f"usb {usb}")
-            return {"message": "cameras starting" + note, "usb_device": usb}
+            rec = "camera recorded in the bag" if record else "camera NOT recorded in the bag"
+            self._log("cameras.start", True, actor, f"usb {usb}, {rec}")
+            return {"message": "cameras starting" + note, "usb_device": usb, "record": record}
 
     def stop_cameras(self, actor: str = "") -> dict[str, Any]:
         with self._lock:
@@ -862,12 +887,17 @@ class Controller:
         pnp_params: str = "",
         max_speed_mps: float | None = None,
         min_speed_mps: float | None = None,
+        a_lat_max_mps2: float | None = None,
+        side_cap_min_speed_mps: float | None = None,
     ) -> dict[str, Any]:
         action = f"drive.start.{mode}"
         params: dict[str, Any] = {"mode": mode, "profile": profile, "raceline": raceline}
+        gap_tuning = (max_speed_mps, min_speed_mps, a_lat_max_mps2, side_cap_min_speed_mps)
         if mode == "gap_follow":
             params["max_speed_mps"] = max_speed_mps
             params["min_speed_mps"] = min_speed_mps
+            params["a_lat_max_mps2"] = a_lat_max_mps2
+            params["side_cap_min_speed_mps"] = side_cap_min_speed_mps
         if mode == "spiderbot":
             params.update({"patrol": patrol, "rule": rule, "speed_mps": speed_mps})
         if mode == "ml_policy":
@@ -898,8 +928,7 @@ class Controller:
                     speed_mps,
                     policy,
                     (pnp_perception, pnp_dynamics, pnp_backend, pnp_v_max_mps, pnp_params),
-                    max_speed_mps,
-                    min_speed_mps,
+                    *gap_tuning,
                 )
                 params.update(resolved)
                 used_override = self._gate_drive(override, override_reason)
@@ -968,6 +997,8 @@ class Controller:
         pnp: tuple[str, str, str, float, str] = ("", "", "net", cmd.PNP_DEFAULT_SPEED_MPS, ""),
         max_speed_mps: float | None = None,
         min_speed_mps: float | None = None,
+        a_lat_max_mps2: float | None = None,
+        side_cap_min_speed_mps: float | None = None,
     ) -> tuple[str, str, dict[str, Any]]:
         """Validate a driving request against the whitelist.
 
@@ -1033,41 +1064,16 @@ class Controller:
             profile = "lane-2026-10-25" if mode == "gap_follow" else "floor-2026-10-07"
         label = f"{mode}:{profile}" if profile else mode
         resolved: dict[str, Any] = {"profile": profile}
-        if mode == "gap_follow" and max_speed_mps is not None:
-            low, high = self.gap_follow_speed_limits(profile)
-            if (
-                isinstance(max_speed_mps, bool)
-                or not isinstance(max_speed_mps, (int, float))
-                or not (low <= float(max_speed_mps) <= high)
+        tuning = (max_speed_mps, min_speed_mps, a_lat_max_mps2, side_cap_min_speed_mps)
+        if mode == "gap_follow":
+            self._check_gap_tuning(profile, *tuning)
+        else:
+            for value, what in zip(
+                tuning,
+                ("a max speed", "a min speed", "a lateral acceleration", "a side cap speed"),
             ):
-                raise ActionError(
-                    f"gap follow max speed for profile {profile} must be between {low:g} and "
-                    f"{high:g} m/s (the profile's ceiling, and vehicle_params' speed cap)",
-                    400,
-                )
-        elif mode != "gap_follow" and max_speed_mps is not None:
-            raise ActionError("a max speed is only used with gap follow", 400)
-        if mode == "gap_follow" and min_speed_mps is not None:
-            # The node refuses min > max, so the floor is checked against the max speed that
-            # will actually be in effect: the caller's cap, else the profile's ceiling (clipped
-            # by vehicle_params' speed cap).
-            if max_speed_mps is not None:
-                effective, source = float(max_speed_mps), "the max speed set here"
-            else:
-                effective = self.gap_follow_speed_limits(profile)[1]
-                source = f"profile {profile}'s max speed"
-            if (
-                isinstance(min_speed_mps, bool)
-                or not isinstance(min_speed_mps, (int, float))
-                or not (0.0 <= float(min_speed_mps) <= effective)
-            ):
-                raise ActionError(
-                    f"gap follow min speed must be between 0 and {effective:g} m/s "
-                    f"(it cannot exceed the max speed in effect, {source})",
-                    400,
-                )
-        elif mode != "gap_follow" and min_speed_mps is not None:
-            raise ActionError("a min speed is only used with gap follow", 400)
+                if value is not None:
+                    raise ActionError(f"{what} is only used with gap follow", 400)
         gap = mode == "gap_follow"
         return (
             cmd.ros_cmd_for(
@@ -1075,10 +1081,65 @@ class Controller:
                 profile=profile,
                 max_speed_mps=max_speed_mps if gap else None,
                 min_speed_mps=min_speed_mps if gap else None,
+                a_lat_max_mps2=a_lat_max_mps2 if gap else None,
+                side_cap_min_speed_mps=side_cap_min_speed_mps if gap else None,
             ),
             label,
             resolved,
         )
+
+    @staticmethod
+    def _number(value: object) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    def _check_gap_tuning(
+        self,
+        profile: str,
+        max_speed_mps: float | None,
+        min_speed_mps: float | None,
+        a_lat_max_mps2: float | None = None,
+        side_cap_min_speed_mps: float | None = None,
+    ) -> None:
+        """Gap follow's optional values, each None (the profile's own) or inside its bounds."""
+        if profile not in cmd.GAP_FOLLOW_PROFILES:
+            raise ActionError(
+                f"gap_follow profile must be one of {list(cmd.GAP_FOLLOW_PROFILES)}", 400
+            )
+        low, high = self.gap_follow_speed_limits(profile)
+        if max_speed_mps is not None and not (
+            self._number(max_speed_mps) and low <= float(max_speed_mps) <= high
+        ):
+            raise ActionError(
+                f"gap follow max speed for profile {profile} must be between {low:g} and "
+                f"{high:g} m/s (the profile's ceiling, and vehicle_params' speed cap)",
+                400,
+            )
+        # The node refuses min > max, so the floor is checked against the max speed that will
+        # actually be in effect: the caller's cap, else the profile's ceiling (clipped by
+        # vehicle_params' speed cap). The side cap's speed at the wall gets the same bound.
+        if max_speed_mps is not None:
+            effective, source = float(max_speed_mps), "the max speed set here"
+        else:
+            effective, source = high, f"profile {profile}'s max speed"
+        for value, what in (
+            (min_speed_mps, "min speed"),
+            (side_cap_min_speed_mps, "side cap min speed"),
+        ):
+            if value is not None and not (self._number(value) and 0.0 <= float(value) <= effective):
+                raise ActionError(
+                    f"gap follow {what} must be between 0 and {effective:g} m/s "
+                    f"(it cannot exceed the max speed in effect, {source})",
+                    400,
+                )
+        a_low, a_high = cmd.GAP_FOLLOW_A_LAT_RANGE
+        if a_lat_max_mps2 is not None and not (
+            self._number(a_lat_max_mps2) and a_low <= float(a_lat_max_mps2) <= a_high
+        ):
+            raise ActionError(
+                f"gap follow lateral acceleration limit must be between {a_low:g} and "
+                f"{a_high:g} m/s^2",
+                400,
+            )
 
     def gap_follow_speed_limits(self, profile: str) -> tuple[float, float]:
         """(lowest, highest) max speed in m/s the app will pass to gap follow for `profile`.
@@ -1383,6 +1444,90 @@ class Controller:
         self._invalidate()
         self._log("bag.delete", True, actor, "deleted", params={"name": name})
         return {"message": f"deleted {name}"}
+
+    def disk_usage(self) -> dict[str, Any]:
+        """Total, used and free GiB of the disk the bags are on (nulls when unreadable)."""
+        usage = self.host.disk_usage_gb(self.s.bags)
+        total, used, free = usage if usage else (None, None, None)
+        return {
+            "total_gb": None if total is None else round(total, 1),
+            "used_gb": None if used is None else round(used, 1),
+            "free_gb": None if free is None else round(free, 1),
+        }
+
+    def cleanup_docker(self, confirm: str, actor: str = "") -> dict[str, Any]:
+        """`docker image prune -f` then `docker builder prune -f` (see cmd.CLEANUP_ARGVS)."""
+        if confirm != "cleanup":
+            raise ActionError("type 'cleanup' to confirm", 400)
+        outputs: list[str] = []
+        reclaimed: list[str] = []
+        with self._lock:
+            for argv in cmd.CLEANUP_ARGVS:
+                res = self.runner.run(argv, timeout=600)
+                text = (res.stdout + res.stderr).strip()
+                outputs.append(f"$ {' '.join(argv)}\n{text}")
+                if not res.ok:
+                    detail = f"{' '.join(argv)} failed: {res.tail()}"
+                    self._log("system.cleanup", False, actor, detail)
+                    raise ActionError(detail, 500, {"output": "\n\n".join(outputs)})
+                found = [
+                    ln.split(":", 1)[1].strip()
+                    for ln in text.splitlines()
+                    if ln.lower().startswith("total reclaimed space")
+                ]
+                reclaimed.append(found[-1] if found else "0B")
+        self._invalidate()
+        detail = f"reclaimed {reclaimed[0]} of images, {reclaimed[1]} of build cache"
+        self._log("system.cleanup", True, actor, detail)
+        return {"message": detail, "output": "\n\n".join(outputs)}
+
+    # ------------------------------------------------------------------------------------
+    # saved drive settings (the Tune tab)
+    # ------------------------------------------------------------------------------------
+
+    def get_prefs(self) -> dict[str, Any]:
+        return {"prefs": self.prefs_store.load().model_dump(), "defaults": Prefs().model_dump()}
+
+    def _check_prefs(self, p: Prefs) -> None:
+        g = p.gap_follow
+        self._check_gap_tuning(
+            g.profile, g.max_speed_mps, g.min_speed_mps, g.a_lat_max_mps2, g.side_cap_min_speed_mps
+        )
+        n = p.pnp
+        if n.backend not in cmd.PNP_BACKENDS:
+            raise ActionError(f"pnp backend must be one of {list(cmd.PNP_BACKENDS)}", 400)
+        low, high = cmd.PNP_SPEED_RANGE
+        if not (low <= n.v_max_mps <= high):
+            raise ActionError(f"pnp speed cap must be between {low} and {high} m/s", 400)
+        for value, what in ((n.dynamics, "dynamics bundle"), (n.perception, "perception bundle")):
+            if value and not cmd.NAME_RE.match(value):
+                raise ActionError(f"bad {what} name", 400)
+        if n.params_file and not (
+            n.params_file.endswith(".yaml") and cmd.NAME_RE.match(n.params_file)
+        ):
+            raise ActionError("planner params file must be a plain *.yaml name", 400)
+        if p.stack.map and p.stack.map not in self.maps():
+            raise ActionError(f"unknown map {p.stack.map!r}", 400)
+        if p.stack.mode == "localization" and not p.stack.map:
+            raise ActionError("localisation needs a map", 400)
+        if p.tracker.raceline and p.tracker.raceline not in [r.id for r in self.racelines()]:
+            raise ActionError(f"unknown raceline {p.tracker.raceline!r}", 400)
+
+    def set_prefs(self, prefs: Prefs, actor: str = "") -> dict[str, Any]:
+        try:
+            self._check_prefs(prefs)
+        except ActionError as exc:
+            self._log("prefs.save", False, actor, exc.message)
+            raise
+        self.prefs_store.save(prefs)
+        self._log(
+            "prefs.save",
+            True,
+            actor,
+            f"record camera {'on' if prefs.record_camera else 'off'}",
+            params=prefs.model_dump(),
+        )
+        return {"message": "settings saved", "prefs": prefs.model_dump()}
 
     # ------------------------------------------------------------------------------------
     # system

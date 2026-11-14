@@ -4,26 +4,32 @@ import {
   ApiError,
   type ActionReply,
   type BagInfo,
+  type BagsReply,
   type FetchLike,
   loginError,
   type LogEntry,
   type Options,
+  type Prefs,
   type Status,
   type TokenStore,
 } from "./api";
-import { ChecksTab } from "./ChecksTab";
-import { OpsTray, ReconnectBanner, StopBar, Tabs, TopBar } from "./chrome";
+import { OpsTray, ReconnectBanner, Sidebar, StopBar, TopBar } from "./chrome";
 import { AppCtx, TABS, useStore, type Ctx, type TabId } from "./ctx";
+import { carHost } from "./data";
+import { DataTab } from "./DataTab";
 import { DriveTab } from "./DriveTab";
 import { ConnectionTracker, errorText, ToastStore } from "./feedback";
 import { emptyLive, startLive } from "./live";
 import { LiveTab } from "./LiveTab";
 import { LogsTab } from "./LogsTab";
 import type { VehicleInfo } from "./model";
-import { doneText, OpsStore } from "./ops";
+import { doneText, opTitle, OpsStore } from "./ops";
+import { DEFAULT_PREFS } from "./prefs";
+import { ProblemStore } from "./problems";
 import { describeTokenStorage, type Target, type TokenStorageInfo } from "./platform";
 import { RosLink, type LinkStatus, type RosSource } from "./ros";
 import { SystemTab } from "./SystemTab";
+import { TuneTab } from "./TuneTab";
 import { Toasts } from "./ui";
 
 export interface AppProps {
@@ -71,6 +77,7 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
   const live = useRef(emptyLive()).current;
   const ops = useMemo(() => new OpsStore(), []);
   const toasts = useMemo(() => new ToastStore(), []);
+  const problems = useMemo(() => new ProblemStore(), []);
   const agentConn = useRef(new ConnectionTracker(2)).current;
   const linkConn = useRef(new ConnectionTracker(1)).current;
   const seq = useRef(0);
@@ -81,6 +88,11 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
   const [options, setOptions] = useState<Options | null>(null);
   const [vehicle, setVehicle] = useState<VehicleInfo | null>(null);
   const [bags, setBags] = useState<BagInfo[]>([]);
+  const [bagsInfo, setBagsInfo] = useState<BagsReply | null>(null);
+  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
+  const [prefsDefaults, setPrefsDefaults] = useState<Prefs>(DEFAULT_PREFS);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
+  const [lastOutput, setLastOutput] = useState<{ title: string; text: string } | null>(null);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [agentUp, setAgentUp] = useState(true);
   const [agentLastSeen, setAgentLastSeen] = useState<number | null>(null);
@@ -91,6 +103,8 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
   latest.current = { status, link, bags };
 
   const setTab = (t: TabId) => {
+    // leaving Logs: what was listed there has been seen, so the badge clears
+    if (tab === "logs" && t !== "logs") problems.markSeen();
     setTabState(t);
     saveTab(t);
   };
@@ -113,6 +127,7 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
       const [o, b, l] = await Promise.all([api.options(), api.bags(), api.log(40)]);
       setOptions(o);
       setBags(b.bags);
+      setBagsInfo(b);
       setLog(l.entries);
       latest.current = { ...latest.current, bags: b.bags };
     } catch {
@@ -149,12 +164,36 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
     void refreshSlow();
   };
 
+  const loadPrefs = async () => {
+    try {
+      const r = await api.prefs();
+      setPrefs(r.prefs);
+      setPrefsDefaults(r.defaults);
+      setPrefsLoaded(true);
+    } catch {
+      /* the status poll reports the connection problem; the next slow poll retries */
+    }
+  };
+
+  const savePrefs = async (next: Prefs): Promise<Prefs> => {
+    try {
+      const r = await api.savePrefs(next);
+      const stored = r.prefs ?? next;
+      setPrefs(stored);
+      return stored;
+    } catch (e) {
+      problems.add("Saving settings", errorText(e));
+      throw e;
+    }
+  };
+
   useEffect(() => {
     if (needLogin) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     void api.vehicle().then(setVehicle).catch(() => undefined);
     void refreshSlow();
+    void loadPrefs();
     // One poll at a time. While an operation is in flight the poll runs twice as often, so its
     // timeline follows the car closely.
     const loop = async () => {
@@ -162,7 +201,10 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
       if (alive) timer = setTimeout(() => void loop(), ops.active().length ? Math.max(250, pollMs / 2) : pollMs);
     };
     void loop();
-    const slow = setInterval(() => void refreshSlow(), 4000);
+    const slow = setInterval(() => {
+      void refreshSlow();
+      void loadPrefs();
+    }, 4000);
     // Timeouts must fire even when no poll answers (the car is gone mid-operation).
     const watchdog = setInterval(() => tickOps(), 1000);
     return () => {
@@ -207,20 +249,25 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
     for (const op of ops.all()) {
       if (announced.current.has(op.id)) continue;
       if (op.phase === "confirmed") toasts.push(doneText(op.kind), "ok");
-      else if (op.phase === "timeout") toasts.push(`${op.title} timed out. ${op.error ?? ""}`.trim(), "error");
-      else continue;
+      else if (op.phase === "timeout") {
+        toasts.push(`${op.title} timed out`, "error");
+        problems.add(`${op.title} timed out`, op.error ?? "");
+      } else continue;
       announced.current.add(op.id);
     }
   });
 
-  const act: Ctx["act"] = async (fn) => {
+  // The toast stays short; the agent's full reason goes to the Logs tab's problem list.
+  const act: Ctx["act"] = async (fn, title) => {
     try {
       const r = await fn();
       toasts.push(r.message ?? "Done", "ok");
       refreshAll();
       return r;
     } catch (e) {
-      toasts.push(errorText(e), "error");
+      const what = title ?? "Request";
+      problems.add(what, errorText(e));
+      toasts.push(`${what} failed. See Logs.`, "error");
       refreshAll();
       throw e;
     }
@@ -228,7 +275,7 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
 
   const runOp: Ctx["runOp"] = (spec, fn) => {
     const box: { p: Promise<ActionReply> | null } = { p: null };
-    const op = ops.begin(spec, () => (box.p = act(fn)));
+    const op = ops.begin(spec, () => (box.p = act(fn, spec.title ?? opTitle(spec.kind))));
     const p = box.p;
     if (!op || !p) return Promise.reject(new ApiError(`${spec.title ?? spec.kind} is already in progress`, 409, null));
     tickOps();
@@ -238,7 +285,7 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
   const stopAll: Ctx["stopAll"] = () => {
     // STOP is never blocked by an operation in flight: it is always sent, and the timeline
     // (when none is running yet) shows it until the status says nothing is driving.
-    const p = act(() => api.stopAll());
+    const p = act(() => api.stopAll(), "Stop");
     ops.begin({ kind: "stop-all" }, () => p);
     tickOps();
     return p;
@@ -263,7 +310,16 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
     status,
     options,
     bags,
+    bagsInfo,
     log,
+    prefs,
+    prefsDefaults,
+    prefsLoaded,
+    savePrefs,
+    problems,
+    carHost: carHost(target.apiBase, globalThis.location?.hostname),
+    lastOutput,
+    setLastOutput,
     agentUp,
     agentLastSeen,
     link,
@@ -283,19 +339,19 @@ export function App({ target, tokens, fetchImpl, tokenStorage, rosFactory, carNa
 
   return (
     <AppCtx.Provider value={ctx}>
-      <div class="app">
-        <TopBar live={live} onTab={setTab} />
-        <Tabs tab={tab} onTab={setTab} />
-        <ReconnectBanner />
+      <div class="app shell">
+        <TopBar live={live} onTab={setTab} tab={tab} />
+        <Sidebar tab={tab} onTab={setTab} />
         <main class={`page ${agentUp ? "" : "offline"}`} aria-label={tab}>
-          <OpsTray />
+          <ReconnectBanner />
+          <OpsTray tab={tab} />
           {tab === "drive" && <DriveTab />}
+          {tab === "tune" && <TuneTab />}
           {tab === "live" && <LiveTab live={live} vehicle={vehicle} />}
-          {tab === "checks" && <ChecksTab />}
+          {tab === "data" && <DataTab />}
           {tab === "logs" && <LogsTab />}
           {tab === "system" && <SystemTab />}
         </main>
-        <StopBar onStop={stopAll} />
         <Toasts store={toasts} />
       </div>
     </AppCtx.Provider>

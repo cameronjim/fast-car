@@ -48,6 +48,8 @@ class World:
     ignore_int_external: bool = False
     drive_cmd: str = ""  # the ros2 command of the app-started launch
     signals: list = field(default_factory=list)  # (container, signal) of every docker kill
+    prune_fails: str = ""  # stderr of a failing docker image/builder prune
+    reclaim: dict = field(default_factory=lambda: {"image": "1.2GB", "builder": "640MB"})
     park_reply: str = "response:\nstd_srvs.srv.Trigger_Response(success=True, message='ok')"
 
     def disk_usage(self, _path: str) -> tuple[int, int, int]:
@@ -67,6 +69,11 @@ class World:
         if sub == "ps":
             lines = [f"{n}\t{c['state']}" for n, c in self.containers.items()]
             return (0, "\n".join(lines) + "\n")
+        if argv[1:3] in (("image", "prune"), ("builder", "prune")):
+            if self.prune_fails:
+                return CmdResult(argv, 1, "", self.prune_fails)
+            kind = "Deleted Images" if argv[1] == "image" else "Deleted build cache objects"
+            return (0, f"{kind}:\nsha256:abc\n\nTotal reclaimed space: {self.reclaim[argv[1]]}\n")
         if sub == "image":
             if argv[-1] == "car:perception":
                 return (0 if self.perception_image_present else 1, "")

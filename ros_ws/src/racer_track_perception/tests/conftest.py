@@ -10,7 +10,11 @@ from racer_track_perception.vehicle import LiveVehicle, load_live_vehicle
 
 # hypothesis is a dev dependency (uv run pytest). colcon test runs this directory under the
 # ros-dev image's system python3 where it may be absent; the property tests are then not collected.
-collect_ignore = [] if importlib.util.find_spec("hypothesis") else ["test_property.py"]
+collect_ignore = (
+    []
+    if importlib.util.find_spec("hypothesis")
+    else ["test_property.py", "test_refine_property.py"]
+)
 
 
 @pytest.fixture(scope="session")

@@ -66,3 +66,48 @@ Reading of the table, none of it used to choose:
   owner question (see the PR comment). Nothing was changed in the rule.
 
 The choice is committed (launch constants `DESKEW_STAMP_IS`, `DESKEW_BEAM_ORDER`) before step B.
+
+## Step B: result on the held-out role, scored once
+
+Pairs R8 against R3 (ccw) and R7b against R4 (cw), raw against `sweep_end` / `index_descending`.
+JSON next to the bags: `/Users/cameronjim/code/car-data/pnp/deskew/step_b.json`. The first run of
+step B stopped at item 4 (a bug: the split names R7 as R7a and R7b, the code asked for R7) after
+items 1 to 3 were computed in memory and before anything was written; nobody read it. The code was
+fixed and the step run again from the start, saving after every item. This is the run reported.
+Worker count does not enter the numbers (each scan is scored on its own).
+
+| item | measured | rule | |
+|---|---|---|---|
+| 1 C, fast corner scans, pooled (262 scans) | raw 0.01316 m, deskewed 0.01051 m, ratio 0.799, bootstrap 95 percent interval 0.778 to 0.814 (14 blocks of 2.0 s, 2000 resamples, seed 0) | ratio at most 0.90, upper end below 1.00 | PASS |
+| 2 C, fast run scans that are not fast corner scans | ratio 0.796 | at most 1.02 | PASS, on 2 scans (see below) |
+| 3 `geometric-v1` on A-run (4016 moving scans, 10 held-out segments) | intrusion mean raw 0.00300, deskewed 0.00275 (excess -0.00026); deficit p90 raw 0.02078 m, deskewed 0.01995 m (excess -0.00083 m) | excess at most 0.002 and 0.005 m | PASS |
+| 4 planner replay R0 to R8 (10 segments, uniform ticks, caps from the split) | NO_SCAN or FAULT ticks: raw 0, deskewed 0, none the raw replay lacks; same tick counts | none that raw does not have | PASS |
+| 5 core plus rebin over 2000 real scans, this Mac | p50 0.065 ms, p99 0.22 ms, max 0.42 ms | p99 under 3 ms | PASS |
+
+Per pair, fast corner scans (C raw to C deskewed): R8 against R3 0.01395 to 0.01109 m (172 scans),
+R7b against R4 0.01265 to 0.01008 m (90 scans). Every scan found a match in both conditions and no
+scan passed through.
+
+Verdict by the pre-registered rule: all five items hold, so deskew MAY be switched on at the car, as
+its own step (two runs per direction, compared with the step before). Not done here, and the car
+decides: item 5 on the Orin (under 5 ms, brief 34's check), and the open `stamp_is` question.
+
+Things the numbers do not say:
+
+* Item 2 is weak. 172 of the 174 scans of R8 and all 90 of R7b are fast corner scans (the loop is
+  7.4 m round at 0.83 m minimum radius, so a fast run is almost all corner), which leaves 2 scans
+  for the check on the rest. It passes, on 2 scans.
+* Item 4 is open loop: the planner reacts to what the deskewed scans would have shown at the
+  recorded poses, not a lap. The chosen configuration is `sweep_end`, whose stamp offset is 0, so the
+  replay does not test a shifted stamp at all. If the car runs `sweep_start` (the owner question
+  below) the output stamp moves by the sweep time and the planner dead-reckons from it (design 13.4);
+  that has not been replayed.
+* Metric C compares scans of runs at two speeds and so shows the shape of the scan, not its stamp.
+  The stamp question is not settled by it (step A).
+* The simulator's scan has no sweep, so there is no L5 case and a sim lap cannot show a gain;
+  deskewing an instantaneous scan would only add error. That gap is stated, not closed.
+
+## L6 check for brief 34 (not run here)
+
+On the Orin, with the car moving: `/pnp/deskew/status` `process_ms.p99` under 5 ms, and
+`scans_passed_through` 0 (`passed_through_by_reason` all 0) while the wheel speed is above 0.02 m/s.

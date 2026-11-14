@@ -11,7 +11,7 @@ from typing import Any
 
 from racer_eval.cli import HAND_COUNT
 
-from pnp_session.constants import BASELINE_BAG, GAP_LIMITS_S, SCHEMA_VERSION
+from pnp_session.constants import GAP_LIMITS_S, SCHEMA_VERSION
 from pnp_session.gaps import limit_key
 
 LIMIT_KEYS = [limit_key(x) for x in GAP_LIMITS_S]
@@ -70,6 +70,20 @@ def _num(x: object) -> object:
     return f"{x:.3f}" if isinstance(x, float) else x
 
 
+def _per_minute(m: dict[str, Any]) -> Any:
+    def fmt(k: str) -> str:
+        return "-" if m.get(k) is None else f"{m[k]:.2f}"
+
+    return fmt
+
+
+def _per_minute(m: dict[str, Any]) -> Any:
+    def fmt(k: str) -> str:
+        return "-" if m.get(k) is None else f"{m[k]:.2f}"
+
+    return fmt
+
+
 def _row(cells: Sequence[object]) -> str:
     return "| " + " | ".join(str(c) for c in cells) + " |"
 
@@ -84,7 +98,15 @@ def _entries(report: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _gap_table(report: dict[str, Any], clock: str) -> list[str]:
-    header = ["run", "window s", "msgs", "p50 ms", "p99 ms", "max ms", *[f">{k} ms" for k in LIMIT_KEYS]]
+    header = [
+        "run",
+        "window s",
+        "msgs",
+        "p50 ms",
+        "p99 ms",
+        "max ms",
+        *[f">{k} ms" for k in LIMIT_KEYS],
+    ]
     rows = []
     for e in _entries(report):
         g = e["drive_raw"][clock]
@@ -145,8 +167,13 @@ def _safety_table(report: dict[str, Any]) -> list[str]:
     for e in _entries(report):
         s = e["safety"]
         c, m, f = s["engage_counts"], s["engage_per_minute"], s["first_2s_counts"]
-        known = c.get("watchdog", 0) + c.get("rate_limit", 0) + c.get("ttc", 0) + c.get("ttc_reverse", 0)
-        pm = lambda k: "-" if m.get(k) is None else f"{m[k]:.2f}"  # noqa: E731
+        known = (
+            c.get("watchdog", 0)
+            + c.get("rate_limit", 0)
+            + c.get("ttc", 0)
+            + c.get("ttc_reverse", 0)
+        )
+        pm = _per_minute(m)
         if e["run_id"] == "pooled":
             start = f"{s['starts_with_event']}/{s['starts']}"
         else:
@@ -165,13 +192,18 @@ def _detail_lines(report: dict[str, Any]) -> list[str]:
     d = report["pooled"]["safety"]["details"]
     rl, wd = d["rate_limit"], d["watchdog"]
     lines = [
-        "rate_limit, the limiter's own dt parsed from the event detail (pooled): "
-        f"n {rl['dt_s']['n']}, min {_ms(rl['dt_s']['min'])} ms, p50 {_ms(rl['dt_s']['p50'])} ms, "
-        f"max {_ms(rl['dt_s']['max'])} ms, under half a tick (10 ms) {rl['dt_below_half_tick']}, "
-        f"unparsed {rl['n_unparsed']}",
-        "watchdog, the age parsed from the event detail (pooled): "
-        f"n {wd['age_s']['n']}, min {_ms(wd['age_s']['min'])} ms, p50 {_ms(wd['age_s']['p50'])} ms, "
-        f"max {_ms(wd['age_s']['max'])} ms, timeouts {wd['timeouts_s']}, unparsed {wd['n_unparsed']}",
+        (
+            "rate_limit, the limiter's own dt parsed from the event detail (pooled): "
+            f"n {rl['dt_s']['n']}, min {_ms(rl['dt_s']['min'])} ms, "
+            f"p50 {_ms(rl['dt_s']['p50'])} ms, max {_ms(rl['dt_s']['max'])} ms, "
+            f"under half a tick (10 ms) {rl['dt_below_half_tick']}, unparsed {rl['n_unparsed']}"
+        ),
+        (
+            "watchdog, the age parsed from the event detail (pooled): "
+            f"n {wd['age_s']['n']}, min {_ms(wd['age_s']['min'])} ms, "
+            f"p50 {_ms(wd['age_s']['p50'])} ms, max {_ms(wd['age_s']['max'])} ms, "
+            f"timeouts {wd['timeouts_s']}, unparsed {wd['n_unparsed']}"
+        ),
     ]
     for s in rl["unparsed_shown"] + wd["unparsed_shown"]:
         lines.append(f"unparsed detail shown as recorded: {s!r}")
@@ -187,12 +219,14 @@ def _watchdog_whatif(report: dict[str, Any]) -> list[str]:
     out += [
         w["note"],
         "",
-        f"Agreement of the {int(w['current_limit_s'] * 1000)} ms row with the recorded `watchdog` "
-        f"engagements (tolerance {w['match_tolerance_s'] * 1000:.0f} ms): "
-        f"{w['gaps_above_current_limit']} gaps above the limit, "
-        f"{w['recorded_watchdog_engagements']} recorded engagements, {w['matched']} matched, "
-        f"{w['recorded_without_gap']} recorded without a gap, "
-        f"{w['gaps_without_recorded_event']} gaps without a recorded engagement.",
+        (
+            f"Agreement of the {int(w['current_limit_s'] * 1000)} ms row with the recorded "
+            f"`watchdog` engagements (tolerance {w['match_tolerance_s'] * 1000:.0f} ms): "
+            f"{w['gaps_above_current_limit']} gaps above the limit, "
+            f"{w['recorded_watchdog_engagements']} recorded engagements, {w['matched']} matched, "
+            f"{w['recorded_without_gap']} recorded without a gap, "
+            f"{w['gaps_without_recorded_event']} gaps without a recorded engagement."
+        ),
         "",
     ]
     return out
@@ -212,12 +246,19 @@ def _limiter(report: dict[str, Any]) -> list[str]:
     for mode, label in labels.items():
         p = w["modes"][mode]["pooled"]
         rows.append([label, p["clip_cycles"], p["engage_rate_limit"], p["engage_watchdog"]])
-    out = _table(["replay", "clipped cycles", "rate_limit engagements", "watchdog engagements"], rows)
+    out = _table(
+        ["replay", "clipped cycles", "rate_limit engagements", "watchdog engagements"], rows
+    )
     rec = report["pooled"]["safety"]["engage_counts"].get("rate_limit", 0)
-    out.append(f"Recorded `rate_limit` engagements in the windows: {rec}. In the table the counts are "
-               "of the replay inside the counting windows.")
+    out.append(
+        f"Recorded `rate_limit` engagements in the windows: {rec}. In the table the counts are "
+        "of the replay inside the counting windows."
+    )
     out.append("")
-    out += ["Reproduction with the recorded dt (rows without a suffix: each cycle judged from the recorded previous output; `free_running`: the replay's own chain):", ""]
+    out += [
+        "Reproduction with the recorded dt (rows without a suffix: each cycle judged from the recorded previous output; `free_running`: the replay's own chain):",
+        "",
+    ]
     repro = w["reproduction_recorded_dt"]
     rrows = []
     for key in ("rate_limit", "rate_limit_free_running", "watchdog", "watchdog_free_running"):
@@ -227,7 +268,10 @@ def _limiter(report: dict[str, Any]) -> list[str]:
             [key, r["recorded"], r["replayed"], r["matched"], r["missed"], r["extra"],
              "-" if diff is None else f"{diff * 1000:.3f} ms ({r['dt_detail_compared']} pairs)"]
         )  # fmt: skip
-    out += _table(["events", "recorded", "replayed", "matched", "missed", "extra", "dt detail max diff"], rrows)
+    out += _table(
+        ["events", "recorded", "replayed", "matched", "missed", "extra", "dt detail max diff"],
+        rrows,
+    )
     out += [f"Not modelled: {w['not_modelled']}.", ""]
     return out
 
@@ -242,16 +286,22 @@ def _acceptance(report: dict[str, Any]) -> list[str]:
         for i in a["items"]
     ]  # fmt: skip
     head = f"Outcome: {a['outcome'] or ('accepted' if a['passed'] else 'miss')} (wall contacts as given: {a['wall_contacts_given']}, not observable from a bag)"
-    return [head, "", *_table(["item", "", "description", "measured", "", "threshold", "note"], rows)]
+    return [
+        head,
+        "",
+        *_table(["item", "", "description", "measured", "", "threshold", "note"], rows),
+    ]
 
 
 def markdown(report: dict[str, Any]) -> str:
     lines = [
         f"# Timing report: {report['bag']}",
         "",
-        f"Schema {report['schema']}. {report['preregistration']}. Counting window of each run: "
-        "first non-zero `/drive_raw` command to the last `/pnp/planner/status` (v0.2 4.2). "
-        "Percentiles are linear interpolation.",
+        (
+            f"Schema {report['schema']}. {report['preregistration']}. Counting window of each "
+            "run: first non-zero `/drive_raw` command to the last `/pnp/planner/status` "
+            "(v0.2 4.2). Percentiles are linear interpolation."
+        ),
         "",
         "## `/drive_raw` gaps, recorder receive time",
         "",
@@ -262,8 +312,10 @@ def markdown(report: dict[str, Any]) -> str:
         "## Planner (`/pnp/planner/status`)",
         "",
         *_planner_table(report),
-        "Plan age at publish: not carried by PlannerStatus. Tick gaps are header-stamp gaps; "
-        "bunched is a gap under 10 ms (half a tick).",
+        (
+            "Plan age at publish: not carried by PlannerStatus. Tick gaps are header-stamp "
+            "gaps; bunched is a gap under 10 ms (half a tick)."
+        ),
         "",
         "Status gaps above each limit:",
         "",

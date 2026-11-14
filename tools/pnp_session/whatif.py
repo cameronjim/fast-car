@@ -40,7 +40,7 @@ from racer_eval import interventions
 from pnp_session import detail as detail_mod
 from pnp_session.bagread import SessionBag
 from pnp_session.constants import LIMITER_MATCH_TOL_S
-from pnp_session.timing import TimingAnalysis, in_window
+from pnp_session.timing import TimingAnalysis
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLI_NAME = "limiter_whatif_cli"
@@ -152,7 +152,14 @@ def run_cli(cli: Path, stream: Path, dt_mode: str, teacher: bool = False) -> lis
     if dt_mode not in DT_MODES:
         raise ValueError(f"dt_mode must be one of {DT_MODES}")
     proc = subprocess.run(
-        [str(cli), "--stream", str(stream), "--dt-mode", dt_mode, *(["--teacher"] if teacher else [])],
+        [
+            str(cli),
+            "--stream",
+            str(stream),
+            "--dt-mode",
+            dt_mode,
+            *(["--teacher"] if teacher else []),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -246,7 +253,10 @@ def whatif_report(
         teacher_lines = teacher_results["recorded"]
 
     def per_run(lines: Sequence[dict[str, Any]]) -> dict[str, dict[str, int]]:
-        out = {rid: {"clip_cycles": 0, "engage_rate_limit": 0, "engage_watchdog": 0} for rid, _ in windows}
+        out = {
+            rid: {"clip_cycles": 0, "engage_rate_limit": 0, "engage_watchdog": 0}
+            for rid, _ in windows
+        }
         for ln in lines:
             if ln["type"] == "clip":
                 rid = _in_any(float(ln["t"]), windows)
@@ -275,9 +285,7 @@ def whatif_report(
             for i in np.nonzero(rec_sel & (bag.ev_source == source))[0]
             if _in_any(float(bag.ev_t[i]), windows)
         ]
-        rep = [
-            ln for ln in _engage(teacher_lines, source) if _in_any(float(ln["t"]), windows)
-        ]
+        rep = [ln for ln in _engage(teacher_lines, source) if _in_any(float(ln["t"]), windows)]
         repro[source] = compare_events(rec, rep)
         free = [
             ln for ln in _engage(results["recorded"], source) if _in_any(float(ln["t"]), windows)

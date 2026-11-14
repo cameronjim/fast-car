@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
-    from pnp_session.cli import main  # noqa: E402
+    from pnp_session.cli import main
 except ModuleNotFoundError as exc:  # racer_eval and scipy come with the `session` extra only
     if exc.name and exc.name.split(".")[0] in ("racer_eval", "scipy"):
         sys.exit(

@@ -37,7 +37,7 @@ def cut(bag: Path, run_id: str, out: Path) -> tuple[int, str]:
     data = read_session_bag(bag)
     runs = {r.run_id: r for r in find_pnp_runs(data)}
     run = runs[run_id]
-    t0_ns = int(round(data.t0_log_s * 1e9))
+    t0_ns = round(data.t0_log_s * 1e9)
     start_ns = t0_ns + int((run.t_start - MARGIN_BEFORE_S) * 1e9)
     end_ns = t0_ns + int((run.t_end + MARGIN_AFTER_S) * 1e9)
     n = 0

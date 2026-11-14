@@ -10,6 +10,7 @@ racer_eval.gates.planner_car_acceptance, printed with every item.
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -51,7 +52,7 @@ def _summary(values: NDArray[np.float64]) -> dict[str, Any]:
         return {"n": 0, "min": None, "p50": None, "p99": None, "max": None}
     p50, p99 = np.percentile(values, [50.0, 99.0], method="linear")
     return {
-        "n": int(len(values)),
+        "n": len(values),
         "min": float(np.min(values)),
         "p50": float(p50),
         "p99": float(p99),
@@ -126,9 +127,7 @@ def _starting(bag: SessionBag, run: Run) -> dict[str, Any]:
     return {"ticks": n, "duration_s": duration}
 
 
-def _watchdog_gap_hits(
-    recv: NDArray[np.float64], limit_s: float
-) -> list[tuple[float, float]]:
+def _watchdog_gap_hits(recv: NDArray[np.float64], limit_s: float) -> list[tuple[float, float]]:
     """Receive gaps above the limit as (start, end) pairs."""
     g = gaps.gaps_of(recv)
     idx = np.nonzero(g - limit_s > gaps.ABOVE_EPS_S)[0]
@@ -207,7 +206,7 @@ def _safety_block(
     iv_start: interventions.RunInterventions,
     engage: dict[str, list[str]],
 ) -> dict[str, Any]:
-    per_min = {k: (None if v != v else v) for k, v in iv.per_minute.items()}
+    per_min = {k: (None if math.isnan(v) else v) for k, v in iv.per_minute.items()}
     return {
         "engage_counts": dict(sorted(iv.counts.items())),
         "engage_per_minute": dict(sorted(per_min.items())),
@@ -230,9 +229,7 @@ def _run_entry(p: _RunPieces) -> dict[str, Any]:
             "recv": gaps.gap_stats(p.draw_recv_gaps, p.n_draw).to_dict(),
             "stamp": gaps.gap_stats(p.draw_stamp_gaps, p.n_draw).to_dict(),
         },
-        "planner": _planner_block(
-            p.solve_s, p.st_stamp_gaps, p.st_recv_gaps, p.n_status, p.states
-        ),
+        "planner": _planner_block(p.solve_s, p.st_stamp_gaps, p.st_recv_gaps, p.n_status, p.states),
         "safety": _safety_block(p.iv, p.iv_start, p.engage_details),
     }
 
@@ -327,7 +324,9 @@ def watchdog_event_stamps(
             & in_window(bag.ev_t, window)
             & (bag.ev_source == "watchdog")
         )
-        out.extend((float(s), float(r)) for s, r in zip(bag.ev_stamp[sel], bag.ev_t[sel], strict=True))
+        out.extend(
+            (float(s), float(r)) for s, r in zip(bag.ev_stamp[sel], bag.ev_t[sel], strict=True)
+        )
     return out
 
 

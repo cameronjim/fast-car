@@ -71,7 +71,9 @@ def inputs_from_bag(
             reference = tuple(float(x) for x in bag.cam_lap_time_s[cam])
         else:
             reference = video.get(run.run_id, ())
-        out.append(RunLapInput(run.run_id, tuple(float(x) for x in bag.pnp_lap_time_s[pnp]), reference))
+        out.append(
+            RunLapInput(run.run_id, tuple(float(x) for x in bag.pnp_lap_time_s[pnp]), reference)
+        )
     return out
 
 
@@ -95,7 +97,15 @@ def _run_row(inp: RunLapInput) -> dict[str, Any]:
     compared = 0
     for r in rows:
         if r.diff_s is None:
-            laps.append({"lap": r.lap, "reference_s": r.camera_time_s, "pnp_s": r.pnp_time_s, "diff_s": None, "within": None})
+            laps.append(
+                {
+                    "lap": r.lap,
+                    "reference_s": r.camera_time_s,
+                    "pnp_s": r.pnp_time_s,
+                    "diff_s": None,
+                    "within": None,
+                }
+            )
             continue
         ok = abs(r.diff_s) <= D3C0_TOLERANCE_S + 1e-9  # float noise of a difference of two times
         compared += 1
@@ -120,9 +130,7 @@ def _run_row(inp: RunLapInput) -> dict[str, Any]:
     }
 
 
-def d3c0(
-    runs: Sequence[RunLapInput], reference_name: str = "camera"
-) -> dict[str, Any]:
+def d3c0(runs: Sequence[RunLapInput], reference_name: str = "camera") -> dict[str, Any]:
     """The D3-C0 verdict over the given runs, with every per-lap difference."""
     rows = [_run_row(r) for r in runs]
     n_ref = sum(r["n_reference"] for r in rows)
@@ -132,7 +140,9 @@ def d3c0(
     reasons: list[str] = []
     if n_ref == 0:
         verdict = "NO REFERENCE"
-        reasons.append(f"no {reference_name} lap event in any run: nothing to compare the lap memory with")
+        reasons.append(
+            f"no {reference_name} lap event in any run: nothing to compare the lap memory with"
+        )
     elif len(rows) < D3C0_MIN_RUNS:
         verdict = "INSUFFICIENT"
         reasons.append(f"{len(rows)} run(s), the rule needs at least {D3C0_MIN_RUNS}")
@@ -149,7 +159,9 @@ def d3c0(
             reasons.append("the lap count differs from the reference in at least one run")
         elif within < need:
             verdict = "FAIL"
-            reasons.append(f"{within} of {compared} lap times within {D3C0_TOLERANCE_S} s, need {need}")
+            reasons.append(
+                f"{within} of {compared} lap times within {D3C0_TOLERANCE_S} s, need {need}"
+            )
         else:
             verdict = "PASS"
     need_report = -(-compared * D3C0_MIN_WITHIN // D3C0_OF_LAPS) if compared else None

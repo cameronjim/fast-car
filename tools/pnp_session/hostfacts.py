@@ -11,7 +11,6 @@ from __future__ import annotations
 import glob
 import subprocess
 from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import Any
 
 PROCESS_PATTERN = "mppi_planner_node"
@@ -60,7 +59,9 @@ def collect(
                 }
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            entries.append({"command": command, "returncode": None, "stdout": "", "stderr": str(exc)})
+            entries.append(
+                {"command": command, "returncode": None, "stdout": "", "stderr": str(exc)}
+            )
     return {
         "planner_pids": pids,
         "note": (

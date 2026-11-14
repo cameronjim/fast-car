@@ -41,7 +41,7 @@ class GapStats:
 def limit_key(limit_s: float) -> str:
     """Key of a limit in a table: milliseconds, no decimals when whole ("60")."""
     ms = limit_s * 1000.0
-    return str(int(round(ms))) if abs(ms - round(ms)) < 1e-9 else f"{ms:g}"
+    return str(round(ms)) if abs(ms - round(ms)) < 1e-9 else f"{ms:g}"
 
 
 def gaps_of(times: ArrayLike) -> NDArray[np.float64]:

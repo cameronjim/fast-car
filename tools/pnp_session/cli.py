@@ -19,11 +19,11 @@ from typing import Any
 
 import numpy as np
 import yaml
-
-from pnp_session import hostfacts, laps, report, timing, whatif
 from racer_eval.runs import Run
 
+from pnp_session import hostfacts, laps, report, timing, whatif
 from pnp_session.bagread import SessionBag
+from pnp_session.constants import BASELINE_BAG
 
 EXIT_BASELINE_DIFFERS = 3
 
@@ -34,7 +34,9 @@ def _read(path: Path) -> SessionBag:
     return read_session_bag(path)
 
 
-def caps_from_split(split_yaml: Path, bag_name: str, analysis: timing.TimingAnalysis) -> list[float] | None:
+def caps_from_split(
+    split_yaml: Path, bag_name: str, analysis: timing.TimingAnalysis
+) -> list[float] | None:
     """The cap of each run from the pre-registered split file: the pnp segment of this bag that
     contains the run's first command. None when a run has no such segment."""
     doc = yaml.safe_load(Path(split_yaml).read_text())
@@ -47,6 +49,7 @@ def caps_from_split(split_yaml: Path, bag_name: str, analysis: timing.TimingAnal
     for p in analysis.pieces:
         window = p.run.counting_window
         assert window is not None
+
         # The segment that overlaps the run most (a run's first command can precede the
         # segment's `from` by a few hundredths of a second).
         def overlap(seg: dict[str, Any], run: Run = p.run) -> float:
@@ -71,7 +74,10 @@ def cmd_timing(args: argparse.Namespace, read: Callable[[Path], SessionBag] | No
         if derived is not None:
             analysis = timing.analyse_timing(bag, derived, args.wall_contacts)
     if not analysis.pieces:
-        print(f"{bag.name}: no PnP run with a commanded window (needs /pnp/planner/status)", file=sys.stderr)
+        print(
+            f"{bag.name}: no PnP run with a commanded window (needs /pnp/planner/status)",
+            file=sys.stderr,
+        )
         return 2
     limiter: dict[str, Any]
     if args.no_limiter:
@@ -82,13 +88,18 @@ def cmd_timing(args: argparse.Namespace, read: Callable[[Path], SessionBag] | No
             limiter = whatif.whatif_report(bag, analysis, cli)
         except whatif.LimiterUnavailable as exc:
             limiter = whatif.not_run(str(exc))
-    is_baseline = bag.name.startswith(report.BASELINE_BAG) or args.check_baseline
+    is_baseline = bag.name.startswith(BASELINE_BAG) or args.check_baseline
     doc = report.assemble(bag.name, analysis.report, limiter, is_baseline)
     if args.out:
-        Path(args.out).write_text(json.dumps(doc, indent=2, sort_keys=True, default=_json_default) + "\n")
+        Path(args.out).write_text(
+            json.dumps(doc, indent=2, sort_keys=True, default=_json_default) + "\n"
+        )
     print(report.markdown(doc))
     if is_baseline and not doc["baseline_check"]["matches"]:
-        print("BASELINE DIFFERS from the pre-registered counts: both are reported above.", file=sys.stderr)
+        print(
+            "BASELINE DIFFERS from the pre-registered counts: both are reported above.",
+            file=sys.stderr,
+        )
         return EXIT_BASELINE_DIFFERS
     return 0
 
@@ -119,7 +130,9 @@ def cmd_laps(args: argparse.Namespace, read: Callable[[Path], SessionBag] | None
     result = laps.d3c0(laps.inputs_from_bag(bag, video), name)
     result = {"schema": "pnp-session/1", "report": "laps", "bag": bag.name, **result}
     if args.out:
-        Path(args.out).write_text(json.dumps(result, indent=2, sort_keys=True, default=_json_default) + "\n")
+        Path(args.out).write_text(
+            json.dumps(result, indent=2, sort_keys=True, default=_json_default) + "\n"
+        )
     print(laps_markdown(result))
     return {"PASS": 0, "FAIL": 1}.get(result["verdict"], 2)
 
@@ -165,7 +178,9 @@ def cmd_host_facts(args: argparse.Namespace, runner: hostfacts.Runner | None = N
     return 0
 
 
-def cmd_limiter_stream(args: argparse.Namespace, read: Callable[[Path], SessionBag] | None = None) -> int:
+def cmd_limiter_stream(
+    args: argparse.Namespace, read: Callable[[Path], SessionBag] | None = None
+) -> int:
     """Developer command: write the teacher-forced cycle stream of a bag's counting windows and the
     recorded rate_limit engagements inside them (the fixture of the tool's ctest)."""
     bag = (read or _read)(Path(args.bag))
@@ -189,26 +204,48 @@ def cmd_limiter_stream(args: argparse.Namespace, read: Callable[[Path], SessionB
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="pnp_session_report")
     sub = p.add_subparsers(dest="command", required=True)
-    t = sub.add_parser("timing", help="M-T timing report of a bag (pre-registration v0.3 section 5)")
+    t = sub.add_parser(
+        "timing", help="M-T timing report of a bag (pre-registration v0.3 section 5)"
+    )
     t.add_argument("--bag", required=True, help="bag directory or .mcap file")
     t.add_argument("--out", help="write the JSON here")
-    t.add_argument("--caps", help="comma list, the cap in m/s of each PnP run in order (for the 4.2 acceptance)")
-    t.add_argument("--caps-from-split", help="pnp-v0.2-split.yaml: take each run's cap from its segment")
-    t.add_argument("--wall-contacts", type=int, default=0, help="wall contacts seen by people or video (default 0, not observable from a bag)")
+    t.add_argument(
+        "--caps",
+        help="comma list, the cap in m/s of each PnP run in order (for the 4.2 acceptance)",
+    )
+    t.add_argument(
+        "--caps-from-split", help="pnp-v0.2-split.yaml: take each run's cap from its segment"
+    )
+    t.add_argument(
+        "--wall-contacts",
+        type=int,
+        default=0,
+        help="wall contacts seen by people or video (default 0, not observable from a bag)",
+    )
     t.add_argument("--limiter-cli", help="path of limiter_whatif_cli")
     t.add_argument("--no-limiter", action="store_true", help="skip the rate limiter what-if")
-    t.add_argument("--check-baseline", action="store_true", help="compare with the 4.2 hand count whatever the bag is called")
+    t.add_argument(
+        "--check-baseline",
+        action="store_true",
+        help="compare with the 4.2 hand count whatever the bag is called",
+    )
     t.set_defaults(func=cmd_timing)
-    lp = sub.add_parser("laps", help="D3-C0: lap memory events against the camera counter (or video)")
+    lp = sub.add_parser(
+        "laps", help="D3-C0: lap memory events against the camera counter (or video)"
+    )
     lp.add_argument("--bag", required=True)
     lp.add_argument("--reference", choices=["camera", "video"], default="camera")
-    lp.add_argument("--times", help="CSV run,lap,lap_time_s of the hand-timed laps (with --reference video)")
+    lp.add_argument(
+        "--times", help="CSV run,lap,lap_time_s of the hand-timed laps (with --reference video)"
+    )
     lp.add_argument("--out", help="write the JSON here")
     lp.set_defaults(func=cmd_laps)
     h = sub.add_parser("host-facts", help="scheduling policy, CPU governor, load: read only")
     h.add_argument("--out-dir", required=True)
     h.set_defaults(func=cmd_host_facts)
-    s = sub.add_parser("limiter-stream", help="developer: the cycle stream of a bag for the tool's ctest")
+    s = sub.add_parser(
+        "limiter-stream", help="developer: the cycle stream of a bag for the tool's ctest"
+    )
     s.add_argument("--bag", required=True)
     s.add_argument("--out", required=True)
     s.add_argument("--events-out", help="write the recorded rate_limit engagements here (JSON)")

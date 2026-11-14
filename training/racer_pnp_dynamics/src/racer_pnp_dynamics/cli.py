@@ -121,6 +121,13 @@ def strict_evaluate(  # pragma: no cover - real data
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - real data
+    import sys
+
+    args_in = sys.argv[1:] if argv is None else argv
+    if args_in and not args_in[0].startswith("-"):  # a v0.3 command (mb1, ...), see cli_v03
+        from . import cli_v03
+
+        return cli_v03.main(args_in)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--stage", choices=("fit", "evaluate", "strict-fit", "strict-evaluate"), required=True

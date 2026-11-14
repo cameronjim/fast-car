@@ -605,8 +605,10 @@ def test_planner_replay_r0_keeps_driving_where_the_v0_car_stopped(tmp_path: Path
     rows, m = replay_cut("R0", tmp_path, "recorded", {})
     assert len(rows["now_s"]) == pytest.approx((7.5 - 3.0) / 0.02, abs=2)
     assert "NO_TRACK" not in m["state_counts"]
-    assert m["state_counts"]["DRIVING"] > 200
-    assert m["speed_zero_share"] < 0.05
+    # the 25 tick warm start (STARTING, planner v0.2) comes first: it is driving that has not begun
+    assert m["state_counts"]["DRIVING"] + m["state_counts"].get("STARTING", 0) > 200
+    warm = rows["state"] != 0  # the zero speed of the warm start itself is not a stop
+    assert float(np.mean(rows["cmd_speed_mps"][warm] == 0.0)) < 0.05
     confusion = m["agreement_with_recorded"]["replayed_to_recorded"]
     assert confusion["DRIVING->NO_TRACK"] > 50  # the v0 car's stall, still in the recording
     assert confusion["DRIVING->DRIVING"] > 100
@@ -644,7 +646,8 @@ def test_planner_replay_r1_moves_at_the_floor_or_backs_out_at_the_recorded_corne
     assert "NO_TRACK" not in m["state_counts"]
     assert_only_start_ramp_ticks_are_in_the_dead_zone(rows)  # v0 crawled under the dead zone
     state, cmd = rows["state"], rows["cmd_speed_mps"]
-    assert set(state.tolist()) <= {1, 5, 7}  # drives, holds with a reason, or backs out
+    # warm start, drives, holds with a reason, or backs out
+    assert set(state.tolist()) <= {0, 1, 5, 7}
     assert (cmd[state == 7] <= 0.0).all()
     assert (cmd[(state != 7) & (state != 1)] == 0.0).all()
     assert m["speed_negative_outside_recovering"] == 0
@@ -665,7 +668,7 @@ def test_planner_replay_drives_on_the_scan_alone_with_no_tracks(
 ) -> None:
     rows, m = replay_cut("L", tmp_path, "none", dict(OPEN_LOOP), bundle=CAR_BUNDLE)
     assert "NO_TRACK" not in set(rows["state_name"]) and 6 not in set(rows["state"])
-    assert set(rows["state"].tolist()) <= {1, 5, 7}  # this cut holds a stuck stretch
+    assert set(rows["state"].tolist()) <= {0, 1, 5, 7}  # warm start; this cut holds a stuck stretch
     assert float(np.nanmax(rows["track_confidence"])) == 0.0  # no track at all
     assert_only_start_ramp_ticks_are_in_the_dead_zone(rows)
     rec, a, b = cut_fixture.load_cut(FIXTURE, "L")

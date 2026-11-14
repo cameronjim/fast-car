@@ -4,7 +4,9 @@
 #define RACER_PLANNER_PLANNER_LOGIC_HPP_
 
 #include <cstdint>
+#include <limits>
 
+#include "racer_planner/dynamics_model.hpp"
 #include "racer_planner/local_track.hpp"
 
 namespace racer_planner {
@@ -23,10 +25,40 @@ enum class PlannerState : std::uint8_t {
 
 struct LogicParams {
   double v_max_mps = 0.5;
+  // Graceful staleness. A scan up to scan_timeout_s old gives the full cap; from there to
+  // scan_hard_timeout_s the cap is multiplied by a linear ramp 1 to 0; beyond it: NO_SCAN. A wheel
+  // speed up to odom_timeout_s old is used as it is; from there to odom_hard_timeout_s the planner
+  // keeps solving with its own speed estimate and the cap may not exceed the last measured wheel
+  // speed plus odom_stale_cap_margin_mps; beyond it: NO_ODOM. A stamp from the future by more than
+  // the first timeout, or one that is not finite, is beyond both at once.
   double scan_timeout_s = 0.35;
+  double scan_hard_timeout_s = 0.60;
   double odom_timeout_s = 0.10;
+  double odom_hard_timeout_s = 0.20;
+  double odom_stale_cap_margin_mps = 0.05;
   bool use_lap_guidance = false;
   double guidance_timeout_s = 2.0;
+  // With use_lap_guidance and no fresh, well formed guidance the cap is min(v_max_mps, this): lap
+  // learning makes v_max_mps the ceiling, and a dead lap memory node must not send the car there.
+  // The default (no limit beyond v_max_mps) is what the node and the replay tool replace with
+  // v_max_mps itself.
+  double v_no_guidance_mps = std::numeric_limits<double>::infinity();
+  // Plan snapshots (Planner::publish): a snapshot older than this while the state would be Driving
+  // or Recovering gives speed 0 and Fault (s).
+  double plan_timeout_s = 0.12;
+  // Warm start gate (start_gate): ticks that must each arrive within start_tick_gap_s of the
+  // previous one, how long STARTING may last before the missing condition is logged, how long the
+  // published speed must have been 0 before a return to Driving goes through STARTING again, and
+  // whether the gated /drive must have been seen (false: sim tests that run without safety_node).
+  int start_ticks = 25;
+  double start_tick_gap_s = 0.03;
+  double start_timeout_s = 5.0;
+  double start_stop_hold_s = 1.0;
+  bool require_gated_for_start = true;
+  // While the gated /drive has not been seen yet (DDS discovery of safety_node takes a few ticks),
+  // STARTING does not publish /drive_raw for up to this long: the steering it would start from is
+  // not known, and a guess of 0 against safety_node's held steering is a rate limit clip.
+  double start_gated_grace_s = 0.5;
   // A gap between two planner ticks longer than this (s) means the planner was stalled long
   // enough for safety_node's /drive_raw watchdog (60 ms) to have braked: the speed ramp then
   // restarts from zero, as from rest, instead of asking safety for a jump from 0 to the old
@@ -70,12 +102,16 @@ struct LogicInputs {
   bool internal_error = false;
   bool has_odom = false;
   double odom_stamp_s = 0.0;
+  double wheel_speed_mps = 0.0;  // the last measured one, used by speed_cap while it is stale
   bool has_scan = false;
   double scan_stamp_s = 0.0;
   TrackSummary track;
   bool has_guidance = false;
   double guidance_stamp_s = 0.0;
   double guidance_v_cap_mps = 0.0;
+  // Set by the lap memory plumbing when a non-empty lap profile is malformed or too old: forces
+  // the same fallback as a missing guidance.
+  bool guidance_profile_bad = false;
 };
 
 // now - stamp, NaN when either is not finite.
@@ -109,13 +145,25 @@ struct Gate {
   bool may_solve = false;  // true only for Driving (the planner may still report Blocked)
 };
 
-// The first rows of the decision table, checked in order: FAULT, NO_ODOM, NO_SCAN, otherwise the
-// planner may solve (it then decides between DRIVING and BLOCKED). The track never gates.
+// The first rows of the decision table, checked in order: FAULT, NO_ODOM (wheel speed older than
+// odom_hard_timeout_s, missing, or a bad stamp), NO_SCAN (scan older than scan_hard_timeout_s,
+// missing, or a bad stamp), otherwise the planner may solve (it then decides between DRIVING and
+// BLOCKED). The track never gates.
 Gate evaluate_gate(const LogicInputs& in, const LogicParams& p);
 
-// min(v_max_mps, guidance cap with a fresh guidance message when enabled) scaled by
-// (f + (1 - f) * confidence) with f = freespace_speed_fraction. Never below 0, never above
-// v_max_mps, NaN guidance ignored, a NaN confidence counts as 0.
+// How an input's age is judged: Fresh up to the first timeout (a stamp ahead of now by up to the
+// timeout is clock skew, still Fresh), Soft between the timeouts, Hard beyond the second, ahead of
+// now by more than the first, or not finite.
+enum class Age : std::uint8_t { Fresh = 0, Soft = 1, Hard = 2 };
+Age classify_age(double now_s, double stamp_s, double timeout_s, double hard_timeout_s);
+
+// min(v_max_mps, guidance cap) scaled by (f + (1 - f) * confidence) with f =
+// freespace_speed_fraction, then by the scan staleness ramp (1 up to scan_timeout_s, linear to 0 at
+// scan_hard_timeout_s, 0 for a missing scan or a bad stamp), then at most the last wheel speed plus
+// odom_stale_cap_margin_mps while the wheel speed is between its two timeouts (0 when it is
+// missing or beyond the second). With use_lap_guidance the guidance cap applies when the guidance
+// is fresh, finite and its profile is not bad; otherwise the cap is min(v_max_mps,
+// v_no_guidance_mps). Never below 0, never above v_max_mps, a NaN confidence counts as 0.
 double speed_cap(const LogicParams& p, const LogicInputs& in, double confidence = 1.0);
 
 struct Command {
@@ -141,6 +189,63 @@ Command command_for_state(PlannerState state, const Command& solver_cmd, double 
 // then the floor itself.
 Command rate_limit(const Command& wanted, const Command& previous, double max_steer_step_rad,
                    double max_speed_up_step_mps, double speed_floor_mps = 0.0);
+
+// Slew limits by elapsed time (the planner publishes from a timer that can be late or arrive just
+// after a late one, so the limit follows the measured time, not the nominal tick).
+struct SlewLimits {
+  double tick_s = 0.02;  // the nominal tick: the upper bound of one step's elapsed time
+  double steering_rate_rad_per_s = 0.0;
+  double max_acceleration_mps2 = 0.0;
+  double fraction = 0.45;  // share of the two limits the planner may use
+  double speed_floor_mps = 0.0;
+};
+
+// elapsed clamped to [0, tick_s]; NaN gives 0 (no movement allowed).
+double slew_elapsed_s(double elapsed_s, double tick_s);
+
+// rate_limit with steps of f * rate * e and f * accel * e, e = slew_elapsed_s(elapsed_s). The dead
+// zone ramp keeps its shape for an on-time tick (equal steps of floor / ceil(floor / (f * accel *
+// tick))) and scales its step by e / tick otherwise, so the ramp takes the same wall time however
+// the ticks land and no step exceeds the limit of its own elapsed time.
+Command slew_limit(const Command& wanted, const Command& previous, double elapsed_s,
+                   const SlewLimits& limits);
+
+// The control `age_s` after the first of n controls spaced dt_s apart: the first for age <= 0 or a
+// NaN age, the last beyond the end, linear in between.
+Control interpolate_plan(const Control* seq, int n, double dt_s, double age_s);
+
+// Why STARTING has not ended yet, first missing condition in this order.
+enum class StartMissing : std::uint8_t {
+  None = 0,
+  NoPlan = 1,        // no plan snapshot, or one older than plan_timeout_s
+  Scan = 2,          // scan not fresh
+  Odom = 3,          // wheel speed not fresh
+  Track = 4,         // a track has arrived once and is not fresh now
+  TickTiming = 5,    // fewer than start_ticks consecutive publish ticks within start_tick_gap_s
+  SolverWarmup = 6,  // fewer than start_ticks consecutive solves on the real inputs
+  Gated = 7,         // the gated /drive has not been seen (and it is required)
+};
+const char* start_missing_name(StartMissing m);
+
+struct StartGateInputs {
+  bool plan_fresh = false;
+  bool scan_fresh = false;
+  bool odom_fresh = false;
+  bool track_ever = false;  // /pnp/local_track has arrived at least once
+  bool track_fresh = false;
+  int publish_good_ticks = 0;  // consecutive publishes each within start_tick_gap_s of the last
+  int solve_good_ticks = 0;    // consecutive solves on the real inputs, same gap rule
+  bool gated_seen = false;
+};
+
+struct StartGateResult {
+  bool leave = false;  // STARTING may end
+  StartMissing missing = StartMissing::None;
+};
+
+// The warm start gate: leave STARTING only when every condition holds (design 14.7). A pure
+// decision; the planner keeps the counters. Not a safety function: safety_node gates /drive_raw.
+StartGateResult start_gate(const StartGateInputs& in, const LogicParams& p);
 
 // One step of a first-order low-pass: previous + (wanted - previous) * (1 - exp(-tick / tau)).
 // tau <= 0 or a non finite input passes `wanted` (or `previous` when wanted is not finite).

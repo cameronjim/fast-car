@@ -4,7 +4,8 @@
 // free-space field of a scan. Prints p50 / p90 / p99 / max in ms per scene and the sample count;
 // exit code 1 when a scene's solve p99 is above --budget-ms (default 12, the Jetson budget) or the
 // field build p99 is above --field-budget-ms (default 3).
-// --background-threads N runs N busy threads for the length of the run, to measure the solve with
+// --background-threads N (or --background-load: one per CPU) runs busy threads for the length of
+// the run, to measure the solve with
 // the rest of the stack competing for cores.
 #include <algorithm>
 #include <atomic>
@@ -26,6 +27,7 @@
 #include "racer_planner/lap_profile.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/mppi.hpp"
+#include "racer_planner/planner.hpp"
 
 using namespace racer_planner;
 
@@ -34,7 +36,7 @@ void usage() {
   std::fprintf(stderr,
                "usage: mppi_bench --bundle DIR [--samples 512] [--solves 2000] [--horizon 30]\n"
                "                  [--speed 0.6] [--budget-ms 12] [--field-budget-ms 3]\n"
-               "                  [--background-threads 0]\n");
+               "                  [--background-threads 0 | --background-load]\n");
 }
 
 struct Stats {
@@ -76,6 +78,8 @@ int main(int argc, char** argv) {
       budget_ms = std::atof(next());
     else if (!std::strcmp(argv[i], "--field-budget-ms"))
       field_budget_ms = std::atof(next());
+    else if (!std::strcmp(argv[i], "--background-load"))
+      background_threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
     else if (!std::strcmp(argv[i], "--background-threads"))
       background_threads = std::atoi(next());
     else {
@@ -267,6 +271,74 @@ int main(int argc, char** argv) {
     const Stats gs = stats_of(gate_ms);
     std::printf("gate table      build ms: p50 %.3f  p90 %.3f  p99 %.3f  max %.3f  (720 beams)\n",
                 gs.p50, gs.p90, gs.p99, gs.max);
+  }
+
+  // The whole planner pipeline on the same corridor: tick() (solve and output in one call, what the
+  // planner has always had) and, on the code with the solve / publish split, the two halves apart:
+  // solve() and publish(), the publish path being what the node's 50 Hz publisher timer runs.
+  {
+    PlannerConfig pc;
+    pc.logic.v_max_mps = speed;
+#ifndef RACER_BENCH_OLD
+    pc.logic.require_gated_for_start = false;
+    pc.logic.start_ticks = 5;
+#endif
+    pc.mppi.samples = samples;
+    pc.mppi.seed = 7;
+    pc.max_samples = samples;
+    Planner planner(pc, dyn, *geometry);
+    auto make_input = [&](double now) {
+      track.stamp_s = now - 0.1;
+      TickInput in;
+      in.now_s = now;
+      in.has_odom = true;
+      in.odom_stamp_s = now;
+      in.wheel_speed_mps = 0.5 * speed;
+      in.has_scan = true;
+      in.scan_stamp_s = now - 0.1;
+      in.field = &field;
+      in.freespace = &freespace;
+      in.track = &track;
+      in.has_gated = true;
+      in.gated_stamp_s = now;
+      in.gated_speed_mps = 1.0;
+      return in;
+    };
+    double t = 1000.0;
+    std::vector<double> tick_ms, solve_ms, publish_ms;
+    for (int i = 0; i < solves + 300; ++i) {
+      t += 0.02;
+      const TickInput in = make_input(t);
+      const bool measure = i >= 300;  // warm up: leave STARTING, ramp, warm start
+#ifdef RACER_BENCH_OLD
+      const auto a = std::chrono::steady_clock::now();
+      planner.tick(in);
+      const auto b = std::chrono::steady_clock::now();
+      if (measure) tick_ms.push_back(std::chrono::duration<double, std::milli>(b - a).count());
+#else
+      PublishInput pin;
+      pin.now_s = t;
+      pin.has_gated = true;
+      pin.gated_stamp_s = t;
+      const auto a = std::chrono::steady_clock::now();
+      planner.solve(in);
+      const auto b = std::chrono::steady_clock::now();
+      planner.publish(pin);
+      const auto c = std::chrono::steady_clock::now();
+      if (measure) {
+        solve_ms.push_back(std::chrono::duration<double, std::milli>(b - a).count());
+        publish_ms.push_back(std::chrono::duration<double, std::milli>(c - b).count());
+        tick_ms.push_back(std::chrono::duration<double, std::milli>(c - a).count());
+      }
+#endif
+    }
+    print_stats("planner tick (solve + output) ", stats_of(tick_ms), budget_ms);
+    if (!solve_ms.empty()) {
+      print_stats("planner solve()               ", stats_of(solve_ms), budget_ms);
+      const Stats ps = stats_of(publish_ms);
+      std::printf("planner publish() path ms: p50 %.4f  p90 %.4f  p99 %.4f  max %.4f\n", ps.p50,
+                  ps.p90, ps.p99, ps.max);
+    }
   }
 
   // The free-space field of one scan (the distance field is built by the same callback, timed

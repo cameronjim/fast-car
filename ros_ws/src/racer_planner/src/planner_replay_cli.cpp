@@ -75,7 +75,17 @@ std::map<std::string, Param> default_params() {
   auto i = [&](const char* n, double v, double lo, double hi) { p[n] = {v, lo, hi, true}; };
   d("v_max_mps", 0.5, 0.1, VEHICLE_PARAMS.limits.global_speed_cap_mps);
   d("scan_timeout_s", lg.scan_timeout_s, 0.05, 5.0);
+  d("scan_hard_timeout_s", lg.scan_hard_timeout_s, 0.05, 0.60);
   d("odom_timeout_s", lg.odom_timeout_s, 0.02, 5.0);
+  d("odom_hard_timeout_s", lg.odom_hard_timeout_s, 0.02, 0.20);
+  d("plan_timeout_s", lg.plan_timeout_s, 0.05, 0.12);
+  i("start_ticks", lg.start_ticks, 1, 200);
+  d("start_tick_gap_s", lg.start_tick_gap_s, 0.01, 0.2);
+  d("start_timeout_s", lg.start_timeout_s, 0.5, 120.0);
+  d("start_stop_hold_s", lg.start_stop_hold_s, 0.2, 60.0);
+  d("require_gated_for_start", 1.0, 0.0, 1.0);
+  d("start_gated_grace_s", lg.start_gated_grace_s, 0.0, 5.0);
+  d("v_no_guidance_mps", 0.5, 0.0, VEHICLE_PARAMS.limits.global_speed_cap_mps);
   d("conf_intrusion_full", lg.conf_intrusion_full, 0.0, 1.0);
   d("conf_intrusion_zero", lg.conf_intrusion_zero, 0.0, 1.0);
   d("conf_residual_full_m", lg.conf_residual_full_m, 0.0, 5.0);
@@ -176,7 +186,17 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   LogicParams& lg = cfg.logic;
   lg.v_max_mps = v("v_max_mps");
   lg.scan_timeout_s = v("scan_timeout_s");
+  lg.scan_hard_timeout_s = v("scan_hard_timeout_s");
   lg.odom_timeout_s = v("odom_timeout_s");
+  lg.odom_hard_timeout_s = v("odom_hard_timeout_s");
+  lg.plan_timeout_s = v("plan_timeout_s");
+  lg.start_ticks = static_cast<int>(v("start_ticks"));
+  lg.start_tick_gap_s = v("start_tick_gap_s");
+  lg.start_timeout_s = v("start_timeout_s");
+  lg.start_stop_hold_s = v("start_stop_hold_s");
+  lg.require_gated_for_start = v("require_gated_for_start") != 0.0;
+  lg.start_gated_grace_s = v("start_gated_grace_s");
+  lg.v_no_guidance_mps = v("v_no_guidance_mps");
   lg.conf_intrusion_full = v("conf_intrusion_full");
   lg.conf_intrusion_zero = v("conf_intrusion_zero");
   lg.conf_residual_full_m = v("conf_residual_full_m");
@@ -253,6 +273,15 @@ std::string csv_number(double v) {
   if (std::isinf(v)) return v > 0 ? "inf" : "-inf";
   char buf[48];
   std::snprintf(buf, sizeof buf, "%.9g", v);
+  return buf;
+}
+
+// The tick time with the microsecond resolution of the stream's K lines (a bag time of a few
+// thousand seconds does not survive %.9g at that resolution).
+std::string time_number(double v) {
+  if (!std::isfinite(v)) return csv_number(v);
+  char buf[48];
+  std::snprintf(buf, sizeof buf, "%.6f", v);
   return buf;
 }
 
@@ -369,7 +398,10 @@ int main(int argc, char** argv) {
     std::cout << "},\"laser_yaw_rad\":" << json_number(laser_yaw_rad)
               << ",\"horizon_steps\":" << planner.horizon_steps()
               << ",\"delay_ticks\":" << planner.delay_ticks()
-              << ",\"tick_s\":" << json_number(cfg.tick_s) << "}\n";
+              << ",\"tick_s\":" << json_number(cfg.tick_s) << ",\"steering_max_rate_rad_per_s\":"
+              << json_number(geometry->steering_max_rate_rad_per_s)
+              << ",\"max_acceleration_mps2\":" << json_number(geometry->max_acceleration_mps2)
+              << "}\n";
     return 0;
   }
 
@@ -388,12 +420,22 @@ int main(int argc, char** argv) {
   csv << "now_s,state,state_name,cmd_speed_mps,cmd_steering_rad,solve_time_s,est_speed_mps,"
          "est_steering_rad,v_cap_mps,best_cost,plan_progress_m,plan_min_clearance_m,"
          "collision_fraction,track_age_s,scan_age_s,samples,samples_halved,track_confidence,"
-         "freespace_goal_x_m,freespace_goal_y_m,freespace_reach_m,block_reason,recovery_attempts\n";
+         "freespace_goal_x_m,freespace_goal_y_m,freespace_reach_m,block_reason,recovery_attempts,"
+         "elapsed_s,bunched,plan_stale,gap_reset,start_missing,steer_step_rad,steer_allow_rad,"
+         "speed_up_step_mps,speed_allow_mps,slew_violation\n";
+  // The elapsed-time check (design 14.7): between two consecutive publishes the steering may move
+  // by at most f * steering_rate * dt and the speed magnitude grow by at most f * max_accel * dt,
+  // dt the real time between the two ticks (not clamped to a tick). One row per tick; the first
+  // has no previous publish.
+  const double slew_fraction = cfg.logic.rate_limit_fraction;
+  bool have_prev_cmd = false;
+  double prev_now = 0.0, prev_steer = 0.0, prev_speed = 0.0;
 
   std::vector<PointXY> points(kMaxScanPoints);
   DistanceField field;
   FreespaceField freespace(*geometry);
   double last_published_speed = 0.0;
+  double last_published_steering = 0.0;
   bool have_prev_goal = false;
   PointXY prev_goal{0.0, 0.0};
   bool has_scan = false;
@@ -492,9 +534,24 @@ int main(int argc, char** argv) {
       ti.has_gated = true;
       ti.gated_stamp_s = now;
       ti.gated_speed_mps = last_published_speed;
+      ti.gated_steering_rad = last_published_steering;
       ti.track = has_track ? &track : nullptr;
       const TickOutput o = planner.tick(ti);
-      csv << csv_number(now) << ',' << static_cast<int>(o.state) << ',' << state_name(o.state)
+      double steer_step = 0.0, steer_allow = 0.0, speed_up = 0.0, speed_allow = 0.0;
+      bool violation = false;
+      if (have_prev_cmd) {
+        const double dt = std::max(0.0, now - prev_now);
+        steer_step = std::fabs(o.cmd.steering_rad - prev_steer);
+        steer_allow = slew_fraction * geometry->steering_max_rate_rad_per_s * dt;
+        speed_up = std::max(0.0, std::fabs(o.cmd.speed_mps) - std::fabs(prev_speed));
+        speed_allow = slew_fraction * geometry->max_acceleration_mps2 * dt;
+        violation = steer_step > steer_allow + 1e-9 || speed_up > speed_allow + 1e-9;
+      }
+      have_prev_cmd = true;
+      prev_now = now;
+      prev_steer = o.cmd.steering_rad;
+      prev_speed = o.cmd.speed_mps;
+      csv << time_number(now) << ',' << static_cast<int>(o.state) << ',' << state_name(o.state)
           << ',' << csv_number(o.cmd.speed_mps) << ',' << csv_number(o.cmd.steering_rad) << ','
           << csv_number(o.solve_time_s) << ',' << csv_number(o.est_speed_mps) << ','
           << csv_number(o.est_steering_rad) << ',' << csv_number(o.v_cap_mps) << ','
@@ -505,8 +562,13 @@ int main(int argc, char** argv) {
           << csv_number(o.has_freespace_goal ? o.freespace_goal_x_m : NAN) << ','
           << csv_number(o.has_freespace_goal ? o.freespace_goal_y_m : NAN) << ','
           << csv_number(o.freespace_reach_m) << ',' << static_cast<int>(o.block_reason) << ','
-          << o.recovery_attempts << '\n';
+          << o.recovery_attempts << ',' << csv_number(o.elapsed_s) << ',' << (o.bunched ? 1 : 0)
+          << ',' << (o.plan_stale ? 1 : 0) << ',' << (o.gap_reset ? 1 : 0) << ','
+          << static_cast<int>(o.start_missing) << ',' << csv_number(steer_step) << ','
+          << csv_number(steer_allow) << ',' << csv_number(speed_up) << ','
+          << csv_number(speed_allow) << ',' << (violation ? 1 : 0) << '\n';
       last_published_speed = o.cmd.speed_mps;
+      last_published_steering = o.cmd.steering_rad;
     } else {
       die(2, "stream line " + std::to_string(line_no) + ": unknown event '" + std::string(1, kind) +
                  "'");

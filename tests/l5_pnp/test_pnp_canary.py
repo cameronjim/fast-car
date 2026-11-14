@@ -23,12 +23,15 @@ sourced ROS workspace.
 from __future__ import annotations
 
 import json
+import math
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 pytest.importorskip("rclpy")
 pytest.importorskip("f1tenth_gym")
@@ -260,3 +263,173 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
         "/drive": ["safety_node"],
     }
     assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+
+# --- planner timing (2026-11-13 night, design 14.7, pre-registration 4.1) ----------------------
+# The planner's output timing against the real safety_node, on the car-like plant: no rate_limit
+# engagement, no watchdog engagement between the first non-zero /drive_raw command and the last
+# planner status, no speed command jump after a stop. The same cases with stalls injected into the
+# planner's SOLVE thread (debug_stall_profile, a 400 ms stall in the first second after DRIVING,
+# then 40 to 90 ms stalls at about 0.2 per second, seeded): the publisher thread keeps /drive_raw
+# coming, a plan older than 0.12 s stops the car and the ramp restarts from zero, so at most one
+# watchdog engagement per run and the same slew behaviour. The stall profile needs the planner on
+# use_sim_time, which the runner gives it with --wall-clock (a /clock from the system clock).
+#
+# Per push: stadium lane 1.0 m both ways at 0.6 and 1.0 m/s, with and without stalls, 3 laps.
+# The full matrix (stadium lane 1.0 and 1.3 m and the rounded rectangle, both ways, 0.6 and 1.0 m/s
+# and the planner bundle's validity ceiling, with and without stalls, 10 laps) runs only with
+# RACER_L5_PNP_FULL=1: about 36 runs of one to four minutes each.
+TIMING_SEED = 13
+TIMING_STALL_SEED = 2026
+RATE_FRACTION = 0.45  # the planner's rate_limit_fraction (its default; the cases leave it alone)
+FULL = os.environ.get("RACER_L5_PNP_FULL") == "1"
+FULL_SKIP = pytest.mark.skipif(
+    not FULL,
+    reason="the full planner timing matrix (about 36 runs of 10 laps) runs only with "
+    "RACER_L5_PNP_FULL=1",
+)
+
+
+def bundle_ceiling_mps() -> float:
+    manifest = yaml.safe_load((PLANNER_BUNDLE / "manifest.yaml").read_text())
+    return float(manifest["io"]["validity"]["v_max_mps"])
+
+
+def stall_profile(seed: int, horizon_s: float = 600.0) -> str:
+    """'T:D,...': T seconds after the first DRIVING the solve thread sleeps D seconds. One stall
+    of 400 ms at 0.5 s, then 40 to 90 ms stalls with exponential gaps of mean 5 s (0.2 per s)."""
+    rng = random.Random(seed)
+    items = [(0.5, 0.4)]
+    t = 0.5
+    while t < horizon_s:
+        t += max(1.0, rng.expovariate(0.2))
+        items.append((t, rng.uniform(0.04, 0.09)))
+    return ",".join(f"{a:.3f}:{b:.3f}" for a, b in items)
+
+
+def timing_id(track, reverse, v_max, stalls, laps) -> str:
+    name, params = track
+    return (
+        f"{name}-lane{params['lane_width_m']}-{'cw' if reverse else 'ccw'}-v{v_max}"
+        f"-{'stalls' if stalls else 'nostalls'}-{laps}laps"
+    )
+
+
+TIMING_PUSH_CASES = [
+    pytest.param(
+        stadium(1.0), reverse, v, stalls, 3, id=timing_id(stadium(1.0), reverse, v, stalls, 3)
+    )
+    for v in (0.6, 1.0)
+    for stalls in (False, True)
+    for reverse in (False, True)
+]
+TIMING_FULL_CASES = [
+    pytest.param(
+        track, reverse, v, stalls, 10, id=timing_id(track, reverse, v, stalls, 10), marks=FULL_SKIP
+    )
+    for track in (stadium(1.0), ROUNDED_RECT, stadium(1.3))
+    for v in (0.6, 1.0, "ceiling")
+    for stalls in (False, True)
+    for reverse in (False, True)
+]
+
+
+def run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domain_id):
+    from racer_tools.vehicle_params_loader import load_vehicle_params
+
+    if v_max == "ceiling":
+        v_max = bundle_ceiling_mps()
+    name, params = track
+    out = tmp_path / "result.json"
+    command = [
+        sys.executable,
+        str(RUNNER),
+        "--track",
+        name,
+        "--track-params-json",
+        json.dumps(params),
+        "--driver",
+        "pnp",
+        "--backend",
+        "geometric",
+        "--dynamics-bundle",
+        str(PLANNER_BUNDLE),
+        "--v-max-mps",
+        str(v_max),
+        "--car",
+        "params",
+        *CAR_LIKE_PLANT,
+        "--seed",
+        str(TIMING_SEED),
+        "--stop-after-laps",
+        str(laps),
+        "--duration",
+        str(60 + 40 * laps),
+        "--domain-id",
+        str(domain_id),
+        "--work-dir",
+        str(tmp_path / "work"),
+        "--out",
+        str(out),
+    ]
+    if stalls:
+        command += [
+            "--wall-clock",
+            "--planner-params-json",
+            json.dumps({"debug_stall_profile": stall_profile(TIMING_STALL_SEED)}),
+        ]
+    if reverse:
+        command.append("--reverse")
+    proc = subprocess.run(
+        command, env=dict(os.environ), capture_output=True, text=True, timeout=1500, check=False
+    )
+    assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
+    result = json.loads(out.read_text())
+    assert "error" not in result, result["error"]
+    counts = result.get("safety_event_counts", {})
+    drive = result.get("drive_raw", {})
+    label = (
+        f"{name} lane {params['lane_width_m']} {'cw' if reverse else 'ccw'} {v_max} m/s "
+        f"{'with stalls' if stalls else 'no stalls'}"
+    )
+    with capsys.disabled():
+        print(
+            f"\nl5_pnp timing {label}: laps {result['laps']} lap_times_s {result['lap_times_s']} "
+            f"wall_contacts {result['wall_contacts']} "
+            f"min_clearance_m {result['min_body_clearance_m']} events {counts} "
+            f"rate_limit_events_whole_run {result['rate_limit_events']} drive_raw {drive} "
+            f"planner_states {result['planner_states']}"
+        )
+    vehicle = load_vehicle_params()
+    accel_allow = RATE_FRACTION * vehicle.actuation.max_acceleration_mps2
+    assert result["laps"] >= laps, result.get("stopped_because")
+    assert result["wall_contacts"] == 0
+    assert result["rate_limit_events"] == 0, (
+        "safety_node rate-limited the planner's command: "
+        f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
+    )
+    watchdogs = counts.get("watchdog", 0)
+    assert watchdogs <= (1 if stalls else 0), f"watchdog engagements in the run: {watchdogs}"
+    ttc = sum(n for source, n in counts.items() if source.startswith("ttc"))
+    assert ttc <= math.ceil(laps / 10), f"TTC or obstacle brakes: {ttc}"
+    # no speed command jump after a stop: the first speed after the command was 0 is one ramp step
+    assert drive["max_first_speed_after_zero_mps"] <= accel_allow * 0.02 + 1e-6, drive
+    # and the speed never rose faster than the planner's share of the acceleration limit (the
+    # window is at least 50 ms, so the 1 ms resolution of stamps is a few percent at most)
+    assert drive["max_speed_rise_mps2"] <= 1.1 * accel_allow, drive
+    assert result["publisher_nodes"] == {
+        "/drive_raw": ["mppi_planner_node"],
+        "/drive": ["safety_node"],
+    }
+    if not stalls:
+        assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+
+@pytest.mark.parametrize(("track", "reverse", "v_max", "stalls", "laps"), TIMING_PUSH_CASES)
+def test_pnp_planner_timing(track, reverse, v_max, stalls, laps, tmp_path, capsys):
+    run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domain_id=83)
+
+
+@pytest.mark.parametrize(("track", "reverse", "v_max", "stalls", "laps"), TIMING_FULL_CASES)
+def test_pnp_planner_timing_full_matrix(track, reverse, v_max, stalls, laps, tmp_path, capsys):
+    run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domain_id=84)

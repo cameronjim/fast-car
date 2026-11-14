@@ -33,7 +33,7 @@ from .checks import Report, Snapshot, evaluate
 from .config import Settings
 from .hostinfo import HostInfo
 from .prefs import Prefs, PrefsStore
-from .rosstate import RosState
+from .rosstate import RATE_WINDOW_S, RosSnapshot, RosState, tf_key
 from .runner import CmdResult, Runner
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,28 @@ SNAPSHOT_TTL_S = 2.0  # a status poll costs about five docker CLI calls; share t
 HEARTBEAT_UNIT = "racer-heartbeat.service"
 GROWTH_WINDOW_S = 30.0  # the bag growth rate is averaged over this long
 GROWTH_MIN_SPAN_S = 2.0  # and is not reported until the samples are this far apart
+
+
+#: AMCL republishes map -> odom on every scan (about 10 Hz) whether or not the filter updated,
+#: so a transform older than the rate window means AMCL stopped.
+MAP_ODOM_TF = tf_key("map", "odom")
+
+
+def localisation_live(ros: RosSnapshot | None) -> bool:
+    """True when AMCL has produced a pose the tracker can start from.
+
+    A rate on /pose is not required: AMCL (racer_state amcl.yaml, update_min_d 0.05 m,
+    update_min_a 0.05 rad) publishes /pose once on the initial pose and then only after the car
+    moves, so a car parked on the start spot reads 0 Hz. Live means any /pose in this bridge
+    connection (the bridge restarts with the stack, so: since the stack started), or a fresh
+    map -> odom transform on /tf.
+    """
+    if ros is None or not ros.connected:
+        return False
+    if ros.rate("/pose") > 0.0 or ros.last_age("/pose") is not None:
+        return True
+    tf_age = ros.last_age(MAP_ODOM_TF)
+    return tf_age is not None and tf_age <= RATE_WINDOW_S
 
 
 class ActionError(Exception):
@@ -898,10 +920,15 @@ class Controller:
         return True
 
     def _tracker_precondition(self, snap: Snapshot) -> None:
-        pose_hz = snap.ros.rate("/pose") if snap.ros else 0.0
-        if snap.stack_flags.get("localization") != "true" or pose_hz <= 0.0:
+        if snap.stack_flags.get("localization") != "true":
             raise ActionError(
                 "the tracker needs the stack running with localisation and a live /pose", 409
+            )
+        if not localisation_live(snap.ros):
+            raise ActionError(
+                "the tracker needs the stack running with localisation and a live /pose: "
+                "AMCL has published neither /pose nor map -> odom since the stack started",
+                409,
             )
 
     def start_drive(

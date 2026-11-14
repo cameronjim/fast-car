@@ -1,0 +1,1376 @@
+{
+  "numpy_vs_torch_max_abs_diff": 2.86102294921875e-06,
+  "recipe_sha": "c66ce014dabac8340239252f70128d7992e17c51",
+  "latency_ms": {
+    "scans": 2000,
+    "p50": 0.7274790550582111,
+    "p99": 0.7740873284637928,
+    "max": 1.430374919436872,
+    "geometric_p50": 0.9470630320720375,
+    "geometric_p99": 1.0158055613283068,
+    "proxy_note": "this is the dev machine (Apple M5 Pro, one thread), not the Orin; the Orin number is taken at the car. The measured p99 is about 13 times under the 10 ms budget."
+  },
+  "gp1b": {
+    "split_sha256": "bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83",
+    "refined": {
+      "candidate": "net",
+      "outcome": "no better than geometric in the layout (item 1 or 2 failed), geometric stays",
+      "failed_items": [
+        1,
+        3,
+        4,
+        5
+      ],
+      "items": [
+        {
+          "number": 1,
+          "name": "v0.2 items 1, 2, 3 and 6 on H-run, full model",
+          "value": {
+            "v0.2 item 1": {
+              "passed": true,
+              "value": {
+                "labelled_scans": 2597
+              }
+            },
+            "v0.2 item 2": {
+              "passed": true,
+              "value": {
+                "e_c_net_m": 0.0639746656092001,
+                "e_c_geometric_m": 0.1355333784055033,
+                "ratio": 0.4720214781173227,
+                "ratio_ci_upper": 0.5201690671269833
+              }
+            },
+            "v0.2 item 3": {
+              "passed": false,
+              "value": {
+                "v_net": 15.309587986137851,
+                "v_geometric": 16.0
+              }
+            },
+            "v0.2 item 6": {
+              "passed": true,
+              "value": {
+                "cells_judged": 8,
+                "cells_not_judged": 1,
+                "worst_ratio": 1.0742689115485564,
+                "failing_cells": []
+              }
+            }
+          },
+          "threshold": {
+            "v0.2 item 1": {
+              "min": 300
+            },
+            "v0.2 item 2": {
+              "ratio_max": 0.9,
+              "ci_upper_below": 1.0
+            },
+            "v0.2 item 3": {
+              "v_net_min": 16.0
+            },
+            "v0.2 item 6": {
+              "ratio_max": 1.1,
+              "min_labelled_scans": 40
+            }
+          },
+          "passed": false,
+          "note": "second read of H-run (read once by net v1 in v0.2)"
+        },
+        {
+          "number": 2,
+          "name": "label-free rule on A-run, full model",
+          "value": {
+            "intrusion_mean": 0.0,
+            "residual_median_m": 0.041015000978176404,
+            "deficit_p90_m": 0.0047690975732677336,
+            "c95": 0.8967651195499297,
+            "geometric_intrusion_mean": 0.0030071895218507115,
+            "geometric_c95": 0.889451476793249
+          },
+          "threshold": {
+            "intrusion_max": 0.02,
+            "residual_median_max_m": 0.1,
+            "deficit_p90_max_m": 0.05,
+            "c95_min": 0.869451476793249,
+            "checks": {
+              "intrusion": true,
+              "residual_median": true,
+              "deficit_p90": true,
+              "c95": true
+            }
+          },
+          "passed": true,
+          "note": "clearance deficit p90 holds by construction for the refined output (per-side clearance cap of refine.py); see the variant without the cap"
+        },
+        {
+          "number": 3,
+          "name": "each fold with 100 or more labelled scans: accuracy and range",
+          "value": {
+            "F1": {
+              "labelled_scans": 1634,
+              "judged": true,
+              "e_c_net_m": 0.11259382577984181,
+              "e_c_geometric_m": 0.1741304393986254,
+              "ratio": 0.64660622329269,
+              "v_net": 14.392288861689106,
+              "v_geometric": 15.2796817625459,
+              "passed": false
+            },
+            "F2": {
+              "labelled_scans": 3271,
+              "judged": true,
+              "e_c_net_m": 0.10217078900671242,
+              "e_c_geometric_m": 0.1688759208259748,
+              "ratio": 0.6050050741810524,
+              "v_net": 15.23723631916845,
+              "v_geometric": 15.037603179455823,
+              "passed": true
+            }
+          },
+          "threshold": {
+            "min_labelled_scans": 100,
+            "F1": {
+              "ratio_max": 1.0,
+              "v_net_min": 14.7796817625459
+            },
+            "F2": {
+              "ratio_max": 1.0,
+              "v_net_min": 14.537603179455823
+            }
+          },
+          "passed": false,
+          "note": ""
+        },
+        {
+          "number": 4,
+          "name": "each fold, all moving scans: the label-free rule",
+          "value": {
+            "F1": {
+              "intrusion_mean": 4.497488851712009e-05,
+              "residual_median_m": 0.05042058999792505,
+              "deficit_p90_m": 0.005790457066310738,
+              "c95": 0.603112840466926,
+              "geometric_intrusion_mean": 0.005047193801442778,
+              "geometric_c95": 0.6356145571068894,
+              "passed": false,
+              "moving_scans": 4826
+            },
+            "F2": {
+              "intrusion_mean": 0.00019174367465133398,
+              "residual_median_m": 0.04229583083158281,
+              "deficit_p90_m": 0.005860053021435502,
+              "c95": 0.8333000997008974,
+              "geometric_intrusion_mean": 0.00720176891732898,
+              "geometric_c95": 0.7475573280159521,
+              "passed": true,
+              "moving_scans": 5201
+            }
+          },
+          "threshold": {
+            "F1": {
+              "intrusion_max": 0.02,
+              "residual_median_max_m": 0.1,
+              "deficit_p90_max_m": 0.05,
+              "c95_min": 0.6156145571068894,
+              "checks": {
+                "intrusion": true,
+                "residual_median": true,
+                "deficit_p90": true,
+                "c95": false
+              }
+            },
+            "F2": {
+              "intrusion_max": 0.02,
+              "residual_median_max_m": 0.1,
+              "deficit_p90_max_m": 0.05,
+              "c95_min": 0.7275573280159521,
+              "checks": {
+                "intrusion": true,
+                "residual_median": true,
+                "deficit_p90": true,
+                "c95": true
+              }
+            }
+          },
+          "passed": false,
+          "note": "clearance deficit p90 holds by construction for the refined output (per-side clearance cap of refine.py); see the variant without the cap"
+        },
+        {
+          "number": 5,
+          "name": "label-free rule on the 2026-11-12 layout, full model",
+          "value": {
+            "intrusion_mean": 1.8049205248290467e-05,
+            "residual_median_m": 0.045289575927650136,
+            "deficit_p90_m": 0.005396252688061654,
+            "c95": 0.4800498753117207,
+            "geometric_intrusion_mean": 0.006523744443497586,
+            "geometric_c95": 0.5635910224438903
+          },
+          "threshold": {
+            "intrusion_max": 0.02,
+            "residual_median_max_m": 0.1,
+            "deficit_p90_max_m": 0.05,
+            "c95_min": 0.5435910224438902,
+            "checks": {
+              "intrusion": true,
+              "residual_median": true,
+              "deficit_p90": true,
+              "c95": false
+            }
+          },
+          "passed": false,
+          "note": "development data, reported and not evidence; clearance deficit p90 holds by construction for the refined output (per-side clearance cap of refine.py); see the variant without the cap"
+        }
+      ],
+      "H-run": {
+        "net": {
+          "scans": 2597,
+          "e_c_m": 0.0639746656092001,
+          "e_far_m": 0.09203395095884738,
+          "v": 15.309587986137851,
+          "c95": 0.9453215248363497
+        },
+        "geometric": {
+          "scans": 2597,
+          "e_c_m": 0.1355333784055033,
+          "e_far_m": 0.19286919828938906,
+          "v": 16.0,
+          "c95": 0.9341547939930689
+        }
+      },
+      "H-layout": {
+        "net": {
+          "scans": 1088,
+          "e_c_m": 0.14140773752116087,
+          "e_far_m": 0.21068470056104824,
+          "v": 15.120404411764707,
+          "c95": 0.7251838235294118
+        },
+        "geometric": {
+          "scans": 1088,
+          "e_c_m": 0.14998033866723068,
+          "e_far_m": 0.21716333822504616,
+          "v": 15.954963235294118,
+          "c95": 0.7987132352941176
+        }
+      },
+      "A-run": {
+        "net": {
+          "scans": 4009,
+          "intrusion_mean": 0.0,
+          "residual_median_m": 0.041015000978176404,
+          "deficit_p90_m": 0.0047690975732677336,
+          "c95": 0.8967651195499297,
+          "c95_scans": 3555
+        },
+        "geometric": {
+          "scans": 4009,
+          "intrusion_mean": 0.0030071895218507115,
+          "residual_median_m": 0.02585216730242696,
+          "deficit_p90_m": 0.020750275475334437,
+          "c95": 0.889451476793249,
+          "c95_scans": 3555
+        }
+      },
+      "A-layout-2026-11-12": {
+        "net": {
+          "scans": 2715,
+          "intrusion_mean": 1.8049205248290467e-05,
+          "residual_median_m": 0.045289575927650136,
+          "deficit_p90_m": 0.005396252688061654,
+          "c95": 0.4800498753117207,
+          "c95_scans": 2406
+        },
+        "geometric": {
+          "scans": 2715,
+          "intrusion_mean": 0.006523744443497586,
+          "residual_median_m": 0.030999938014880497,
+          "deficit_p90_m": 0.024630889218260454,
+          "c95": 0.5635910224438903,
+          "c95_scans": 2406
+        }
+      },
+      "bootstrap_ci_hi": 0.5201690671269833,
+      "cells": [
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "0.85+",
+          "scans": 269,
+          "e_c_net_m": 0.13935276802237848,
+          "e_c_geo_m": 0.19773092600951506,
+          "judged": true,
+          "ratio": 0.7047595984842181
+        },
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 797,
+          "e_c_net_m": 0.14055488656429954,
+          "e_c_geo_m": 0.1308377120973276,
+          "judged": true,
+          "ratio": 1.0742689115485564
+        },
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 22,
+          "e_c_net_m": 0.21355709346780466,
+          "e_c_geo_m": 0.259606037809877,
+          "judged": false,
+          "ratio": 0.8226199023314074
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "0.85+",
+          "scans": 42,
+          "e_c_net_m": 0.09108198942154229,
+          "e_c_geo_m": 0.09375445421589237,
+          "judged": true,
+          "ratio": 0.9714950631764536
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 1224,
+          "e_c_net_m": 0.06697664517309994,
+          "e_c_geo_m": 0.12005534503169453,
+          "judged": true,
+          "ratio": 0.5578814100731471
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 156,
+          "e_c_net_m": 0.07428289673599454,
+          "e_c_geo_m": 0.1434420954148439,
+          "judged": true,
+          "ratio": 0.5178598131961442
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "0.85+",
+          "scans": 48,
+          "e_c_net_m": 0.05685867694599248,
+          "e_c_geo_m": 0.15749344433545018,
+          "judged": true,
+          "ratio": 0.36102249960885624
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 958,
+          "e_c_net_m": 0.05989954253379985,
+          "e_c_geo_m": 0.14933416985036274,
+          "judged": true,
+          "ratio": 0.40111076114609917
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 169,
+          "e_c_net_m": 0.05110200714739918,
+          "e_c_geo_m": 0.166248327773762,
+          "judged": true,
+          "ratio": 0.30738358593862686
+        }
+      ],
+      "folds": {
+        "F1": {
+          "labelled": {
+            "net": {
+              "scans": 1634,
+              "e_c_m": 0.11259382577984181,
+              "e_far_m": 0.17869291849286872,
+              "v": 14.392288861689106,
+              "c95": 0.8476132190942472
+            },
+            "geometric": {
+              "scans": 1634,
+              "e_c_m": 0.1741304393986254,
+              "e_far_m": 0.3050469506057798,
+              "v": 15.2796817625459,
+              "c95": 0.8347613219094248
+            }
+          },
+          "free": {
+            "net": {
+              "scans": 4826,
+              "intrusion_mean": 4.497488851712009e-05,
+              "residual_median_m": 0.05042058999792505,
+              "deficit_p90_m": 0.005790457066310738,
+              "c95": 0.603112840466926,
+              "c95_scans": 4369
+            },
+            "geometric": {
+              "scans": 4826,
+              "intrusion_mean": 0.005047193801442778,
+              "residual_median_m": 0.03273608640295215,
+              "deficit_p90_m": 0.024086812341673546,
+              "c95": 0.6356145571068894,
+              "c95_scans": 4369
+            }
+          }
+        },
+        "F2": {
+          "labelled": {
+            "net": {
+              "scans": 3271,
+              "e_c_m": 0.10217078900671242,
+              "e_far_m": 0.17709872494186862,
+              "v": 15.23723631916845,
+              "c95": 0.8498929990828493
+            },
+            "geometric": {
+              "scans": 3271,
+              "e_c_m": 0.1688759208259748,
+              "e_far_m": 0.3334700039455171,
+              "v": 15.037603179455823,
+              "c95": 0.7529807398349129
+            }
+          },
+          "free": {
+            "net": {
+              "scans": 5201,
+              "intrusion_mean": 0.00019174367465133398,
+              "residual_median_m": 0.04229583083158281,
+              "deficit_p90_m": 0.005860053021435502,
+              "c95": 0.8333000997008974,
+              "c95_scans": 5015
+            },
+            "geometric": {
+              "scans": 5201,
+              "intrusion_mean": 0.00720176891732898,
+              "residual_median_m": 0.034702792096375064,
+              "deficit_p90_m": 0.04278227447740435,
+              "c95": 0.7475573280159521,
+              "c95_scans": 5015
+            }
+          }
+        }
+      }
+    },
+    "refined_no_cap": {
+      "candidate": "net_refined_no_cap",
+      "outcome": "no better than geometric in the layout (item 1 or 2 failed), geometric stays",
+      "failed_items": [
+        1,
+        3,
+        4,
+        5
+      ],
+      "items": [
+        {
+          "number": 1,
+          "name": "v0.2 items 1, 2, 3 and 6 on H-run, full model",
+          "value": {
+            "v0.2 item 1": {
+              "passed": true,
+              "value": {
+                "labelled_scans": 2597
+              }
+            },
+            "v0.2 item 2": {
+              "passed": true,
+              "value": {
+                "e_c_net_m": 0.0639746656092001,
+                "e_c_geometric_m": 0.1355333784055033,
+                "ratio": 0.4720214781173227,
+                "ratio_ci_upper": 0.5201690671269833
+              }
+            },
+            "v0.2 item 3": {
+              "passed": false,
+              "value": {
+                "v_net": 15.309587986137851,
+                "v_geometric": 16.0
+              }
+            },
+            "v0.2 item 6": {
+              "passed": true,
+              "value": {
+                "cells_judged": 8,
+                "cells_not_judged": 1,
+                "worst_ratio": 1.0742689115485564,
+                "failing_cells": []
+              }
+            }
+          },
+          "threshold": {
+            "v0.2 item 1": {
+              "min": 300
+            },
+            "v0.2 item 2": {
+              "ratio_max": 0.9,
+              "ci_upper_below": 1.0
+            },
+            "v0.2 item 3": {
+              "v_net_min": 16.0
+            },
+            "v0.2 item 6": {
+              "ratio_max": 1.1,
+              "min_labelled_scans": 40
+            }
+          },
+          "passed": false,
+          "note": "second read of H-run (read once by net v1 in v0.2)"
+        },
+        {
+          "number": 2,
+          "name": "label-free rule on A-run, full model",
+          "value": {
+            "intrusion_mean": 7.385371646672004e-07,
+            "residual_median_m": 0.04079118030461324,
+            "deficit_p90_m": 0.005095030523453415,
+            "c95": 0.8967651195499297,
+            "geometric_intrusion_mean": 0.0030071895218507115,
+            "geometric_c95": 0.889451476793249
+          },
+          "threshold": {
+            "intrusion_max": 0.02,
+            "residual_median_max_m": 0.1,
+            "deficit_p90_max_m": 0.05,
+            "c95_min": 0.869451476793249,
+            "checks": {
+              "intrusion": true,
+              "residual_median": true,
+              "deficit_p90": true,
+              "c95": true
+            }
+          },
+          "passed": true,
+          "note": ""
+        },
+        {
+          "number": 3,
+          "name": "each fold with 100 or more labelled scans: accuracy and range",
+          "value": {
+            "F1": {
+              "labelled_scans": 1634,
+              "judged": true,
+              "e_c_net_m": 0.11259382577984181,
+              "e_c_geometric_m": 0.1741304393986254,
+              "ratio": 0.64660622329269,
+              "v_net": 14.392288861689106,
+              "v_geometric": 15.2796817625459,
+              "passed": false
+            },
+            "F2": {
+              "labelled_scans": 3271,
+              "judged": true,
+              "e_c_net_m": 0.10217078900671242,
+              "e_c_geometric_m": 0.1688759208259748,
+              "ratio": 0.6050050741810524,
+              "v_net": 15.23723631916845,
+              "v_geometric": 15.037603179455823,
+              "passed": true
+            }
+          },
+          "threshold": {
+            "min_labelled_scans": 100,
+            "F1": {
+              "ratio_max": 1.0,
+              "v_net_min": 14.7796817625459
+            },
+            "F2": {
+              "ratio_max": 1.0,
+              "v_net_min": 14.537603179455823
+            }
+          },
+          "passed": false,
+          "note": ""
+        },
+        {
+          "number": 4,
+          "name": "each fold, all moving scans: the label-free rule",
+          "value": {
+            "F1": {
+              "intrusion_mean": 0.0008608516588896093,
+              "residual_median_m": 0.04875934088713258,
+              "deficit_p90_m": 0.013024555197556102,
+              "c95": 0.6033417257953765,
+              "geometric_intrusion_mean": 0.005047193801442778,
+              "geometric_c95": 0.6356145571068894,
+              "passed": false,
+              "moving_scans": 4826
+            },
+            "F2": {
+              "intrusion_mean": 0.0011467460885873852,
+              "residual_median_m": 0.04021952469974644,
+              "deficit_p90_m": 0.010597175630240893,
+              "c95": 0.8333000997008974,
+              "geometric_intrusion_mean": 0.00720176891732898,
+              "geometric_c95": 0.7475573280159521,
+              "passed": true,
+              "moving_scans": 5201
+            }
+          },
+          "threshold": {
+            "F1": {
+              "intrusion_max": 0.02,
+              "residual_median_max_m": 0.1,
+              "deficit_p90_max_m": 0.05,
+              "c95_min": 0.6156145571068894,
+              "checks": {
+                "intrusion": true,
+                "residual_median": true,
+                "deficit_p90": true,
+                "c95": false
+              }
+            },
+            "F2": {
+              "intrusion_max": 0.02,
+              "residual_median_max_m": 0.1,
+              "deficit_p90_max_m": 0.05,
+              "c95_min": 0.7275573280159521,
+              "checks": {
+                "intrusion": true,
+                "residual_median": true,
+                "deficit_p90": true,
+                "c95": true
+              }
+            }
+          },
+          "passed": false,
+          "note": ""
+        },
+        {
+          "number": 5,
+          "name": "label-free rule on the 2026-11-12 layout, full model",
+          "value": {
+            "intrusion_mean": 0.00034122346850133314,
+            "residual_median_m": 0.04346964980036955,
+            "deficit_p90_m": 0.006363579205511528,
+            "c95": 0.4800498753117207,
+            "geometric_intrusion_mean": 0.006523744443497586,
+            "geometric_c95": 0.5635910224438903
+          },
+          "threshold": {
+            "intrusion_max": 0.02,
+            "residual_median_max_m": 0.1,
+            "deficit_p90_max_m": 0.05,
+            "c95_min": 0.5435910224438902,
+            "checks": {
+              "intrusion": true,
+              "residual_median": true,
+              "deficit_p90": true,
+              "c95": false
+            }
+          },
+          "passed": false,
+          "note": "development data, reported and not evidence"
+        }
+      ],
+      "H-run": {
+        "net": {
+          "scans": 2597,
+          "e_c_m": 0.0639746656092001,
+          "e_far_m": 0.09203395095884738,
+          "v": 15.309587986137851,
+          "c95": 0.9453215248363497
+        },
+        "geometric": {
+          "scans": 2597,
+          "e_c_m": 0.1355333784055033,
+          "e_far_m": 0.19286919828938906,
+          "v": 16.0,
+          "c95": 0.9341547939930689
+        }
+      },
+      "H-layout": {
+        "net": {
+          "scans": 1088,
+          "e_c_m": 0.14140773752116087,
+          "e_far_m": 0.21068470056104824,
+          "v": 15.120404411764707,
+          "c95": 0.7251838235294118
+        },
+        "geometric": {
+          "scans": 1088,
+          "e_c_m": 0.14998033866723068,
+          "e_far_m": 0.21716333822504616,
+          "v": 15.954963235294118,
+          "c95": 0.7987132352941176
+        }
+      },
+      "A-run": {
+        "net": {
+          "scans": 4009,
+          "intrusion_mean": 7.385371646672004e-07,
+          "residual_median_m": 0.04079118030461324,
+          "deficit_p90_m": 0.005095030523453415,
+          "c95": 0.8967651195499297,
+          "c95_scans": 3555
+        },
+        "geometric": {
+          "scans": 4009,
+          "intrusion_mean": 0.0030071895218507115,
+          "residual_median_m": 0.02585216730242696,
+          "deficit_p90_m": 0.020750275475334437,
+          "c95": 0.889451476793249,
+          "c95_scans": 3555
+        }
+      },
+      "A-layout-2026-11-12": {
+        "net": {
+          "scans": 2715,
+          "intrusion_mean": 0.00034122346850133314,
+          "residual_median_m": 0.04346964980036955,
+          "deficit_p90_m": 0.006363579205511528,
+          "c95": 0.4800498753117207,
+          "c95_scans": 2406
+        },
+        "geometric": {
+          "scans": 2715,
+          "intrusion_mean": 0.006523744443497586,
+          "residual_median_m": 0.030999938014880497,
+          "deficit_p90_m": 0.024630889218260454,
+          "c95": 0.5635910224438903,
+          "c95_scans": 2406
+        }
+      },
+      "bootstrap_ci_hi": 0.5201690671269833,
+      "cells": [
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "0.85+",
+          "scans": 269,
+          "e_c_net_m": 0.13935276802237848,
+          "e_c_geo_m": 0.19773092600951506,
+          "judged": true,
+          "ratio": 0.7047595984842181
+        },
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 797,
+          "e_c_net_m": 0.14055488656429954,
+          "e_c_geo_m": 0.1308377120973276,
+          "judged": true,
+          "ratio": 1.0742689115485564
+        },
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 22,
+          "e_c_net_m": 0.21355709346780466,
+          "e_c_geo_m": 0.259606037809877,
+          "judged": false,
+          "ratio": 0.8226199023314074
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "0.85+",
+          "scans": 42,
+          "e_c_net_m": 0.09108198942154229,
+          "e_c_geo_m": 0.09375445421589237,
+          "judged": true,
+          "ratio": 0.9714950631764536
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 1224,
+          "e_c_net_m": 0.06697664517309994,
+          "e_c_geo_m": 0.12005534503169453,
+          "judged": true,
+          "ratio": 0.5578814100731471
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 156,
+          "e_c_net_m": 0.07428289673599454,
+          "e_c_geo_m": 0.1434420954148439,
+          "judged": true,
+          "ratio": 0.5178598131961442
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "0.85+",
+          "scans": 48,
+          "e_c_net_m": 0.05685867694599248,
+          "e_c_geo_m": 0.15749344433545018,
+          "judged": true,
+          "ratio": 0.36102249960885624
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 958,
+          "e_c_net_m": 0.05989954253379985,
+          "e_c_geo_m": 0.14933416985036274,
+          "judged": true,
+          "ratio": 0.40111076114609917
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 169,
+          "e_c_net_m": 0.05110200714739918,
+          "e_c_geo_m": 0.166248327773762,
+          "judged": true,
+          "ratio": 0.30738358593862686
+        }
+      ],
+      "folds": {
+        "F1": {
+          "labelled": {
+            "net": {
+              "scans": 1634,
+              "e_c_m": 0.11259382577984181,
+              "e_far_m": 0.17869291849286872,
+              "v": 14.392288861689106,
+              "c95": 0.8476132190942472
+            },
+            "geometric": {
+              "scans": 1634,
+              "e_c_m": 0.1741304393986254,
+              "e_far_m": 0.3050469506057798,
+              "v": 15.2796817625459,
+              "c95": 0.8347613219094248
+            }
+          },
+          "free": {
+            "net": {
+              "scans": 4826,
+              "intrusion_mean": 0.0008608516588896093,
+              "residual_median_m": 0.04875934088713258,
+              "deficit_p90_m": 0.013024555197556102,
+              "c95": 0.6033417257953765,
+              "c95_scans": 4369
+            },
+            "geometric": {
+              "scans": 4826,
+              "intrusion_mean": 0.005047193801442778,
+              "residual_median_m": 0.03273608640295215,
+              "deficit_p90_m": 0.024086812341673546,
+              "c95": 0.6356145571068894,
+              "c95_scans": 4369
+            }
+          }
+        },
+        "F2": {
+          "labelled": {
+            "net": {
+              "scans": 3271,
+              "e_c_m": 0.10217078900671242,
+              "e_far_m": 0.17709872494186862,
+              "v": 15.23723631916845,
+              "c95": 0.8498929990828493
+            },
+            "geometric": {
+              "scans": 3271,
+              "e_c_m": 0.1688759208259748,
+              "e_far_m": 0.3334700039455171,
+              "v": 15.037603179455823,
+              "c95": 0.7529807398349129
+            }
+          },
+          "free": {
+            "net": {
+              "scans": 5201,
+              "intrusion_mean": 0.0011467460885873852,
+              "residual_median_m": 0.04021952469974644,
+              "deficit_p90_m": 0.010597175630240893,
+              "c95": 0.8333000997008974,
+              "c95_scans": 5015
+            },
+            "geometric": {
+              "scans": 5201,
+              "intrusion_mean": 0.00720176891732898,
+              "residual_median_m": 0.034702792096375064,
+              "deficit_p90_m": 0.04278227447740435,
+              "c95": 0.7475573280159521,
+              "c95_scans": 5015
+            }
+          }
+        }
+      }
+    },
+    "unrefined": {
+      "candidate": "net_unrefined",
+      "outcome": "better where it trained, not shown elsewhere (items 1 and 2 passed, item 3, 4 or 5 failed), geometric stays deployed",
+      "failed_items": [
+        4,
+        5
+      ],
+      "items": [
+        {
+          "number": 1,
+          "name": "v0.2 items 1, 2, 3 and 6 on H-run, full model",
+          "value": {
+            "v0.2 item 1": {
+              "passed": true,
+              "value": {
+                "labelled_scans": 2597
+              }
+            },
+            "v0.2 item 2": {
+              "passed": true,
+              "value": {
+                "e_c_net_m": 0.05690862798411213,
+                "e_c_geometric_m": 0.1355333784055033,
+                "ratio": 0.41988644165459216,
+                "ratio_ci_upper": 0.44794994030360946
+              }
+            },
+            "v0.2 item 3": {
+              "passed": true,
+              "value": {
+                "v_net": 16.0,
+                "v_geometric": 16.0
+              }
+            },
+            "v0.2 item 6": {
+              "passed": true,
+              "value": {
+                "cells_judged": 8,
+                "cells_not_judged": 1,
+                "worst_ratio": 1.0644314213720678,
+                "failing_cells": []
+              }
+            }
+          },
+          "threshold": {
+            "v0.2 item 1": {
+              "min": 300
+            },
+            "v0.2 item 2": {
+              "ratio_max": 0.9,
+              "ci_upper_below": 1.0
+            },
+            "v0.2 item 3": {
+              "v_net_min": 16.0
+            },
+            "v0.2 item 6": {
+              "ratio_max": 1.1,
+              "min_labelled_scans": 40
+            }
+          },
+          "passed": true,
+          "note": "second read of H-run (read once by net v1 in v0.2)"
+        },
+        {
+          "number": 2,
+          "name": "label-free rule on A-run, full model",
+          "value": {
+            "intrusion_mean": 0.003480010223029108,
+            "residual_median_m": 0.07026974339676793,
+            "deficit_p90_m": 0.02272773604417388,
+            "c95": 0.8807313642756681,
+            "geometric_intrusion_mean": 0.0030071895218507115,
+            "geometric_c95": 0.889451476793249
+          },
+          "threshold": {
+            "intrusion_max": 0.02,
+            "residual_median_max_m": 0.1,
+            "deficit_p90_max_m": 0.05,
+            "c95_min": 0.869451476793249,
+            "checks": {
+              "intrusion": true,
+              "residual_median": true,
+              "deficit_p90": true,
+              "c95": true
+            }
+          },
+          "passed": true,
+          "note": ""
+        },
+        {
+          "number": 3,
+          "name": "each fold with 100 or more labelled scans: accuracy and range",
+          "value": {
+            "F1": {
+              "labelled_scans": 1634,
+              "judged": true,
+              "e_c_net_m": 0.12174863364798352,
+              "e_c_geometric_m": 0.1741304393986254,
+              "ratio": 0.6991806491068018,
+              "v_net": 15.06609547123623,
+              "v_geometric": 15.2796817625459,
+              "passed": true
+            },
+            "F2": {
+              "labelled_scans": 3271,
+              "judged": true,
+              "e_c_net_m": 0.10649378064716751,
+              "e_c_geometric_m": 0.1688759208259748,
+              "ratio": 0.6306037007899334,
+              "v_net": 15.757566493427086,
+              "v_geometric": 15.037603179455823,
+              "passed": true
+            }
+          },
+          "threshold": {
+            "min_labelled_scans": 100,
+            "F1": {
+              "ratio_max": 1.0,
+              "v_net_min": 14.7796817625459
+            },
+            "F2": {
+              "ratio_max": 1.0,
+              "v_net_min": 14.537603179455823
+            }
+          },
+          "passed": true,
+          "note": ""
+        },
+        {
+          "number": 4,
+          "name": "each fold, all moving scans: the label-free rule",
+          "value": {
+            "F1": {
+              "intrusion_mean": 0.06632892026228798,
+              "residual_median_m": 0.11726064207239123,
+              "deficit_p90_m": 0.1121623908058462,
+              "c95": 0.616388189517052,
+              "geometric_intrusion_mean": 0.005047193801442778,
+              "geometric_c95": 0.6356145571068894,
+              "passed": false,
+              "moving_scans": 4826
+            },
+            "F2": {
+              "intrusion_mean": 0.05156177928333608,
+              "residual_median_m": 0.08894537865393876,
+              "deficit_p90_m": 0.0825869401703286,
+              "c95": 0.8713858424725822,
+              "geometric_intrusion_mean": 0.00720176891732898,
+              "geometric_c95": 0.7475573280159521,
+              "passed": false,
+              "moving_scans": 5201
+            }
+          },
+          "threshold": {
+            "F1": {
+              "intrusion_max": 0.02,
+              "residual_median_max_m": 0.1,
+              "deficit_p90_max_m": 0.05,
+              "c95_min": 0.6156145571068894,
+              "checks": {
+                "intrusion": false,
+                "residual_median": false,
+                "deficit_p90": false,
+                "c95": true
+              }
+            },
+            "F2": {
+              "intrusion_max": 0.02,
+              "residual_median_max_m": 0.1,
+              "deficit_p90_max_m": 0.05,
+              "c95_min": 0.7275573280159521,
+              "checks": {
+                "intrusion": false,
+                "residual_median": true,
+                "deficit_p90": false,
+                "c95": true
+              }
+            }
+          },
+          "passed": false,
+          "note": ""
+        },
+        {
+          "number": 5,
+          "name": "label-free rule on the 2026-11-12 layout, full model",
+          "value": {
+            "intrusion_mean": 0.014399724228337742,
+            "residual_median_m": 0.08911981971468615,
+            "deficit_p90_m": 0.055701054976017746,
+            "c95": 0.5062344139650873,
+            "geometric_intrusion_mean": 0.006523744443497586,
+            "geometric_c95": 0.5635910224438903
+          },
+          "threshold": {
+            "intrusion_max": 0.02,
+            "residual_median_max_m": 0.1,
+            "deficit_p90_max_m": 0.05,
+            "c95_min": 0.5435910224438902,
+            "checks": {
+              "intrusion": true,
+              "residual_median": true,
+              "deficit_p90": false,
+              "c95": false
+            }
+          },
+          "passed": false,
+          "note": "development data, reported and not evidence"
+        }
+      ],
+      "H-run": {
+        "net": {
+          "scans": 2597,
+          "e_c_m": 0.05690862798411213,
+          "e_far_m": 0.07886301224307732,
+          "v": 16.0,
+          "c95": 0.9083557951482479
+        },
+        "geometric": {
+          "scans": 2597,
+          "e_c_m": 0.1355333784055033,
+          "e_far_m": 0.19286919828938906,
+          "v": 16.0,
+          "c95": 0.9341547939930689
+        }
+      },
+      "H-layout": {
+        "net": {
+          "scans": 1088,
+          "e_c_m": 0.13727694423757542,
+          "e_far_m": 0.1984492490242629,
+          "v": 15.71875,
+          "c95": 0.7527573529411765
+        },
+        "geometric": {
+          "scans": 1088,
+          "e_c_m": 0.14998033866723068,
+          "e_far_m": 0.21716333822504616,
+          "v": 15.954963235294118,
+          "c95": 0.7987132352941176
+        }
+      },
+      "A-run": {
+        "net": {
+          "scans": 4009,
+          "intrusion_mean": 0.003480010223029108,
+          "residual_median_m": 0.07026974339676793,
+          "deficit_p90_m": 0.02272773604417388,
+          "c95": 0.8807313642756681,
+          "c95_scans": 3555
+        },
+        "geometric": {
+          "scans": 4009,
+          "intrusion_mean": 0.0030071895218507115,
+          "residual_median_m": 0.02585216730242696,
+          "deficit_p90_m": 0.020750275475334437,
+          "c95": 0.889451476793249,
+          "c95_scans": 3555
+        }
+      },
+      "A-layout-2026-11-12": {
+        "net": {
+          "scans": 2715,
+          "intrusion_mean": 0.014399724228337742,
+          "residual_median_m": 0.08911981971468615,
+          "deficit_p90_m": 0.055701054976017746,
+          "c95": 0.5062344139650873,
+          "c95_scans": 2406
+        },
+        "geometric": {
+          "scans": 2715,
+          "intrusion_mean": 0.006523744443497586,
+          "residual_median_m": 0.030999938014880497,
+          "deficit_p90_m": 0.024630889218260454,
+          "c95": 0.5635910224438903,
+          "c95_scans": 2406
+        }
+      },
+      "bootstrap_ci_hi": 0.44794994030360946,
+      "cells": [
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "0.85+",
+          "scans": 269,
+          "e_c_net_m": 0.12831253776377535,
+          "e_c_geo_m": 0.19773092600951506,
+          "judged": true,
+          "ratio": 0.6489249828203444
+        },
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 797,
+          "e_c_net_m": 0.13926777185682782,
+          "e_c_geo_m": 0.1308377120973276,
+          "judged": true,
+          "ratio": 1.0644314213720678
+        },
+        {
+          "set": "layout",
+          "direction": "unknown",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 22,
+          "e_c_net_m": 0.18661056319303562,
+          "e_c_geo_m": 0.259606037809877,
+          "judged": false,
+          "ratio": 0.7188221228109503
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "0.85+",
+          "scans": 42,
+          "e_c_net_m": 0.07548256669848297,
+          "e_c_geo_m": 0.09375445421589237,
+          "judged": true,
+          "ratio": 0.8051091260652645
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 1224,
+          "e_c_net_m": 0.053874646028123155,
+          "e_c_geo_m": 0.12005534503169453,
+          "judged": true,
+          "ratio": 0.4487484169397063
+        },
+        {
+          "set": "run",
+          "direction": "ccw",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 156,
+          "e_c_net_m": 0.06793980923219611,
+          "e_c_geo_m": 0.1434420954148439,
+          "judged": true,
+          "ratio": 0.47363926911210935
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "0.85+",
+          "scans": 48,
+          "e_c_net_m": 0.062351630963141697,
+          "e_c_geo_m": 0.15749344433545018,
+          "judged": true,
+          "ratio": 0.39589984983969884
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "[0.2, 0.6)",
+          "scans": 958,
+          "e_c_net_m": 0.05793579135719133,
+          "e_c_geo_m": 0.14933416985036274,
+          "judged": true,
+          "ratio": 0.3879607153221845
+        },
+        {
+          "set": "run",
+          "direction": "cw",
+          "speed_bin": "[0.6, 0.85)",
+          "scans": 169,
+          "e_c_net_m": 0.05671535910258861,
+          "e_c_geo_m": 0.166248327773762,
+          "judged": true,
+          "ratio": 0.3411484486013559
+        }
+      ],
+      "folds": {
+        "F1": {
+          "labelled": {
+            "net": {
+              "scans": 1634,
+              "e_c_m": 0.12174863364798352,
+              "e_far_m": 0.18943113620008295,
+              "v": 15.06609547123623,
+              "c95": 0.8157894736842105
+            },
+            "geometric": {
+              "scans": 1634,
+              "e_c_m": 0.1741304393986254,
+              "e_far_m": 0.3050469506057798,
+              "v": 15.2796817625459,
+              "c95": 0.8347613219094248
+            }
+          },
+          "free": {
+            "net": {
+              "scans": 4826,
+              "intrusion_mean": 0.06632892026228798,
+              "residual_median_m": 0.11726064207239123,
+              "deficit_p90_m": 0.1121623908058462,
+              "c95": 0.616388189517052,
+              "c95_scans": 4369
+            },
+            "geometric": {
+              "scans": 4826,
+              "intrusion_mean": 0.005047193801442778,
+              "residual_median_m": 0.03273608640295215,
+              "deficit_p90_m": 0.024086812341673546,
+              "c95": 0.6356145571068894,
+              "c95_scans": 4369
+            }
+          }
+        },
+        "F2": {
+          "labelled": {
+            "net": {
+              "scans": 3271,
+              "e_c_m": 0.10649378064716751,
+              "e_far_m": 0.17283448364161708,
+              "v": 15.757566493427086,
+              "c95": 0.8911647814124121
+            },
+            "geometric": {
+              "scans": 3271,
+              "e_c_m": 0.1688759208259748,
+              "e_far_m": 0.3334700039455171,
+              "v": 15.037603179455823,
+              "c95": 0.7529807398349129
+            }
+          },
+          "free": {
+            "net": {
+              "scans": 5201,
+              "intrusion_mean": 0.05156177928333608,
+              "residual_median_m": 0.08894537865393876,
+              "deficit_p90_m": 0.0825869401703286,
+              "c95": 0.8713858424725822,
+              "c95_scans": 5015
+            },
+            "geometric": {
+              "scans": 5201,
+              "intrusion_mean": 0.00720176891732898,
+              "residual_median_m": 0.034702792096375064,
+              "deficit_p90_m": 0.04278227447740435,
+              "c95": 0.7475573280159521,
+              "c95_scans": 5015
+            }
+          }
+        }
+      }
+    },
+    "speed_source": {
+      "2026-11-11T03-54-11_car_teleop_cw": "odom",
+      "2026-11-11T04-20-19_car_teleop_v3": "odom",
+      "2026-10-24T23-13-18_car_teleop": "icp",
+      "2026-10-25T19-27-08_car_teleop": "icp"
+    },
+    "moving_rule": "wheel speed >= 0.2 m/s; ICP ground speed >= 0.2 m/s without /odom/wheel",
+    "sets": {
+      "full": {
+        "scans": 6724,
+        "labelled": 3685
+      },
+      "F1": {
+        "scans": 4826,
+        "labelled": 1634
+      },
+      "F2": {
+        "scans": 5201,
+        "labelled": 3271
+      }
+    }
+  }
+}

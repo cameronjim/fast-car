@@ -533,6 +533,10 @@ def data_lines_v2(
         "ICP ground speed at least 0.2 m/s is their moving test, they have no /odom/wheel)"
     )
     lines.append(f"recipe frozen at git {recipe_sha} before any fold was trained or scored")
+    lines.append(
+        f"trained on device {config.get('device', 'cpu')} (torch {config.get('torch')}); the "
+        "device is how the recipe was run and not part of it"
+    )
     return lines
 
 

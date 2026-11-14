@@ -75,6 +75,19 @@ TRAIN_STRIDE_S = 0.1  # residual training windows every scan
 TRAIN_MIN_START_MPS = 0.1
 HIST_BIN_MPS = 0.25
 HIST_MAX_MPS = 2.5
+# Dated addendum written BEFORE stage 2 (held-out scoring) was run; it changes no threshold and no
+# pre-registered rule, it records what the split holds.
+ADDENDUM = (
+    "Addendum 2026-11-13, written before stage 2 scoring. Segment T3b (bag 2026-11-13T23-27-23, "
+    "1312.1 to 1347.6 s) has no driving: the car is at rest there (speed command 0, wheel speed 0), "
+    "so it contributes no windows. Held-out driving is 403 s, not the 441 s of the pre-registration. "
+    "Held-out windows (1453 in all, counted before any model was scored): ccw 641 / 93 / 46 / 1 and "
+    "cw 527 / 91 / 51 / 3 in the bins 0.25-0.6 / 0.6-0.85 / 0.85-1.25 / 1.25+. The 1.25+ bins are "
+    "merged into 0.85-1.25 as the rule says (ccw 1 window, cw 3 windows), so no stratum above "
+    "1.25 m/s exists: the fast held-out data is too thin to decide anything about speeds above "
+    "1.25 m/s. Strata after merging: ccw 0.25-0.6, 0.6-0.85, 0.85+; cw 0.25-0.6, 0.6-0.85, 0.85+. "
+    "The pre-registration and the split file are unchanged."
+)
 REFIT_NOT_BETTER = "not better than dyn-v0.1 on held-out, do not deploy"
 
 
@@ -554,6 +567,10 @@ def render_report(metrics: dict[str, Any], model_id: str) -> str:
             else ["- none"]
         ),
         "",
+        "## Addendum",
+        "",
+        ADDENDUM,
+        "",
         "## 3.1 Refit decision (held-out segments)",
         "",
         _decision_table(ev["decision_3_1_refit"]),
@@ -622,6 +639,12 @@ def render_report(metrics: dict[str, Any], model_id: str) -> str:
             if ev["strata"]["merges"]
             else ["Merges: none.", ""]
         ),
+        (
+            "Strata under 30 windows with no lower bin to merge into (kept, listed): "
+            + (", ".join(ev["strata"]["unmerged_small"]) or "none")
+            + "."
+        ),
+        "",
         (
             "Windows by original bin: "
             + ", ".join(f"{k} {v}" for k, v in ev["strata"]["windows_by_original_bin"].items())

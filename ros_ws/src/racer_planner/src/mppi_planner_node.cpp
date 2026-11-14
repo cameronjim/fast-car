@@ -58,9 +58,12 @@
 #include <vector>
 
 #include "binding_geometry.hpp"
+#include "gate_binding.hpp"
 #include "racer_planner/bundle_loader.hpp"
 #include "racer_planner/distance_field.hpp"
 #include "racer_planner/freespace_field.hpp"
+#include "racer_planner/gate_predictor.hpp"
+#include "racer_planner/lap_profile.hpp"
 #include "racer_planner/planner.hpp"
 
 namespace racer_planner {
@@ -73,11 +76,14 @@ using PlannerStatusMsg = racer_pnp_msgs::msg::PlannerStatus;
 constexpr double kBodyMarginM = 0.02;  // same rule as the perception input in the contract
 constexpr std::size_t kMaxScanPoints = 8192;
 
-// What one scan produces for the tick: the distance field and the free-space progress field.
+// What one scan produces for the tick: the distance field, the free-space progress field and the
+// safety gate's view of the scan (in-path distance along each steering angle).
 struct ScanProducts {
   DistanceField field;
   FreespaceField freespace;
-  explicit ScanProducts(const VehicleGeometry& g) : freespace(g) {}
+  GateTable gate;
+  ScanProducts(const VehicleGeometry& g, const GateConfig& gc)
+      : freespace(g), gate(gc.geometry, gc.limits) {}
 };
 
 // The gated /drive as last seen (read only: never published here).
@@ -270,6 +276,18 @@ class MppiPlannerNode : public rclcpp::Node {
         declare_double("move_margin", mp.move_margin, 0.0, 100.0,
                        "Cost the best moving sample must beat the best standing one by.");
     mp.w_term = declare_double("w_term", mp.w_term, 0.0, 1e5, "Stop within sight weight.");
+    mp.w_gate = declare_double("w_gate", mp.w_gate, 0.0, 1e4,
+                               "Weight of the gate aware cost: how far the first 0.3 s of a plan "
+                               "stay from the safety gate's TTC and distance-floor band (0 off).");
+    mp.gate_ttc_margin = declare_double(
+        "gate_ttc_margin", mp.gate_ttc_margin, 0.5, 5.0,
+        "The gate cost starts at this multiple of limits.ttc_warning_s (time to collision).");
+    mp.gate_clear_margin =
+        declare_double("gate_clear_margin", mp.gate_clear_margin, 0.5, 10.0,
+                       "The gate cost starts at this multiple of limits.min_forward_clearance_m.");
+    mp.w_trust = declare_double("w_trust", mp.w_trust, 0.0, 1e7,
+                                "Weight of the speed trust region around the lap profile's "
+                                "per station speed bound (only while a profile is active).");
     cfg.drivability.stall_hold_s = declare_double(
         "stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0,
         "Wheel speed under 0.03 m/s while a speed at least the floor is published for this long: "
@@ -326,6 +344,15 @@ class MppiPlannerNode : public rclcpp::Node {
     }
     geometry_ = *geometry;
     laser_yaw_rad_ = yaw_from_params ? geometry_.lidar_mount_yaw_rad : yaw_offset;
+    // The gate's view of the scan, from the same binding fields safety_node uses, with the LiDAR
+    // yaw the node resolved (so a simulator run with an explicit yaw matches safety_node's).
+    const auto gate_cfg = gate_from_binding(VEHICLE_PARAMS, &why);
+    if (!gate_cfg) {
+      RCLCPP_FATAL(get_logger(), "mppi_planner_node: %s", why.c_str());
+      throw std::runtime_error(why);
+    }
+    gate_cfg_ = *gate_cfg;
+    gate_cfg_.geometry.lidar_mount_yaw_rad = laser_yaw_rad_;
     if (bundle_dir.empty()) {
       const std::string m = "ManifestMissing: parameter dynamics_bundle is empty";
       RCLCPP_FATAL(get_logger(), "%s", m.c_str());
@@ -372,12 +399,13 @@ class MppiPlannerNode : public rclcpp::Node {
     for (const auto& p : loaded.bundle->payload) {
       RCLCPP_INFO(get_logger(), "  payload %s sha256 %s", p.file.c_str(), p.sha256.c_str());
     }
+    guidance_timeout_s_ = lg.guidance_timeout_s;
     planner_ = std::make_unique<Planner>(cfg, loaded.bundle->params, geometry_);
     tick_s_ = cfg.tick_s;
     const std::size_t horizon = static_cast<std::size_t>(planner_->horizon_steps()) + 1;
     path_.poses.resize(horizon);
     path_.header.frame_id = "base_link";
-    for (int i = 0; i < 3; ++i) pool_[i] = std::make_shared<ScanProducts>(geometry_);
+    for (int i = 0; i < 3; ++i) pool_[i] = std::make_shared<ScanProducts>(geometry_, gate_cfg_);
     points_.resize(kMaxScanPoints);
     status_.dynamics_model_id = model_id_;
 
@@ -485,6 +513,14 @@ class MppiPlannerNode : public rclcpp::Node {
     }
     if (!target) return;  // cannot happen with a pool of three, but never write a buffer in use
     target->field.build(points_.data(), n);
+    GateScan gate_scan;
+    gate_scan.ranges = msg->ranges.data();
+    gate_scan.count = msg->ranges.size();
+    gate_scan.angle_min_rad = msg->angle_min;
+    gate_scan.angle_increment_rad = msg->angle_increment;
+    gate_scan.range_min_m = msg->range_min;
+    gate_scan.range_max_m = msg->range_max;
+    target->gate.build(gate_scan);
     target->freespace.build(target->field, points_.data(), n,
                             have_prev_goal_ ? &prev_goal_ : nullptr);
     have_prev_goal_ = target->freespace.valid();
@@ -528,6 +564,24 @@ class MppiPlannerNode : public rclcpp::Node {
     guidance_v_cap_mps_ = msg->v_cap_mps;
     guidance_stamp_s_ = now().seconds();
     has_guidance_ = true;
+    // The per station profile (empty in D v0). A refused one is counted and logged at most once
+    // per second; the planner then runs without a profile (the speed cap above still holds).
+    const double now_s = now().seconds();
+    const LapProfileStatus st =
+        make_lap_profile(msg->s_m.data(), msg->v_ref_mps.data(), msg->cost_to_go_s.data(),
+                         msg->s_m.size(), msg->v_ref_mps.size(), msg->cost_to_go_s.size(),
+                         stamp_or_now(msg->header.stamp), now_s, &lap_profile_);
+    guidance_profile_bad_ = st == LapProfileStatus::kBad;
+    if (st == LapProfileStatus::kBad) {
+      ++guidance_profile_bad_count_;
+      if (now_s - guidance_bad_log_s_ >= 1.0) {
+        guidance_bad_log_s_ = now_s;
+        RCLCPP_WARN(get_logger(),
+                    "lap guidance profile refused (%u so far): lengths %zu/%zu/%zu, age %.3f s",
+                    guidance_profile_bad_count_, msg->s_m.size(), msg->v_ref_mps.size(),
+                    msg->cost_to_go_s.size(), now_s - stamp_or_now(msg->header.stamp));
+      }
+    }
   }
 
   void on_gated(const AckermannMsg::SharedPtr msg) {
@@ -585,6 +639,13 @@ class MppiPlannerNode : public rclcpp::Node {
     in.has_guidance = has_guidance_;
     in.guidance_stamp_s = guidance_stamp_s_;
     in.guidance_v_cap_mps = guidance_v_cap_mps_;
+    in.gate = products ? &products->gate : nullptr;
+    // A refused profile, or one that has gone stale, makes the planner fall back to
+    // v_no_guidance_mps (LogicInputs::guidance_profile_bad).
+    const bool profile_stale =
+        lap_profile_.active && in.now_s - lap_profile_.stamp_s > guidance_timeout_s_;
+    in.guidance_profile_bad = guidance_profile_bad_ || profile_stale;
+    in.lap = lap_profile_.active && !profile_stale ? &lap_profile_ : nullptr;
 
     const SolveReport rep = planner_->solve(in);
     if (rep.bunched) return;
@@ -759,6 +820,7 @@ class MppiPlannerNode : public rclcpp::Node {
   }
 
   VehicleGeometry geometry_;
+  GateConfig gate_cfg_;
   double laser_yaw_rad_ = 0.0;
   double tick_s_ = 0.02;
   std::string model_id_;
@@ -796,6 +858,11 @@ class MppiPlannerNode : public rclcpp::Node {
   double guidance_v_cap_mps_ = 0.0;
   double guidance_stamp_s_ = 0.0;
   bool has_guidance_ = false;
+  LapProfile lap_profile_;  // preallocated, filled by on_guidance
+  bool guidance_profile_bad_ = false;
+  uint32_t guidance_profile_bad_count_ = 0;
+  double guidance_bad_log_s_ = 0.0;
+  double guidance_timeout_s_ = 2.0;
   double last_solve_tick_s_ = 0.0;
   std::uint32_t solve_cycle_ = 0;
   bool halved_logged_ = false;

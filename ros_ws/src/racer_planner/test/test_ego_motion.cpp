@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "racer_planner/ego_motion.hpp"
 
@@ -126,4 +127,53 @@ TEST(EgoMotion, NonFiniteQueryTimesGiveIdentity) {
   const Pose2 p = e.relative_pose(std::nan(""), 0.5, &covered);
   EXPECT_EQ(p.x, 0.0);
   EXPECT_FALSE(covered);
+}
+
+TEST(EgoMotionDistance, IsTheIntegralOfTheHeldSpeed) {
+  EgoMotion e(kL, 0.0);
+  e.push(0.0, 1.0, 0.0);
+  e.push(0.1, 2.0, 0.3);
+  e.push(0.2, 0.5, 0.0);
+  e.push(0.3, 0.5, 0.0);
+  // 0.05 s at 1, 0.1 s at 2, 0.1 s at 0.5: the steering does not matter to the distance
+  EXPECT_NEAR(e.distance_between(0.05, 0.3), 0.05 * 1.0 + 0.1 * 2.0 + 0.1 * 0.5, 1e-12);
+  EXPECT_NEAR(e.distance_between(0.0, 0.1), 0.1, 1e-12);
+  EXPECT_NEAR(e.distance_between(0.1, 0.1), 0.0, 1e-12);
+}
+
+TEST(EgoMotionDistance, IsSignedAndAntisymmetric) {
+  EgoMotion e(kL, 0.0);
+  e.push(0.0, 1.0, 0.0);
+  e.push(0.1, -0.5, 0.0);  // backing up
+  e.push(0.3, -0.5, 0.0);
+  EXPECT_NEAR(e.distance_between(0.0, 0.3), 0.1 * 1.0 + 0.2 * -0.5, 1e-12);
+  EXPECT_NEAR(e.distance_between(0.3, 0.0), -e.distance_between(0.0, 0.3), 1e-12);
+}
+
+TEST(EgoMotionDistance, HoldsTheLastSampleAndExtrapolatesTheFirstBackwards) {
+  EgoMotion e(kL, 0.0);
+  e.push(1.0, 0.8, 0.0);
+  e.push(1.1, 0.8, 0.0);
+  EXPECT_NEAR(e.distance_between(1.1, 1.5), 0.4 * 0.8, 1e-12) << "past the last sample";
+  EXPECT_NEAR(e.distance_between(0.5, 1.0), 0.5 * 0.8, 1e-12) << "before the first sample";
+}
+
+TEST(EgoMotionDistance, MatchesTheArcLengthOfTheDeadReckonedPathOnAConstantArc) {
+  EgoMotion e(kL, 0.0);
+  const double v = 0.8, delta = 0.25;
+  for (int i = 0; i <= 25; ++i) e.push(i * 0.02, v, delta);
+  const double w = v * std::tan(delta) / kL;
+  const Pose2 p = e.relative_pose(0.1, 0.4);
+  EXPECT_NEAR(e.distance_between(0.1, 0.4), v * 0.3, 1e-12);
+  // the arc length is the radius times the heading change
+  EXPECT_NEAR((v / w) * p.yaw, e.distance_between(0.1, 0.4), 1e-9);
+}
+
+TEST(EgoMotionDistance, EmptyOrNonFiniteIsZero) {
+  EgoMotion e(kL, 0.0);
+  EXPECT_EQ(e.distance_between(0.0, 1.0), 0.0);
+  e.push(0.0, 1.0, 0.0);
+  e.push(1.0, 1.0, 0.0);
+  EXPECT_EQ(e.distance_between(std::nan(""), 0.5), 0.0);
+  EXPECT_EQ(e.distance_between(0.5, std::numeric_limits<double>::infinity()), 0.0);
 }

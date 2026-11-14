@@ -19,9 +19,12 @@
 #include <vector>
 
 #include "binding_geometry.hpp"
+#include "gate_binding.hpp"
 #include "racer_planner/bundle_loader.hpp"
 #include "racer_planner/distance_field.hpp"
 #include "racer_planner/freespace_field.hpp"
+#include "racer_planner/gate_predictor.hpp"
+#include "racer_planner/lap_profile.hpp"
 #include "racer_planner/local_track.hpp"
 #include "racer_planner/mppi.hpp"
 #include "racer_planner/planner.hpp"
@@ -119,6 +122,51 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "mppi_bench: the synthetic scan gave no free-space field\n");
     return 3;
   }
+  // The same corridor as a 720 beam scan from the LiDAR head, for the gate table and the profile
+  // scenes: two side walls at y = +-0.5 and a wall across at x = 5 (base_link).
+  const auto gate_cfg = gate_from_binding(VEHICLE_PARAMS, &why);
+  if (!gate_cfg) {
+    std::fprintf(stderr, "mppi_bench: %s\n", why.c_str());
+    return 2;
+  }
+  std::vector<float> scan_ranges(720);
+  for (int i = 0; i < 720; ++i) {
+    const double b = -M_PI + i * (2.0 * M_PI / 720.0) + gate_cfg->geometry.lidar_mount_yaw_rad;
+    const double dx = std::cos(b), dy = std::sin(b);
+    const double ox = gate_cfg->geometry.lidar_mount_x_m, oy = gate_cfg->geometry.lidar_mount_y_m;
+    double best = 1e9;
+    for (double wy : {0.5, -0.5}) {
+      const double t = (wy - oy) / dy;
+      if (std::fabs(dy) > 1e-9 && t > 0.0) best = std::min(best, t);
+    }
+    if (std::fabs(dx) > 1e-9) {
+      const double t = (5.0 - ox) / dx;
+      if (t > 0.0) best = std::min(best, t);
+    }
+    scan_ranges[static_cast<std::size_t>(i)] = best < 12.0 ? static_cast<float>(best) : INFINITY;
+  }
+  GateScan gate_scan;
+  gate_scan.ranges = scan_ranges.data();
+  gate_scan.count = scan_ranges.size();
+  gate_scan.angle_min_rad = -M_PI;
+  gate_scan.angle_increment_rad = 2.0 * M_PI / 720.0;
+  gate_scan.range_min_m = 0.05;
+  gate_scan.range_max_m = 12.0;
+  GateTable gate_table(gate_cfg->geometry, gate_cfg->limits);
+  gate_table.build(gate_scan);
+  // A lap profile: bound 1.0 m/s, 0.9 s per metre of best lap.
+  LapProfile lap_profile;
+  {
+    std::vector<float> s, v, q;
+    for (int i = 0; i < 61; ++i) {
+      s.push_back(static_cast<float>(0.1 * i));
+      v.push_back(1.0f);
+      q.push_back(static_cast<float>(10.0 - 0.9 * 0.1 * i));
+    }
+    make_lap_profile(s.data(), v.data(), q.data(), s.size(), v.size(), q.size(), 0.0, 0.0,
+                     &lap_profile);
+  }
+
   LocalTrackData track;
   track.frame_id = "base_link";
   track.station_spacing_m = kTrackStationSpacingM;
@@ -156,11 +204,17 @@ int main(int argc, char** argv) {
     double confidence;
     bool use_track;
     bool use_free;
+    bool use_gate;
+    bool use_lap;
   };
-  const Scene scenes[] = {{"track c=1.0     ", 1.0, true, false},
-                          {"field only c=0  ", 0.0, false, true},
-                          {"blend c=0.5     ", 0.5, true, true}};
+  const Scene scenes[] = {{"track c=1.0     ", 1.0, true, false, false, false},
+                          {"field only c=0  ", 0.0, false, true, false, false},
+                          {"blend c=0.5     ", 0.5, true, true, false, false},
+                          {"track +gate term", 1.0, true, false, true, false},
+                          {"track +gate +lap", 1.0, true, false, true, true},
+                          {"blend +gate +lap", 0.5, true, true, true, true}};
   bool over_budget = false;
+  double base_p50 = 0.0;
   for (const Scene& scene : scenes) {
     MppiParams params;
     params.horizon_steps = horizon;
@@ -175,6 +229,9 @@ int main(int argc, char** argv) {
     in.confidence = scene.confidence;
     in.track = scene.use_track ? &projector : nullptr;
     in.freespace = scene.use_free ? &freespace : nullptr;
+    in.gate = scene.use_gate ? &gate_table : nullptr;
+    in.wheel_speed_mps = 0.5 * speed;
+    in.lap = scene.use_lap ? &lap_profile : nullptr;
     std::vector<double> ms;
     ms.reserve(static_cast<std::size_t>(solves));
     for (int i = 0; i < solves + 50; ++i) {
@@ -194,7 +251,26 @@ int main(int argc, char** argv) {
     }
     const Stats s = stats_of(ms);
     print_stats(scene.name, s, budget_ms);
+    if (!scene.use_gate && scene.confidence == 1.0) base_p50 = s.p50;
+    if (scene.use_gate && scene.confidence == 1.0) {
+      std::printf("  p50 against the same scene without the hooks: %+.3f ms\n", s.p50 - base_p50);
+    }
     if (s.p99 > budget_ms) over_budget = true;
+  }
+  {
+    // The gate table build: the scan thread's extra work per scan.
+    std::vector<double> gate_ms;
+    const int builds = std::max(200, solves / 5);
+    for (int i = 0; i < builds + 20; ++i) {
+      scan_ranges[static_cast<std::size_t>(i % 720)] = 1.0f + 0.001f * static_cast<float>(i % 7);
+      const auto t0 = std::chrono::steady_clock::now();
+      gate_table.build(gate_scan);
+      const auto t1 = std::chrono::steady_clock::now();
+      if (i >= 20) gate_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    const Stats gs = stats_of(gate_ms);
+    std::printf("gate table      build ms: p50 %.3f  p90 %.3f  p99 %.3f  max %.3f  (720 beams)\n",
+                gs.p50, gs.p90, gs.p99, gs.max);
   }
 
   // The whole planner pipeline on the same corridor: tick() (solve and output in one call, what the

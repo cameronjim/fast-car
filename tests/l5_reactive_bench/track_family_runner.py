@@ -17,7 +17,13 @@ world), with the car as measured and three drivers:
   pnp           the Plug-and-Play driver, no map and no pose: racer_track_perception's
                 track_perception_node and racer_planner's mppi_planner_node (--backend,
                 --perception-bundle, --dynamics-bundle, --v-max-mps), with the car's LiDAR,
-                scan noise and 50 Hz /odom/wheel; parameters come from pnp.launch.py
+                scan noise and 50 Hz /odom/wheel; parameters come from pnp.launch.py.
+                --lap-memory none|off|v0|v1 adds racer_laps' lap_memory_node (start-scan lap
+                source): `off` runs it as an observer only (the planner ignores its guidance, so
+                the run is "D off" but the system's laps are still counted), v0 and v1 let the
+                planner use it. --v-max-mps is then the ceiling and --v-lap1-mps the cap of lap
+                1. The result carries the system's LapEvents, the guidance cap per lap and the
+                interventions per ground-truth lap by source.
 
 The car (--car): `params` (default) gives the simulator's steering the limits of vehicle_params
 (0.449 rad each way, schema 0.14.0: commands are true angles and true speeds); `gym` is the
@@ -186,6 +192,59 @@ def make_raceline(args, synthetic, map_yaml: Path, work: Path) -> tuple[Path, di
     return out, result.report
 
 
+def lap_results(
+    lap_tracker,
+    events: list[tuple],
+    lap_events: list[dict],
+    guidance_log: list[tuple],
+    lap_status: dict,
+    driving_first_s: float | None,
+) -> dict:
+    """Ground truth against the system for a run with the lap memory: the ground-truth crossing
+    stamps, lap times (lap 1 counted from the instant the planner first reported DRIVING, which
+    is what the system's lap 1 counts from), the system's LapEvents, the interventions per
+    ground-truth lap by source (every /safety/events ENGAGE, and the BRAKE severity ones
+    separately) and the guidance cap per system lap."""
+    crossings = list(getattr(lap_tracker, "_crossings", []))
+    gt_times = list(lap_tracker.lap_times_s)
+    if gt_times and crossings and driving_first_s is not None:
+        gt_times[0] = crossings[0] - driving_first_s  # the system's lap 1 starts at DRIVING
+    edges = [driving_first_s if driving_first_s is not None else -math.inf, *crossings]
+    engage: list[dict] = []
+    brake: list[dict] = []
+    for k in range(len(crossings)):
+        lo, hi = edges[k], edges[k + 1]
+        in_lap = [e for e in events if e[2] == 0 and lo < e[0] <= hi]
+        engage.append(_count_by_source(in_lap))
+        brake.append(_count_by_source([e for e in in_lap if e[3] == 2]))
+    caps: dict[int, dict] = {}
+    for t, lap_index, cap, n_arrays in guidance_log:
+        entry = caps.setdefault(
+            lap_index, {"first_cap_mps": cap, "max_cap_mps": cap, "max_stations": n_arrays}
+        )
+        entry["max_cap_mps"] = max(entry["max_cap_mps"], cap)
+        entry["max_stations"] = max(entry["max_stations"], n_arrays)
+        entry["last_cap_mps"] = cap
+    return {
+        "gt_lap_crossings_s": [round(c, 3) for c in crossings],
+        "gt_lap_times_s": [round(t, 3) for t in gt_times],
+        "gt_lap1_start_s": driving_first_s,
+        "system_lap_events": lap_events,
+        "system_laps": len(lap_events),
+        "engage_per_lap": engage,
+        "brake_per_lap": brake,
+        "guidance_caps_by_lap": {str(k): v for k, v in sorted(caps.items())},
+        "lap_status": dict(lap_status),
+    }
+
+
+def _count_by_source(events: list[tuple]) -> dict:
+    out: dict[str, int] = {}
+    for e in events:
+        out[e[1]] = out.get(e[1], 0) + 1
+    return out
+
+
 def run_benchmark(args: argparse.Namespace) -> dict:
     os.environ["ROS_DOMAIN_ID"] = str(args.domain_id)
     import bench_metrics as bm
@@ -288,9 +347,43 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             # The scan-only fault case: the planner starts and no track ever arrives.
             del nodes["track_perception_node"]
             pnp_nodes = pnp_nodes[1:]
+        if args.lap_memory != "none":
+            lap_params = pnp_launch.lap_memory_parameters(
+                args.dynamics_bundle,
+                args.v_max_mps,
+                args.v_lap1_mps,
+                "v1" if args.lap_memory == "v1" else "v0",
+                args.lap_source,
+            )
+            lap_params.update(
+                {
+                    # the sim's car turns as commanded, the table is the real car's measurement
+                    "yaw_gain_override": 1.0,
+                    "laser_yaw_from_vehicle_params": mounted,
+                    "save_lap1_map": False,
+                    "output_dir": str(work / "laps"),
+                }
+            )
+            lap_params.update(json.loads(args.lap_params_json))
+            nodes["lap_memory_node"] = lap_params
+            pnp_nodes.append(("racer_laps", "lap_memory_node"))
+            if args.lap_memory != "off":
+                planner["use_lap_guidance"] = True
+                # missing, stale or malformed guidance: the lap-1 cap, never the ceiling
+                planner["v_no_guidance_mps"] = float(lap_params["v_cap_start_mps"])
+            result["lap_params"] = lap_params
         for package, name in pnp_nodes:
             stack.append((name, [base._executable(package, name)]))
-        result.update({"backend": args.backend, "v_max_mps": args.v_max_mps, "pnp": nodes})
+        result.update(
+            {
+                "backend": args.backend,
+                "v_max_mps": args.v_max_mps,
+                "v_lap1_mps": args.v_lap1_mps,
+                "lap_memory": args.lap_memory,
+                "lap_source": args.lap_source,
+                "pnp": nodes,
+            }
+        )
     else:
         raceline_csv, report = make_raceline(args, walls_synthetic, map_yaml, work)
         tracker = dict(LANE_TRACKER_DEFAULTS)
@@ -476,12 +569,54 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         node.create_subscription(String, "/policy/status", on_policy_status, reliable)
         node.create_subscription(String, "/policy/events", on_policy_event, reliable)
     planner_states: list[int] = []
+    lap_events: list[dict] = []
+    guidance_log: list[tuple] = []
+    lap_status: dict = {}
+    driving_first: list[float] = []
     if args.driver == "pnp":
-        from racer_pnp_msgs.msg import PlannerStatus
+        from racer_pnp_msgs.msg import LapEvent, LapGuidance, PlannerStatus
 
-        node.create_subscription(
-            PlannerStatus, "/pnp/planner/status", lambda m: planner_states.append(m.state), reliable
-        )
+        def on_planner(m) -> None:
+            planner_states.append(m.state)
+            if m.state == 1 and not driving_first:
+                driving_first.append(node.get_clock().now().nanoseconds * 1e-9)
+
+        node.create_subscription(PlannerStatus, "/pnp/planner/status", on_planner, reliable)
+        if args.lap_memory != "none":
+            from std_msgs.msg import String
+
+            def on_lap_event(m) -> None:
+                lap_events.append(
+                    {
+                        "lap_index": int(m.lap_index),
+                        "t_cross_s": base._stamp_s(m.header.stamp),
+                        "frame_id": m.header.frame_id,
+                        "lap_time_s": float(m.lap_time_s),
+                        "length_m": float(m.lap_length_m),
+                        "cap_mps": float(m.v_cap_mps),
+                        "safety_brakes": int(m.safety_brakes),
+                        "min_clearance_m": float(m.min_clearance_m),
+                        "clean": bool(m.clean),
+                    }
+                )
+
+            def on_guidance(m) -> None:
+                guidance_log.append(
+                    (
+                        node.get_clock().now().nanoseconds * 1e-9,
+                        int(m.lap_index),
+                        float(m.v_cap_mps),
+                        len(m.s_m),
+                    )
+                )
+
+            def on_lap_status(m) -> None:
+                lap_status.clear()
+                lap_status.update(json.loads(m.data))
+
+            node.create_subscription(LapEvent, "/pnp/lap/event", on_lap_event, reliable)
+            node.create_subscription(LapGuidance, "/pnp/lap/guidance", on_guidance, reliable)
+            node.create_subscription(String, "/pnp/lap/status", on_lap_status, reliable)
     reset_client = node.create_client(Trigger, "/sim/reset")
     initial_pose_pub = node.create_publisher(PoseWithCovarianceStamped, "/initialpose", reliable)
 
@@ -613,6 +748,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 last_check = time.monotonic()
                 if why := died():
                     raise RuntimeError(why)
+        if args.driver == "pnp" and args.lap_memory != "none":
+            # the system's last LapEvent follows the ground-truth crossing by a scan or two
+            grace_end = time.monotonic() + args.grace_s
+            while time.monotonic() < grace_end:
+                rclpy.spin_once(node, timeout_sec=0.01)
         metrics = bm.compute_metrics(
             recording,
             box=box,
@@ -650,6 +790,17 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 topic: sorted(i.node_name for i in node.get_publishers_info_by_topic(topic))
                 for topic in ("/drive_raw", "/drive")
             }
+            if args.lap_memory != "none":
+                result.update(
+                    lap_results(
+                        lap_tracker,
+                        recording.events,
+                        lap_events,
+                        guidance_log,
+                        lap_status,
+                        driving_first[0] if driving_first else None,
+                    )
+                )
         t_first = recording.odom[0][0] if recording.odom else 0.0
         if os.environ.get("RUNNER_TRACE_NPZ"):
             # Diagnostics only: the command stream and the events, for timing analysis offline.
@@ -742,6 +893,37 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--backend", default="geometric", choices=("net", "geometric"))
     parser.add_argument("--v-max-mps", type=float, default=0.6, help="pnp planner speed cap")
+    parser.add_argument(
+        "--lap-memory",
+        default="none",
+        choices=("none", "off", "v0", "v1"),
+        help="driver pnp: none = no lap_memory_node; off = the node observes only (the planner "
+        "ignores its guidance); v0 = cap schedule; v1 = station set. --v-max-mps is then the "
+        "ceiling",
+    )
+    parser.add_argument(
+        "--lap-source",
+        default="start_scan",
+        choices=("start_scan", "map_pose"),
+        help="lap source of the lap memory (map_pose needs a map -> base_link transform, which "
+        "this runner does not provide)",
+    )
+    parser.add_argument(
+        "--v-lap1-mps",
+        type=float,
+        default=None,
+        help="cap of lap 1 (default: --v-max-mps); the planner's v_no_guidance_mps",
+    )
+    parser.add_argument(
+        "--lap-params-json", default="{}", help="lap_memory_node parameters on top (tuning)"
+    )
+    parser.add_argument(
+        "--grace-s",
+        type=float,
+        default=1.5,
+        help="with a lap memory: keep listening this long after the run ends so the system's "
+        "last LapEvent arrives (s)",
+    )
     parser.add_argument("--profile", default="lane-2026-10-25", help="gap_follow profile")
     parser.add_argument("--params-json", default="{}", help="gap_follow parameters on top")
     parser.add_argument("--tracker-params-json", default="{}", help="tracker_node parameters")

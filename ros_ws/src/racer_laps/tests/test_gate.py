@@ -311,6 +311,14 @@ def test_the_late_match_rule_has_a_limit_and_a_switch(monkeypatch: pytest.Monkey
     h = armed_gate(monkeypatch, late_match_max_m=0.0)
     monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.1)]))
     assert h.on_scan(5.7, PTS) is None  # switched off
+    # a borderline match (share 0.84, or RMS 0.026) of a partial view is not evidence
+    for weak in (result(0.1, share=0.84), result(0.1, rms=0.026)):
+        w = armed_gate(monkeypatch)
+        monkeypatch.setattr(gate_module, "match_scans", Scripted([weak]))
+        assert w.on_scan(5.7, PTS) is None
+    ok = armed_gate(monkeypatch)
+    monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.1, share=0.85, rms=0.025)]))
+    assert ok.on_scan(5.7, PTS) is not None
     # a fresh earlier match that is already ahead of the line does not allow the late rule
     k = armed_gate(monkeypatch)
     monkeypatch.setattr(gate_module, "match_scans", Scripted([result(0.9)]))

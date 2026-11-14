@@ -29,9 +29,12 @@ longitudinal offset goes from negative to non-negative between two accepted matc
 times (header stamp plus half the sweep). One addition: the views a metre or more before the
 start pose are often too unlike the start scan to pass the thresholds, so the first accepted
 match of an approach can already be ahead of the line. If it is at most `late_match_max_m`
-(0.4 m) ahead and no match was accepted in the previous `max_match_gap_s`, the crossing is placed
-that far back by wheel distance (an error of centimetres of path) and the lap closes. Beyond
-0.4 m nothing is invented. Lap time is crossing to crossing, lap length the wheel
+(0.4 m) ahead, no match was accepted in the previous `max_match_gap_s` and the match is a good
+one (inlier share at least 0.75 and RMS at most 0.027 m: a borderline match of the partial view
+of a lane is not evidence), the crossing is placed that far back by wheel distance (an error of
+centimetres of path) and the lap closes. Beyond 0.4 m nothing is invented. On the 2026-11-13
+bags this recovers the laps whose approach never matched (PnP runs R1 and R7); in the simulator
+a version without the quality condition closed laps at 0.63 of the real lap. Lap time is crossing to crossing, lap length the wheel
 distance between crossings. The first closure fixes the reference lap length. A crossing is
 checked before it counts: at least `min_along_support` inlier matches of the later scan must
 sit on surfaces whose normal has a large component along the start heading (corners, island
@@ -99,6 +102,11 @@ class GateConfig:
     #: already up to this far ahead of the line, close the lap with the crossing placed that
     #: wheel distance back. 0 turns it off: then only a negative-to-non-negative pair counts.
     late_match_max_m: float = 0.4
+    #: ... and only on a clearly better match than a normal one (a borderline match of a partial
+    #: view of a lane is not evidence that the car is back at the start): at least this inlier
+    #: share and at most this RMS.
+    late_match_min_share: float = 0.75
+    late_match_rms_max_m: float = 0.027
     #: Also seed the ICP with the dead-reckoned pose of the car in the start frame (see _seeds).
     dead_reckoning_seed: bool = True
     #: Around the dead-reckoned seed, rank a grid of along-lane and yaw offsets by overlap and
@@ -451,6 +459,8 @@ class StartScanGate:
         elif (
             self.cfg.late_match_max_m > 0.0
             and 0.0 <= res.x_m <= self.cfg.late_match_max_m
+            and res.inlier_share >= self.cfg.late_match_min_share
+            and res.rms_m <= self.cfg.late_match_rms_max_m
             and self._supported(source, res)
         ):
             # The first accepted match of the approach is already past the line (the views

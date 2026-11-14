@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import rclpy
 import tf2_ros
 from ackermann_msgs.msg import AckermannDriveStamped
@@ -288,6 +289,15 @@ class LapMemoryNode(Node):
             ParameterDescriptor(description="Where station_set_<start time>.npz is written."),
         )
         self.declare_parameter(
+            "debug_dump_path",
+            "",
+            ParameterDescriptor(
+                description="Debugging: if set, the node's inputs (scans, wheel odometry, "
+                "steering) are written to this npz every 15 s and at exit, so a run can be "
+                "replayed offline through the same code. Off (empty) on the car."
+            ),
+        )
+        self.declare_parameter(
             "map_frame", "map", ParameterDescriptor(description="Pose parent frame.")
         )
         self.declare_parameter(
@@ -306,6 +316,8 @@ class LapMemoryNode(Node):
             0.0,
             ParameterDescriptor(description="Mount yaw when not taken from vehicle_params."),
         )
+        self._dump_path = str(self.get_parameter("debug_dump_path").value)
+        self._dump: dict[str, list[Any]] = {"scan": [], "odom": [], "drive": []}
         self._output_dir = Path(str(self.get_parameter("output_dir").value))
         self._map_frame = str(self.get_parameter("map_frame").value)
         self._base_frame = str(self.get_parameter("base_frame").value)
@@ -368,6 +380,7 @@ class LapMemoryNode(Node):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         kind = "station_set" if lap_source == "start_scan" else "safe_set"
         self._save_path = self._output_dir / f"{kind}_{stamp}.npz"
+        self._results: list[LapResult] = []
         self._tf_ok = False
         self._tf_age_s = math.nan
         self._tf_error = ""
@@ -394,6 +407,8 @@ class LapMemoryNode(Node):
         self.create_timer(self._pose_period_s, self._on_pose_timer)
         self.create_timer(guidance_period_s, self._publish_guidance)
         self.create_timer(status_period_s, self._publish_status)
+        if self._dump_path:
+            self.create_timer(15.0, self.dump_inputs)
         self.get_logger().info(
             f"lap memory up: source {lap_source}, mode {lap_mode}, lap 1 cap "
             f"{cfg.v_cap_start_mps} m/s, ceiling {cfg.v_cap_ceiling_mps} m/s, "
@@ -421,9 +436,15 @@ class LapMemoryNode(Node):
         if stamp <= 0.0:
             stamp = self.get_clock().now().nanoseconds * 1e-9
         self._mem.on_wheel_odom(stamp, float(msg.twist.twist.linear.x))
+        if self._dump_path:
+            self._dump["odom"].append((stamp, float(msg.twist.twist.linear.x)))
 
     def _on_drive(self, msg: AckermannDriveStamped) -> None:
         self._mem.on_drive(float(msg.drive.steering_angle))
+        if self._dump_path:
+            self._dump["drive"].append(
+                (self.get_clock().now().nanoseconds * 1e-9, float(msg.drive.steering_angle))
+            )
 
     def _on_drive_raw(self, msg: AckermannDriveStamped) -> None:
         self._mem.on_drive_raw(float(msg.drive.speed), float(msg.drive.steering_angle))
@@ -437,6 +458,10 @@ class LapMemoryNode(Node):
         sweep = float(msg.scan_time)
         if not (math.isfinite(sweep) and sweep > 0.0):
             sweep = float(msg.time_increment) * max(len(msg.ranges) - 1, 0)
+        if self._dump_path:
+            self._dump["scan"].append(
+                (stamp + 0.5 * sweep, np.asarray(msg.ranges, dtype=np.float32))
+            )
         pts = scan_to_points(
             msg.ranges,
             float(msg.angle_min),
@@ -477,6 +502,7 @@ class LapMemoryNode(Node):
     # -- outputs ---------------------------------------------------------------------------
 
     def _on_lap(self, r: LapResult) -> None:
+        self._results.append(r)
         msg = LapEvent()
         msg.header.stamp = _time_msg(r.t_cross_s)
         msg.header.frame_id = "start_scan" if r.source == "start_scan" else self._map_frame
@@ -505,6 +531,30 @@ class LapMemoryNode(Node):
         except OSError as error:
             self._save_error = f"{type(error).__name__}: {error}"
             self.get_logger().error(f"could not write {self._save_path}: {error}")
+
+    def dump_inputs(self) -> None:
+        """Write the recorded inputs (debugging only, see `debug_dump_path`)."""
+        if not self._dump_path or not self._dump["scan"]:
+            return
+        try:
+            np.savez_compressed(
+                self._dump_path,
+                scan_t=np.array([t for t, _ in self._dump["scan"]]),
+                scan_r=np.stack([r for _, r in self._dump["scan"]]),
+                odom=np.array(self._dump["odom"]),
+                drive=np.array(self._dump["drive"]),
+                laps=np.array([[e.lap_index, e.t_cross_s] for e in self._mem_laps()]),
+            )
+        except (OSError, ValueError) as error:
+            self.get_logger().warn(f"input dump failed: {error}")
+
+    def _mem_laps(self) -> list[LapResult]:
+        return [
+            LapResult(
+                r.lap_index, r.t_cross_s, r.lap_time_s, r.length_m, 0.0, 0, 0.0, False, False, 0.0
+            )
+            for r in self._results
+        ]
 
     def _request_map_save(self) -> None:
         """Ask slam_toolbox for the lap-1 map, once. Never fatal."""
@@ -578,6 +628,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        node.dump_inputs()
         node.destroy_node()
         rclpy.try_shutdown()
     return 0

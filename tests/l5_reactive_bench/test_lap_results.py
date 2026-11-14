@@ -245,3 +245,13 @@ def test_lap_results_writes_the_old_field_and_the_new_one() -> None:
         Tracker([110.0, 130.0], [7.0, 20.0]), [], [], [], {}, driving_first_s=100.0
     )
     assert out["gt_lap_times_s"][0] == 10.0 and out["gt_lap_times_by_crossing_s"] == [10.0, 20.0]
+
+
+def test_the_start_line_is_the_first_scan_stamped_at_or_after_the_driving_report() -> None:
+    stamps = [99.8, 99.9, 100.0, 100.1, 100.2]
+    assert runner.first_scan_at_or_after(stamps, 100.0) == 100.0  # at the report counts
+    assert runner.first_scan_at_or_after(stamps, 100.05) == 100.1
+    assert runner.first_scan_at_or_after(stamps, 100.3) is None
+    assert runner.first_scan_at_or_after(stamps, None) is None
+    # arrival order does not matter: scans that reached this process late or out of order
+    assert runner.first_scan_at_or_after([100.2, 99.9, 100.1], 100.0) == 100.1

@@ -239,6 +239,19 @@ def rescore_from_start_scan(
     return list(tracker.lap_times_s), list(getattr(tracker, "_crossings", [])), start_stamp
 
 
+def first_scan_at_or_after(scan_stamps: list[float], t_s: float | None) -> float | None:
+    """The header stamp of the first /scan stamped at or after `t_s`, or None. The start line of
+    the ground truth is the pose at this stamp (pre-registration 1.3: the first /scan after the
+    planner first reported DRIVING, `t_s` being that report's header stamp). Defined by stamps, not
+    by the order in which this process happened to receive the messages: its own spin loop lags
+    the scan subscription by seconds in a busy run (a_S1_ccw_13 of the 2026-11-14 acceptance run
+    saw the first scan 1.9 s late)."""
+    if t_s is None:
+        return None
+    later = [t for t in scan_stamps if t >= t_s]
+    return min(later) if later else None
+
+
 def crossing_lap_times(crossings: list[float], start_stamp: float | None) -> list[float]:
     """Ground-truth lap k is crossing stamp k minus crossing stamp k-1, crossing 0 being the stamp
     of the first /scan after the planner first reported DRIVING (pre-registration 1.3). It does
@@ -713,7 +726,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     guidance_log: list[tuple] = []
     lap_status: dict = {}
     driving_first: list[float] = []
-    first_scan_after_driving: list[float] = []
+    first_scan_after_driving: list[float] = []  # by arrival order (kept for the record only)
+    scan_stamps: list[float] = []
     planner_status: list[tuple[float, int]] = []
 
     def on_planner_status(msg) -> None:
@@ -764,6 +778,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             from sensor_msgs.msg import LaserScan
 
             def on_scan_seen(m) -> None:
+                scan_stamps.append(base._stamp_s(m.header.stamp))
                 if driving_first and not first_scan_after_driving:
                     first_scan_after_driving.append(base._stamp_s(m.header.stamp))
 
@@ -965,7 +980,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                         guidance_log,
                         lap_status,
                         driving_first[0] if driving_first else None,
-                        first_scan_after_driving[0] if first_scan_after_driving else None,
+                        first_scan_at_or_after(
+                            scan_stamps, next((t for t, st in planner_status if st == 1), None)
+                        ),
                         rescore_from_start_scan(
                             recording.odom, lap_tracker._xs, lap_tracker._ys, lap_events
                         ),

@@ -34,7 +34,7 @@ struct CycleInput {
   double stamp_s = 0.0;  // the cycle's time, used only to label events
   double dt_s = 0.0;     // what the gate is told about the time since the previous cycle
   racer_safety::DriveCommand command;  // the /drive_raw command in force
-  double age_s = 0.0;    // seconds since that command arrived (+inf: none yet)
+  double age_s = 0.0;                  // seconds since that command arrived (+inf: none yet)
 };
 
 struct EventOut {

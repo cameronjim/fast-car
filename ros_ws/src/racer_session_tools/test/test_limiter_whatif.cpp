@@ -71,21 +71,21 @@ TEST(WhatIfWiring, ClipDecisionsEqualTheGatesOwnOnATable) {
   ASSERT_GT(rate, 0.0);
   ASSERT_GT(acc, 0.0);
   const std::vector<Row> table = {
-      {{0.0, 0.0}, {0.0, 0.0}, nominal},                              // standing, no command
-      {{0.0, 0.0}, {0.1, 0.0}, nominal},                              // small steering step
-      {{0.0, 0.0}, {0.4, 0.0}, nominal},                              // large steering step
-      {{0.0, 0.0}, {-0.4, 0.0}, nominal},                             // large step, other side
-      {{0.4, 0.0}, {0.0, 0.0}, nominal},                              // the start clip of 13.1.3
-      {{0.4, 0.0}, {0.0, 0.0}, 0.0068},                               // same, tiny recorded dt
-      {{0.0, 0.0}, {0.0, 0.2}, nominal},                              // speed step
-      {{0.0, 0.5}, {0.0, 0.5}, nominal},                              // steady
-      {{0.0, 0.5}, {0.0, 0.0}, nominal},                              // braking is never clipped
-      {{0.0, 0.3}, {0.0, 0.3 + 2.0 * acc * 0.0068}, 0.0068},          // speed step, twice the limit
-      {{0.0, 0.3}, {0.0, 0.3 + 0.5 * acc * nominal}, nominal},        // speed step, half the limit
-      {{0.0, 0.0}, {2.0 * rate * 0.0068, 0.0}, 0.0068},               // steering, twice the limit
-      {{0.0, 0.0}, {0.5 * rate * nominal, 0.0}, nominal},             // steering, half the limit
-      {{0.0, 0.0}, {0.5 * rate * 0.0068, 0.0}, 0.0068},               // half the limit at small dt
-      {{0.05, 0.4}, {0.15, 0.45}, 0.03},                              // both channels
+      {{0.0, 0.0}, {0.0, 0.0}, nominal},                        // standing, no command
+      {{0.0, 0.0}, {0.1, 0.0}, nominal},                        // small steering step
+      {{0.0, 0.0}, {0.4, 0.0}, nominal},                        // large steering step
+      {{0.0, 0.0}, {-0.4, 0.0}, nominal},                       // large step, other side
+      {{0.4, 0.0}, {0.0, 0.0}, nominal},                        // the start clip of 13.1.3
+      {{0.4, 0.0}, {0.0, 0.0}, 0.0068},                         // same, tiny recorded dt
+      {{0.0, 0.0}, {0.0, 0.2}, nominal},                        // speed step
+      {{0.0, 0.5}, {0.0, 0.5}, nominal},                        // steady
+      {{0.0, 0.5}, {0.0, 0.0}, nominal},                        // braking is never clipped
+      {{0.0, 0.3}, {0.0, 0.3 + 2.0 * acc * 0.0068}, 0.0068},    // speed step, twice the limit
+      {{0.0, 0.3}, {0.0, 0.3 + 0.5 * acc * nominal}, nominal},  // speed step, half the limit
+      {{0.0, 0.0}, {2.0 * rate * 0.0068, 0.0}, 0.0068},         // steering, twice the limit
+      {{0.0, 0.0}, {0.5 * rate * nominal, 0.0}, nominal},       // steering, half the limit
+      {{0.0, 0.0}, {0.5 * rate * 0.0068, 0.0}, 0.0068},         // half the limit at small dt
+      {{0.05, 0.4}, {0.15, 0.45}, 0.03},                        // both channels
   };
   int clips = 0;
   for (std::size_t i = 0; i < table.size(); ++i) {

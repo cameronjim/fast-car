@@ -43,7 +43,9 @@ def main() -> int:
 
     lines = run(args.cli, stream, "recorded", "--teacher")
     replay = [
-        ln for ln in lines if ln["type"] == "event" and ln["phase"] == "engage" and ln["source"] == "rate_limit"
+        ln
+        for ln in lines
+        if ln["type"] == "event" and ln["phase"] == "engage" and ln["source"] == "rate_limit"
     ]
     summary = [ln for ln in lines if ln["type"] == "summary"]
     if len(summary) != 1 or summary[0]["cycles"] != 984:
@@ -57,11 +59,14 @@ def main() -> int:
         b = float(DT.search(rep["detail"]).group(1))
         if abs(a - b) > 1e-5:
             sys.exit(f"dt in detail: recorded {a}, replayed {b}")
-    if any(ln["type"] == "event" and ln["phase"] == "engage" and ln["source"] != "rate_limit" for ln in lines):
+    if any(
+        ln["type"] == "event" and ln["phase"] == "engage" and ln["source"] != "rate_limit"
+        for ln in lines
+    ):
         sys.exit("an engagement of another source was raised")
 
     nominal = run(args.cli, stream, "nominal", "--teacher")
-    if [ln for ln in nominal if ln["type"] == "summary"][0]["dt_mode"] != "nominal":
+    if next(ln for ln in nominal if ln["type"] == "summary")["dt_mode"] != "nominal":
         sys.exit("nominal run did not report its mode")
     print("limiter reproduction: ok")
     return 0

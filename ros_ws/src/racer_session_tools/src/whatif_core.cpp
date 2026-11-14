@@ -36,7 +36,7 @@ racer_safety::SafetyLimits default_limits() {
   model.peak_acceleration_mps2 = vp.actuation.peak_acceleration_mps2;
   limits.measured_speed_model = model;
   limits.obstacle_steering_hold_after_s = vp.limits.obstacle_steering_hold_after_s;
-  limits.watchdog_missed_cycles = 3;  // safety_node's declared default
+  limits.watchdog_missed_cycles = 3;     // safety_node's declared default
   limits.control_period_s = 1.0 / 50.0;  // safety_node's control_rate_hz default
   return limits;
 }
@@ -45,8 +45,7 @@ double nominal_period_s(const racer_safety::SafetyLimits& limits) {
   return limits.control_period_s;
 }
 
-Replayer::Replayer(const racer_safety::SafetyLimits& limits)
-    : gate_(limits), previous_{0.0, 0.0} {}
+Replayer::Replayer(const racer_safety::SafetyLimits& limits) : gate_(limits), previous_{0.0, 0.0} {}
 
 void Replayer::seed(const racer_safety::DriveCommand& output) {
   previous_ = output;

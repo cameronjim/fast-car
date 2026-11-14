@@ -241,8 +241,8 @@ int main(int argc, char** argv) {
       if (e.engage && e.source == "watchdog") {
         ++engage_watchdog;
       }
-      std::cout << "{\"type\": \"event\", \"t\": " << json_time(e.t_s) << ", \"phase\": "
-                << json_string(e.engage ? "engage" : "release")
+      std::cout << "{\"type\": \"event\", \"t\": " << json_time(e.t_s)
+                << ", \"phase\": " << json_string(e.engage ? "engage" : "release")
                 << ", \"source\": " << json_string(e.source)
                 << ", \"severity\": " << json_string(e.severity)
                 << ", \"duration_s\": " << json_number(e.duration_s)

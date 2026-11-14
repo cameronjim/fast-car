@@ -46,6 +46,10 @@ class CapSchedule:
         self.step_mps = float(step_mps)
         self.ceiling_mps = float(ceiling_mps)
         self._max_level = math.ceil((self.ceiling_mps - self.start_mps) / self.step_mps - 1e-9)
+        self._history: list[tuple[int, bool]] = []
+        self._reset_state()
+
+    def _reset_state(self) -> None:
         self._level = 0
         self._clean_streak = 0
         self._needs_two = False
@@ -54,8 +58,26 @@ class CapSchedule:
     def cap_mps(self) -> float:
         return min(self.ceiling_mps, self.start_mps + self._level * self.step_mps)
 
-    def finish_lap(self, clean: bool) -> float:
-        """Record the outcome of the lap just driven. Returns the cap for the next lap."""
+    def finish_lap(self, clean: bool, lap_index: int | None = None) -> float:
+        """Record the outcome of the lap just driven. Returns the cap for the next lap.
+        `lap_index` (optional) lets `drop_lap` take the lap back out later."""
+        if lap_index is not None:
+            self._history.append((lap_index, bool(clean)))
+        self._apply(clean)
+        return self.cap_mps
+
+    def drop_lap(self, lap_index: int) -> float:
+        """Forget a lap that turned out not to be one (a suspect closure): replay the outcomes of
+        the remaining indexed laps from the start. Returns the cap for the next lap."""
+        if not any(i == lap_index for i, _ in self._history):
+            return self.cap_mps
+        self._history = [(i, c) for i, c in self._history if i != lap_index]
+        self._reset_state()
+        for _i, clean in self._history:
+            self._apply(clean)
+        return self.cap_mps
+
+    def _apply(self, clean: bool) -> None:
         if clean:
             self._clean_streak += 1
             if (not self._needs_two) or self._clean_streak >= 2:
@@ -66,4 +88,3 @@ class CapSchedule:
             self._level = max(0, self._level - 1)
             self._clean_streak = 0
             self._needs_two = True
-        return self.cap_mps

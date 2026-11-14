@@ -69,6 +69,9 @@ class MatchResult:
     rms_m: float  # RMS distance of the inliers
     inlier_share: float  # share of the source points with a target point within inlier_m
     n_source: int
+    #: Larger of the two free-space violation shares (see `freespace_violation_share`); the gate
+    #: fills it in for the match it keeps, 0.0 when nobody measured it.
+    freespace_violation: float = 0.0
 
 
 def wrap(a: float) -> float:
@@ -249,3 +252,56 @@ def overlap_share(
     moved = source @ np.array([[c, -s], [s, c]]).T + np.array([pose[0], pose[1]])
     d, _ = _nearest(moved, target)
     return float(np.mean(d < inlier_m))
+
+
+def polar_profile(
+    points: FloatArray,
+    origin_xy: tuple[float, float],
+    n_bins: int = 360,
+    dilate_bins: int = 2,
+) -> FloatArray:
+    """Nearest return per 1 degree bearing bin around `origin_xy` (the LiDAR position in the frame
+    of `points`), then the minimum over +- `dilate_bins` bins (circular). NaN where no bin in the
+    window has a return: unknown, never counted as free space."""
+    out = np.full(n_bins, np.nan)
+    if points.shape[0] == 0 or n_bins <= 0:
+        return out
+    dx = points[:, 0] - origin_xy[0]
+    dy = points[:, 1] - origin_xy[1]
+    r = np.hypot(dx, dy)
+    k = np.floor((np.arctan2(dy, dx) + math.pi) / (2.0 * math.pi) * n_bins).astype(np.int64)
+    k = np.clip(k, 0, n_bins - 1)
+    raw = np.full(n_bins, np.inf)
+    np.minimum.at(raw, k, r)
+    prof = raw.copy()
+    for shift in range(1, max(dilate_bins, 0) + 1):
+        prof = np.minimum(prof, np.minimum(np.roll(raw, shift), np.roll(raw, -shift)))
+    out[np.isfinite(prof)] = prof[np.isfinite(prof)]
+    return out
+
+
+def freespace_violation_share(
+    points: FloatArray,
+    profile: FloatArray,
+    origin_xy: tuple[float, float],
+    margin_m: float = 0.15,
+    max_range_m: float = 6.0,
+) -> float:
+    """Share of `points` (already in the profile's frame) that lie more than `margin_m` INSIDE the
+    profile's range in their bin: the other scan saw through the place where this scan sees a
+    wall. Points in unknown bins or beyond `max_range_m` from `origin_xy` are not counted, in the
+    numerator or the denominator. 0.0 when nothing can be counted."""
+    n_bins = profile.shape[0]
+    if points.shape[0] == 0 or n_bins == 0:
+        return 0.0
+    dx = points[:, 0] - origin_xy[0]
+    dy = points[:, 1] - origin_xy[1]
+    r = np.hypot(dx, dy)
+    k = np.floor((np.arctan2(dy, dx) + math.pi) / (2.0 * math.pi) * n_bins).astype(np.int64)
+    k = np.clip(k, 0, n_bins - 1)
+    seen = profile[k]
+    counted = np.isfinite(seen) & (r <= max_range_m)
+    n = int(counted.sum())
+    if n == 0:
+        return 0.0
+    return float(np.sum(r[counted] < seen[counted] - margin_m)) / n

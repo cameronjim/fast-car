@@ -12,6 +12,12 @@ the planner bundle's validity): the system's lap count equals the ground-truth l
 system lap time is within 0.3 s of the truth, 0 wall contacts, the cap rose at least once, the
 only publisher on /drive_raw is mppi_planner_node and the only publisher on /drive is safety_node.
 
+Case 3 (brief 29, development case T2: lane 1.0 m, straight 5.0 m, island radius 0.4 m, condition a,
+D off at the lap-1 cap, 4 laps): rule D3-S0a of the v0.3 pre-registration: the system's lap count
+equals the ground-truth count and every system lap time is within 0.3 s of the ground-truth lap
+(differences of crossing stamps of the start line, `gt_lap_times_by_crossing_s`), 0 wall contacts.
+Gate v1 closed laps metres early on straights like this one.
+
 Case 2 (half a lap): the car is stopped after a little more than half a lap. A stadium looks the
 same half a lap later, so a gate that only compared scans would close here; the heading condition
 must keep it armed off. The system reports no lap.
@@ -78,6 +84,7 @@ def run_runner(
     laps: int,
     duration_s: float,
     v_max_mps: float | None = None,
+    track_params: dict | None = None,
 ) -> dict:
     out = tmp_path / "result.json"
     command = [
@@ -86,7 +93,7 @@ def run_runner(
         "--track",
         "stadium",
         "--track-params-json",
-        json.dumps(TUNING_STADIUM),
+        json.dumps(TUNING_STADIUM if track_params is None else track_params),
         "--driver",
         "pnp",
         "--backend",
@@ -175,4 +182,34 @@ def test_the_gate_does_not_close_at_half_a_lap(tmp_path, capsys):
     assert 0.5 * loop < result["progress_m"] < 0.95 * loop, "the run must pass half way, not finish"
     assert result["system_laps"] == 0
     assert result["lap_status"]["laps_completed"] == 0
+    assert result["wall_contacts"] == 0
+
+
+T2_STADIUM = {"lane_width_m": 1.0, "straight_length_m": 5.0, "island_radius_m": 0.4}
+T2_LAPS = 4
+
+
+def test_the_long_straight_stadium_t2_counts_every_lap_with_the_right_time(tmp_path, capsys):
+    """D3-S0a on development case T2 (5.0 m straight), ccw, seed 11, condition a, 4 laps."""
+    result = run_runner(
+        tmp_path,
+        domain=85,
+        mode="off",
+        laps=T2_LAPS,
+        duration_s=400.0,
+        v_max_mps=LAP1_CAP_MPS,
+        track_params=T2_STADIUM,
+    )
+    gt = result["gt_lap_times_by_crossing_s"]
+    system = [e["lap_time_s"] for e in result["system_lap_events"]]
+    with capsys.disabled():
+        print(
+            f"\nl5_pnp_laps T2 ccw D off: gt laps {gt} system laps {system} "
+            f"lengths {[round(e['length_m'], 2) for e in result['system_lap_events']]} "
+            f"loop {result['loop_length_m']} contacts {result['wall_contacts']}"
+        )
+    assert len(gt) >= T2_LAPS, result.get("stopped_because")
+    assert len(system) == len(gt), f"system {len(system)} laps, ground truth {len(gt)}"
+    for k, (s, g) in enumerate(zip(system, gt, strict=True), start=1):
+        assert abs(s - g) <= LAP_TIME_TOLERANCE_S, f"lap {k}: system {s:.2f} s, truth {g:.2f} s"
     assert result["wall_contacts"] == 0

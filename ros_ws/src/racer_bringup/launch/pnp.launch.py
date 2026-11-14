@@ -40,7 +40,10 @@ Refusals (a launch that does not start is the safe outcome):
 Options that are measurements, not part of the command path:
 
 * `lap_memory` (default false) adds racer_laps' lap_memory_node (`lap_source:=start_scan|map_pose`,
-  `lap_mode:=v0|v1`) and sets the planner's `use_lap_guidance`.
+  `lap_mode:=v0|v1|observe`) and sets the planner's `use_lap_guidance`. With `lap_mode:=observe`
+  the node publishes `/pnp/lap/event` and `/pnp/lap/status` and no guidance, and the planner is
+  launched exactly as with `lap_memory:=false` (fixed cap `v_max_mps`); `v_lap1_mps` is ignored
+  and the launch log says so.
 * `lap_counter` (default true) starts racer_perception's camera lap counter unless a node named
   `lap_counter_node` is already in the graph, and calls `/lap_counter/reset` once so the
   reference frame is this run's start line. If the package or OpenCV is missing (the node exits
@@ -77,7 +80,7 @@ from launch_ros.actions import Node
 
 BACKENDS = ("net", "geometric")
 LAP_SOURCES = ("start_scan", "map_pose")
-LAP_MODES = ("v0", "v1")
+LAP_MODES = ("v0", "v1", "observe")
 RECORDER_NODE_SUBSTRING = "rosbag2_recorder"
 RECORDER_WAIT_S = 5.0
 RECORDER_REFUSAL = "refusing to drive: no rosbag recorder in the graph (every run is logged)"
@@ -246,6 +249,16 @@ def lap_memory_parameters(
         raise RuntimeError(
             "pnp.launch.py: lap_mode:=v1 needs lap_source:=start_scan (D v1 is indexed by station)"
         )
+    if lap_mode == "observe":
+        # The gate runs, events and status are published, no guidance: the planner keeps its
+        # fixed cap `v_max_mps`. `v_lap1_mps` has no meaning here and is ignored.
+        ceiling = min(float(v_max_mps), validity_v_max_mps(dynamics_bundle))
+        return {
+            "v_cap_ceiling_mps": ceiling,
+            "v_cap_start_mps": ceiling,
+            "lap_mode": lap_mode,
+            "lap_source": lap_source,
+        }
     lap1 = float(v_max_mps) if v_lap1_mps is None else float(v_lap1_mps)
     if lap1 > float(v_max_mps):
         raise RuntimeError(
@@ -363,13 +376,22 @@ def _make_actions(context: LaunchContext) -> list:
     v_lap1_text = arg("v_lap1_mps")
     v_lap1 = float(v_lap1_text) if v_lap1_text else None
     lap_params = None
+    log: list[str] = []
     if lap_memory:
         lap_params = lap_memory_parameters(
             arg("dynamics_bundle"), v_max, v_lap1, arg("lap_mode"), arg("lap_source")
         )
-        planner_params["use_lap_guidance"] = True
-        # missing, stale or malformed guidance: the lap-1 cap, never the ceiling
-        planner_params["v_no_guidance_mps"] = float(lap_params["v_cap_start_mps"])
+        if arg("lap_mode") == "observe":
+            # the planner is launched exactly as with lap_memory:=false: fixed cap, no guidance
+            # expected, no no-guidance fallback
+            log.append(
+                "lap_mode:=observe: the lap node publishes events and status only, the planner "
+                f"runs at its fixed cap v_max_mps {v_max} m/s; v_lap1_mps is ignored"
+            )
+        else:
+            planner_params["use_lap_guidance"] = True
+            # missing, stale or malformed guidance: the lap-1 cap, never the ceiling
+            planner_params["v_no_guidance_mps"] = float(lap_params["v_cap_start_mps"])
         lap_params["laser_yaw_from_vehicle_params"] = perception_params[
             "laser_yaw_from_vehicle_params"
         ]
@@ -387,7 +409,7 @@ def _make_actions(context: LaunchContext) -> list:
         )
         for node, name in ((perception, "track_perception_node"), (planner, "mppi_planner_node"))
     ]
-    actions = [perception, planner, *stop_all]
+    actions = [perception, planner, *stop_all, *[LogInfo(msg=f"[pnp.launch.py] {m}") for m in log]]
     if lap_params is not None:
         base = [arg("params_file")] if arg("params_file") else []
         laps = Node(
@@ -514,7 +536,11 @@ def generate_launch_description() -> LaunchDescription:
                 "lap_mode",
                 default_value="v0",
                 choices=list(LAP_MODES),
-                description="D v0 (cap schedule) or v1 (station set); v1 needs start_scan.",
+                description=(
+                    "D v0 (cap schedule), v1 (station set; needs start_scan) or observe (the lap "
+                    "node publishes events and status and no guidance; the planner runs at its "
+                    "fixed cap v_max_mps and v_lap1_mps is ignored)."
+                ),
             ),
             DeclareLaunchArgument(
                 "lap_source",

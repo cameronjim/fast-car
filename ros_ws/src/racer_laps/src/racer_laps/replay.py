@@ -1,14 +1,23 @@
-"""Run the lap detector over a recorded bag and print the laps.
+"""Run the lap memory over a recorded bag and print the laps.
 
-    python -m racer_laps.replay --bag <dir or .mcap>
+    python -m racer_laps.replay --bag <dir or .mcap>                         # map pose
+    python -m racer_laps.replay --bag <dir> --lap-source start_scan          # start-scan gate
 
-The bag needs `/tf` (and `/tf_static` if the map to odom or odom to base_link link is static):
-bags from stack runs with `mapping:=true`. `/pnp/planner/status`, `/safety/events`,
-`/odom/wheel` and `/drive_raw` are used when present. Without planner status the start line is
-set at the first pose and every lap is unclean (there is no plan clearance to judge), which the
-output says. Needs the `replay` extra (mcap, mcap-ros2-support), no ROS install.
+`--lap-source map_pose` (default) needs `/tf` (and `/tf_static` if the map to odom or odom to
+base_link link is static): bags from stack runs with `mapping:=true`. `/pnp/planner/status`,
+`/safety/events`, `/odom/wheel` and `/drive_raw` are used when present. Without planner status the
+start line is set at the first pose and every lap is unclean (there is no plan clearance to judge),
+which the output says.
 
-The decision logic is exactly the node's: `racer_laps.engine.LapMemory` fed at 20 Hz of bag time.
+`--lap-source start_scan` needs `/scan`, `/odom/wheel` and `/drive` (no `/tf`): the start scan is
+the first scan of the segment with wheel speed under 0.05 m/s that is followed by motion, or the
+segment's first scan if the car is already moving. `--from-s` and `--to-s` (seconds after the
+first `/scan`, the axis of tools/pnp_replay/bag.py) or `--split <file> --segment T2a+T2b` cut the
+segment; `--compare-pose` runs the map-pose detector over the same segment and starts it at the
+same instant. Needs the `replay` extra (mcap, mcap-ros2-support, pyyaml, jsonschema), no ROS.
+
+The decision logic is exactly the node's: `racer_laps.engine.LapMemory`, fed at 20 Hz of bag time
+(map pose) or message by message (start scan).
 """
 
 from __future__ import annotations
@@ -17,14 +26,18 @@ import argparse
 import logging
 import math
 import sys
+import time
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from racer_laps.engine import LapConfig, LapMemory, LapResult
+from racer_laps.engine import LAP_SOURCES, LapConfig, LapMemory, LapResult
+from racer_laps.gate import GateConfig
 from racer_laps.lap_detector import wrap_angle
+from racer_laps.scan_match import scan_to_points
+from racer_laps.vehicle import LapVehicle, load_live_vehicle
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +46,17 @@ PLANNER_TOPIC = "/pnp/planner/status"
 EVENTS_TOPIC = "/safety/events"
 ODOM_TOPIC = "/odom/wheel"
 DRIVE_RAW_TOPIC = "/drive_raw"
-WANTED = (*TF_TOPICS, PLANNER_TOPIC, EVENTS_TOPIC, ODOM_TOPIC, DRIVE_RAW_TOPIC)
+DRIVE_TOPIC = "/drive"
+SCAN_TOPIC = "/scan"
+WANTED = (
+    *TF_TOPICS,
+    PLANNER_TOPIC,
+    EVENTS_TOPIC,
+    ODOM_TOPIC,
+    DRIVE_RAW_TOPIC,
+    DRIVE_TOPIC,
+    SCAN_TOPIC,
+)
 
 #: PlannerStatus.STATE_DRIVING
 STATE_DRIVING = 1
@@ -110,6 +133,7 @@ def run_replay(
     pose_timeout_s: float = 0.5,
     map_frame: str = "map",
     base_frame: str = "base_link",
+    start_s: float | None = None,
 ) -> ReplayResult:
     """Feed decoded messages (log time in seconds, topic, message) through the lap memory.
 
@@ -149,8 +173,12 @@ def run_replay(
         # Sample the pose for every tick before this message: it only knows what came earlier.
         assert next_tick is not None
         while next_tick < t_s:
-            if not saw_planner and not assumed_driving:
-                # no planner status in this bag: lap 1 starts at the first pose
+            if (
+                not saw_planner
+                and not assumed_driving
+                and (start_s is None or next_tick >= start_s)
+            ):
+                # no planner status in this bag: lap 1 starts at the first pose (or at start_s)
                 mem.on_planner_status(STATE_DRIVING, math.nan)
                 assumed_driving = True
             tick(next_tick)
@@ -174,7 +202,9 @@ def run_replay(
             saw_planner = True
             mem.on_planner_status(int(msg.state), float(msg.plan_min_clearance_m))
         elif topic == EVENTS_TOPIC:
-            mem.on_safety_event(int(msg.phase), int(msg.severity))
+            mem.on_safety_event(
+                int(msg.phase), int(msg.severity), str(getattr(msg, "source", "ttc"))
+            )
         elif topic == ODOM_TOPIC:
             mem.on_wheel_speed(float(msg.twist.twist.linear.x))
         elif topic == DRIVE_RAW_TOPIC:
@@ -268,21 +298,211 @@ def read_messages(path: str | Path) -> Iterator[tuple[float, str, Any]]:
                 log.warning("%s: stopped at an unreadable record (%s)", file.name, error)
 
 
+@dataclass
+class ScanReplayResult:
+    laps: list[LapResult]
+    start_t_s: float | None  # log time of the start scan's instant
+    first_scan_log_s: float
+    n_scans: int
+    armed_scans: int
+    matched_scans: int
+    match_times_s: list[float]  # wall seconds of every on_scan call made while armed
+    wheel_distance_m: float
+    status: dict[str, object]
+
+    def bag_time(self, t_s: float) -> float:
+        """A log or stamp time on the bag axis (seconds after the first /scan)."""
+        return t_s - self.first_scan_log_s
+
+
+def find_start_time(
+    odom: Sequence[tuple[float, float]], standstill_mps: float = 0.05
+) -> float | None:
+    """Log time of the start scan's instant: the last standstill odometry sample before the first
+    motion, or the first sample if the car is already moving. `odom` is (log time, speed)."""
+    if not odom:
+        return None
+    t_start = odom[0][0]
+    for t, v in odom:
+        if abs(v) < standstill_mps:
+            t_start = t
+        else:
+            break
+    return t_start
+
+
+def default_start_scan_config(vehicle: LapVehicle) -> LapConfig:
+    return LapConfig(
+        lap_source="start_scan",
+        gate=GateConfig(wheelbase_m=vehicle.wheelbase_m, yaw_gain_table=vehicle.yaw_gain_table),
+    )
+
+
+def run_replay_start_scan(
+    messages: Sequence[tuple[float, str, Any]],
+    vehicle: LapVehicle,
+    cfg: LapConfig | None = None,
+    window_s: tuple[float, float] | None = None,
+) -> ScanReplayResult:
+    """The start-scan gate over decoded messages (log time, topic, message), in log time order.
+
+    `window_s` is (from, to) in seconds after the first /scan. Odometry and scans use their header
+    stamps for time (the node does too); the order of delivery is log time."""
+    scans = [m for m in messages if m[1] == SCAN_TOPIC]
+    if not scans:
+        raise ValueError("no /scan in the bag")
+    first_scan_log = scans[0][0]
+    lo, hi = (-math.inf, math.inf) if window_s is None else window_s
+    inside = [m for m in messages if lo <= m[0] - first_scan_log <= hi]
+    odom = [(t, float(msg.twist.twist.linear.x)) for t, topic, msg in inside if topic == ODOM_TOPIC]
+    t_start = find_start_time(odom)
+    mem = LapMemory(cfg or default_start_scan_config(vehicle))
+    laps: list[LapResult] = []
+    n_scans = 0
+    timing: list[float] = []
+    wheel_m = 0.0
+    last_odom_t: float | None = None
+    started = False
+    saw_planner = any(topic == PLANNER_TOPIC for _t, topic, _m in inside)
+    for t_log, topic, msg in inside:
+        if t_start is not None and t_log < t_start:
+            continue
+        if not started and not saw_planner and topic == SCAN_TOPIC:
+            mem.on_planner_status(STATE_DRIVING, math.nan)  # no planner status in the bag
+            started = True
+        if topic == ODOM_TOPIC:
+            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            v = float(msg.twist.twist.linear.x)
+            mem.on_wheel_odom(stamp, v)
+            if last_odom_t is not None and stamp > last_odom_t:
+                wheel_m += max(0.0, v) * min(stamp - last_odom_t, 1.0)
+            last_odom_t = stamp
+        elif topic == DRIVE_TOPIC:
+            mem.on_drive(float(msg.drive.steering_angle))
+        elif topic == DRIVE_RAW_TOPIC:
+            mem.on_drive_raw(float(msg.drive.speed), float(msg.drive.steering_angle))
+        elif topic == PLANNER_TOPIC:
+            mem.on_planner_status(int(msg.state), float(msg.plan_min_clearance_m))
+        elif topic == EVENTS_TOPIC:
+            mem.on_safety_event(int(msg.phase), int(msg.severity), str(msg.source))
+        elif topic == SCAN_TOPIC:
+            n_scans += 1
+            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            sweep = float(msg.scan_time) if msg.scan_time > 0.0 else 0.0
+            pts = scan_to_points(
+                msg.ranges,
+                float(msg.angle_min),
+                float(msg.angle_increment),
+                float(msg.range_min),
+                float(msg.range_max),
+                vehicle.mount,
+                vehicle.body,
+            )
+            armed_before = mem.gate is not None and mem.gate.armed
+            t0 = time.perf_counter()
+            result = mem.on_scan(stamp + 0.5 * sweep, pts)
+            if armed_before:
+                timing.append(time.perf_counter() - t0)
+            if result is not None:
+                laps.append(result)
+    assert mem.gate is not None
+    return ScanReplayResult(
+        laps=laps,
+        start_t_s=t_start,
+        first_scan_log_s=first_scan_log,
+        n_scans=n_scans,
+        armed_scans=mem.gate.n_armed_scans,
+        matched_scans=mem.gate.n_matched_scans,
+        match_times_s=timing,
+        wheel_distance_m=wheel_m,
+        status=mem.status(),
+    )
+
+
+def segment_ranges(split_file: str | Path, bag_name: str, segment: str) -> tuple[float, float]:
+    """(from, to) in bag seconds of a segment, or of consecutive segments joined with `+`
+    (T2a+T2b is T2a's start to T2b's end). Reads the pre-registered split file, names only."""
+    import yaml
+
+    data = yaml.safe_load(Path(split_file).read_text(encoding="utf-8"))
+    entries = {e["name"]: e for e in data["bags"][bag_name]["segments"]}
+    parts = [entries[name] for name in segment.split("+")]
+    return float(min(e["from"] for e in parts)), float(max(e["to"] for e in parts))
+
+
+def format_scan_report(result: ScanReplayResult) -> str:
+    lines = []
+    for lap in result.laps:
+        lines.append(
+            f"lap {lap.lap_index}: crossing at bag {result.bag_time(lap.t_cross_s):.2f} s  "
+            f"{lap.lap_time_s:.2f} s  {lap.length_m:.2f} m  "
+            f"{'MISSED-GATE ' if lap.missed_gate else ''}"
+            f"{'clean' if lap.clean else 'unclean'}"
+        )
+    cost = result.match_times_s
+    if cost:
+        ms = sorted(1e3 * c for c in cost)
+        lines.append(
+            f"on_scan cost while armed: mean {sum(ms) / len(ms):.1f} ms, "
+            f"p99 {ms[min(len(ms) - 1, int(0.99 * len(ms)))]:.1f} ms, max {ms[-1]:.1f} ms"
+        )
+    share = result.matched_scans / result.armed_scans if result.armed_scans else math.nan
+    lines.append(
+        f"{len(result.laps)} laps, {result.n_scans} scans, armed {result.armed_scans}, "
+        f"matched {result.matched_scans} ({100.0 * share:.0f} percent of armed), "
+        f"wheel distance {result.wheel_distance_m:.1f} m"
+    )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--bag", required=True, type=Path, help="bag directory or .mcap file")
+    parser.add_argument("--lap-source", choices=LAP_SOURCES, default="map_pose")
     parser.add_argument("--min-lap-length-m", type=float, default=LapConfig().min_lap_length_m)
     parser.add_argument(
         "--start-line-length-m", type=float, default=LapConfig().start_line_length_m
     )
+    parser.add_argument("--from-s", type=float, help="segment start, bag seconds after first /scan")
+    parser.add_argument("--to-s", type=float, help="segment end, bag seconds after first /scan")
+    parser.add_argument("--split", type=Path, help="pre-registered split yaml")
+    parser.add_argument("--segment", help="segment name from --split, A+B joins consecutive ones")
+    parser.add_argument("--compare-pose", action="store_true", help="also run the map pose")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    window: tuple[float, float] | None = None
+    if args.segment:
+        if args.split is None:
+            parser.error("--segment needs --split")
+        bag_dir = args.bag if args.bag.is_dir() else args.bag.parent
+        window = segment_ranges(args.split, bag_dir.name, args.segment)
+    elif args.from_s is not None or args.to_s is not None:
+        window = (
+            -math.inf if args.from_s is None else args.from_s,
+            math.inf if args.to_s is None else args.to_s,
+        )
+    messages = list(read_messages(args.bag))
+    if args.lap_source == "start_scan":
+        scan_result = run_replay_start_scan(messages, load_live_vehicle(), window_s=window)
+        sys.stdout.write(format_scan_report(scan_result) + "\n")
+        if args.compare_pose:
+            first = scan_result.first_scan_log_s
+            lo, hi = (-math.inf, math.inf) if window is None else window
+            sub = [m for m in messages if lo <= m[0] - first <= hi]
+            pose = run_replay(sub, start_s=scan_result.start_t_s)
+            sys.stdout.write("map pose, same segment and start:\n" + format_report(pose) + "\n")
+            for k, lap in enumerate(pose.laps):
+                sys.stdout.write(f"  pose lap {k + 1} at bag {lap.t_cross_s - first:.2f} s\n")
+        return 0 if scan_result.laps else 1
+    if window is not None:
+        first = next((m[0] for m in messages if m[1] == SCAN_TOPIC), messages[0][0])
+        messages = [m for m in messages if window[0] <= m[0] - first <= window[1]]
     cfg = LapConfig(
         min_lap_length_m=args.min_lap_length_m, start_line_length_m=args.start_line_length_m
     )
-    result = run_replay(read_messages(args.bag), cfg)
-    sys.stdout.write(format_report(result) + "\n")
-    return 0 if result.n_pose_samples > 0 else 1
+    pose_result = run_replay(messages, cfg)
+    sys.stdout.write(format_report(pose_result) + "\n")
+    return 0 if pose_result.n_pose_samples > 0 else 1
 
 
 if __name__ == "__main__":

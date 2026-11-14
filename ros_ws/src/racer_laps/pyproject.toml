@@ -12,8 +12,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Only `python -m racer_laps.replay` reads bags.
-replay = ["mcap>=1.6.0", "mcap-ros2-support>=0.6.0"]
+# Only `python -m racer_laps.replay` reads bags (pyyaml and jsonschema: vehicle_params binding
+# and the split file).
+replay = ["mcap>=1.6.0", "mcap-ros2-support>=0.6.0", "pyyaml", "jsonschema"]
 
 [build-system]
 requires = ["hatchling"]

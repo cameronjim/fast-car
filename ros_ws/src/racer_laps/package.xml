@@ -4,9 +4,10 @@
   <name>racer_laps</name>
   <version>0.1.0</version>
   <description>
-    Lap memory (plug-and-play part D v0): detects lap closure from the map to base_link pose,
-    keeps a record of every lap, stores clean laps as a safe set resampled by arc length, and
-    advises the planner a speed cap that rises after clean laps and drops after unclean ones.
+    Lap memory (plug-and-play part D): closes laps from a start-scan gate plus wheel odometry (no
+    map after lap 1) or from the map to base_link pose, keeps a record of every lap, and advises
+    the planner a speed cap that rises after clean laps and drops after unclean ones (D v0) or a
+    per-station speed bound and cost to go learned from its own clean laps (D v1).
     It never publishes /drive_raw or /drive.
   </description>
   <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
@@ -17,6 +18,8 @@
   <depend>rclpy</depend>
   <depend>ackermann_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>racer_tools</depend>
   <depend>std_msgs</depend>
   <depend>tf2_ros_py</depend>
   <depend>racer_msgs</depend>

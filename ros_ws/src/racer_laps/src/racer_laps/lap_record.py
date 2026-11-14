@@ -9,7 +9,7 @@ known wheel speed, command and planner values are attached to each pose sample.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
@@ -41,6 +41,14 @@ class LapRecord:
     cmd_steering_rad: FloatArray
     planner_state: FloatArray
     plan_clearance_m: FloatArray
+    #: Obstacle-gate brake engagements (sources ttc and ttc_reverse) of the lap. These alone make
+    #: a lap unclean; `brake_count` counts every BRAKE-severity engagement (watchdog and
+    #: rate_limit timing events included). Defaults to `brake_count` when not given.
+    obstacle_brake_count: int = -1
+    #: Wheel distance since the lap start at each sample (start-scan source), else empty.
+    station_m: FloatArray = field(default_factory=lambda: np.zeros(0))
+    #: The lap does not count as a lap (a missed gate): never clean, never stored.
+    missed_gate: bool = False
 
 
 class LapRecorder:
@@ -50,13 +58,19 @@ class LapRecorder:
         self.min_clearance_clean_m = float(min_clearance_clean_m)
         self._rows: list[tuple[float, ...]] = []
         self._brakes = 0
+        self._obstacle_brakes = 0
         self._non_driving = False
         self._min_clearance = math.inf
         self._clearance_seen = False
 
-    def note_brake(self) -> None:
-        """A safety event with phase ENGAGE and severity BRAKE happened during this lap."""
+    def note_brake(self, obstacle: bool = True) -> None:
+        """A safety event with phase ENGAGE and severity BRAKE happened during this lap.
+        `obstacle` is True for the obstacle gate (ttc, ttc_reverse), False for the timing gates
+        (watchdog, rate_limit): both count in `brake_count`, only the first makes the lap
+        unclean."""
         self._brakes += 1
+        if obstacle:
+            self._obstacle_brakes += 1
 
     def note_planner(self, state: int, clearance_m: float) -> None:
         """Every planner status message (50 Hz), not only the ones at pose samples. Any state but
@@ -80,6 +94,7 @@ class LapRecorder:
         cmd_steering: float,
         planner_state: int,
         clearance_m: float,
+        station_m: float = math.nan,
     ) -> None:
         self._rows.append(
             (
@@ -92,6 +107,7 @@ class LapRecorder:
                 cmd_steering,
                 float(planner_state),
                 clearance_m,
+                station_m,
             )
         )
 
@@ -103,14 +119,23 @@ class LapRecorder:
     def brake_count(self) -> int:
         return self._brakes
 
+    @property
+    def obstacle_brake_count(self) -> int:
+        return self._obstacle_brakes
+
     def finish(
-        self, lap_index: int, lap_time_s: float, length_m: float, cap_mps: float
+        self,
+        lap_index: int,
+        lap_time_s: float,
+        length_m: float,
+        cap_mps: float,
+        missed_gate: bool = False,
     ) -> LapRecord:
         """Close the lap, return its record and start an empty one."""
-        a = np.array(self._rows, dtype=float).reshape(-1, 9)
+        a = np.array(self._rows, dtype=float).reshape(-1, 10)
         min_clearance = self._min_clearance if self._clearance_seen else math.nan
-        clean = lap_is_clean(
-            self._brakes, self._non_driving, min_clearance, self.min_clearance_clean_m
+        clean = not missed_gate and lap_is_clean(
+            self._obstacle_brakes, self._non_driving, min_clearance, self.min_clearance_clean_m
         )
         record = LapRecord(
             lap_index=lap_index,
@@ -130,9 +155,13 @@ class LapRecorder:
             cmd_steering_rad=a[:, 6],
             planner_state=a[:, 7],
             plan_clearance_m=a[:, 8],
+            obstacle_brake_count=self._obstacle_brakes,
+            station_m=a[:, 9],
+            missed_gate=missed_gate,
         )
         self._rows = []
         self._brakes = 0
+        self._obstacle_brakes = 0
         self._non_driving = False
         self._min_clearance = math.inf
         self._clearance_seen = False

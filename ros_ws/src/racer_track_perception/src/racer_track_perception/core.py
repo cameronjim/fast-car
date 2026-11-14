@@ -52,6 +52,7 @@ class TrackPerceiver:
         net: CircConv1dV0 | None = None,
         model_id: str | None = None,
         refine_net: bool = False,
+        refine_cfg: refine.RefineConfig | None = None,
     ) -> None:
         if backend not in (BACKEND_NET, BACKEND_GEOMETRIC):
             raise ValueError(f"backend must be 'net' or 'geometric', got {backend!r}")
@@ -65,7 +66,7 @@ class TrackPerceiver:
         # scan. Only the net backend has an output to refine; geometric-v1 is the scan itself.
         self.refine_net = bool(refine_net) and backend == BACKEND_NET
         self.model_id = (model_id or "unknown") if backend == BACKEND_NET else GEOMETRIC_MODEL_ID
-        self._refine_cfg = refine.RefineConfig(sigma_max_m=sigma_max_m)
+        self._refine_cfg = refine_cfg or refine.RefineConfig(sigma_max_m=sigma_max_m)
         self._geo_cfg = geometric.GeometricConfig(
             default_half_width_m=default_half_width_m, hw_min_m=hw_min_m, hw_max_m=hw_max_m
         )

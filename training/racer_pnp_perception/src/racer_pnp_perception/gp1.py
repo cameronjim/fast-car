@@ -413,6 +413,10 @@ OUTCOME_GP1B_NOT_ELSEWHERE = (
     "better where it trained, not shown elsewhere (items 1 and 2 passed, item 3, 4 or 5 failed), "
     "geometric stays deployed"
 )
+DEFICIT_BY_CONSTRUCTION_NOTE = (
+    "clearance deficit p90 holds by construction for the refined output (per-side clearance cap "
+    "of refine.py); see the variant without the cap"
+)
 # v0.2 items of H-run that GP1b item 1 repeats.
 GP1B_ITEM1_V02_ITEMS = (1, 2, 3, 6)
 
@@ -426,7 +430,9 @@ class FoldResult:
     free: dict[str, LabelFree]
 
 
-def decide_gp1b(full: Numbers, folds: dict[str, FoldResult]) -> tuple[list[Item], str, list[int]]:
+def decide_gp1b(
+    full: Numbers, folds: dict[str, FoldResult], deficit_by_construction: bool = False
+) -> tuple[list[Item], str, list[int]]:
     """The five items of pre-registration v0.3 section 3.3 for the backends `net` (the candidate)
     and `geometric` in the given numbers.
 
@@ -520,6 +526,10 @@ def decide_gp1b(full: Numbers, folds: dict[str, FoldResult]) -> tuple[list[Item]
             "development data, reported and not evidence",
         )
     )
+    if deficit_by_construction:
+        for i in items:
+            if i.number in (2, 4, 5):
+                i.note = (i.note + "; " if i.note else "") + DEFICIT_BY_CONSTRUCTION_NOTE
     failed = [i.number for i in items if not i.passed]
     if 1 in failed or 2 in failed:
         outcome = OUTCOME_GP1B_NO_BETTER

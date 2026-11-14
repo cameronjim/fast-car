@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from racer_track_perception.core import BACKEND_GEOMETRIC, BACKEND_NET, TrackPerceiver
+from racer_track_perception.refine import RefineConfig
 from racer_track_perception.vehicle import LiveVehicle, load_live_vehicle
 
 from racer_pnp_perception import gp1
@@ -41,6 +42,7 @@ from racer_pnp_perception.split import ROLE_TRAIN, Split, load_folds, load_split
 log = logging.getLogger(__name__)
 
 UNREFINED = "net_unrefined"
+NO_CAP = "net_refined_no_cap"
 SET_FOLD = "fold"
 
 
@@ -50,6 +52,14 @@ def perceivers_for(run: Path, live: LiveVehicle) -> dict[str, TrackPerceiver]:
     return {
         BACKEND_NET: TrackPerceiver(BACKEND_NET, live, net=net, model_id=run.name, refine_net=True),
         UNREFINED: TrackPerceiver(BACKEND_NET, live, net=net, model_id=run.name),
+        NO_CAP: TrackPerceiver(
+            BACKEND_NET,
+            live,
+            net=net,
+            model_id=run.name,
+            refine_net=True,
+            refine_cfg=RefineConfig(clearance_cap=False),
+        ),
         BACKEND_GEOMETRIC: TrackPerceiver(BACKEND_GEOMETRIC, live),
     }
 
@@ -59,7 +69,7 @@ def as_candidate(row: gp1.ScanRow, key: str) -> gp1.ScanRow:
     read it unchanged."""
 
     def rename(d: dict[str, Any]) -> dict[str, Any]:
-        out = {k: v for k, v in d.items() if k != BACKEND_NET and k != UNREFINED}
+        out = {k: v for k, v in d.items() if k not in (BACKEND_NET, UNREFINED, NO_CAP)}
         if key in d:
             out[BACKEND_NET] = d[key]
         return out
@@ -107,11 +117,14 @@ def fold_result(rows: list[gp1.ScanRow]) -> gp1.FoldResult:
 
 
 def decide_variant(
-    full_rows: list[gp1.ScanRow], fold_rows: dict[str, list[gp1.ScanRow]], key: str
+    full_rows: list[gp1.ScanRow],
+    fold_rows: dict[str, list[gp1.ScanRow]],
+    key: str,
+    by_construction: bool = False,
 ) -> dict[str, Any]:
     full = full_numbers([as_candidate(r, key) for r in full_rows])
     folds = {f: fold_result([as_candidate(r, key) for r in rows]) for f, rows in fold_rows.items()}
-    items, outcome, failed = gp1.decide_gp1b(full, folds)
+    items, outcome, failed = gp1.decide_gp1b(full, folds, by_construction)
 
     def dump(d: dict[str, Any]) -> dict[str, Any]:
         return {k: vars(v) for k, v in d.items()}
@@ -143,7 +156,7 @@ def heldout_bag_names(split: Split) -> list[str]:
 
 def format_report(result: dict[str, Any]) -> str:
     lines = [f"GP1b outcome: {result['refined']['outcome']}", ""]
-    for label in ("refined", "unrefined"):
+    for label in ("refined", "refined_no_cap", "unrefined"):
         v = result[label]
         lines.append(f"[{label}] outcome: {v['outcome']}  failed items: {v['failed_items']}")
         for i in v["items"]:
@@ -192,7 +205,8 @@ def main(argv: list[str] | None = None) -> int:
         fold_rows[name] = rows
     result = {
         "split_sha256": split.sha256,
-        "refined": decide_variant(full_rows, fold_rows, BACKEND_NET),
+        "refined": decide_variant(full_rows, fold_rows, BACKEND_NET, True),
+        "refined_no_cap": decide_variant(full_rows, fold_rows, NO_CAP),
         "unrefined": decide_variant(full_rows, fold_rows, UNREFINED),
         "speed_source": sources,
         "moving_rule": "wheel speed >= 0.2 m/s; ICP ground speed >= 0.2 m/s without /odom/wheel",

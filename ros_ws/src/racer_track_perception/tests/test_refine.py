@@ -238,6 +238,19 @@ def test_sigma_is_carried_and_valid_count_recomputed() -> None:
     assert (out.sigma_m[n:] == tr.INVALID_SIGMA_M).all()
 
 
+def test_the_clearance_cap_can_be_switched_off_for_the_report_only() -> None:
+    # A point just ahead and to the left of a station: with the cap the left half width stops at
+    # its distance, without the cap (GP1b's report variant) it does not.
+    pts = np.concatenate([straight_walls(0.5), np.array([[0.9, 0.12]])])
+    net = straight_net(0.0)
+    capped = refine.refine_track(net, pts, CFG)
+    free = refine.refine_track(net, pts, refine.RefineConfig(clearance_cap=False))
+    assert refine.RefineConfig().clearance_cap is True
+    n = min(capped.valid_count, free.valid_count)
+    assert (capped.half_width_left_m[:n] <= free.half_width_left_m[:n] + 1e-9).all()
+    assert (capped.half_width_left_m[:n] < free.half_width_left_m[:n] - 0.05).any()
+
+
 def test_short_or_invalid_input_comes_back_as_it_was() -> None:
     for net in (tr.no_track(), make_track(np.zeros(16), np.zeros(16), n=1)):
         out = refine.refine_track(net, straight_walls(), CFG)

@@ -203,3 +203,15 @@ def test_thresholds_are_the_v02_constants_not_retyped() -> None:
     assert gp1.ITEM5_INTRUSION_FLOOR == 0.02 and gp1.ITEM4_MAX_RATIO == 1.00
     assert gp1.ITEM4_V_MARGIN == 0.5 and gp1.MIN_H_LAYOUT_LABELS == 100
     assert copy.deepcopy(gp1.GP1B_ITEM1_V02_ITEMS) == (1, 2, 3, 6)
+
+
+def test_deficit_by_construction_flag_adds_the_note_and_changes_no_decision() -> None:
+    plain = decide()
+    flagged = gp1.decide_gp1b(
+        passing_full(), {"F1": passing_fold(), "F2": passing_fold()}, deficit_by_construction=True
+    )
+    assert plain[1:] == flagged[1:]
+    for i in flagged[0]:
+        has = gp1.DEFICIT_BY_CONSTRUCTION_NOTE in i.note
+        assert has is (i.number in (2, 4, 5))
+    assert all(gp1.DEFICIT_BY_CONSTRUCTION_NOTE not in i.note for i in plain[0])

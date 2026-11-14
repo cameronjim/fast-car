@@ -74,6 +74,9 @@ class RefineConfig:
     hw_max_m: float = HW_MAX_M
     feeler_max_m: float = FEELER_MAX_M
     sigma_max_m: float = 0.25
+    # The per-side clearance cap of the module docstring. True in the bundle contract
+    # circ_conv1d_v0_refine_v1; False exists only so GP1b can report the refinement without it.
+    clearance_cap: bool = True
 
 
 def _copy(track: tr.LocalTrackData) -> tr.LocalTrackData:
@@ -117,6 +120,8 @@ def _refine_station(
     if nl is None and nr is None:
         return c, hl_net, hr_net, False
     c_new, hl, hr = _walls(c, t, hl_net, hr_net, pts, dist, nl, nr, cfg)
+    if not cfg.clearance_cap:
+        return c_new, hl, hr, True
     rel = pts - c_new
     d_new = np.hypot(rel[:, 0], rel[:, 1])
     lat_new = -rel[:, 0] * t[1] + rel[:, 1] * t[0]

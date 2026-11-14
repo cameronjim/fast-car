@@ -102,6 +102,24 @@ class Raceline:
     source: str  # "repo" or "data"
 
 
+def _describe_laps(params: dict[str, Any]) -> str:
+    """The lap learning choices of a PnP start, for the log line (only what differs from off)."""
+    lap = params.get("lap")
+    if not lap:
+        return ""
+    text = ""
+    if lap["memory"]:
+        text += f" lap_mode={lap['mode']} lap_source={lap['source']}"
+        if lap["v_lap1_mps"] is not None:
+            text += f" v_lap1={lap['v_lap1_mps']:.2f}"
+    text += f" lap_counter={'on' if lap['counter'] else 'off'}"
+    if lap["require_counter"]:
+        text += " require_lap_counter"
+    if lap["shadow"]:
+        text += f" shadow={lap['shadow']}"
+    return text
+
+
 def _describe(mode: str, params: dict[str, Any]) -> str:
     """The choices a drive was started with, for the action log line (the UI shows `detail`)."""
     if mode == "pnp":
@@ -109,7 +127,7 @@ def _describe(mode: str, params: dict[str, Any]) -> str:
             f" dynamics={params.get('dynamics') or 'NONE'}"
             f" perception={params.get('perception') or 'none'}"
             f" planner_params={params.get('params_file') or 'default'}"
-            f" v_max={params.get('v_max_mps')}"
+            f" v_max={params.get('v_max_mps')}" + _describe_laps(params)
         )
     if mode == "gap_follow":
         cap = params.get("max_speed_mps")
@@ -809,6 +827,15 @@ class Controller:
             "default_speed": cmd.PNP_DEFAULT_SPEED_MPS,
             "params_files": self.pnp_params_files(),
         }
+        declared = self.pnp_launch_declarations()
+        # Only what the launch file on this car declares is on offer (an `observe` that the
+        # launch does not have yet is not listed, and a request for it is refused).
+        status["lap_modes"] = [
+            m for m in cmd.PNP_LAP_MODES if m in (declared.get("lap_mode") or ())
+        ]
+        status["lap_sources"] = [
+            m for m in cmd.PNP_LAP_SOURCES if m in (declared.get("lap_source") or ())
+        ]
         launch = self.s.repo_dir / "ros_ws" / "src" / "racer_bringup" / "launch" / "pnp.launch.py"
         if not found["dynamics"]:
             reason = "no dynamics bundle (manifest.yaml, kind dynamics) under data/pnp/models"
@@ -817,6 +844,15 @@ class Controller:
         else:
             reason = ""
         return {"available": not reason, "reason": reason, **status}
+
+    def pnp_launch_declarations(self) -> dict[str, tuple[str, ...] | None]:
+        """The argument names and choices pnp.launch.py declares, read from the file on every
+        call (never imported). Empty when the file is missing or unreadable."""
+        launch = self.s.repo_dir / "ros_ws" / "src" / "racer_bringup" / "launch" / "pnp.launch.py"
+        try:
+            return cmd.parse_launch_declarations(launch.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            return {}
 
     def pnp_params_files(self) -> list[str]:
         """Planner parameter files the PnP card offers: data/pnp/*.yaml, plain files with a
@@ -912,6 +948,13 @@ class Controller:
         pnp_backend: str = "net",
         pnp_v_max_mps: float = cmd.PNP_DEFAULT_SPEED_MPS,
         pnp_params: str = "",
+        pnp_v_lap1_mps: Any = None,
+        pnp_lap_memory: Any = False,
+        pnp_lap_mode: Any = "v0",
+        pnp_lap_source: Any = "start_scan",
+        pnp_lap_counter: Any = True,
+        pnp_require_lap_counter: Any = False,
+        pnp_shadow_perception: Any = "",
         max_speed_mps: float | None = None,
         min_speed_mps: float | None = None,
         a_lat_max_mps2: float | None = None,
@@ -956,6 +999,15 @@ class Controller:
                     policy,
                     (pnp_perception, pnp_dynamics, pnp_backend, pnp_v_max_mps, pnp_params),
                     *gap_tuning,
+                    pnp_lap=(
+                        pnp_v_lap1_mps,
+                        pnp_lap_memory,
+                        pnp_lap_mode,
+                        pnp_lap_source,
+                        pnp_lap_counter,
+                        pnp_require_lap_counter,
+                        pnp_shadow_perception,
+                    ),
                 )
                 params.update(resolved)
                 used_override = self._gate_drive(override, override_reason)
@@ -1026,13 +1078,14 @@ class Controller:
         min_speed_mps: float | None = None,
         a_lat_max_mps2: float | None = None,
         side_cap_min_speed_mps: float | None = None,
+        pnp_lap: tuple[Any, ...] = (None, False, "v0", "start_scan", True, False, ""),
     ) -> tuple[str, str, dict[str, Any]]:
         """Validate a driving request against the whitelist.
 
         Returns (ros2 command, mode label, the choices as resolved here, for the log).
         """
         if mode == "pnp":
-            return self._prepare_pnp(*pnp)
+            return self._prepare_pnp(*pnp, lap=pnp_lap)
         if mode == "spiderbot":
             status = self.spiderbot_status()
             if not status["available"]:
@@ -1192,7 +1245,13 @@ class Controller:
         return float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) else None
 
     def _prepare_pnp(
-        self, perception: str, dynamics: str, backend: str, v_max_mps: float, params_file: str = ""
+        self,
+        perception: str,
+        dynamics: str,
+        backend: str,
+        v_max_mps: float,
+        params_file: str = "",
+        lap: tuple[Any, ...] = (None, False, "v0", "start_scan", True, False, ""),
     ) -> tuple[str, str, dict[str, Any]]:
         status = self.pnp_status()
         if not status["available"]:
@@ -1228,7 +1287,25 @@ class Controller:
                 )
         else:
             perception = ""
+        v_lap1, lap_memory, lap_mode, lap_source, lap_counter, require_counter, shadow = lap
+        if shadow and (not isinstance(shadow, str) or shadow not in status["perception"]):
+            raise ActionError(
+                f"unknown shadow perception bundle {shadow!r} "
+                f"(available: {', '.join(status['perception']) or 'none'})",
+                400,
+            )
         models = self.s.pnp_models_dir
+        lap_request = cmd.PnpLap(
+            v_lap1_mps=v_lap1,
+            lap_memory=lap_memory,
+            lap_mode=lap_mode,
+            lap_source=lap_source,
+            lap_counter=lap_counter,
+            require_lap_counter=require_counter,
+            shadow_container_path=cmd.container_path(self.s.repo_dir, models / shadow)
+            if shadow
+            else "",
+        )
         return (
             cmd.ros_cmd_for(
                 "pnp",
@@ -1243,6 +1320,8 @@ class Controller:
                     if params_file
                     else ""
                 ),
+                pnp_lap=lap_request,
+                pnp_launch=self.pnp_launch_declarations(),
             ),
             f"pnp:{backend}",
             {
@@ -1251,6 +1330,15 @@ class Controller:
                 "backend": backend,
                 "v_max_mps": v_max_mps,
                 "params_file": params_file,
+                "lap": {
+                    "memory": bool(lap_memory) or lap_mode == "observe",
+                    "mode": lap_mode,
+                    "source": lap_source,
+                    "v_lap1_mps": None if v_lap1 is None else float(v_lap1),
+                    "counter": lap_counter,
+                    "require_counter": require_counter,
+                    "shadow": shadow,
+                },
             },
         )
 
@@ -1533,6 +1621,27 @@ class Controller:
             n.params_file.endswith(".yaml") and cmd.NAME_RE.match(n.params_file)
         ):
             raise ActionError("planner params file must be a plain *.yaml name", 400)
+        for value, what in ((n.shadow_perception, "shadow perception bundle"),):
+            if value and not cmd.NAME_RE.match(value):
+                raise ActionError(f"bad {what} name", 400)
+        try:
+            shadow = cmd.PNP_MODELS_IN_CONTAINER + n.shadow_perception
+            driving = cmd.PNP_MODELS_IN_CONTAINER + n.perception
+            cmd.check_pnp_lap(
+                cmd.PnpLap(
+                    v_lap1_mps=n.v_lap1_mps,
+                    lap_memory=n.lap_memory,
+                    lap_mode=n.lap_mode,
+                    lap_source=n.lap_source,
+                    lap_counter=n.lap_counter,
+                    require_lap_counter=n.require_lap_counter,
+                    shadow_container_path=shadow if n.shadow_perception else "",
+                ),
+                driving if n.backend == "net" and n.perception else "",
+                n.v_max_mps,
+            )
+        except cmd.CommandError as exc:
+            raise ActionError(str(exc), 400) from exc
         if p.stack.map and p.stack.map not in self.maps():
             raise ActionError(f"unknown map {p.stack.map!r}", 400)
         if p.stack.mode == "localization" and not p.stack.map:

@@ -47,6 +47,14 @@ class PnpPrefs(_Strict):
     dynamics: str = ""
     perception: str = ""
     params_file: str = ""
+    # Lap learning (pnp.launch.py 15.7). The defaults send nothing: today's command.
+    v_lap1_mps: float | None = None
+    lap_memory: bool = False
+    lap_mode: Literal["v0", "v1", "observe"] = "v0"
+    lap_source: Literal["start_scan", "map_pose"] = "start_scan"
+    lap_counter: bool = True
+    require_lap_counter: bool = False
+    shadow_perception: str = ""
 
 
 class TrackerPrefs(_Strict):

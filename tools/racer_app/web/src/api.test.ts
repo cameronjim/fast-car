@@ -88,6 +88,27 @@ describe("Api", () => {
     expect(init.headers.Authorization).toBe("Bearer t");
   });
 
+  it("sends the lap learning fields as given and nothing else", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(reply(200, { ok: true, message: "pnp:geometric started" }));
+    const body = {
+      mode: "pnp",
+      pnp_backend: "geometric",
+      pnp_dynamics: "dyn-v0-2026-11-12",
+      pnp_v_max_mps: 0.8,
+      pnp_v_lap1_mps: 0.4,
+      pnp_lap_memory: true,
+      pnp_lap_mode: "v1" as const,
+      pnp_lap_source: "start_scan" as const,
+      pnp_lap_counter: false,
+      pnp_require_lap_counter: false,
+      pnp_shadow_perception: "trackperc-shadow",
+    };
+    await new Api(memoryTokens("t"), fetchImpl).startDrive(body);
+    const [path, init] = fetchImpl.mock.calls[0];
+    expect(path).toBe("/api/drive/start");
+    expect(JSON.parse(init.body)).toEqual(body);
+  });
+
   it("a disabled Plug-and-Play reply keeps the reason for the UI", async () => {
     const body = { ok: false, error: "Plug-and-Play is disabled: no dynamics bundle" };
     const api = new Api(memoryTokens("t"), vi.fn().mockResolvedValue(reply(409, body)));

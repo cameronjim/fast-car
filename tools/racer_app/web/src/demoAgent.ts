@@ -226,6 +226,8 @@ export class DemoCar {
         speed_range: [0.2, 1.5],
         default_speed: 0.5,
         params_files: ["planner-tight.yaml", "planner-wide.yaml"],
+        lap_modes: ["v0", "v1", "observe"],
+        lap_sources: ["start_scan", "map_pose"],
       },
       patrols: ["loop-a"],
       spiderbot_rules: ["arms_raised"],
@@ -290,10 +292,40 @@ export class DemoCar {
     return ok("stack stopped, bag closed");
   }
 
+  /** The lap learning rules of the agent (commands.py), word for word, so the demo refuses what the car refuses. */
+  private checkPnpLaps(b: Record<string, unknown>): string | null {
+    const isBool = (v: unknown) => v === undefined || typeof v === "boolean";
+    for (const k of ["pnp_lap_memory", "pnp_lap_counter", "pnp_require_lap_counter"]) {
+      if (!isBool(b[k])) return `${k} must be true or false`;
+    }
+    const cap = b.pnp_v_lap1_mps;
+    if (cap !== undefined && (typeof cap !== "number" || !Number.isFinite(cap))) return "pnp lap 1 cap must be a number";
+    const mode = b.pnp_lap_mode ?? "v0";
+    if (!["v0", "v1", "observe"].includes(String(mode))) return "pnp lap mode must be one of ['v0', 'v1', 'observe']";
+    const source = b.pnp_lap_source ?? "start_scan";
+    if (!["start_scan", "map_pose"].includes(String(source))) return "pnp lap source must be one of ['start_scan', 'map_pose']";
+    const memory = b.pnp_lap_memory === true || mode === "observe";
+    if (mode !== "v0" && !memory) return `pnp lap mode ${mode} needs lap memory on`;
+    if (mode === "v1" && source !== "start_scan") return "pnp lap mode v1 needs lap source start_scan";
+    if (cap !== undefined) {
+      if (!memory) return "pnp lap 1 cap needs lap memory on or lap mode observe";
+      if (cap < 0.2 || cap > 1.5) return "pnp lap 1 cap must be between 0.2 and 1.5 m/s";
+      if (cap > Number(b.pnp_v_max_mps ?? 0.5)) return "pnp lap 1 cap cannot exceed the speed cap";
+    }
+    if (b.pnp_require_lap_counter === true && b.pnp_lap_counter === false) return "require lap counter needs the lap counter on";
+    const shadow = b.pnp_shadow_perception;
+    if (shadow && shadow === b.pnp_perception) return "the shadow perception bundle cannot be the driving one";
+    return null;
+  }
+
   private checkDrive(body: Record<string, unknown>): Reply | null {
     if (!this.containerUp) return fail(409, "the stack is not running");
     if (!this.recorderUp) return fail(409, "the bag recorder is not running (cannot be overridden)", { overridable: false });
     if (this.driveMode) return fail(409, `already driving: ${this.driveMode}`);
+    if (body.mode === "pnp") {
+      const bad = this.checkPnpLaps(body);
+      if (bad) return fail(400, bad);
+    }
     if (this.lowBattery && !body.override) {
       const msg = "Not ready: Battery (10.9 V, too low: charge it)";
       return fail(409, msg, { overridable: true, failing: ["battery"] });

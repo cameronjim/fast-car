@@ -66,3 +66,11 @@ def test_unknown_backend_exits_non_zero() -> None:
 
 def test_disagreeing_yaw_with_vehicle_params_exits_non_zero() -> None:
     refused(run_node("backend:=geometric", "laser_yaw_offset_rad:=1.0"), "laser_yaw_offset_rad")
+
+
+def test_unknown_arch_type_exits_non_zero(tmp_path: Path) -> None:
+    def future_arch(m: dict[str, Any]) -> None:
+        m["io"]["arch"]["type"] = "circ_conv1d_v0_refine_v2"
+
+    b = write_bundle(tmp_path / "b", load_live_vehicle(), future_arch)
+    refused(run_node("backend:=net", f"bundle_dir:={b}"), "IoContractMismatch")

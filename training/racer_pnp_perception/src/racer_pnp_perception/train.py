@@ -35,7 +35,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from racer_pnp_perception import dataset, model, real
+from racer_pnp_perception import augment, dataset, model, prereg, real
 
 log = logging.getLogger(__name__)
 
@@ -57,9 +57,10 @@ def internal_validation(net: Any, val: real.RealSet, batch: int = 1000) -> dict[
 
     if len(val) == 0:
         return {SELECTION_KEY: float("nan"), "val_real_efar_m": float("nan"), "val_real_v": 0.0}
-    x = torch.from_numpy(val.tensor)
+    dev = next(net.parameters()).device
+    x = torch.from_numpy(val.tensor).to(dev)
     with torch.no_grad():
-        out = torch.cat([net(x[i : i + batch]) for i in range(0, len(x), batch)]).numpy()
+        out = torch.cat([net(x[i : i + batch]) for i in range(0, len(x), batch)]).cpu().numpy()
     ec, ef, v = [], [], []
     for k in range(len(val)):
         track = net_output_to_track(out[k], 0.25)
@@ -88,6 +89,10 @@ def train(
     real_fraction: float = 0.0,
     split_path: Path | None = None,
     init: Path | None = None,
+    scale_aug: bool = False,
+    scale_probability: float = 1.0,
+    fold: str | None = None,
+    device: str = "cpu",
 ) -> dict[str, Any]:
     import torch
 
@@ -103,6 +108,21 @@ def train(
     if real_paths:
         split = load_split(split_path or DEFAULT_SPLIT_PATH)
         everything = real.load_real(list(real_paths), split)
+        fold_info: dict[str, Any] = {}
+        if fold is not None:
+            fold_def = sp_folds(split)[fold]
+            provenance = {
+                (str(b), int(i))
+                for b, i in zip(everything.bag, everything.scan_index, strict=True)
+                if str(b) in fold_def.heldout_bags
+            }
+            everything = real.drop_bags(everything, fold_def.heldout_bags)
+            real.assert_fold_clean(everything, fold_def.heldout_bags, provenance)
+            fold_info = {
+                "fold": fold,
+                "heldout_bags": list(fold_def.heldout_bags),
+                "heldout_labels_removed": len(provenance),
+            }
         real_train, real_val, cut_report = real.train_val_split(everything, split)
         real_info = {
             "files": [str(p) for p in real_paths],
@@ -114,24 +134,31 @@ def train(
             "train_labels": len(real_train),
             "val_labels": len(real_val),
             "segment_cuts": cut_report,
+            **fold_info,
         }
         log.info("real: %d train labels, %d internal validation", len(real_train), len(real_val))
     elif real_fraction > 0.0:
         raise ValueError("--real-fraction needs --real")
+    scale_range = prereg.scale_augmentation_range() if scale_aug else None
+    limits = augment.lidar_range_limits() if scale_aug else None
+    lidar_xy = augment.lidar_position() if scale_aug else None
     n_real = round(batch_size * real_fraction) if real_train is not None else 0
     n_sim = batch_size - n_real
     if real_train is not None and len(real_train) == 0 and n_real > 0:
         raise ValueError("no real training labels after the role filter")
+    # The device is how the same recipe is run, not part of it; it is recorded in config.json.
+    dev = torch.device(device)
     net = model.build_model()
     if init is not None:
         net.load_state_dict(torch.load(init, map_location="cpu"))
+    net.to(dev)
     log.info("parameters: %d", model.count_parameters(net))
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     steps_per_epoch = len(x_train) // n_sim
     sched = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=lr, total_steps=epochs * steps_per_epoch, pct_start=0.1
     )
-    xv, yv = torch.from_numpy(x_val), torch.from_numpy(y_val)
+    xv, yv = torch.from_numpy(x_val).to(dev), torch.from_numpy(y_val).to(dev)
     history: list[dict[str, float]] = []
     t0 = time.time()
     for epoch in range(epochs):
@@ -140,9 +167,9 @@ def train(
         running = 0.0
         for b in range(steps_per_epoch):
             idx = order[b * n_sim : (b + 1) * n_sim]
-            xb, yb = torch.from_numpy(x_train[idx]), torch.from_numpy(y_train[idx])
+            xb, yb = torch.from_numpy(x_train[idx]).to(dev), torch.from_numpy(y_train[idx]).to(dev)
             if hflip:
-                flip = torch.rand(len(idx)) < 0.5
+                flip = torch.rand(len(idx), device=dev) < 0.5
                 xb = torch.where(flip[:, None, None], xb.flip(-1), xb)
                 yf = yb.clone()
                 yf[..., 1] = -yb[..., 1]
@@ -152,17 +179,26 @@ def train(
             if n_real > 0:
                 assert real_train is not None
                 pick = rng.integers(0, len(real_train), size=n_real)
-                rx, ry = real.augment_real(real_train.tensor[pick], real_train.label[pick], rng)
-                xb = torch.cat([xb, torch.from_numpy(rx)])
-                yb = torch.cat([yb, torch.from_numpy(ry)])
+                rt, rl, rv = (
+                    real_train.tensor[pick],
+                    real_train.label[pick],
+                    real_train.valid_count[pick],
+                )
+                if scale_aug:
+                    rt, rl, rv, _k = augment.scale_real(
+                        rt, rl, rv, rng, scale_range, scale_probability, limits, lidar_xy
+                    )
+                rx, ry = real.augment_real(rt, rl, rng)
+                xb = torch.cat([xb, torch.from_numpy(rx).to(dev)])
+                yb = torch.cat([yb, torch.from_numpy(ry).to(dev)])
                 weight = torch.from_numpy(
                     np.concatenate(
                         [
                             np.ones((n_sim, 16), np.float32),
-                            station_weights(real_train.valid_count[pick]),
+                            station_weights(rv),
                         ]
                     )
-                )
+                ).to(dev)
             loss = model.loss_fn(net(xb), yb, station_weight=weight)
             opt.zero_grad()
             loss.backward()
@@ -188,7 +224,7 @@ def train(
         history.append(row)
         log.info(json.dumps(row))
     out.mkdir(parents=True, exist_ok=True)
-    torch.save(net.state_dict(), out / "model.pt")
+    torch.save({k: v.cpu() for k, v in net.state_dict().items()}, out / "model.pt")
     config = {
         "train": str(train_path),
         "val": str(val_path),
@@ -196,9 +232,15 @@ def train(
         "batch_size": batch_size,
         "lr": lr,
         "seed": seed,
+        "device": device,
+        "torch": torch.__version__,
         "hflip": hflip,
         "real_fraction": real_fraction,
         "init": str(init) if init else None,
+        "scale_aug": scale_aug,
+        "scale_probability": scale_probability,
+        "scale_range": list(scale_range) if scale_range else None,
+        "fold": fold,
         "real": real_info,
         "channels": list(model.CHANNELS),
         "hidden": model.HIDDEN,
@@ -207,6 +249,12 @@ def train(
     (out / "config.json").write_text(json.dumps(config, indent=2))
     (out / "history.json").write_text(json.dumps(history, indent=2))
     return {"config": config, "history": history}
+
+
+def sp_folds(split: Any) -> dict[str, Any]:
+    from racer_pnp_perception.split import load_folds
+
+    return load_folds(split)
 
 
 def select_seed(runs: dict[int, list[dict[str, float]]]) -> dict[str, Any]:
@@ -248,6 +296,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--split", type=Path, default=None)
     parser.add_argument("--init", type=Path, default=None)
     parser.add_argument(
+        "--scale-aug", action="store_true", help="isotropic scale augmentation of real samples"
+    )
+    parser.add_argument("--device", default="cpu", help="cpu, mps or cuda (not part of the recipe)")
+    parser.add_argument("--scale-probability", type=float, default=1.0)
+    parser.add_argument(
+        "--fold", default=None, help="a fold of pnp-v0.3.yaml: its held-out bags are not trained on"
+    )
+    parser.add_argument(
         "--select-only",
         action="store_true",
         help="only write <out>/selection.json from the <out>/seed<k> runs that exist",
@@ -274,6 +330,10 @@ def main(argv: list[str] | None = None) -> int:
             args.real_fraction,
             args.split,
             args.init,
+            args.scale_aug,
+            args.scale_probability,
+            args.fold,
+            args.device,
         )
         return result["history"]
 

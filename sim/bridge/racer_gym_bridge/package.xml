@@ -25,6 +25,8 @@
   <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>
   <depend>tf2_ros</depend>
+  <depend>tf2_msgs</depend>
+  <depend>rosgraph_msgs</depend>
   <!-- racer_tools.spin_guard.spin_until_shutdown (GitHub issue 50) -->
   <depend>racer_tools</depend>
 
@@ -33,7 +35,6 @@
   <test_depend>launch_ros</test_depend>
   <test_depend>launch_testing</test_depend>
   <test_depend>launch_testing_ros</test_depend>
-  <test_depend>tf2_msgs</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

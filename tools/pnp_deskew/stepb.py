@@ -45,6 +45,8 @@ MAX_LATENCY_P99_MS = 3.0
 LATENCY_SCANS = 2000
 # GP1's moving-scan definition (pre-registration v0.2 section 2): wheel speed at least 0.2 m/s.
 MOVING_MPS = 0.2
+# "R0 to R8" of the pre-registration: the split file names R7 as R7a and R7b.
+REPLAY_SEGMENTS = ("R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7a", "R7b", "R8")
 STATE_NO_SCAN = 3
 STATE_FAULT = 6
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -218,7 +220,7 @@ def item_4(
     out_dir: Path,
     cli_path: str | None,
     bundle: Path,
-    names: tuple[str, ...] = tuple(f"R{i}" for i in range(9)),
+    names: tuple[str, ...] = REPLAY_SEGMENTS,
 ) -> dict[str, Any]:
     from pnp_replay import bag as bagmod
     from pnp_replay import perception, planner_stream
@@ -351,10 +353,20 @@ def run_step(args: Any, ev: Any) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     bundle = args.dynamics_bundle or DYNAMICS_BUNDLE
     result: dict[str, Any] = {"chosen": chosen, "split_sha256": ev.SPLIT_SHA256}
-    result.update(items_1_2(ev, cfg, split, chosen, args.workers))
-    result["item3"] = item_3(ev, split, chosen)
-    result["item4"] = item_4(ev, split, chosen, args.out, args.cli, bundle)
+    path = args.out / "step_b.json"
+
+    def save() -> None:
+        path.write_text(json.dumps(_clean(result), indent=2))
+
+    # The cheap items first, each saved as soon as it is computed.
     result["item5"] = item_5(ev, split, chosen)
+    save()
+    result["item3"] = item_3(ev, split, chosen)
+    save()
+    result["item4"] = item_4(ev, split, chosen, args.out, args.cli, bundle)
+    save()
+    result.update(items_1_2(ev, cfg, split, chosen, args.workers))
+    save()
     items = {k: result[k]["passed"] for k in ("item1", "item2", "item3", "item4", "item5")}
     result["items_passed"] = items
     result["verdict"] = (
@@ -364,7 +376,7 @@ def run_step(args: Any, ev: Any) -> int:
         if not items["item1"]
         else "deskew stays off: item(s) " + ", ".join(k for k, v in items.items() if not v)
     )
-    (args.out / "step_b.json").write_text(json.dumps(_clean(result), indent=2))
+    save()
     print(json.dumps(_clean(result), indent=2))
     return 0
 

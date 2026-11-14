@@ -15,7 +15,6 @@ docs/notes/localization-2026-11-03.md.
 from __future__ import annotations
 
 import importlib.util
-import signal
 import sys
 import unittest
 from pathlib import Path
@@ -96,6 +95,4 @@ class TestLocalizationCanaryLane(unittest.TestCase):
 @launch_testing.post_shutdown_test()
 class TestLocalizationCanaryLaneShutdown(unittest.TestCase):
     def test_exit_codes(self, proc_info):
-        launch_testing.asserts.assertExitCodes(
-            proc_info, allowable_exit_codes=[0, -signal.SIGINT, -signal.SIGTERM]
-        )
+        common.assert_shutdown_exit_codes(self, proc_info)

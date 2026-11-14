@@ -1006,3 +1006,28 @@ def run_localization_canary(
         test.assertLessEqual(summary["hdg_max_rad"], thresholds.hdg_max_rad)
     finally:
         node.destroy_node()
+
+
+def assert_shutdown_exit_codes(test, proc_info, extra_allowed: dict[str, list[int]] | None = None):
+    """Post-shutdown check: every process exited 0 or on the SIGINT/SIGTERM launch_testing sent,
+    with ONE documented exception, ekf_node (robot_localization) may have died of SIGSEGV.
+
+    GitHub issue 172: ekf_node exits -11 in the SIGINT window at the end of the run, after every
+    lap was driven and judged (the test body has passed by then: a crash DURING the run would end
+    the pose stream and fail the laps or the map). The EKF shares one SIGINT with every other
+    process of the stack at once; the crash is inside robot_localization / Fast-DDS teardown (the
+    same class of shutdown race as the slam_toolbox abort handled in test_mapping_canary.py), not
+    in a racer_* node. Only ekf_node and only SIGSEGV is tolerated: any other process, and any
+    other code from the EKF, still fails. `extra_allowed` adds per-process codes (process name
+    substring -> codes)."""
+    import signal
+
+    allowed_extra = {"ekf_node": [-signal.SIGSEGV], **(extra_allowed or {})}
+    for info in proc_info:
+        allowed = [0, -signal.SIGINT, -signal.SIGTERM]
+        for name, codes in allowed_extra.items():
+            if name in info.process_name:
+                allowed += codes
+        test.assertIn(
+            info.returncode, allowed, f"{info.process_name} exited with {info.returncode}"
+        )

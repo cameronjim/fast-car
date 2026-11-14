@@ -141,6 +141,13 @@ class LapMemoryNode(Node):
         caution_laps = declare_int(
             "caution_laps", _DEFAULTS.caution_laps, "D v1: laps a caution zone stays active.", 0, 20
         )
+        bound_floor = declare(
+            "v_bound_floor_mps",
+            _DEFAULTS.v_bound_floor_mps,
+            "D v1: no speed bound below this (above the planner's speed dead zone).",
+            0.0,
+            1.0,
+        )
         min_filter = declare(
             "min_filter_half_m",
             _DEFAULTS.min_filter_half_m,
@@ -388,6 +395,7 @@ class LapMemoryNode(Node):
             explore_dv_mps=float(explore),
             caution_before_m=float(caution_before),
             caution_laps=int(caution_laps),
+            v_bound_floor_mps=float(bound_floor),
             min_filter_half_m=float(min_filter),
             gate=gate if lap_source == "start_scan" else None,
         )

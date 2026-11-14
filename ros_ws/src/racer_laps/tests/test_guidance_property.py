@@ -97,7 +97,7 @@ def test_every_guidance_is_valid_and_bounded_whatever_happens(
                     if mem.station_set.n_laps >= 1 and z.active_on(mem.lap_in_progress):
                         grid = z.centre_m - np.linspace(0.0, z.length_m, 11)
                         b = mem.station_set.v_bound(grid, mem.lap_in_progress, explore)
-                        assert np.all(b <= max(0.0, z.speed_mps - 0.1) + 1e-9)
+                        assert np.all(b <= max(mem.cfg.v_bound_floor_mps, z.speed_mps - 0.1) + 1e-9)
         # a scripted closure whose scan was dropped closes on the next scan: never lost, once
         stored_before_lap = mem.station_set.n_laps
     # every scripted closure produced exactly one lap and nothing else did

@@ -154,12 +154,12 @@ def test_the_min_filter_spreads_a_slow_spot_over_plus_or_minus_0_4_m() -> None:
 def test_the_filter_is_periodic() -> None:
     s = make_set(1.0)
     speeds = [1.0] * 10
-    speeds[0] = 0.3
+    speeds[0] = 0.6  # slow, but not a standing start
     st, t, v = lap_samples(1.0, speeds, 5.0)
     s.add_lap(1, st, t, v, 5.0, 1.0, 1.0)
     v_safe = s.v_safe(np.arange(10) * 0.1)
     # the slow start spreads across the lap end: indices 6..9 and 0..4
-    assert np.all(v_safe[[6, 7, 8, 9, 0, 1, 2, 3, 4]] == pytest.approx(0.3))
+    assert np.all(v_safe[[6, 7, 8, 9, 0, 1, 2, 3, 4]] == pytest.approx(0.6))
     assert v_safe[5] == pytest.approx(1.0)
 
 
@@ -291,3 +291,27 @@ def test_overlapping_zones_take_the_lowest_cap_whatever_their_order() -> None:
             s.add_zone(1.5, speed, 1, "brake")
         b = s.v_bound(np.array([1.0, 1.5]), 2, 0.2)
         assert b == pytest.approx([0.2, 0.2])  # 0.3 - 0.1
+
+
+def test_a_standing_start_does_not_become_the_speed_profile_at_the_start_line() -> None:
+    s = make_set(1.0)
+    speeds = [0.0, 0.0, 0.1, 0.3, 0.5, 0.7, 0.7, 0.7, 0.7, 0.7]
+    st, t, v = lap_samples(1.0, speeds, 5.0)
+    s.add_lap(1, st, t, v, 5.0, 1.0, 0.5)
+    v_safe = s.v_safe(np.arange(10) * 0.1)
+    assert np.all(v_safe >= 0.7 - 1e-9)  # the car crosses the line at 0.7 on every later lap
+
+
+def test_no_bound_is_below_the_floor_and_a_flickering_state_makes_one_zone() -> None:
+    s = StationSet(floor_mps=0.3)
+    s.set_reference_length(3.0)
+    st, t, v = lap_samples(3.0, [0.8] * 30, 4.0)
+    s.add_lap(1, st, t, v, 4.0, 3.0, 0.8)
+    s.add_zone(1.5, 0.2, 1, "blocked")
+    s.add_zone(1.55, 0.6, 1, "blocked")  # the same spot, same lap: merged, lower speed kept
+    s.add_zone(1.45, 0.9, 1, "clearance")
+    assert len(s.zones) == 1 and s.zones[0].speed_mps == pytest.approx(0.2)
+    b = s.v_bound(np.linspace(0.5, 1.5, 11), 2, 0.2)
+    assert np.all(b >= 0.3) and np.all(b[-3:] == pytest.approx(0.3))
+    s.add_zone(1.5, 0.2, 2, "blocked")  # another lap: its own zone
+    assert len(s.zones) == 2

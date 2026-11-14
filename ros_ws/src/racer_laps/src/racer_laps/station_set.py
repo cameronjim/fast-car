@@ -114,6 +114,16 @@ def resample_station_lap(
     s_k, t_k, v_k = s_k[keep], t_k[keep], v_k[keep]
     if not np.all(np.isfinite(v_k)):
         return None
+    # A lap that starts from rest has speed 0 at its first stations, but the car crosses the line at
+    # the speed it ends the lap with on every later lap: do not let the standing start become the
+    # profile there (it would bound the start line at the dead zone for good).
+    v_end = float(np.mean(speed_mps[-5:]))
+    if v_end > 0.0 and float(speed_mps[0]) < 0.5 * v_end:
+        reached = np.flatnonzero(speed_mps >= v_end)
+        first = int(reached[0]) if reached.size else speed_mps.shape[0]
+        speed_k = speed_mps.copy()
+        speed_k[:first] = v_end
+        v_k = np.concatenate([[v_end], speed_k, [speed_k[-1]]])[keep]
     h = l_ref_m / n_grid
     grid = np.arange(n_grid + 1) * h
     t_at = np.interp(grid, s_k, t_k)
@@ -131,6 +141,7 @@ class StationSet:
         min_filter_half_m: float = 0.4,
         caution_before_m: float = 1.0,
         caution_laps: int = 2,
+        floor_mps: float = 0.0,
     ) -> None:
         if spacing_m <= 0.0 or min_filter_half_m < 0.0 or caution_before_m <= 0.0:
             raise ValueError("station set spacing and zone lengths must be positive")
@@ -140,6 +151,9 @@ class StationSet:
         self.min_filter_half_m = float(min_filter_half_m)
         self.caution_before_m = float(caution_before_m)
         self.caution_laps = int(caution_laps)
+        #: No bound is below this: the planner cannot drive below its speed dead zone, so a bound
+        #: under it is a stop, not a slow speed.
+        self.floor_mps = float(floor_mps)
         self._laps: list[StationLap] = []
         self._zones: list[CautionZone] = []
         self._l_ref = math.nan
@@ -222,8 +236,25 @@ class StationSet:
             math.isfinite(self._l_ref) and math.isfinite(centre_m) and math.isfinite(speed_mps)
         ):
             return None
+        centre = float(centre_m) % self._l_ref
+        for k, old in enumerate(self._zones):
+            gap = abs(old.centre_m - centre)
+            gap = min(gap, self._l_ref - gap)
+            if old.created_lap == int(created_lap) and gap <= 0.5 * self.caution_before_m:
+                # the same spot again on the same lap (a state that flickers): one zone, the
+                # lower speed
+                merged = CautionZone(
+                    old.centre_m,
+                    old.length_m,
+                    min(old.speed_mps, max(0.0, float(speed_mps))),
+                    old.created_lap,
+                    old.hold_laps,
+                    old.reason,
+                )
+                self._zones[k] = merged
+                return merged
         zone = CautionZone(
-            centre_m=float(centre_m) % self._l_ref,
+            centre_m=centre,
             length_m=self.caution_before_m,
             speed_mps=max(0.0, float(speed_mps)),
             created_lap=int(created_lap),
@@ -267,7 +298,8 @@ class StationSet:
             inside = behind <= z.length_m
             zone_cap = np.where(inside, np.minimum(zone_cap, max(0.0, z.speed_mps - 0.1)), zone_cap)
         # inside any zone: the lowest of the zones' caps and v_safe, no exploration step
-        return np.where(np.isfinite(zone_cap), np.minimum(safe, zone_cap), safe + explore_dv_mps)
+        bound = np.where(np.isfinite(zone_cap), np.minimum(safe, zone_cap), safe + explore_dv_mps)
+        return np.maximum(bound, self.floor_mps)
 
     def cost_to_go(self, s_m: FloatArray | float) -> FloatArray:
         """Q, unwrapped past the lap end. NaN when no lap is stored."""

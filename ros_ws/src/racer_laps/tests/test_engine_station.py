@@ -271,15 +271,15 @@ def test_zone_events_in_lap_1_wait_for_the_reference_length_then_apply() -> None
 def test_zones_for_brake_blocked_recovering_and_low_clearance_and_their_expiry() -> None:
     d = started("v1")
     d.lap()  # lap 1 stored, L_ref known
-    d.run(2.0)
+    d.run(1.0)
     d.mem.on_safety_event(PHASE_ENGAGE, SEVERITY_BRAKE, "ttc")
-    d.run(0.5)
+    d.run(1.0)
     d.planner(BLOCKED)
     d.planner(BLOCKED)  # the same state again is not a new zone
-    d.run(0.5)
+    d.run(1.0)
     d.planner(STATE_DRIVING)
     d.planner(RECOVERING)
-    d.run(0.5)
+    d.run(1.0)
     d.planner(STATE_DRIVING)
     d.clearance = 0.01
     d.planner()

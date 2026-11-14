@@ -77,6 +77,7 @@ class LapConfig:
     explore_dv_mps: float = 0.2
     caution_before_m: float = 1.0
     caution_laps: int = 2
+    v_bound_floor_mps: float = 0.3
     min_filter_half_m: float = 0.4
     #: Gate settings of the start-scan source (required for it).
     gate: GateConfig | None = None
@@ -147,6 +148,7 @@ class LapMemory:
             min_filter_half_m=cfg.min_filter_half_m,
             caution_before_m=cfg.caution_before_m,
             caution_laps=cfg.caution_laps,
+            floor_mps=cfg.v_bound_floor_mps,
         )
         self.gate: StartScanGate | None = (
             StartScanGate(cfg.gate) if cfg.lap_source == "start_scan" and cfg.gate else None

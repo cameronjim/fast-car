@@ -62,6 +62,10 @@ TOLERANCE_M = 0.12
 #                             timers and the scheduler decides which scan meets which odometry
 #                             sample, so one seed gives a spread, and a slower or busier machine
 #                             shifts it up.
+#                             Since 2026-11-14 the canary runs on simulated time (bridge_node
+#                             sim_time, GitHub issue 156, docs/notes/sim-time-lockstep-2026-11-14.md):
+#                             immune to host stalls, but tracker_node still ticks on a wall timer, so
+#                             the thresholds below are unchanged.
 #     varied seeds, 14 runs:  13 healthy ones in the same range (mean 0.028 to 0.040), and ONE
 #                             broken map (seed 301): mean 0.114, p95 0.31, spurious 0.39, coverage
 #                             0.76: the loop closed at the wrong place, the failure of the first
@@ -104,7 +108,7 @@ class TestMappingCanary(unittest.TestCase):
         rclpy.shutdown()
 
     def test_saved_map_matches_the_track(self):
-        node = rclpy.create_node("l5_mapping_canary")
+        node = common.create_node("l5_mapping_canary")
         try:
             truth = common.receive_latched(self, node, OccupancyGrid, "/sim/map")
             # tracker_node starts TRACKER_START_DELAY_S after the stack, so the car is still on

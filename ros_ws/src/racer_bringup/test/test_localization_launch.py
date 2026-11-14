@@ -25,6 +25,7 @@ import pytest
 from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.substitutions.substitution_failure import SubstitutionFailure
+from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
 
@@ -102,7 +103,12 @@ def test_odometry_defaults():
     assert defaults["wheel_odom_topic"] == "/odom/wheel"
     # 0 = use vehicle_params' measured yaw rate gain table; sim launches pass 1.0.
     assert defaults["yaw_gain_override"] == "0.0"
-    assert set(defaults) == {"ekf_params_file", "wheel_odom_topic", "yaw_gain_override"}
+    assert set(defaults) == {
+        "ekf_params_file",
+        "wheel_odom_topic",
+        "yaw_gain_override",
+        "use_sim_time",
+    }
 
 
 # --- mapping.launch.py -------------------------------------------------------------------
@@ -134,7 +140,8 @@ def test_localization_runs_map_server_amcl_and_a_lifecycle_manager():
     assert defaults["set_initial_pose"] == "true"
     assert (defaults["initial_pose_x"], defaults["initial_pose_y"]) == ("0.0", "0.0")
     params = {}
-    for entry in evaluate_parameters(LaunchContext(), nodes["lifecycle_manager"]._Node__parameters):
+    context = _context(use_sim_time="false")
+    for entry in evaluate_parameters(context, nodes["lifecycle_manager"]._Node__parameters):
         params.update(entry)
     assert list(params["node_names"]) == ["map_server", "amcl"]
     assert params["autostart"] is True
@@ -164,6 +171,57 @@ def test_not_on_the_command_path(name):
     for node in _nodes(_entities(name)):
         for dst in _remaps(node).values():
             assert dst not in ("/drive", "/drive_raw"), (name, node.node_executable)
+
+
+# --- use_sim_time (GitHub issue 156) ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name", ["odometry.launch.py", "mapping.launch.py", "localization.launch.py"]
+)
+def test_use_sim_time_defaults_false_on_the_car(name):
+    """The car never runs on /clock: the argument exists for the sim canaries and is off."""
+    assert _defaults(_entities(name))["use_sim_time"] == "false"
+
+
+@pytest.mark.parametrize(
+    "name", ["odometry.launch.py", "mapping.launch.py", "localization.launch.py"]
+)
+def test_every_node_follows_the_use_sim_time_argument(name):
+    """Each node here gets use_sim_time from the launch argument, true or false alike, and
+    nothing hard-codes it."""
+    for use_sim_time, expected in (("false", False), ("true", True)):
+        context = _context(use_sim_time=use_sim_time)
+        for node in _nodes(_entities(name)):
+            # Only the use_sim_time entry is evaluated: the other parameters name launch
+            # arguments this context does not set. Node stores each key as substitutions.
+            literal = []
+            for entry in node._Node__parameters:
+                if not isinstance(entry, dict):
+                    continue
+                for key, value in entry.items():
+                    name_of_key = (
+                        key if isinstance(key, str) else perform_substitutions(context, list(key))
+                    )
+                    if name_of_key == "use_sim_time":
+                        literal.append({key: value})
+            assert len(literal) == 1, (name, node.node_executable)
+            params = evaluate_parameters(context, literal)[0]
+            assert params["use_sim_time"] is expected, (name, node.node_executable)
+
+
+@pytest.mark.parametrize("name", ["mapping.launch.py", "localization.launch.py"])
+def test_the_included_odometry_gets_the_same_use_sim_time(name):
+    entities = _entities(name)
+    include = next(e for e in entities if isinstance(e, IncludeLaunchDescription))
+    context = _context(use_sim_time="true")
+    arguments = {
+        perform_substitutions(context, normalize_to_list_of_substitutions(key)): (
+            perform_substitutions(context, normalize_to_list_of_substitutions(value))
+        )
+        for key, value in include.launch_arguments
+    }
+    assert arguments["use_sim_time"] == "true"
 
 
 # --- car_teleop.launch.py ----------------------------------------------------------------

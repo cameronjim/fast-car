@@ -96,6 +96,35 @@ def noise_on() -> bool:
     return os.environ.get("L5_NOISE", "1") != "0"
 
 
+def sim_time_on() -> bool:
+    """The canaries run on simulated time (GitHub issue 156): bridge_node owns /clock and paces
+    its steps, every node under test has use_sim_time:=true. L5_SIM_TIME=0 runs the old
+    wall-clock sim, kept to measure the before."""
+    return os.environ.get("L5_SIM_TIME", "1") != "0"
+
+
+#: Estimator outputs the bridge's lockstep gate watches (bridge_node lockstep_ack): sim time may
+#: not lead them by more than LOCKSTEP_MAX_LAG_S. The EKF's /odom, and the map -> odom of
+#: slam_toolbox or AMCL (its child frame is odom; stamped up to 0.2 s ahead of its data, their
+#: transform tolerance). Tried and rejected, see docs/notes/sim-time-lockstep-2026-11-14.md:
+#: acknowledging slam_toolbox's or AMCL's /pose (they publish only when the car has moved, so the
+#: gate sits on its timeout while the car stands still and sim time crawls), and a lag of 0.03 s or
+#: 0 on /odom (no measurable gain, and 0 stalls the sim).
+LOCKSTEP_ACK = ["/odom", "tf:odom:0.2"]
+LOCKSTEP_MAX_LAG_S = 0.1
+
+
+def create_node(name: str):
+    """The test's own node, on /clock when the sim is."""
+    if not sim_time_on():
+        return rclpy.create_node(name)
+    from rclpy.parameter import Parameter
+
+    return rclpy.create_node(
+        name, parameter_overrides=[Parameter("use_sim_time", Parameter.Type.BOOL, True)]
+    )
+
+
 def reliable_qos(depth: int = 10) -> QoSProfile:
     return QoSProfile(
         reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=depth
@@ -538,6 +567,8 @@ def run_laps(
     sub = node.create_subscription(Odometry, "/sim/ground_truth_odom", on_gt, reliable_qos(50))
     result = RunResult()
     max_lateral_m = track.lane_half_width_m - CAR_HALF_WIDTH_M
+    sim = sim_time_on()
+    latest_stamp_s = 0.0
     deadline = time.monotonic() + max_wall_s
     consumed = 0
     prev_index = None
@@ -569,10 +600,19 @@ def run_laps(
             while consumed < len(gt):
                 stamp, x, y, yaw, speed, wall = gt[consumed]
                 consumed += 1
+                latest_stamp_s = stamp.nanoseconds * 1e-9
+                if sim:
+                    # Progress, stalls and lap times are measured in simulated time: how long
+                    # the runner took says nothing about the car.
+                    wall = latest_stamp_s
                 if first_wall is None:
                     first_wall = wall
                     last_progress_wall = wall
-                if previous_stamp is not None and (stamp - previous_stamp).nanoseconds > 2e9:
+                if (
+                    not sim
+                    and previous_stamp is not None
+                    and (stamp - previous_stamp).nanoseconds > 2e9
+                ):
                     # The sim stamps with the wall clock. A jump (a VM resync, a sleeping host)
                     # wrecks every estimator's dt; that run measures the host, not the stack.
                     fail(
@@ -623,8 +663,12 @@ def run_laps(
                 if next_sample_stamp is None or stamp >= next_sample_stamp:
                     pending.append(gt[consumed - 1])
                     next_sample_stamp = stamp + Duration(seconds=sample_period_s)
-            now_wall = time.monotonic()
-            while pending and now_wall - pending[0][5] > lookup_delay_s:
+            now_wall = latest_stamp_s if sim else time.monotonic()
+            while (
+                pending
+                and now_wall - (pending[0][0].nanoseconds * 1e-9 if sim else pending[0][5])
+                > lookup_delay_s
+            ):
                 stamp, x, y, yaw, speed, _wall = pending.pop(0)
                 try:
                     tf = tf_buffer.lookup_transform("map", "base_link", stamp)
@@ -777,15 +821,26 @@ def launch_actions(track: Track, mode: str, map_yaml: Path | None, seed: int):
     from launch.launch_description_sources import PythonLaunchDescriptionSource
     from launch_ros.actions import Node as LaunchNode
 
+    bridge_params = bridge_parameters(track, seed)
+    if sim_time_on():
+        bridge_params.update(
+            {
+                "sim_time": True,
+                "lockstep_ack": LOCKSTEP_ACK,
+                "lockstep_max_lag_s": LOCKSTEP_MAX_LAG_S,
+            }
+        )
     bridge = LaunchNode(
         package="racer_gym_bridge",
         executable="bridge_node",
         name="bridge_node",
-        parameters=[bridge_parameters(track, seed)],
+        parameters=[bridge_params],
     )
     # The sim's car steers exactly as commanded, so wheel_twist_node must not apply the real
     # car's measured yaw rate gain table (vehicle_params steering.yaw_rate_gain_table).
     overrides = {"yaw_gain_override": "1.0"}
+    if sim_time_on():
+        overrides["use_sim_time"] = "true"
     if os.environ.get("L5_EKF_PARAMS"):
         overrides["ekf_params_file"] = os.environ["L5_EKF_PARAMS"]
     if mode == "mapping":
@@ -822,6 +877,8 @@ def launch_actions(track: Track, mode: str, map_yaml: Path | None, seed: int):
                 "odom_topic": "/sim/ground_truth_odom",
             }
     tracker_params.update(track.tracker_overrides)
+    if sim_time_on():
+        tracker_params["use_sim_time"] = True
     tracker = LaunchNode(
         package="racer_control",
         executable="tracker_node",
@@ -988,7 +1045,7 @@ def run_localization_canary(
     thresholds: Thresholds,
     extra: dict,
 ) -> None:
-    node = rclpy.create_node(f"l5_{label}")
+    node = create_node(f"l5_{label}")
     try:
         set_initial_pose_from_ground_truth(test, node, gt_from_map)
         result = run_laps(test, node, track, target_laps=laps, max_wall_s=max_wall_s)

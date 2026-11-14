@@ -98,6 +98,11 @@ _FLOAT_TRACK_KEYS = {
 }
 
 
+#: The output the bridge's lockstep gate watches in the PnP stack: one message per scan, stamped
+#: with that scan (track_perception_node), so a starved perception holds sim time back.
+PNP_LOCKSTEP_ACK = "racer_pnp_msgs/msg/LocalTrack@/pnp/local_track"
+
+
 def car_parameters(car: str) -> dict:
     """Bridge parameters for the car model: `params` gives the gym the steering limits of
     vehicle_params (0.449 rad each way), `gym` leaves its own 0.4189."""
@@ -565,6 +570,17 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     ],
                 )
             )
+    if args.sim_time:
+        # Simulated time (GitHub issue 156): the bridge owns /clock and paces its steps, every
+        # node has use_sim_time:=true, and sim time may not lead the perception's per-scan
+        # /pnp/local_track (stamped with its scan) by more than the bridge's lockstep lag.
+        if args.driver != "pnp" or args.wall_clock:
+            raise ValueError("--sim-time is for driver pnp, and not with --wall-clock")
+        bridge.update({"sim_time": True, "lockstep_ack": [PNP_LOCKSTEP_ACK]})
+        for node_name, node_params in nodes.items():
+            if node_name != "bridge_node":
+                node_params["use_sim_time"] = True
+        result["sim_time"] = True
     params_file = work / "params.yaml"
     base._write_params_file(params_file, nodes)
 
@@ -592,7 +608,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     duration_s = args.duration
     result["requested_duration_s"] = duration_s
     rclpy.init()
-    node = rclpy.create_node("track_family_runner")
+    if args.sim_time:
+        from rclpy.parameter import Parameter
+
+        node = rclpy.create_node(
+            "track_family_runner",
+            parameter_overrides=[Parameter("use_sim_time", Parameter.Type.BOOL, True)],
+        )
+    else:
+        node = rclpy.create_node("track_family_runner")
     recording = bm.Recording()
     reliable = QoSProfile(
         reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=200
@@ -1079,6 +1103,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="driver pnp: start wall_clock_node.py (publishes /clock from the system clock) and "
         "give the planner use_sim_time:=true, which its debug_stall_profile requires",
+    )
+    parser.add_argument(
+        "--sim-time",
+        action="store_true",
+        help="driver pnp: run on simulated time (bridge_node sim_time, /clock, use_sim_time:=true "
+        "on every node, lockstep on /pnp/local_track), independent of CPU scheduling",
     )
     parser.add_argument("--profile", default="lane-2026-10-25", help="gap_follow profile")
     parser.add_argument("--params-json", default="{}", help="gap_follow parameters on top")

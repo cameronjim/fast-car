@@ -66,4 +66,26 @@ and were not seen to crash this way except the already fixed ones.
 
 ## Numbers
 
-TODO
+All local runs: ros-dev image, pinned to 2 CPUs, serial, 2026-11-14.
+
+| | Before (all processes SIGINT at once) | After (one at a time) |
+|---|---|---|
+| CI, last 289 runs since 2026-10-28 | `exit code -11` in 11 runs | this PR's runs, below |
+| rclpy stress nodes, shared topics | 4 SIGSEGV in 8,790 exits | 0 in 500 exits |
+| L5 park canary, real | 0 in 60 | 0 in 21 |
+| L5 tracker lap canary, real | 0 in 20 | 0 in 21 |
+| L5 localisation oval canary, real | 0 in 12 | 0 in 13 |
+
+Every modified canary (13 files) also passed once with the change. Read the table for what it is:
+the crash is about one participant exit in 2,000 here, so zero in a few hundred orderly exits does
+not by itself prove an improvement. The proof is the mechanism (two core dumps, one CI
+faulthandler trace, all the same two code paths) plus the fix removing the overlap by
+construction. A widened window (a pause between subscription deletes, spread-out SIGINTs, six
+busy loops) did not raise the rate either: 0 in 1,400 exits.
+
+The stress nodes are `/stress_node.py` in the scratch container: rclpy nodes with 8 to 32
+publishers and subscribers on shared topics, `spin_until_shutdown` then `destroy_node`, the shape of
+bridge_node's exit. Not committed: they are a measuring tool, not a test.
+
+One unrelated local flake seen on the way: the oval canary's heading p95 was 0.1225 against the
+0.12 limit in 1 of 12 baseline runs on the 2-CPU pinned container. Not touched here.

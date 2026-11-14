@@ -73,9 +73,12 @@ TRACKS = (
 DRIVERS = ("gap_follow", "tracker", "tracker_loc", "tracker_policy", "pnp")
 CARS = ("gym", "params")
 PNP_SCAN_BEAMS = 720
-#: Ground-truth yaw change over the integral of v tan(delta) / L of the gated steering command,
-#: sim plant of the PnP canaries (dyn-car-2026-11-12 actuation), measured on the tuning stadium.
-SIM_YAW_GAIN = 0.90
+#: Ground-truth yaw change over the integral of v tan(delta) / L of the gated steering command, sim
+#: plant of the PnP canaries (dyn-car-2026-11-12 actuation: steer_gain 0.917 left, 1.011 right),
+#: measured on the tuning stadium, two laps each way: 0.903 counter-clockwise (left turns), 1.008
+#: clockwise (right turns).
+SIM_YAW_GAIN_LEFT = 0.90
+SIM_YAW_GAIN_RIGHT = 1.01
 LOCALISATION_LAUNCH = REPO_ROOT / "ros_ws" / "src" / "racer_bringup" / "launch"
 # The sensor errors the localisation canaries use (sim_autopilot.launch.py SIM_SENSOR_NOISE).
 LANE_TRACKER_DEFAULTS = {
@@ -367,11 +370,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             )
             lap_params.update(
                 {
-                    # The heading the gate integrates from the gated steering command: the sim
-                    # car turns 0.90 times what the command gives (ground-truth yaw over the
-                    # integral of v tan(delta) / L, measured on the tuning stadium: 0.903; the
-                    # real car's table is vehicle_params' steering.yaw_rate_gain_table).
-                    "yaw_gain_override": SIM_YAW_GAIN,
+                    # The heading the gate integrates from the gated steering command: what the
+                    # sim plant does with it, per side (the real car's gain is vehicle_params'
+                    # steering.yaw_rate_gain_table).
+                    "yaw_gain_override": SIM_YAW_GAIN_LEFT,
+                    "yaw_gain_override_right": SIM_YAW_GAIN_RIGHT,
                     "laser_yaw_from_vehicle_params": mounted,
                     "save_lap1_map": False,
                     "output_dir": str(work / "laps"),

@@ -84,6 +84,10 @@ class GateConfig:
     min_lap_length_m: float = 3.0
     arm_fraction: float = 0.6
     heading_slack_rad: float = 1.2
+    #: Matching starts (without permission to close a lap) at this share of the arming distance
+    #: and with this heading slack: about 60 percent of a lap.
+    track_distance_fraction: float = 0.6
+    track_slack_rad: float = 2.4
     rms_max_m: float = 0.03
     inlier_min_share: float = 0.6
     inlier_dist_m: float = 0.05
@@ -93,9 +97,18 @@ class GateConfig:
     missed_factor: float = 1.25
     #: (|delta| rad, gain) pairs from vehicle_params steering.yaw_rate_gain_table; empty = 1.0.
     yaw_gain_table: tuple[tuple[float, float], ...] = ()
+    #: Multiplies the gain for a RIGHT turn (negative steering). 1.0 for the car, whose table is
+    #: symmetric; the simulator's plant turns differently each way.
+    yaw_gain_right_scale: float = 1.0
     #: A crossing counts only if at least this many inlier matches pin down the along-lane offset
     #: (0 turns the check off). See `along_support` in scan_match.py.
     min_along_support: int = 8
+    #: A match within this distance of the start pose is re-scored shifted along the start
+    #: heading in steps of `along_step_m`; a shift whose dense inlier share is better by
+    #: `along_min_gain` replaces it (0 turns the search off). See `_refine_along`.
+    along_search_m: float = 1.5
+    along_step_m: float = 0.1
+    along_min_gain: float = 0.03
     #: When the first accepted match of an approach (none in the previous `max_match_gap_s`) is
     #: already up to this far ahead of the line, close the lap with the crossing placed that
     #: wheel distance back. 0 turns it off: then only a negative-to-non-negative pair counts.
@@ -195,6 +208,7 @@ class StartScanGate:
         self._start_normals: FloatArray = np.zeros((0, 2))
         self._start_dense: FloatArray = np.zeros((0, 2))
         self._source_dense: FloatArray = np.zeros((0, 2))
+        self._source_thin: FloatArray = np.zeros((0, 2))
         self._start_dr: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._prev: tuple[float, MatchResult] | None = None  # t_eff, accepted match
         self._run: list[tuple[float, MatchResult, float]] = []  # t_eff, match, wheel total
@@ -242,6 +256,23 @@ class StartScanGate:
         )
 
     @property
+    def tracking(self) -> bool:
+        """Matching runs: far enough round the lap (distance and heading, with a wider heading
+        slack than arming) that the start scan can be followed on the approach. A closure still
+        needs `armed`. Following the approach early lets the matches chain, so the seed of the
+        scan that crosses the line is the last match advanced by odometry rather than a guess."""
+        if not self._started:
+            return False
+        need = (
+            self.cfg.min_lap_length_m
+            if not math.isfinite(self._l_ref)
+            else self.cfg.arm_fraction * self._l_ref
+        )
+        return self.station_m >= self.cfg.track_distance_fraction * need and (
+            abs(self.heading_since_closure_rad) >= TWO_PI - self.cfg.track_slack_rad
+        )
+
+    @property
     def armed(self) -> bool:
         need = (
             self.cfg.min_lap_length_m
@@ -280,12 +311,10 @@ class StartScanGate:
         # trapezoid on speed
         v_mid = 0.5 * (self._speed + v)
         delta = self._steer
-        rate = (
-            yaw_gain(self.cfg.yaw_gain_table, abs(delta))
-            * v_mid
-            * math.tan(delta)
-            / (self.cfg.wheelbase_m)
-        )
+        gain = yaw_gain(self.cfg.yaw_gain_table, abs(delta))
+        if delta < 0.0:
+            gain *= self.cfg.yaw_gain_right_scale
+        rate = gain * v_mid * math.tan(delta) / self.cfg.wheelbase_m
         dth = rate * dt
         step = v_mid * dt
         th_mid = last.theta + 0.5 * dth
@@ -439,29 +468,77 @@ class StartScanGate:
             ok = self._accept(res)
             if best is None or (ok, res.inlier_share) > (best_ok, best.inlier_share):
                 best, best_ok = res, ok
+        if (
+            best is not None
+            and self.cfg.along_search_m > 0.0
+            and abs(best.x_m) <= self.cfg.along_search_m
+            and self._accept(best)
+        ):
+            best = self._refine_along(best)
         return best
+
+    def _refine_along(self, res: MatchResult) -> MatchResult:
+        """Point-to-point ICP slides along a straight lane: the walls match at any shift and the
+        solution stays near its seed, so a lane end can be missed by a metre. Score the same
+        match shifted along the start heading (the dense inlier share, which only the lane ends
+        and bends depend on) and, if another shift is clearly better, polish from there."""
+        c = self.cfg
+        n = round(2.0 * c.along_search_m / c.along_step_m) + 1
+        shifts = -c.along_search_m + c.along_step_m * np.arange(n)
+        cos_y, sin_y = math.cos(res.yaw_rad), math.sin(res.yaw_rad)
+        moved = self._source_dense @ np.array([[cos_y, -sin_y], [sin_y, cos_y]]).T
+        target = self._start_dense
+        t2 = (target * target).sum(axis=1)[None, :]
+        shares = np.empty(n)
+        for k, dx in enumerate(shifts):
+            p = moved + np.array([res.x_m + dx, res.y_m])
+            d2 = (p * p).sum(axis=1)[:, None] + t2 - 2.0 * (p @ target.T)
+            shares[k] = float(np.mean(d2.min(axis=1) < c.inlier_dist_m**2))
+        k0 = int(np.argmin(np.abs(shifts)))
+        k_best = int(np.argmax(shares))
+        if shares[k_best] < shares[k0] + c.along_min_gain or k_best == k0:
+            return res
+        again = match_scans(
+            self._source_thin,
+            self._start_pts,
+            (res.x_m + float(shifts[k_best]), res.y_m, res.yaw_rad),
+            inlier_m=c.inlier_dist_m,
+            score_source=self._source_dense,
+            score_target=self._start_dense,
+        )
+        if again is not None and again.inlier_share > res.inlier_share:
+            return again
+        return res
 
     def on_scan(self, t_eff_s: float, points: FloatArray) -> GateCrossing | None:
         """One scan (base_link points, body filtered) at its effective time. Returns the lap it
         closed, if any. Costs one ICP while armed, nothing otherwise."""
         if not self._started:
             return None
-        if not self.armed:
+        if not self.tracking:
             self.last_arming_state = "waiting"
             self._prev = None
             self._run = []
             return None
-        self.last_arming_state = "armed"
-        self.n_armed_scans += 1
+        armed = self.armed
+        self.last_arming_state = "armed" if armed else "tracking"
+        if armed:
+            self.n_armed_scans += 1
         source = thin(points)
+        self._source_thin = source
         self._source_dense = thin(points, DENSE_VOXEL_M, DENSE_MAX_POINTS)
         now = self._at(t_eff_s)
         res = self._best_match(source, now)
         self.last_match = res
         if res is None or not self._accept(res):
             return None
-        self.n_matched_scans += 1
+        if armed:
+            self.n_matched_scans += 1
         self._last_good = (t_eff_s, res, (now.x, now.y, now.theta))
+        if not armed:
+            self._prev = (t_eff_s, res)  # keep following; no lap can close before arming
+            self._run = []
+            return None
         crossing: GateCrossing | None = None
         prev = self._prev
         # the run of consecutive accepted matches this one belongs to

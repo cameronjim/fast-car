@@ -24,6 +24,7 @@ def make_gate(**kw: object) -> StartScanGate:
         "min_along_support": 0,
         "dead_reckoning_seed": False,
         "seed_search": False,
+        "along_search_m": 0.0,
         **kw,
     }
     return StartScanGate(GateConfig(wheelbase_m=WHEELBASE_M, **opts))
@@ -143,6 +144,29 @@ def test_heading_follows_v_tan_delta_over_l_and_the_gain_table() -> None:
     for i in range(101, 201):
         g.on_odom(i * 0.01, 1.0)
     assert g.heading_since_closure_rad < h0  # right turn reduces it
+
+
+def test_the_right_turn_gain_scale_applies_to_negative_steering_only() -> None:
+    def heading_after(steer: float, scale: float) -> float:
+        g = StartScanGate(
+            GateConfig(
+                wheelbase_m=0.5,
+                yaw_gain_table=((0.0, 2.0),),
+                yaw_gain_right_scale=scale,
+                min_along_support=0,
+            )
+        )
+        g.on_odom(0.0, 0.0)
+        g.set_start(0.0, PTS)
+        g.on_steering(steer)
+        for i in range(1, 101):
+            g.on_odom(i * 0.01, 1.0)
+        return g.heading_since_closure_rad
+
+    left = heading_after(0.2, 0.5)
+    right = heading_after(-0.2, 0.5)
+    assert left == pytest.approx(2.0 * math.tan(0.2) / 0.5 * 0.995, rel=0.02)
+    assert right == pytest.approx(-0.5 * left, rel=1e-6)  # a right turn, at half the gain
 
 
 # -- arming --------------------------------------------------------------------------------------

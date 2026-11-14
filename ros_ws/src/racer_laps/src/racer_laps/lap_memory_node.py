@@ -272,7 +272,18 @@ class LapMemoryNode(Node):
                 0.0,
                 "Yaw-rate gain of the gate's heading integral: 0 uses vehicle_params' "
                 "steering.yaw_rate_gain_table (the car). The sim's plant needs its own number "
-                "(about 0.90, see tests/l5_reactive_bench/track_family_runner.py SIM_YAW_GAIN).",
+                "(about 0.90, see tests/l5_reactive_bench/track_family_runner.py SIM_YAW_GAIN_LEFT and _RIGHT).",
+                0.0,
+                3.0,
+            )
+        )
+        yaw_gain_override_right = float(
+            declare(
+                "yaw_gain_override_right",
+                0.0,
+                "With yaw_gain_override: the gain for right turns (0 = the same as "
+                "yaw_gain_override). The sim's plant turns differently each way; the car's table "
+                "is symmetric.",
                 0.0,
                 3.0,
             )
@@ -357,6 +368,11 @@ class LapMemoryNode(Node):
             missed_factor=gate.missed_factor,
             yaw_gain_table=table,
             min_along_support=gate.min_along_support,
+            yaw_gain_right_scale=(
+                yaw_gain_override_right / yaw_gain_override
+                if yaw_gain_override > 0.0 and yaw_gain_override_right > 0.0
+                else 1.0
+            ),
         )
         cfg = LapConfig(
             v_cap_start_mps=float(v_start),

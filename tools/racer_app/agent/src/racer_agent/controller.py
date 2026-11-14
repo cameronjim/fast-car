@@ -16,6 +16,7 @@ Safety rules enforced in `_gate_drive`:
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 import threading
 import time
@@ -805,6 +806,10 @@ class Controller:
         when data/pnp/models/<id>/manifest.yaml parses and names a kind; the nodes themselves
         refuse any bundle that does not match this car (checksums, vehicle_params, io)."""
         found: dict[str, list[str]] = {"track_perception": [], "dynamics": []}
+        # Per dynamics bundle: its io.validity.v_max_mps, the highest speed cap the planner
+        # accepts with it (it refuses above, ValidityExceeded), or None when the manifest has no
+        # number there (the planner then refuses the bundle itself, ManifestInvalid).
+        dynamics_v_max: dict[str, float | None] = {}
         base = self.s.pnp_models_dir
         if base.is_dir():
             for d in sorted(base.iterdir()):
@@ -814,14 +819,18 @@ class Controller:
                 if not manifest.is_file():
                     continue
                 try:
-                    kind = yaml.safe_load(manifest.read_text(encoding="utf-8")).get("kind")
+                    raw = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+                    kind = raw.get("kind")
                 except (OSError, ValueError, AttributeError, yaml.YAMLError):
                     continue
                 if kind in found:
                     found[kind].append(d.name)
+                if kind == "dynamics":
+                    dynamics_v_max[d.name] = _validity_v_max(raw)
         status: dict[str, Any] = {
             "perception": found["track_perception"],
             "dynamics": found["dynamics"],
+            "dynamics_v_max_mps": dynamics_v_max,
             "backends": list(cmd.PNP_BACKENDS),
             "speed_range": list(cmd.PNP_SPEED_RANGE),
             "default_speed": cmd.PNP_DEFAULT_SPEED_MPS,
@@ -1315,6 +1324,8 @@ class Controller:
                 pnp_dynamics_container_path=cmd.container_path(self.s.repo_dir, models / dynamics),
                 pnp_backend=backend,
                 pnp_v_max_mps=v_max_mps,
+                pnp_dynamics_name=dynamics,
+                pnp_dynamics_v_max_mps=status["dynamics_v_max_mps"].get(dynamics),
                 pnp_params_container_path=(
                     cmd.container_path(self.s.repo_dir, self.s.pnp_dir / params_file)
                     if params_file
@@ -1614,6 +1625,13 @@ class Controller:
         low, high = cmd.PNP_SPEED_RANGE
         if not (low <= n.v_max_mps <= high):
             raise ActionError(f"pnp speed cap must be between {low} and {high} m/s", 400)
+        if n.dynamics:
+            try:
+                cmd.check_pnp_validity(
+                    n.v_max_mps, n.dynamics, self.pnp_status()["dynamics_v_max_mps"].get(n.dynamics)
+                )
+            except cmd.CommandError as exc:
+                raise ActionError(str(exc), 400) from exc
         for value, what in ((n.dynamics, "dynamics bundle"), (n.perception, "perception bundle")):
             if value and not cmd.NAME_RE.match(value):
                 raise ActionError(f"bad {what} name", 400)
@@ -1768,3 +1786,15 @@ class Controller:
     def _invalidate(self) -> None:
         with self._snap_lock:
             self._snap = None
+
+
+def _validity_v_max(manifest: Any) -> float | None:
+    """A dynamics manifest's io.validity.v_max_mps as a positive finite float, else None."""
+    try:
+        value = manifest["io"]["validity"]["v_max_mps"]
+    except (KeyError, TypeError):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) and value > 0 else None

@@ -108,14 +108,39 @@ function drivingPerception(p: Prefs["pnp"], options: Options | null): string {
 }
 
 /**
+ * The speed cap range for the ML driver: the agent's range, with its top lowered to the selected
+ * dynamics bundle's validity v_max_mps (mppi_planner_node refuses a cap above it and the launch
+ * exits). `bundle` names that bundle when its validity is what limits the cap. An older agent that
+ * reports no validity is not second-guessed: the car checks again when the drive starts.
+ */
+export function pnpSpeedLimit(
+  p: Pick<Prefs["pnp"], "dynamics">,
+  options: Options | null,
+): { min: number; max: number; bundle: string } {
+  const [min, top] = options?.pnp?.speed_range ?? [0.2, 1.5];
+  const bundle = selectedBundle(p.dynamics, options?.pnp?.dynamics);
+  const validity = bundle ? options?.pnp?.dynamics_v_max_mps?.[bundle] : undefined;
+  if (typeof validity === "number" && Number.isFinite(validity) && validity < top) {
+    return { min, max: validity, bundle };
+  }
+  return { min, max: top, bundle: "" };
+}
+
+/** The cap as the agent sends it (two decimals), so 1.304 counts as 1.30. */
+const asSent = (v: number) => Number(v.toFixed(2));
+
+/**
  * Per field: why the ML driver settings cannot be saved or started, or nothing. The wording of
  * the lap rules is the agent's, so the same refusal reads the same in the card and from the car.
  */
 export function pnpErrors(p: Prefs["pnp"], options: Options | null): FieldErrors<PnpField> {
   const e: FieldErrors<PnpField> = {};
   const range = options?.pnp?.speed_range ?? [0.2, 1.5];
+  const limit = pnpSpeedLimit(p, options);
   if (!Number.isFinite(p.v_max_mps) || p.v_max_mps < range[0] || p.v_max_mps > range[1]) {
     e.v_max_mps = `${range[0]} to ${range[1]}`;
+  } else if (limit.bundle && asSent(p.v_max_mps) > limit.max) {
+    e.v_max_mps = `max ${limit.max} m/s for ${limit.bundle}`;
   }
   const on = lapChoice(p) !== "off";
   if (p.lap_mode !== "v0" && !p.lap_memory && p.lap_mode !== "observe") {

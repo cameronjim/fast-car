@@ -46,6 +46,11 @@ export interface PnpOptions {
   reason: string;
   perception: string[];
   dynamics: string[];
+  /**
+   * Per dynamics bundle: its manifest's io.validity.v_max_mps, the highest speed cap the planner
+   * accepts with it, or null when the agent read none (absent on an older agent).
+   */
+  dynamics_v_max_mps?: Record<string, number | null>;
   backends: string[];
   speed_range: [number, number];
   default_speed: number;

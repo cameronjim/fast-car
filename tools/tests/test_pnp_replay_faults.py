@@ -679,33 +679,16 @@ def baselines(
     for name, (rec, a, b) in cuts.items():
         out[name] = fault_run.run_planner(setup, rec, a, b, work, f"base_{name}")
         assert fault_checks.always_violations(out[name], setup.limits) == [], name
-        assert set(out[name]["state"].tolist()) == {1}, f"{name}: the cut is all DRIVING"
+        states = out[name]["state"].tolist()
+        lead = next((i for i, x in enumerate(states) if x != 0), len(states))
+        # the planner v0.2 warm start (STARTING) leads the cut; after it the cut is all DRIVING
+        assert set(states[lead:]) == {1}, f"{name}: the cut is all DRIVING after the warm start"
     return out
 
 
-# Findings against the planner on main (v0.1, planner_replay_cli of this branch). Strict: when the
-# planner is fixed these start to pass and the strict xfail says to remove the mark.
-_NAN_FINDING = (
-    "FINDING F1: a scan with no usable beam (every range NaN, inf or 0) is a scan like any other "
-    "to the planner: it builds an EMPTY distance field (min clearance 9.85 m, free-space reach "
-    "0) and keeps DRIVING at 0.93 to 0.97 m/s for the whole 1.0 s fault (fixture R7, bag time "
-    "2977.04 to 2978.0 s; the unfaulted replay commands 0.89 to 0.96 m/s there). Expected "
-    "BLOCKED or NO_SCAN with speed 0."
-)
-_AGE_FINDING = (
-    "FINDING F2: two scans that arrive in swapped order (fixture R4, the pair arriving at bag time "
-    "2823.877 s) put a header stamp 0.5 ms AHEAD of a planner tick: the CSV's scan_age_s is "
-    "-0.00047 s at the tick of 2823.880 s. The planner takes the latest ARRIVAL as the current "
-    "scan, whatever its stamp, and only a stamp from the future by more than the timeout makes "
-    "it stale. About 13 percent of swapped pairs of this lidar stream carry a stamp ahead of "
-    "their arrival slot, by up to 6 ms; whether a tick lands inside that gap depends on its phase."
-)
-PLANNER_XFAIL = {
-    "scan-out_of_order-pair-r4": _AGE_FINDING,
-    "scan-nan_ranges-100-nan": _NAN_FINDING,
-    "scan-nan_ranges-100-inf": _NAN_FINDING,
-    "scan-nan_ranges-100-zero": _NAN_FINDING,
-}
+# F1 (a scan with no usable beam) and F2 (a negative scan age from swapped scans) were findings
+# against the planner of main; planner v0.2 fixes both (min_scan_points, age clamped to 0).
+PLANNER_XFAIL: dict[str, str] = {}
 # What the planner cannot see (module docstring); the test still runs the always rules.
 BLIND = (
     "scan-frozen_fresh_stamp-1.0s",

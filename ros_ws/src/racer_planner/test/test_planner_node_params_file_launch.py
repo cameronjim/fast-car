@@ -47,6 +47,7 @@ _PARAMS.write_text(
     samples: 128
     laser_yaw_from_vehicle_params: false
     laser_yaw_offset_rad: 0.0
+    require_gated_for_start: false
     # removed in planner v0.1, still present in the car's file
     max_intrusion_fraction: 0.2
     max_boundary_residual_m: 0.4

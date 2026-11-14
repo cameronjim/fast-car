@@ -28,6 +28,7 @@ PlannerConfig small_config(double v_max) {
   c.mppi.samples = 128;
   c.max_samples = 128;
   c.mppi.seed = 5;
+  c.logic.require_gated_for_start = false;  // these tests run without safety_node
   return c;
 }
 
@@ -85,6 +86,9 @@ TEST(PlannerProperties, CommandIsAlwaysFiniteAndWithinTheCapAndTheSteeringLimits
   int driving = 0, other = 0;
   for (int scenario = 0; scenario < 120; ++scenario) {
     PlannerConfig cfg = small_config(uni(0.1, 0.9));
+    // This generator feeds garbage on most ticks, so 25 consecutive good ticks would almost never
+    // happen: the warm start is one tick here (its own properties are tested below).
+    cfg.logic.start_ticks = 1;
     cfg.logic.use_lap_guidance = u01(rng) < 0.3;
     const double floor_mps = u01(rng) < 0.5 ? 0.23 : MppiParams{}.speed_floor_margin_mps;
     Planner planner(cfg, dynamics_with_floor(floor_mps), g);
@@ -296,7 +300,7 @@ TEST(Planner, TheConfidenceFallsAtOnceWhenTheTrackGoesAndRisesSlowlyWhenItReturn
 
 TEST(Planner, NoTrackAndNoFreeSpaceFieldIsBlockedForWantOfAPlan) {
   Rig r;
-  for (int i = 0; i < 10; ++i) r.tick();
+  for (int i = 0; i < 30; ++i) r.tick();  // past the 25 tick warm start
   TickInput in;
   in.now_s = r.now;
   in.has_odom = true;
@@ -328,7 +332,7 @@ TEST(Planner, WheelBlockedByAWallReportsBlockedWithZeroSpeed) {
   for (double y = -1.0; y <= 1.0; y += 0.02) wall.push_back({0.1, y});
   r.set_points(wall);
   TickOutput out;
-  for (int i = 0; i < 5; ++i) out = r.tick();
+  for (int i = 0; i < 30; ++i) out = r.tick();  // past the 25 tick warm start
   EXPECT_EQ(out.state, PlannerState::Blocked);
   EXPECT_EQ(out.block_reason, BlockReason::AllCollide);
   EXPECT_EQ(out.cmd.speed_mps, 0.0);

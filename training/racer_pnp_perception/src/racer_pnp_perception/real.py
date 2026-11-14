@@ -150,6 +150,25 @@ def only_train(real: RealSet, split: Split) -> RealSet:
     return out
 
 
+def drop_bags(real: RealSet, bags: tuple[str, ...] | list[str]) -> RealSet:
+    """The labels that do not come from any of `bags` (a fold's held-out bags)."""
+    return real.take(~np.isin(real.bag, np.array(list(bags), dtype=np.str_)))
+
+
+def assert_fold_clean(
+    real: RealSet, bags: tuple[str, ...] | list[str], heldout_provenance: set[tuple[str, int]]
+) -> None:
+    """Raises RoleError when any sample of `real` comes from a held-out bag, by bag name or by
+    provenance (bag, scan index) of the held-out bags' own labels."""
+    held = set(bags)
+    names = set(real.bag.tolist())
+    if names & held:
+        raise RoleError(f"training set holds held-out bags {sorted(names & held)}")
+    mine = {(str(b), int(i)) for b, i in zip(real.bag, real.scan_index, strict=True)}
+    if mine & heldout_provenance:
+        raise RoleError("training set holds scans of a held-out bag (provenance)")
+
+
 def load_real(paths: list[Path], split: Split) -> RealSet:
     """The `train` labels of the given label files. Everything else is dropped (and counted in
     the log); a file that cannot be checked against the split is refused."""

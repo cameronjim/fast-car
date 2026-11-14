@@ -398,6 +398,149 @@ def decide(n: Numbers) -> tuple[list[Item], str, list[int]]:
 
 
 # ---------------------------------------------------------------------------------------------
+# GP1b (docs/notes/preregistration-pnp-v0.3.md section 3.3). All thresholds are the v0.2 ones
+# above, used as they are.
+# ---------------------------------------------------------------------------------------------
+
+OUTCOME_GP1B_PASS = (
+    "pass: net plus scan refinement is the candidate backend (shadow first, the on-car "
+    "confirmation of v0.2 section 2 is the real test)"
+)
+OUTCOME_GP1B_NO_BETTER = (
+    "no better than geometric in the layout (item 1 or 2 failed), geometric stays"
+)
+OUTCOME_GP1B_NOT_ELSEWHERE = (
+    "better where it trained, not shown elsewhere (items 1 and 2 passed, item 3, 4 or 5 failed), "
+    "geometric stays deployed"
+)
+DEFICIT_BY_CONSTRUCTION_NOTE = (
+    "clearance deficit p90 holds by construction for the refined output (per-side clearance cap "
+    "of refine.py); see the variant without the cap"
+)
+# v0.2 items of H-run that GP1b item 1 repeats.
+GP1B_ITEM1_V02_ITEMS = (1, 2, 3, 6)
+
+
+@dataclass
+class FoldResult:
+    """One fold model on its own held-out bags: the labelled scans (E_c, V) and all moving scans
+    (label-free numbers), by backend."""
+
+    labelled: dict[str, Labelled]
+    free: dict[str, LabelFree]
+
+
+def decide_gp1b(
+    full: Numbers, folds: dict[str, FoldResult], deficit_by_construction: bool = False
+) -> tuple[list[Item], str, list[int]]:
+    """The five items of pre-registration v0.3 section 3.3 for the backends `net` (the candidate)
+    and `geometric` in the given numbers.
+
+    1. v0.2 items 1, 2, 3 and 6 on H-run for the full model.
+    2. v0.2 item 5 on A-run for the full model.
+    3. Each fold with at least 100 labelled scans: E_c(net) / E_c(geometric) at most 1.00 and V(net)
+       at least V(geometric) minus 0.5. A fold with fewer is not judged on this item (said in the
+       note); item 4 still judges it.
+    4. Each fold, all moving scans: the label-free rule of v0.2 item 5.
+    5. The same label-free rule on the 2026-11-12 layout (`a_layout`) for the full model.
+
+    Outcome: item 1 or 2 failed gives "no better than geometric in the layout"; otherwise 3, 4 or 5
+    failed gives "better where it trained, not shown elsewhere"; otherwise pass."""
+    net, geo = BACKEND_NET, BACKEND_GEOMETRIC
+    v02_items, _outcome, _failed = decide(full)
+    sub = [i for i in v02_items if i.number in GP1B_ITEM1_V02_ITEMS]
+    items: list[Item] = [
+        Item(
+            1,
+            "v0.2 items 1, 2, 3 and 6 on H-run, full model",
+            {f"v0.2 item {i.number}": {"passed": i.passed, "value": i.value} for i in sub},
+            {f"v0.2 item {i.number}": i.threshold for i in sub},
+            all(i.passed for i in sub),
+            "second read of H-run (read once by net v1 in v0.2)",
+        )
+    ]
+    ok, value, thr = label_free_ok(full.a_run[net], full.a_run[geo])
+    items.append(Item(2, "label-free rule on A-run, full model", value, thr, ok))
+    per_fold: dict[str, Any] = {}
+    thr_fold: dict[str, Any] = {}
+    all_ok = True
+    not_judged: list[str] = []
+    for name, f in sorted(folds.items()):
+        n_lab = f.labelled[net].scans
+        if n_lab < MIN_H_LAYOUT_LABELS:
+            not_judged.append(name)
+            per_fold[name] = {"labelled_scans": n_lab, "judged": False}
+            continue
+        ratio = (
+            f.labelled[net].e_c_m / f.labelled[geo].e_c_m if f.labelled[geo].e_c_m > 0 else math.nan
+        )
+        good = _le(ratio, ITEM4_MAX_RATIO) and _ge(
+            f.labelled[net].v, f.labelled[geo].v - ITEM4_V_MARGIN
+        )
+        per_fold[name] = {
+            "labelled_scans": n_lab,
+            "judged": True,
+            "e_c_net_m": f.labelled[net].e_c_m,
+            "e_c_geometric_m": f.labelled[geo].e_c_m,
+            "ratio": ratio,
+            "v_net": f.labelled[net].v,
+            "v_geometric": f.labelled[geo].v,
+            "passed": good,
+        }
+        thr_fold[name] = {
+            "ratio_max": ITEM4_MAX_RATIO,
+            "v_net_min": f.labelled[geo].v - ITEM4_V_MARGIN,
+        }
+        all_ok = all_ok and good
+    items.append(
+        Item(
+            3,
+            "each fold with 100 or more labelled scans: accuracy and range",
+            per_fold,
+            {"min_labelled_scans": MIN_H_LAYOUT_LABELS, **thr_fold},
+            all_ok,
+            f"not judged (fewer than {MIN_H_LAYOUT_LABELS} labelled scans): {not_judged}"
+            if not_judged
+            else "",
+        )
+    )
+    free_vals: dict[str, Any] = {}
+    free_thr: dict[str, Any] = {}
+    free_ok = True
+    for name, f in sorted(folds.items()):
+        good, v, t = label_free_ok(f.free[net], f.free[geo])
+        free_vals[name] = {**v, "passed": good, "moving_scans": f.free[net].scans}
+        free_thr[name] = t
+        free_ok = free_ok and good
+    items.append(
+        Item(4, "each fold, all moving scans: the label-free rule", free_vals, free_thr, free_ok)
+    )
+    ok, value, thr = label_free_ok(full.a_layout[net], full.a_layout[geo])
+    items.append(
+        Item(
+            5,
+            "label-free rule on the 2026-11-12 layout, full model",
+            value,
+            thr,
+            ok,
+            "development data, reported and not evidence",
+        )
+    )
+    if deficit_by_construction:
+        for i in items:
+            if i.number in (2, 4, 5):
+                i.note = (i.note + "; " if i.note else "") + DEFICIT_BY_CONSTRUCTION_NOTE
+    failed = [i.number for i in items if not i.passed]
+    if 1 in failed or 2 in failed:
+        outcome = OUTCOME_GP1B_NO_BETTER
+    elif failed:
+        outcome = OUTCOME_GP1B_NOT_ELSEWHERE
+    else:
+        outcome = OUTCOME_GP1B_PASS
+    return items, outcome, failed
+
+
+# ---------------------------------------------------------------------------------------------
 # Scans
 # ---------------------------------------------------------------------------------------------
 
@@ -451,8 +594,12 @@ def collect_bag(
     split: Split,
     perceivers: dict[str, TrackPerceiver],
     live: LiveVehicle,
+    role_to_set: dict[str, str] | None = None,
 ) -> list[ScanRow]:
-    """Every moving scan inside a held-out segment (or held-out-layout bag), scored."""
+    """Every moving scan inside a held-out segment (or held-out-layout bag), scored. With
+    `role_to_set` the roles that count and the set each goes to are given (GP1b scores a fold's
+    whole `train` bag as its own set)."""
+    role_to_set = role_to_set or ROLE_TO_SET
     name = bag_dir.name
     entry = split.bags.get(name)
     if entry is None:
@@ -473,13 +620,13 @@ def collect_bag(
                 )
                 if role != str(z["role"][k]):
                     raise ValueError(f"{name}: label {k} role disagrees with the split")
-                if role in ROLE_TO_SET:
+                if role in role_to_set:
                     labelled[int(i)] = (z["label"][k], int(z["valid_count"][k]), z["path_xy"][k])
     rows: list[ScanRow] = []
     for i in np.flatnonzero(moving):
         t = float(bag_t[i])
         seg = split.locate(name, t, t)
-        if seg is None or seg.role not in ROLE_TO_SET:
+        if seg is None or seg.role not in role_to_set:
             continue
         lab = labelled.get(int(i))
         if lab is not None:
@@ -491,7 +638,7 @@ def collect_bag(
         row = ScanRow(
             bag=name,
             index=int(i),
-            set=ROLE_TO_SET[seg.role],
+            set=role_to_set[seg.role],
             segment=seg.name,
             segment_from_s=seg.t_from_s if math.isfinite(seg.t_from_s) else 0.0,
             t_s=t,

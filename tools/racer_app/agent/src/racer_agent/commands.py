@@ -13,6 +13,7 @@ of a table in this file, a map must be a file the agent found itself, a name mus
 
 from __future__ import annotations
 
+import ast
 import re
 import shlex
 from collections.abc import Sequence
@@ -45,6 +46,11 @@ PNP_BACKENDS = ("net", "geometric")
 PNP_SPEED_RANGE = (0.2, 1.5)
 PNP_DEFAULT_SPEED_MPS = 0.5
 PNP_MODELS_IN_CONTAINER = "/workspace/data/pnp/models/"
+#: Lap learning arguments of pnp.launch.py (docs 13 section 15.7). The sets are the app's closed
+#: lists; which of them THIS build's launch file declares is read from the file (see
+#: `parse_launch_declarations`), so a mode the launch does not have yet is refused, not sent.
+PNP_LAP_MODES = ("v0", "v1", "observe")
+PNP_LAP_SOURCES = ("start_scan", "map_pose")
 #: Planner parameter files the PnP card can pick: plain `*.yaml` files directly under data/pnp (not
 #: under models/), passed as `params_file:=` to pnp.launch.py. The name is checked by NAME_RE.
 PNP_PARAMS_IN_CONTAINER = "/workspace/data/pnp/"
@@ -355,6 +361,8 @@ def ros_cmd_for(
     pnp_backend: str = "net",
     pnp_v_max_mps: float = PNP_DEFAULT_SPEED_MPS,
     pnp_params_container_path: str = "",
+    pnp_lap: PnpLap | None = None,
+    pnp_launch: dict[str, tuple[str, ...] | None] | None = None,
     max_speed_mps: float | None = None,
     min_speed_mps: float | None = None,
     a_lat_max_mps2: float | None = None,
@@ -415,12 +423,16 @@ def ros_cmd_for(
             pnp_backend,
             pnp_v_max_mps,
             pnp_params_container_path,
+            pnp_lap or PnpLap(),
+            pnp_launch,
         )
     raise CommandError(f"unknown driving mode {mode!r}")
 
 
 def _pnp_bundle(path: str, what: str) -> str:
     """A bundle directory directly under /workspace/data/pnp/models/, shell-safe."""
+    if not isinstance(path, str):
+        raise CommandError(f"{what} must be a directory under {PNP_MODELS_IN_CONTAINER}")
     path = _inside_repo(path, what)
     name = path[len(PNP_MODELS_IN_CONTAINER) :] if path.startswith(PNP_MODELS_IN_CONTAINER) else ""
     if not NAME_RE.match(name):
@@ -430,6 +442,8 @@ def _pnp_bundle(path: str, what: str) -> str:
 
 def _pnp_params(path: str) -> str:
     """A planner parameter file directly under /workspace/data/pnp/, a plain *.yaml name."""
+    if not isinstance(path, str):
+        raise CommandError("planner params file must be a *.yaml name")
     path = _inside_repo(path, "planner params file")
     name = path[len(PNP_PARAMS_IN_CONTAINER) :] if path.startswith(PNP_PARAMS_IN_CONTAINER) else ""
     if not name.endswith(".yaml") or not NAME_RE.match(name):
@@ -439,8 +453,163 @@ def _pnp_params(path: str) -> str:
     return _quoted_ok(path)
 
 
+@dataclass(frozen=True)
+class PnpLap:
+    """The lap learning part of a PnP request, as received (not yet checked). The defaults are
+    today's command: nothing here is sent while it is at its default."""
+
+    v_lap1_mps: object = None
+    lap_memory: object = False
+    lap_mode: object = "v0"
+    lap_source: object = "start_scan"
+    lap_counter: object = True
+    require_lap_counter: object = False
+    shadow_container_path: object = ""
+
+
+def parse_launch_declarations(text: str) -> dict[str, tuple[str, ...] | None]:
+    """The `DeclareLaunchArgument` calls of a launch file: name -> its choices (None when it
+    declares none). Read with `ast`, never imported or run. A `choices=` that is a list or tuple
+    of strings, or `list(NAME)` / `tuple(NAME)` / `NAME` of a module-level tuple of strings, is
+    understood; anything else counts as no choices (so nothing is allowed through it)."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return {}
+    consts: dict[str, tuple[str, ...]] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            target = node.targets[0] if isinstance(node, ast.Assign) else node.target
+            if isinstance(target, ast.Name) and value is not None:
+                strings = _string_seq(value, consts)
+                if strings is not None:
+                    consts[target.id] = strings
+    out: dict[str, tuple[str, ...] | None] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _call_name(node) == "DeclareLaunchArgument"):
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Constant):
+            continue
+        name = node.args[0].value
+        if not isinstance(name, str):
+            continue
+        choices: tuple[str, ...] | None = None
+        for kw in node.keywords:
+            if kw.arg == "choices":
+                choices = _string_seq(kw.value, consts)
+        out[name] = choices
+    return out
+
+
+def _call_name(node: ast.Call) -> str:
+    f = node.func
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+
+
+def _string_seq(node: ast.AST, consts: dict[str, tuple[str, ...]]) -> tuple[str, ...] | None:
+    if isinstance(node, (ast.List, ast.Tuple)):
+        if all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+            return tuple(e.value for e in node.elts)  # type: ignore[attr-defined]
+        return None
+    if isinstance(node, ast.Name):
+        return consts.get(node.id)
+    if isinstance(node, ast.Call) and _call_name(node) in ("list", "tuple") and len(node.args) == 1:
+        return _string_seq(node.args[0], consts)
+    return None
+
+
+def _is_number(v: object) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _pnp_lap_args(
+    lap: PnpLap,
+    driving_bundle: str,
+    v_max_mps: float,
+    launch: dict[str, tuple[str, ...] | None] | None,
+) -> str:
+    """The lap learning launch arguments, each checked against a closed set or a range and
+    formatted here. Values at their default are left out, so a default request is today's
+    command. `launch` is `parse_launch_declarations` of pnp.launch.py: with it, an argument or a
+    choice the file does not declare is refused as not available in this build."""
+    for name, value in (
+        ("pnp_lap_memory", lap.lap_memory),
+        ("pnp_lap_counter", lap.lap_counter),
+        ("pnp_require_lap_counter", lap.require_lap_counter),
+    ):
+        if not isinstance(value, bool):
+            raise CommandError(f"{name} must be true or false")
+    if lap.v_lap1_mps is not None and not _is_number(lap.v_lap1_mps):
+        raise CommandError("pnp lap 1 cap must be a number")
+    if not isinstance(lap.lap_mode, str) or lap.lap_mode not in PNP_LAP_MODES:
+        raise CommandError(f"pnp lap mode must be one of {list(PNP_LAP_MODES)}")
+    if not isinstance(lap.lap_source, str) or lap.lap_source not in PNP_LAP_SOURCES:
+        raise CommandError(f"pnp lap source must be one of {list(PNP_LAP_SOURCES)}")
+    if not isinstance(lap.shadow_container_path, str):
+        raise CommandError("pnp shadow perception bundle must be a bundle name")
+
+    mode = lap.lap_mode
+    observe = mode == "observe"
+    if mode != "v0" and not lap.lap_memory and not observe:
+        raise CommandError(f"pnp lap mode {mode} needs lap memory on")
+    if mode == "v1" and lap.lap_source != "start_scan":
+        raise CommandError("pnp lap mode v1 needs lap source start_scan")
+    memory = bool(lap.lap_memory) or observe
+    if lap.v_lap1_mps is not None:
+        if not memory:
+            raise CommandError("pnp lap 1 cap needs lap memory on or lap mode observe")
+        low, high = PNP_SPEED_RANGE
+        if not (low <= float(lap.v_lap1_mps) <= high):
+            raise CommandError(f"pnp lap 1 cap must be between {low} and {high} m/s")
+        if float(lap.v_lap1_mps) > float(v_max_mps):
+            raise CommandError("pnp lap 1 cap cannot exceed the speed cap")
+    if lap.require_lap_counter and not lap.lap_counter:
+        raise CommandError("require lap counter needs the lap counter on")
+
+    shadow = ""
+    if lap.shadow_container_path:
+        shadow = _pnp_bundle(str(lap.shadow_container_path), "shadow perception bundle")
+        if driving_bundle and shadow == driving_bundle:
+            raise CommandError("the shadow perception bundle cannot be the driving one")
+
+    used: list[tuple[str, str, str | None]] = []  # launch argument, value, choice to check
+    if lap.v_lap1_mps is not None:
+        used.append(("v_lap1_mps", f"{float(lap.v_lap1_mps):.2f}", None))
+    if memory:
+        used.append(("lap_memory", "true", None))
+    if mode != "v0":
+        used.append(("lap_mode", mode, mode))
+    if lap.lap_source != "start_scan":
+        used.append(("lap_source", str(lap.lap_source), str(lap.lap_source)))
+    if not lap.lap_counter:
+        used.append(("lap_counter", "false", None))
+    if lap.require_lap_counter:
+        used.append(("require_lap_counter", "true", None))
+    if shadow:
+        used.append(("shadow_perception_bundle", shadow, None))
+    if launch is not None:
+        for arg, _value, choice in used:
+            if arg not in launch or (choice is not None and choice not in (launch[arg] or ())):
+                label = f"{arg}={choice}" if choice is not None else arg
+                raise CommandError(f"{label} is not available in this build")
+    return "".join(f" {arg}:={value}" for arg, value, _ in used)
+
+
+def check_pnp_lap(lap: PnpLap, driving_bundle: str, v_max_mps: float) -> None:
+    """Raise CommandError when the lap learning choices break a rule (used to check saved
+    settings, which are only defaults: every drive start is checked again)."""
+    _pnp_lap_args(lap, driving_bundle, v_max_mps, None)
+
+
 def _pnp_cmd(
-    perception: str, dynamics: str, backend: str, v_max_mps: float, params_file: str = ""
+    perception: str,
+    dynamics: str,
+    backend: str,
+    v_max_mps: float,
+    params_file: str = "",
+    lap: PnpLap | None = None,
+    launch: dict[str, tuple[str, ...] | None] | None = None,
 ) -> str:
     """`ros2 launch racer_bringup pnp.launch.py ...` from checked bundle paths, a fixed backend
     and a speed cap formatted here. The nodes refuse any bundle that does not match this car;
@@ -455,14 +624,17 @@ def _pnp_cmd(
         raise CommandError(f"pnp speed cap must be between {low} and {high} m/s")
     dynamics_arg = _pnp_bundle(dynamics, "dynamics bundle")
     if backend == "net":
-        perception_arg = f"perception_bundle:={_pnp_bundle(perception, 'perception bundle')} "
+        driving = _pnp_bundle(perception, "perception bundle")
+        perception_arg = f"perception_bundle:={driving} "
     else:
+        driving = ""
         perception_arg = ""
     params_arg = f" params_file:={_pnp_params(params_file)}" if params_file else ""
+    lap_args = _pnp_lap_args(lap or PnpLap(), driving, v_max_mps, launch)
     return (
         "ros2 launch racer_bringup pnp.launch.py "
         f"{perception_arg}dynamics_bundle:={dynamics_arg} "
-        f"backend:={backend} v_max_mps:={float(v_max_mps):.2f}{params_arg}"
+        f"backend:={backend} v_max_mps:={float(v_max_mps):.2f}{params_arg}{lap_args}"
     )
 
 

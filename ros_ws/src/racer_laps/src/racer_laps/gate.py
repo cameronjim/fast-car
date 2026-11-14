@@ -34,7 +34,7 @@ match is accepted when RMS <= `rms_max_m`, inlier share >= `inlier_min_share`, |
 alive. They place a crossing only when STRONG.
 
 STRONG. An accepted match whose along-lane offset is observable (`along_support`) and whose
-free-space violation share is at most `strong_max_violation`: under the match each scan is moved
+free-space violation share is at most `strong_max_violation` (0.02): under the match each scan is moved
 into the other's frame and a point that lies more than `freespace_margin_m` inside the other
 scan's nearest range in its bearing bin is a violation (`scan_match.freespace_violation_share`;
 the larger of the two directions counts). A straight lane matches itself at any shift and the
@@ -145,8 +145,10 @@ class GateConfig:
     #: the node and the replay pass the binding's numbers, 0.0 is for synthetic tests).
     lidar_x_m: float = 0.0
     lidar_y_m: float = 0.0
-    #: STRONG match: free-space violation share at most this (design 15.2, starting value).
-    strong_max_violation: float = 0.04
+    #: STRONG match: free-space violation share at most this. The design's starting value 0.04
+    #: let an alias 2 m early through on development case T2 (5 m straight; a_T2_cw_12: violation
+    #: 0.032 to 0.075 in the alias zone, 0.000 at the true line); 0.02 sits between.
+    strong_max_violation: float = 0.02
     freespace_margin_m: float = 0.15
     freespace_max_range_m: float = 6.0
     #: Consensus crossing (design 15.2): only STRONG matches within `consensus_window_m` of the

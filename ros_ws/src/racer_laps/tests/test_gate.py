@@ -417,15 +417,15 @@ def test_a_match_outside_the_window_or_not_strong_is_no_candidate(
     scan(far, monkeypatch, 5.6, result(-0.61, share=0.8, rms=0.02))
     scan(far, monkeypatch, 5.7, result(0.61, share=0.8, rms=0.02))
     assert not far._cands
-    strong(monkeypatch, 0.041)
+    strong(monkeypatch, 0.021)
     weak = armed_gate(monkeypatch)
     scan(weak, monkeypatch, 5.7, result(-0.1, share=0.8, rms=0.02))
     assert not weak._cands
-    strong(monkeypatch, 0.04)
+    strong(monkeypatch, 0.02)
     edge = armed_gate(monkeypatch)
     scan(edge, monkeypatch, 5.7, result(-0.1, share=0.8, rms=0.02))
     assert len(edge._cands) == 1
-    assert edge.last_match is not None and edge.last_match.freespace_violation == 0.04
+    assert edge.last_match is not None and edge.last_match.freespace_violation == 0.02
 
 
 def test_a_candidate_not_confirmed_in_time_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:

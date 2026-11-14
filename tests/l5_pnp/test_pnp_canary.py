@@ -373,7 +373,6 @@ def run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domai
         str(TIMING_SEED),
         "--stop-after-laps",
         str(laps),
-        "--sim-time",
         "--duration",
         str(60 + 40 * laps),
         "--domain-id",

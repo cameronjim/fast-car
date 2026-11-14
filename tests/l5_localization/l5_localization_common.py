@@ -103,14 +103,20 @@ def sim_time_on() -> bool:
     return os.environ.get("L5_SIM_TIME", "1") != "0"
 
 
-#: Estimator outputs the bridge's lockstep gate watches (bridge_node lockstep_ack): sim time may
-#: not lead them by more than LOCKSTEP_MAX_LAG_S. The EKF's /odom, and the map -> odom of
-#: slam_toolbox or AMCL (its child frame is odom; stamped up to 0.2 s ahead of its data, their
-#: transform tolerance). Tried and rejected, see docs/notes/sim-time-lockstep-2026-11-14.md:
-#: acknowledging slam_toolbox's or AMCL's /pose (they publish only when the car has moved, so the
-#: gate sits on its timeout while the car stands still and sim time crawls), and a lag of 0.03 s or
-#: 0 on /odom (no measurable gain, and 0 stalls the sim).
-LOCKSTEP_ACK = ["/odom", "tf:odom:0.2"]
+#: Outputs the bridge's lockstep gate watches (bridge_node lockstep_ack): sim time may not lead
+#: them by more than LOCKSTEP_MAX_LAG_S. The EKF's /odom; the map -> odom of slam_toolbox or AMCL
+#: (child frame odom, stamped up to 0.2 s ahead of its data, their transform tolerance); and the
+#: tracker's command on /drive (the canaries remap /drive_raw onto it), so the plant never runs
+#: ahead of the control loop. tracker_node ticks on /clock (ros_clock_timers), not on a wall
+#: timer, which is what ties a command to the step it answers. Tried and rejected, see
+#: docs/notes/sim-time-lockstep-2026-11-14.md: acknowledging slam_toolbox's or AMCL's /pose (they
+#: publish only when the car has moved, so the gate sits on its timeout while the car stands still
+#: and sim time crawls), and a lag of 0.03 s or 0 on /odom (no measurable gain, and 0 stalls).
+LOCKSTEP_ACK = [
+    "/odom",
+    "tf:odom:0.2",
+    "ackermann_msgs/msg/AckermannDriveStamped@/drive",
+]
 LOCKSTEP_MAX_LAG_S = 0.1
 
 
@@ -879,6 +885,7 @@ def launch_actions(track: Track, mode: str, map_yaml: Path | None, seed: int):
     tracker_params.update(track.tracker_overrides)
     if sim_time_on():
         tracker_params["use_sim_time"] = True
+        tracker_params["ros_clock_timers"] = True
     tracker = LaunchNode(
         package="racer_control",
         executable="tracker_node",

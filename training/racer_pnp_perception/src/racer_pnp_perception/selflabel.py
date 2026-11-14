@@ -1,7 +1,8 @@
 """Self-labels for the track perception net without a map: geometry seen later by the same sensor.
 
     uv run --group bags python -m racer_pnp_perception.selflabel --bags <bag dir> [<bag dir> ...] \\
-        [--out /Users/cameronjim/code/car-data/pnp/selflabels] [--moving-mps 0.5]
+        [--out /Users/cameronjim/code/car-data/pnp/selflabels] [--moving-mps 0.5] \\
+        [--split /Users/cameronjim/code/car/evaluation/prereg/pnp-v0.2-split.yaml]
 
 The slam_toolbox map of the oval came out doubled (no loop closure, no gyro), so labels from a map
 and a localised pose are not available. Over a few metres, scan-to-scan ICP drift is centimetres,
@@ -23,6 +24,12 @@ which is enough for local labels:
    the half body width on at least 95 percent of its points, otherwise the label is dropped.
    `path_containment` scores any predicted track the same way.
 
+With `--split` only the scans inside a segment of the pre-registered split are candidates, and a
+label whose submap window (first to last scan of the window) is not inside ONE segment is dropped
+with reason `segment_edge`. Every kept label then carries its segment, its role and the bag time
+of the first and last scan of its window (`split.py` has the time axis). Bags the split does not
+name, or marks unused, are skipped.
+
 Output per bag: `<out>/<bag name>.npz` (the scan tensor exactly as `preprocess.scan_to_tensor`
 gives it, the label [16, 5] in the net's output layout with log sigma from the tracer, the scan
 stamp and index, the gate numbers, the driven path) and `<out>/manifest.json` (counts kept and
@@ -42,7 +49,7 @@ import multiprocessing
 import subprocess
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +61,7 @@ from racer_track_perception.vehicle import LiveVehicle, find_repo_root, load_liv
 from scipy.spatial import cKDTree
 
 from racer_pnp_perception.eval_bags import clearance_deficit
+from racer_pnp_perception.split import Segment, Split, load_split
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +111,7 @@ REASONS = (
     "intrusion",
     "deficit",
     "path_outside",
+    "segment_edge",
 )
 
 
@@ -133,9 +142,19 @@ class ScanSet:
     angle_increment: float
     range_min: float
     range_max: float
+    # Recorder log time of each scan in seconds after the first scan's (the split's time axis).
+    # None for a scan cache written before the split existed.
+    log_s: NDArray[np.float64] | None = None
 
     def __len__(self) -> int:
         return len(self.stamp_s)
+
+    def bag_time_s(self) -> NDArray[np.float64]:
+        """Bag time of every scan: the log time axis of the split, or (without it) the header
+        stamp after the first scan's."""
+        if self.log_s is not None:
+            return self.log_s
+        return self.stamp_s - self.stamp_s[0] if len(self) else self.stamp_s
 
     def rec(self, i: int) -> ScanRec:
         return ScanRec(
@@ -283,6 +302,34 @@ def compute_motion(
             & (out[:, 4] >= INLIER_SHARE_MIN)
         )
     return MotionSeries(out[:, 0], out[:, 1], out[:, 2], out[:, 3], out[:, 4], ok)
+
+
+def extend_motion(
+    series: MotionSeries,
+    scans: ScanSet,
+    live: LiveVehicle,
+    want: NDArray[np.bool_],
+    workers: int = 1,
+) -> MotionSeries:
+    """`series` with the intervals that are wanted but were never computed (NaN) filled in. The
+    cached intervals are kept as they are."""
+    missing = want & ~np.isfinite(series.rms_m)
+    if not missing.any():
+        return series
+    new = compute_motion(scans, live, missing, workers)
+    take = missing & np.isfinite(new.rms_m)
+
+    def merge(old: NDArray[Any], fresh: NDArray[Any]) -> NDArray[Any]:
+        return np.where(take, fresh, old)
+
+    return MotionSeries(
+        merge(series.dx_m, new.dx_m),
+        merge(series.dy_m, new.dy_m),
+        merge(series.dyaw_rad, new.dyaw_rad),
+        merge(series.rms_m, new.rms_m),
+        merge(series.inlier_share, new.inlier_share),
+        np.where(take, new.ok, series.ok),
+    )
 
 
 def save_motion(path: Path, series: MotionSeries) -> None:
@@ -555,14 +602,32 @@ class SelfLabels:
     path_xy: NDArray[np.float64]  # [m, PATH_POINTS, 2]
     candidates: int
     dropped: dict[str, int]
+    # Set with a split: per label the bag time of the scan and of the first and last scan of its
+    # submap window, and the segment name and role the window lies in. Per segment the counts.
+    bag_t_s: NDArray[np.float64] | None = None
+    window_first_s: NDArray[np.float64] | None = None
+    window_last_s: NDArray[np.float64] | None = None
+    segment: NDArray[np.str_] | None = None
+    role: NDArray[np.str_] | None = None
+    per_segment: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.index)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        extra: dict[str, Any] = {}
+        if self.segment is not None:
+            extra = {
+                "bag_t_s": self.bag_t_s,
+                "window_first_s": self.window_first_s,
+                "window_last_s": self.window_last_s,
+                "segment": self.segment,
+                "role": self.role,
+            }
         np.savez_compressed(
             path,
+            **extra,
             index=self.index,
             stamp_s=self.stamp_s,
             tensor=self.tensor,
@@ -594,14 +659,31 @@ def scan_points_list(scans: ScanSet, live: LiveVehicle, want: NDArray[np.bool_])
     ]
 
 
+@dataclass(frozen=True)
+class Segmenter:
+    """The split as seen from one bag: which segment a scan, or a submap window, lies in."""
+
+    split: Split
+    bag: str
+    bag_t_s: NDArray[np.float64]
+
+    def scan_segment(self, i: int) -> Segment | None:
+        return self.split.locate(self.bag, float(self.bag_t_s[i]), float(self.bag_t_s[i]))
+
+    def window_segment(self, lo: int, hi: int) -> Segment | None:
+        return self.split.locate(self.bag, float(self.bag_t_s[lo]), float(self.bag_t_s[hi]))
+
+
 def make_labels(
     scans: ScanSet,
     series: MotionSeries,
     live: LiveVehicle,
     candidates: NDArray[np.bool_],
     cfg: geometric.GeometricConfig | None = None,
+    segmenter: Segmenter | None = None,
 ) -> SelfLabels:
-    """Self-labels for every candidate scan (the moving scans)."""
+    """Self-labels for every candidate scan (the moving scans). With a `segmenter`, a window not
+    inside one segment is dropped as `segment_edge` before anything else is computed."""
     chain = chain_motion(series)
     n = len(scans)
     need = np.zeros(n, dtype=bool)
@@ -614,11 +696,46 @@ def make_labels(
         for k in ("index", "tensor", "label", "valid", "intrusion", "deficit", "contain", "path")
     }
     dropped: Counter[str] = Counter()
+    seg_meta: list[tuple[float, float, float, str, str]] = []
+    per_segment: dict[str, dict[str, Any]] = {}
+
+    def seg_stats(seg: Segment) -> dict[str, Any]:
+        return per_segment.setdefault(
+            seg.name,
+            {"role": seg.role, "moving_scans": 0, "kept": 0, "dropped": dict.fromkeys(REASONS, 0)},
+        )
+
     for i in np.flatnonzero(candidates):
+        own = segmenter.scan_segment(int(i)) if segmenter is not None else None
+        if own is not None:
+            seg_stats(own)["moving_scans"] += 1
+        window = None
+        if segmenter is not None:
+            lo, hi = window_bounds(chain, int(i))
+            window = segmenter.window_segment(lo, hi)
+            if window is None:
+                dropped["segment_edge"] += 1
+                if own is not None:
+                    seg_stats(own)["dropped"]["segment_edge"] += 1
+                continue
         out = label_scan(chain, points, int(i), live, cfg)
         if out.reason is not None:
             dropped[out.reason] += 1
+            if own is not None:
+                seg_stats(own)["dropped"][out.reason] += 1
             continue
+        if segmenter is not None:
+            assert window is not None
+            seg_stats(window)["kept"] += 1
+            seg_meta.append(
+                (
+                    float(segmenter.bag_t_s[i]),
+                    float(segmenter.bag_t_s[lo]),
+                    float(segmenter.bag_t_s[hi]),
+                    window.name,
+                    window.role,
+                )
+            )
         assert out.track is not None and out.path is not None
         kept["index"].append(int(i))
         kept["tensor"].append(
@@ -652,6 +769,12 @@ def make_labels(
         path_xy=np.stack(kept["path"]) if m else np.zeros((0, PATH_POINTS, 2)),
         candidates=int(candidates.sum()),
         dropped={r: int(dropped.get(r, 0)) for r in REASONS},
+        bag_t_s=np.array([r[0] for r in seg_meta], dtype=np.float64) if segmenter else None,
+        window_first_s=np.array([r[1] for r in seg_meta], dtype=np.float64) if segmenter else None,
+        window_last_s=np.array([r[2] for r in seg_meta], dtype=np.float64) if segmenter else None,
+        segment=np.array([r[3] for r in seg_meta], dtype=np.str_) if segmenter else None,
+        role=np.array([r[4] for r in seg_meta], dtype=np.str_) if segmenter else None,
+        per_segment=per_segment,
     )
 
 
@@ -682,6 +805,7 @@ def load_scanset(bag_dir: Path, cache_dir: Path | None = None) -> tuple[ScanSet,
                 float(z["angle_increment"]),
                 float(z["range_min"]),
                 float(z["range_max"]),
+                z["log_s"] if "log_s" in z.files else None,
             )
             return scans, z["speed_t"], z["speed_mps"]
     _tools()
@@ -699,6 +823,7 @@ def load_scanset(bag_dir: Path, cache_dir: Path | None = None) -> tuple[ScanSet,
         float(first.angle_increment),
         float(first.range_min),
         float(first.range_max),
+        np.array([s.log_time_s for s in data.scans], dtype=np.float64) - float(first.log_time_s),
     )
     if data.odom:
         speed_t = np.array([o.stamp_s for o in data.odom])
@@ -718,6 +843,8 @@ def load_scanset(bag_dir: Path, cache_dir: Path | None = None) -> tuple[ScanSet,
             range_max=scans.range_max,
             speed_t=speed_t,
             speed_mps=speed,
+            log_s=scans.log_s,
+            log_t0_s=float(first.log_time_s),
         )
     return scans, speed_t, speed
 
@@ -754,22 +881,32 @@ def git_sha() -> str:
 
 
 def label_bag(
-    bag_dir: Path, out_dir: Path, moving_mps: float, workers: int, live: LiveVehicle
+    bag_dir: Path,
+    out_dir: Path,
+    moving_mps: float,
+    workers: int,
+    live: LiveVehicle,
+    split: Split | None = None,
 ) -> dict[str, Any]:
     scans, speed_t, speed = load_scanset(bag_dir, out_dir / "cache")
     moving = moving_scans(scans, speed_t, speed, moving_mps)
+    segmenter = None
+    if split is not None:
+        segmenter = Segmenter(split, bag_dir.name, scans.bag_time_s())
+        inside = np.array([segmenter.scan_segment(i) is not None for i in range(len(scans))], bool)
+        moving = moving & inside
     motion_path = out_dir / "cache" / f"{bag_dir.name}.motion.npz"
     want = intervals_to_match(moving)
     if motion_path.is_file():
-        series = load_motion(motion_path)
+        series = extend_motion(load_motion(motion_path), scans, live, want, workers)
     else:
         log.info("%s: ICP over %d of %d intervals", bag_dir.name, int(want.sum()), len(want))
         series = compute_motion(scans, live, want, workers)
-        save_motion(motion_path, series)
-    labels = make_labels(scans, series, live, moving)
+    save_motion(motion_path, series)
+    labels = make_labels(scans, series, live, moving, segmenter=segmenter)
     labels.save(out_dir / f"{bag_dir.name}.npz")
     log.info("%s: kept %d of %d moving scans", bag_dir.name, len(labels), labels.candidates)
-    return {
+    entry: dict[str, Any] = {
         "scans": len(scans),
         "moving_scans": labels.candidates,
         "moving_threshold_mps": moving_mps,
@@ -779,6 +916,27 @@ def label_bag(
         "icp_intervals": int(want.sum()),
         "icp_ok": int(series.ok[want].sum()),
     }
+    if split is not None:
+        seg_scans = {
+            name: int(
+                sum(
+                    1
+                    for i in range(len(scans))
+                    if (g := segmenter.scan_segment(i)) is not None and g.name == name
+                )
+            )
+            for name in labels.per_segment
+        }
+        entry["segments"] = {
+            name: {
+                "role": v["role"],
+                "scans": seg_scans[name],
+                **{k: v[k] for k in ("moving_scans", "kept", "dropped")},
+            }
+            for name, v in labels.per_segment.items()
+        }
+        entry["split_sha256"] = split.sha256
+    return entry
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -789,12 +947,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--workers", type=int, default=max(1, (multiprocessing.cpu_count() or 2) - 2)
     )
+    parser.add_argument(
+        "--split", type=Path, default=None, help="pre-registered split YAML (see split.py)"
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     live = load_live_vehicle()
+    split = load_split(args.split) if args.split is not None else None
     manifest: dict[str, Any] = {"git_sha": git_sha(), "bags": {}}
     for bag in args.bags:
-        manifest["bags"][bag.name] = label_bag(bag, args.out, args.moving_mps, args.workers, live)
+        if split is not None and split.bags.get(bag.name) is None:
+            log.info("%s: not in the split, skipped", bag.name)
+            continue
+        if split is not None and bag.name in split.bags:
+            b = split.bags[bag.name]
+            if b.whole_bag_role == "unused":
+                log.info("%s: unused in the split, skipped", bag.name)
+                continue
+        manifest["bags"][bag.name] = label_bag(
+            bag, args.out, args.moving_mps, args.workers, live, split
+        )
     args.out.mkdir(parents=True, exist_ok=True)
     manifest_path = args.out / "manifest.json"
     if manifest_path.is_file():

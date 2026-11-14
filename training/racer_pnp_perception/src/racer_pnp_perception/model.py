@@ -97,11 +97,16 @@ def to_npz_arrays(model: Any) -> dict[str, NDArray[Any]]:
 
 
 def loss_fn(
-    pred: Any, target: Any, width_huber_delta: float = 0.1, width_weight: float = 5.0
+    pred: Any,
+    target: Any,
+    width_huber_delta: float = 0.1,
+    width_weight: float = 5.0,
+    station_weight: Any = None,
 ) -> Any:
     """Gaussian negative log likelihood on (x, y) with the predicted sigma of each station, plus a
     Huber loss on the two half widths. pred and target are [B, 16, 5]; the target's log_sigma
-    column is unused."""
+    column is unused. `station_weight` [B, 16] (0 or 1) leaves out stations that have no label,
+    as the stations past a real self-label's valid_count; the loss is then the weighted mean."""
     import torch
     from torch.nn import functional
 
@@ -111,4 +116,7 @@ def loss_fn(
     huber = functional.huber_loss(
         pred[..., 2:4], target[..., 2:4], delta=width_huber_delta, reduction="none"
     ).sum(-1)
-    return (nll + width_weight * huber).mean()
+    per_station = nll + width_weight * huber
+    if station_weight is None:
+        return per_station.mean()
+    return (per_station * station_weight).sum() / station_weight.sum().clamp(min=1.0)

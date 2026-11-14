@@ -1328,8 +1328,9 @@ TEST(MppiLap, TrustRegionCostsAboveTheBoundAndNothingAtOrBelowIt) {
   MppiParams p = only_weights();
   p.w_trust = 400.0;
   auto s = e.solver(p);
-  const LapProfile prof = make_profile(
-      0.0, [](double) { return 0.5; }, [](double st) { return 6.0 - st; });
+  const auto bound = [](double) { return 0.5; };
+  const auto togo = [](double st) { return 6.0 - st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
   auto cost_at = [&](double speed) {
     SolveInput in = e.input(speed, 0.0, 1.5);
     in.lap = &prof;
@@ -1357,8 +1358,9 @@ TEST(MppiLap, TrustRegionFollowsTheStationOfEveryStepNotTheStartingOne) {
   p.w_trust = 400.0;
   auto s = e.solver(p);
   // fast for the first metre, slow after it
-  const LapProfile prof = make_profile(
-      0.0, [](double st) { return st < 1.0 ? 1.2 : 0.4; }, [](double st) { return 6.0 - st; });
+  const auto bound = [](double st) { return st < 1.0 ? 1.2 : 0.4; };
+  const auto togo = [](double st) { return 6.0 - st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
   SolveInput in = e.input(0.8, 0.0, 1.5);
   in.lap = &prof;
   CostBreakdown bd;
@@ -1385,9 +1387,9 @@ TEST(MppiLap, TerminalCostToGoReplacesProgressAndIsSecondsGainedTimesTheCap) {
   p.w_progress = 10.0;
   auto s = e.solver(p);
   // best lap slow before station 2 (2 s per metre), fast after it (0.5 s per metre)
-  const LapProfile prof = make_profile(
-      0.0, [](double) { return 1.5; },
-      [](double st) { return st < 2.0 ? 10.0 - 2.0 * st : 6.0 - 0.5 * (st - 2.0); });
+  const auto bound = [](double) { return 1.5; };
+  const auto togo = [](double st) { return st < 2.0 ? 10.0 - 2.0 * st : 6.0 - 0.5 * (st - 2.0); };
+  const LapProfile prof = make_profile(0.0, bound, togo);
   const auto seq = e.constant(0.8, 0.0);  // the same 1.2 m of path everywhere
   auto run = [&](double station_now, double cap) {
     SolveInput in = e.input(0.8, 0.0, cap);
@@ -1450,8 +1452,9 @@ TEST(MppiLap, TheProfileNeverRelaxesTheOtherTerms) {
   p.horizon_steps = kT;
   p.d_hard_m = 0.03;
   auto s = e.solver(p);
-  const LapProfile prof = make_profile(
-      0.0, [](double) { return 1.5; }, [](double st) { return 6.0 - st; });
+  const auto bound = [](double) { return 1.5; };
+  const auto togo = [](double st) { return 6.0 - st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
   const auto seq = e.constant(0.6, 0.0);
   SolveInput in = e.input(0.6);
   CostBreakdown base, with_lap;

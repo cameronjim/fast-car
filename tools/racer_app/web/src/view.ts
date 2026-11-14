@@ -147,3 +147,20 @@ export function elapsedLabel(ms: number): string {
   if (s < 60) return `${s} s`;
   return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
 }
+
+const MODE_NAMES: Record<string, string> = {
+  gap_follow: "Gap follow",
+  pnp: "ML driver",
+  tracker: "Racer",
+  ml_policy: "ML policy",
+  wall_follow: "Wall follow",
+  track_follow: "Track follow",
+  park: "Park",
+  spiderbot: "Spiderbot",
+};
+
+/** "gap_follow:lane-2026-10-25 (started from a terminal)" becomes "Gap follow". */
+export function modeLabel(mode: string): string {
+  const base = mode.replace(/ \(started from a terminal\)$/, "").split(":")[0];
+  return MODE_NAMES[base] ?? base;
+}

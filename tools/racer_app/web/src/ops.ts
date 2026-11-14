@@ -94,6 +94,11 @@ const DONE: Record<OpKind, string> = {
   "stop-all": "Car reports nothing driving",
 };
 
+/** The default title of an operation, for example "Starting the stack". */
+export function opTitle(kind: OpKind): string {
+  return TITLES[kind];
+}
+
 /** The toast for a confirmed operation: the car itself reported the target state. */
 export function doneText(kind: OpKind): string {
   return DONE[kind];

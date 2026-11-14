@@ -21,7 +21,7 @@ import pickle
 import subprocess
 from pathlib import Path
 
-from . import export, pipeline_v02
+from . import pipeline_v02
 from .dataset import by_split, make_segments
 from .recordings import load_recordings
 from .split import Split, default_split_path, load_split
@@ -41,6 +41,20 @@ def split_bags(split: Split) -> set[str]:
         for e in split.bags.values()
         if e.whole_bag_role not in (None, "unused", "heldout_layout") or e.segments
     }
+
+
+def read_pointer_nominal(manifest_path: Path):  # pragma: no cover - real data
+    """The nominal of a committed pointer manifest, with the residual disabled."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from .model import Nominal, Residual
+
+    io = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))["io"]
+    if io["residual"]["enabled"]:
+        raise ValueError("the v0.1 pointer has a residual: its weights are not committed")
+    return SimpleNamespace(nominal=Nominal.from_dict(io["nominal"]), residual=Residual.disabled())
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - real data
@@ -82,7 +96,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - real data
     frozen = pickle.loads(frozen_path.read_bytes())
     model_id = f"dyn-v0.2-{args.date}"
     fvehicle = pipeline_v02.fit_vehicle_of(vehicle)
-    v01 = export.read_bundle(args.models / V01_BUNDLE)
+    # the repo copy of the v0.1 manifest (re-pinned to the live vehicle_params); its residual is
+    # disabled, so the nominal is all there is to score
+    v01 = read_pointer_nominal(root / "training" / "pnp_models" / V01_BUNDLE / "manifest.yaml")
     heldout = by_split(segments, "heldout", odom_only=True)
     report = pipeline_v02.evaluate_heldout(
         frozen, heldout, fvehicle, vehicle, (v01.nominal, v01.residual), V01_BUNDLE

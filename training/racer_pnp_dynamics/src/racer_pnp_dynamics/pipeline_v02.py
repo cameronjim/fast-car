@@ -654,14 +654,157 @@ def render_report(metrics: dict[str, Any], model_id: str) -> str:
         "",
         metrics["delay_note"],
         "",
+        *_profile_section(metrics),
+        *_validity_section(metrics),
+        *_dead_zone_section(metrics),
+        *_runs_section(metrics),
+        *_legacy_section(metrics),
         "## Data",
         "",
+        (
+            "Seconds of data per role per bag, then per role by direction and start speed bin "
+            "(wheel speed of the samples; `legacy` is the older bags' 70/30 rule):"
+        ),
+        "",
         "```json",
-        json.dumps(metrics["data"]["seconds_by_bag"], indent=1),
+        json.dumps(metrics["data"], indent=1),
         "```",
         "",
     ]
     return "\n".join(lines)
+
+
+def _profile_section(metrics: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for name in ("command_delay_s", "speed_tau_s", "steer_tau_s"):
+        rows = metrics["profiles"].get(name, [])
+        if not rows:
+            continue
+        lines += [
+            f"Profile of {name} ({metrics['profile_notes'].get(name, '')}); validation RMSE:",
+            "",
+            "| value | RMSE | over the minimum |",
+            "|---|---|---|",
+            *[f"| {r['value']:.3f} | {r['rmse']:.4f} | {r['over_min']:+.1%} |" for r in rows],
+            "",
+        ]
+    lag = metrics["steering_lag_check"]
+    if lag.get("available"):
+        lines += [
+            (
+                "Independent steering lag estimate (cross-correlation of the steering command with "
+                "ICP path curvature at speed above 0.4 m/s, train and val segments): "
+                f"{lag['peak_lag_s']:.3f} s (correlation {lag['peak_correlation']:.2f}, "
+                f"{lag['intervals']} intervals) against fitted delay plus steer_tau "
+                f"{lag['fitted_delay_plus_steer_tau_s']:.3f} s, difference "
+                f"{lag['difference_s']:+.3f} s. Reported, not tuned to."
+            ),
+            "",
+        ]
+    return lines
+
+
+def _validity_section(metrics: dict[str, Any]) -> list[str]:
+    v = metrics["validity"]
+    capped = (
+        f", capped at {v['capped_at_mps']} m/s (raising the ceiling is an owner decision)."
+        if v["capped_at_mps"]
+        else ", not capped."
+    )
+    ground = v["p99_icp_ground_speed_train_mps"]
+    lines = [
+        "## Validity speed",
+        "",
+        (
+            f"v_max_mps {v['v_max_mps']}: 99th percentile of the wheel speed in the train and val "
+            f"data {v['p99_wheel_speed_train_mps']:.3f} m/s, rounded down "
+            f"{v['p99_rounded_down_mps']:.2f}{capped} ICP ground speed p99 "
+            f"{'n/a' if ground is None else format(ground, '.3f')} m/s."
+        ),
+        "",
+        "Seconds of train and val data by wheel speed bin and direction:",
+        "",
+    ]
+    hist = v["speed_histogram_seconds_by_direction"]
+    dirs = sorted(hist)
+    bins = list(next(iter(hist.values())))
+    lines += ["| bin (m/s) | " + " | ".join(dirs) + " |", "|---|" + "---|" * len(dirs)]
+    lines += [f"| {b} | " + " | ".join(f"{hist[d][b]:.1f}" for d in dirs) + " |" for b in bins]
+    return [*lines, ""]
+
+
+def _dead_zone_section(metrics: dict[str, Any]) -> list[str]:
+    dz = metrics["dead_zone"]
+    launches = dz["launches_from_rest"]["all"]
+    steady = dz["steady_state"]
+    choice = dz["choice"]
+    return [
+        "## Dead zone",
+        "",
+        (
+            f"Shipped `speed_deadband_mps` {dz['fitted_mps']:.2f} m/s ({choice.get('rule', '')}; "
+            f"{choice.get('launches_used', 0)} used of {choice.get('launches', 0)} launches in the "
+            f"train and val segments). Launches from rest: n {launches.get('n', 0)}, median "
+            f"{launches.get('median_mps', float('nan')):.3f} m/s. Steady state bracket: the largest "
+            f"still bin ends at {steady['largest_still_bin_hi_mps']}, the smallest moving bin "
+            f"starts at {steady['smallest_moving_bin_lo_mps']} (m/s). Shipped value inside the "
+            f"bracket: {dz['fitted_inside_steady_bracket']}."
+        ),
+        "",
+    ]
+
+
+def _runs_section(metrics: dict[str, Any]) -> list[str]:
+    runs = metrics.get("runs_r0_r8")
+    if not runs:
+        return []
+    names = list(next(iter(runs.values()))["variants"])
+    lines = [
+        "## Prediction error per planner run (bag 2026-11-13T22-20-18, R0 to R8)",
+        "",
+        (
+            "Open loop from the recorded /drive commands, standing starts included, speed vs the "
+            "wheel, pose vs chained ICP. Cells: wheel speed RMSE (m/s) / yaw RMSE (rad) / position "
+            "RMSE (m). `train` runs are in-sample for dyn-v0.2."
+        ),
+        "",
+        "| run | role | windows | model | 0.5 s | 1.0 s | 1.5 s |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for run, row in runs.items():
+        for name in names:
+            e = row["variants"][name]
+            cells = [
+                f"{e['errors'][h]['speed_rmse_mps']:.3f} / {e['errors'][h]['yaw_rmse_rad']:.3f} / "
+                f"{e['errors'][h]['pos_rmse_m']:.3f}"
+                for h in ("0.5", "1.0", "1.5")
+            ]
+            lines.append(
+                f"| {run} | {row['role']} | {e['windows']} | {name} | " + " | ".join(cells) + " |"
+            )
+    return [*lines, ""]
+
+
+def _legacy_section(metrics: dict[str, Any]) -> list[str]:
+    legacy = metrics.get("legacy_heldout") or {}
+    errors = legacy.get("errors")
+    if not errors:
+        return []
+    lines = [
+        "## Legacy held-out (last 30 percent of the older bags; decides nothing)",
+        "",
+        "The dyn-v0.1 pooled report, cells: speed RMSE (m/s) / yaw RMSE (rad) / position RMSE (m).",
+        "",
+        "| model | 0.5 s | 1.0 s | 1.5 s |",
+        "|---|---|---|---|",
+    ]
+    for name, e in errors.items():
+        cells = [
+            f"{e[h]['speed_rmse_mps']:.3f} / {e[h]['yaw_rmse_rad']:.3f} / {e[h]['pos_rmse_m']:.3f}"
+            for h in ("0.5", "1.0", "1.5")
+        ]
+        lines.append(f"| {name} | " + " | ".join(cells) + " |")
+    return [*lines, ""]
 
 
 def _decision_table(d: dict[str, Any]) -> str:
@@ -772,7 +915,7 @@ def build_metrics(
         "The command delay is chosen on the internal validation part (role val), NOT on held-out "
         "as dyn-v0.1 did (it had no validation split), so the comparison with dyn-v0.1 is slightly "
         "generous to dyn-v0.1. "
-        f"Chosen {frozen.nominal.command_delay_s:g} s ({result.delay_selection}). Independent "
+        f"Chosen {frozen.nominal.command_delay_s:g} s (scored on the {result.delay_selection.replace('held-out', 'validation')}). Independent "
         "cross-correlation estimate of steering lag (steering command against ICP path "
         "curvature, speed above 0.4 m/s)"
         + (

@@ -46,6 +46,16 @@ run "ros_ws/src/racer_laps" line90
 # Normal packages: reported, not gated.
 run "training/racer_train" report
 run "tools" report
+# tools/pnp_session (brief 34, the car session timing report): 90 percent line coverage of the
+# package itself. The `session` extra (racer_eval, scipy) is installed by --all-extras. The tests
+# that need the built limiter_whatif_cli skip here and run in the ROS job (ctest).
+echo "::group::pytest: tools/pnp_session (gate=line90 on the package)"
+if ! (cd tools && uv sync --all-extras --dev &&
+  uv run pytest tests/test_pnp_session.py --cov=pnp_session --cov-report=term-missing \
+    --cov-fail-under=90); then
+  FAIL=1
+fi
+echo "::endgroup::"
 # The racer app's backend agent (tools/racer_app/agent): the docker command whitelist, the
 # pre-drive checks, the disk guard and the HTTP API, all tested against a fake docker/systemd/ROS
 # layer. Gated at 90 percent because it decides what the app is allowed to make the car's

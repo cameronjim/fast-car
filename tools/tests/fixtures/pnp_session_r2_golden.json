@@ -1,0 +1,420 @@
+{
+  "acceptance_4_2": {
+    "caps_mps": [
+      1.0
+    ],
+    "items": [
+      {
+        "comparator": ">=",
+        "description": "at least 300 s of PnP driving",
+        "item_id": "4.2-a",
+        "measured": 19.673956905000068,
+        "note": "",
+        "passed": false,
+        "section": "4.2",
+        "threshold": 300.0
+      },
+      {
+        "comparator": ">=",
+        "description": "at least 8 standing starts at caps 0.5 and 1.0",
+        "item_id": "4.2-b",
+        "measured": 1,
+        "note": "",
+        "passed": false,
+        "section": "4.2",
+        "threshold": 8
+      },
+      {
+        "comparator": ">=",
+        "description": "starts at both caps 0.5 and 1.0",
+        "item_id": "4.2-c",
+        "measured": 1,
+        "note": "caps seen [1.0]",
+        "passed": false,
+        "section": "4.2",
+        "threshold": 2
+      },
+      {
+        "comparator": "<=",
+        "description": "watchdog events per minute",
+        "item_id": "4.2-d",
+        "measured": 0.0,
+        "note": "0 events",
+        "passed": true,
+        "section": "4.2",
+        "threshold": 0.2
+      },
+      {
+        "comparator": "<=",
+        "description": "rate_limit events per minute",
+        "item_id": "4.2-e",
+        "measured": 3.0497169577895744,
+        "note": "1 events",
+        "passed": false,
+        "section": "4.2",
+        "threshold": 0.2
+      },
+      {
+        "comparator": ">=",
+        "description": "starts with no watchdog or rate_limit event in the first 2.0 s",
+        "item_id": "4.2-f",
+        "measured": 0,
+        "note": "0 of 1 starts",
+        "passed": false,
+        "section": "4.2",
+        "threshold": 1
+      },
+      {
+        "comparator": "<=",
+        "description": "TTC and obstacle brakes at caps up to 1.0",
+        "item_id": "4.2-g",
+        "measured": 0,
+        "note": "",
+        "passed": true,
+        "section": "4.2",
+        "threshold": 0
+      },
+      {
+        "comparator": "<=",
+        "description": "wall contacts",
+        "item_id": "4.2-h",
+        "measured": 0,
+        "note": "",
+        "passed": true,
+        "section": "4.2",
+        "threshold": 0
+      }
+    ],
+    "name": "planner_car_acceptance",
+    "outcome": "miss",
+    "passed": false,
+    "preregistered": true,
+    "reported": {
+      "driving_s": 19.673956905000068,
+      "rate_limit": 1,
+      "starts": 1,
+      "starts_with_event": 1,
+      "watchdog": 0
+    },
+    "section": "4.2",
+    "status": "computed",
+    "wall_contacts_given": 0
+  },
+  "bag": "pnp_session_r2_cut.mcap",
+  "gap_limits_s": [
+    0.04,
+    0.06,
+    0.08,
+    0.1,
+    0.15
+  ],
+  "percentile_method": "linear",
+  "pooled": {
+    "drive_raw": {
+      "recv": {
+        "above": {
+          "100": 0,
+          "150": 0,
+          "40": 4,
+          "60": 0,
+          "80": 0
+        },
+        "max_s": 0.05913311699998758,
+        "n_gaps": 984,
+        "n_messages": 985,
+        "p50_s": 0.019975972499992167,
+        "p99_s": 0.03578943464996995
+      },
+      "stamp": {
+        "above": {
+          "100": 0,
+          "150": 0,
+          "40": 2,
+          "60": 1,
+          "80": 0
+        },
+        "max_s": 0.06205190599996513,
+        "n_gaps": 984,
+        "n_messages": 985,
+        "p50_s": 0.020003442000017913,
+        "p99_s": 0.03180788881000238
+      }
+    },
+    "duration_s": 19.673956905000068,
+    "n_runs": 1,
+    "planner": {
+      "bunched_ticks": 12,
+      "bunched_ticks_recv": 28,
+      "fault_ticks": 0,
+      "plan_age_note": "PlannerStatus carries no plan age field; not measurable from the bag",
+      "plan_age_s": null,
+      "solve_time_nonzero_s": {
+        "max": 0.027794048190116882,
+        "min": 0.0008910070173442364,
+        "n": 985,
+        "p50": 0.0026809240225702524,
+        "p99": 0.013113931007683268
+      },
+      "solve_time_s": {
+        "max": 0.027794048190116882,
+        "min": 0.0008910070173442364,
+        "n": 985,
+        "p50": 0.0026809240225702524,
+        "p99": 0.013113931007683268
+      },
+      "state_ticks": {
+        "DRIVING": 985
+      },
+      "tick_gap_recv": {
+        "above": {
+          "100": 0,
+          "150": 0,
+          "40": 4,
+          "60": 1,
+          "80": 0
+        },
+        "max_s": 0.06254277000005004,
+        "n_gaps": 984,
+        "n_messages": 985,
+        "p50_s": 0.019986420499947144,
+        "p99_s": 0.03544073902994112
+      },
+      "tick_gap_stamp": {
+        "above": {
+          "100": 0,
+          "150": 0,
+          "40": 2,
+          "60": 1,
+          "80": 0
+        },
+        "max_s": 0.06205190599996513,
+        "n_gaps": 984,
+        "n_messages": 985,
+        "p50_s": 0.020003442000017913,
+        "p99_s": 0.03180788881000238
+      },
+      "ticks": 985,
+      "ticks_with_zero_solve_time": 0
+    },
+    "run_id": "pooled",
+    "safety": {
+      "details": {
+        "rate_limit": {
+          "dt_below_half_tick": 0,
+          "dt_s": {
+            "max": 0.012447,
+            "min": 0.012447,
+            "n": 1,
+            "p50": 0.012447,
+            "p99": 0.012447
+          },
+          "n_unparsed": 0,
+          "unparsed_shown": []
+        },
+        "watchdog": {
+          "age_s": {
+            "max": null,
+            "min": null,
+            "n": 0,
+            "p50": null,
+            "p99": null
+          },
+          "n_unparsed": 0,
+          "timeouts_s": [],
+          "unparsed_shown": []
+        }
+      },
+      "engage_counts": {
+        "rate_limit": 1,
+        "ttc": 0,
+        "ttc_reverse": 0,
+        "watchdog": 0
+      },
+      "engage_per_minute": {
+        "rate_limit": 3.0497169577895744,
+        "ttc": 0.0,
+        "ttc_reverse": 0.0,
+        "watchdog": 0.0
+      },
+      "first_2s_counts": {
+        "rate_limit": 1,
+        "ttc": 0,
+        "ttc_reverse": 0,
+        "watchdog": 0
+      },
+      "start_event": null,
+      "starts": 1,
+      "starts_with_event": 1
+    }
+  },
+  "preregistration": "docs/notes/preregistration-pnp-v0.3.md section 5 (M-T)",
+  "rate_limiter_whatif": {
+    "reason": "--no-limiter given",
+    "status": "not run"
+  },
+  "report": "timing",
+  "runs": [
+    {
+      "commanded": true,
+      "drive_raw": {
+        "recv": {
+          "above": {
+            "100": 0,
+            "150": 0,
+            "40": 4,
+            "60": 0,
+            "80": 0
+          },
+          "max_s": 0.05913311699998758,
+          "n_gaps": 984,
+          "n_messages": 985,
+          "p50_s": 0.019975972499992167,
+          "p99_s": 0.03578943464996995
+        },
+        "stamp": {
+          "above": {
+            "100": 0,
+            "150": 0,
+            "40": 2,
+            "60": 1,
+            "80": 0
+          },
+          "max_s": 0.06205190599996513,
+          "n_gaps": 984,
+          "n_messages": 985,
+          "p50_s": 0.020003442000017913,
+          "p99_s": 0.03180788881000238
+        }
+      },
+      "duration_s": 19.673956905000068,
+      "planner": {
+        "bunched_ticks": 12,
+        "bunched_ticks_recv": 28,
+        "fault_ticks": 0,
+        "plan_age_note": "PlannerStatus carries no plan age field; not measurable from the bag",
+        "plan_age_s": null,
+        "solve_time_nonzero_s": {
+          "max": 0.027794048190116882,
+          "min": 0.0008910070173442364,
+          "n": 985,
+          "p50": 0.0026809240225702524,
+          "p99": 0.013113931007683268
+        },
+        "solve_time_s": {
+          "max": 0.027794048190116882,
+          "min": 0.0008910070173442364,
+          "n": 985,
+          "p50": 0.0026809240225702524,
+          "p99": 0.013113931007683268
+        },
+        "state_ticks": {
+          "DRIVING": 985
+        },
+        "tick_gap_recv": {
+          "above": {
+            "100": 0,
+            "150": 0,
+            "40": 4,
+            "60": 1,
+            "80": 0
+          },
+          "max_s": 0.06254277000005004,
+          "n_gaps": 984,
+          "n_messages": 985,
+          "p50_s": 0.019986420499947144,
+          "p99_s": 0.03544073902994112
+        },
+        "tick_gap_stamp": {
+          "above": {
+            "100": 0,
+            "150": 0,
+            "40": 2,
+            "60": 1,
+            "80": 0
+          },
+          "max_s": 0.06205190599996513,
+          "n_gaps": 984,
+          "n_messages": 985,
+          "p50_s": 0.020003442000017913,
+          "p99_s": 0.03180788881000238
+        },
+        "ticks": 985,
+        "ticks_with_zero_solve_time": 0
+      },
+      "run_id": "R0",
+      "safety": {
+        "details": {
+          "rate_limit": {
+            "dt_below_half_tick": 0,
+            "dt_s": {
+              "max": 0.012447,
+              "min": 0.012447,
+              "n": 1,
+              "p50": 0.012447,
+              "p99": 0.012447
+            },
+            "n_unparsed": 0,
+            "unparsed_shown": []
+          },
+          "watchdog": {
+            "age_s": {
+              "max": null,
+              "min": null,
+              "n": 0,
+              "p50": null,
+              "p99": null
+            },
+            "n_unparsed": 0,
+            "timeouts_s": [],
+            "unparsed_shown": []
+          }
+        },
+        "engage_counts": {
+          "rate_limit": 1,
+          "ttc": 0,
+          "ttc_reverse": 0,
+          "watchdog": 0
+        },
+        "engage_per_minute": {
+          "rate_limit": 3.0497169577895744,
+          "ttc": 0.0,
+          "ttc_reverse": 0.0,
+          "watchdog": 0.0
+        },
+        "first_2s_counts": {
+          "rate_limit": 1,
+          "ttc": 0,
+          "ttc_reverse": 0,
+          "watchdog": 0
+        },
+        "start_event": true
+      },
+      "starting": {
+        "duration_s": null,
+        "ticks": 0
+      },
+      "window_s": [
+        626.120197644,
+        645.794154549
+      ]
+    }
+  ],
+  "schema": "pnp-session/1",
+  "watchdog_whatif": {
+    "current_limit_s": 0.06,
+    "gaps_above_current_limit": 0,
+    "gaps_above_limit": {
+      "100": 0,
+      "150": 0,
+      "40": 4,
+      "60": 0,
+      "80": 0
+    },
+    "gaps_without_recorded_event": 0,
+    "match_tolerance_s": 0.03,
+    "matched": 0,
+    "note": "Receive time at the recorder is not safety_node's own clock: safety_node measures the age of /drive_raw on its steady clock from its own receive time. A gap seen here can be absent there and the other way round.",
+    "recorded_watchdog_engagements": 0,
+    "recorded_without_gap": 0
+  }
+}

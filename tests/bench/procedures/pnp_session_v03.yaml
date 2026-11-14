@@ -1,0 +1,358 @@
+# Car session procedure, Plug-and-Play v0.3 (claude-docs/13-plug-and-play.md section 15.8, steps 0
+# to 8). Brief 34. Loads in racer_bench.engine (steps are human_confirm or scripted); the extra
+# keys of a step (session_step, launch, after, pass_rule, rollback, ...) are read by
+# tests/bench/tests/test_pnp_session_procedure.py and by the runbook, not by the engine.
+#
+# Nothing here sets a scheduling policy, a CPU governor or a safety parameter. Where the owner's
+# decision is needed the step says "owner decision, not taken" and names the table that informs
+# it. One change per step, two runs per direction per step, numbers read before the next step, a
+# failed step rolls back and the session goes on with the previous configuration.
+#
+# Placeholders in commands: <bag> the bag directory of the run, <out> the session output
+# directory, <dyn> and <perc> model bundle names under /workspace/data/pnp/models, <caps> the
+# comma list of the caps of the PnP runs of the bag in order.
+name: pnp_session_v03
+description: >
+  Order of the next car session (13 section 15.8): C v0.2 timing and lap observe, GP3, deskew, the
+  yaw channel, the net in shadow, D v0, D v1, GP4 on a new layout. Pass rules are quoted from
+  docs/notes/preregistration-pnp-v0.3.md and preregistration-pnp-v0.2.md with their section
+  numbers. Steps that depend on another brief say "skip if not on main".
+
+# Fixed before the day. Not left to the day.
+fixed:
+  caps_mps_step1: [0.5, 1.0]
+  direction_order: [ccw, cw]
+  runs_per_direction_per_step: 2
+  laps_per_run_step1: 10
+  people: 2
+  kill_knob_in_hand: true
+  wheels_off_ground_check_before_the_floor: true
+  battery_window_v: 0.8
+  battery_window_rule: >
+    Before the first run write down the VESC input voltage (5 s mean at rest) and the window of
+    0.8 V it must stay inside at the start of every run (v0.2 5.2). A run that starts outside it is
+    not run until the battery is swapped.
+  recorder_rule: >
+    pnp.launch.py refuses to start without a rosbag recorder in the graph (require_recorder
+    stays true). The procedure also checks that the bag is growing: ls -l of the bag directory
+    twice, ten seconds apart, the size must have increased.
+  stack_start: >
+    docker exec -it car-stack bash -lc 'source /opt/ros/humble/setup.bash && source
+    /workspace/ros_ws/install/setup.bash && exec <launch command>'
+  stop: Ctrl-C the launch (the watchdog brakes on the silent /drive_raw); the kill knob in hand.
+  no_settings_changed: >
+    No step sets a scheduling policy (chrt, nice), a CPU governor, a safety_node parameter or a
+    vehicle_params value. Host facts are read only.
+
+steps:
+  - id: s0_jetson_build_and_bench
+    type: human_confirm
+    description: Step 0. Jetson build, mppi_bench under load, L6 wheels off the ground.
+    session_step: 0
+    prompt: >
+      Step 0. (1) Two people present, kill knob in hand. (2) Build on the Jetson: colcon build
+      --packages-select racer_planner racer_track_perception racer_bringup. (3) mppi_bench under
+      load, numbers into the session log. (4) Chassis secured, ALL WHEELS OFF THE GROUND, start the
+      stack with the recorder, launch the PnP driver at cap 0.4, run the L6 checklist (board left
+      of the car turns the wheels right, board right turns them left, cmd_speed_mps never above
+      0.4, Ctrl-C stops the wheels within the watchdog time, kill knob works). (5) Check the bag is
+      growing. Do all of it before anything touches the floor.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=0.4"]
+    commands:
+      - [ros2, run, racer_planner, mppi_bench, --bundle, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12", --background-load]
+    human_confirms:
+      - two people present and the kill knob in hand
+      - wheels off the ground, the L6 checklist items all passed
+      - the bag directory is growing (ls -l twice, ten seconds apart)
+    after: []
+    pass_rule:
+      section: "13 section 15.8 step 0"
+      text: "bench in budget (p50 under 6 ms, p99 under 12 ms at 512 samples, 13 section 14.7), L6 checklist passed"
+    rollback: Stay off the floor. Fix the build or the bench result first; no later step starts.
+
+  - id: s1_host_facts
+    type: scripted
+    description: >
+      Step 1 host facts, read only: the scheduling policy of the planner process, the CPU governor
+      and the load, stored in the session log. Run on the Jetson host while the PnP driver is
+      running (the pid is visible there). Nothing is set.
+    session_step: 1
+    command: [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, host-facts, --out-dir, "<out>/host_facts"]
+    expect:
+      returncode: 0
+    read_only_commands:
+      - [chrt, -p, "<pid>"]
+      - [cat, "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]
+      - [uptime]
+    after: []
+    pass_rule:
+      section: "v0.3 section 5 (M-T)"
+      text: "CPU load and the scheduling policy of the planner process as found (read, not set); no pass or fail"
+    rollback: Nothing to roll back, nothing was set.
+
+  - id: s1_c_v02_timing_and_observe
+    type: human_confirm
+    description: >
+      Step 1. C v0.2 with geometric-v1 and dyn-v0.1, caps 0.5 then 1.0, camera lap counter on, lap
+      memory in observe mode. Two runs per direction at each cap, ccw first, 10 laps each, from a
+      standing start.
+    session_step: 1
+    prompt: >
+      Step 1. Battery window declared and written down. Floor, two people, kill knob in hand.
+      For cap 0.5 then cap 1.0: ccw run, ccw run, cw run, cw run, 10 laps each, standing start,
+      one launch per run, the same launch command with only v_max_mps changed. Bag growing before
+      the first lap. After each run: timing report, laps report. Do not change anything between
+      runs. Owner decision, not taken: real-time scheduling of the planner process; the timing
+      report tables (gaps above 40 to 150 ms, watchdog what-if) inform it.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=0.5", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe"]
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe"]
+    requires: ["lap_mode:=observe: brief 29, skip the lap memory arguments if not on main (then D3-C0 cannot be judged)"]
+    runs:
+      caps_mps: [0.5, 1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 10
+    human_confirms:
+      - battery window declared and the start voltage inside it
+      - bag growing, camera lap counter running (require_lap_counter true did not refuse)
+      - wall contacts per run noted (people and phone video decide)
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step1_timing.json"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, laps, --bag, "<bag>", --out, "<out>/step1_laps.json"]
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step1_session.yaml", --out, "<out>/step1_session"]
+    pass_rule:
+      section: "v0.2 4.2 and v0.3 1.5 (D3-C0)"
+      text: >
+        v0.2 4.2: over at least 300 s of PnP driving and at least 8 standing starts at caps 0.5 and
+        1.0: watchdog at most 0.2 per minute, rate_limit at most 0.2 per minute, no event of either
+        kind in the first 2.0 s of at least 7 of 8 starts, TTC and obstacle brakes 0 at caps up to
+        1.0, no wall contact. v0.3 1.5 D3-C0: the lap count equals the camera lap counter's in both
+        runs and at least 18 of the 20 lap times agree with it within 0.3 s.
+    rollback: >
+      A miss of 4.2 is reported with its counts and the next step (real-time scheduling) goes to
+      the owner as a decision, not taken here; the session goes on with the same configuration. A
+      fail of D3-C0 means D does not drive the cap in this session (steps 6 and 7 are skipped).
+
+  - id: s2_gp3
+    type: human_confirm
+    description: Step 2. GP3 attempt, 20 laps at cap 1.0, ccw first, one launch, nobody touches the car.
+    session_step: 2
+    prompt: >
+      Step 2. One continuous run, one launch, 20 consecutive laps on one layout, cap 1.0, direction
+      ccw, nobody touches the car, backend and bundles as in step 1, lap memory in observe mode. A
+      contact is any touch of a wall seen by either person or on the phone video; the video decides
+      a disagreement. The FIRST attempt is the GP3 result. Battery window checked.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe"]
+    requires: ["lap_mode:=observe: brief 29, skip the lap memory arguments if not on main"]
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw]
+      laps_per_run: 20
+    human_confirms:
+      - nobody touched the car or the knob during the run
+      - wall contacts, recoveries and BLOCKED holds noted from people and video
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step2_timing.json"]
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step2_session.yaml", --out, "<out>/step2_session"]
+    pass_rule:
+      section: "v0.2 4.3 (GP3)"
+      text: >
+        One continuous run, one launch, nobody touches the car: 20 consecutive laps on one layout
+        with no wall contact. Cap 1.0 m/s, direction ccw first. Laps counted by the camera lap
+        counter and cross-checked by wheel distance (at least 0.9 times 20 lap lengths). A BLOCKED
+        hold longer than 5 s fails it.
+    rollback: A failed attempt is the GP3 result and is written down; a repeat is reported as a repeat. The session goes on with the step 1 configuration.
+
+  - id: s3_deskew
+    type: human_confirm
+    description: Step 3. deskew:=true, only if M-DSK accepted. Two runs per direction.
+    session_step: 3
+    prompt: >
+      Step 3, only if M-DSK was accepted offline (v0.3 section 4 items 1 to 4). Same launch as step
+      1 at cap 1.0 with deskew:=true. Measure the node latency on the Orin before it drives (p99
+      under 5 ms). Two runs per direction, ccw first, compared with step 1 at cap 1.0.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe", "deskew:=true"]
+    requires:
+      - "deskew:=true: brief 33, skip if not on main or if M-DSK was not accepted"
+      - "lap_mode:=observe: brief 29, skip if not on main"
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 3
+    human_confirms:
+      - node latency p99 under 5 ms measured at the car before the first run
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step3_timing.json"]
+    pass_rule:
+      section: "13 section 15.8 step 3 and v0.3 section 4 item 5"
+      text: "latency under 5 ms, no new event against step 1 at cap 1.0, mean speed not lower. Node latency p99 under 5 ms on the Orin."
+    rollback: Relaunch with deskew:=false (the default) and continue with the step 1 configuration.
+
+  - id: s4_yaw_channel
+    type: human_confirm
+    description: Step 4. Yaw refit, then the yaw-only residual, each only if its gate passed and the fresh confirmation holds.
+    session_step: 4
+    prompt: >
+      Step 4, only for a candidate whose offline gate passed (GP2c-Y, GP2c-R). First run
+      confirm on the bags of steps 1 and 2 (deployed model dyn-v0.1, residual off): both
+      directions, at least 120 s of driving, P1 and Y1 ratios at most 1.00 under T2. Only then
+      launch with the candidate bundle, two runs per direction, ccw first. The yaw refit first, the
+      residual second, one change per sub-step.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/<dyn>",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe"]
+    requires:
+      - "confirm command: brief 31 (training/racer_pnp_dynamics cli), skip if not on main"
+      - "lap_mode:=observe: brief 29, skip if not on main"
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 3
+    human_confirms:
+      - the confirmation printed PASS for this candidate on the bags of steps 1 and 2
+    after:
+      - [uv, run, --project, training/racer_pnp_dynamics, python, -m, racer_pnp_dynamics.cli, confirm, --bag, "<bag>", --candidate, "/workspace/data/pnp/models/<dyn>", --deployed, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step4_timing.json"]
+    pass_rule:
+      section: "v0.3 section 2.4 and 13 section 15.8 step 4"
+      text: >
+        v0.3 2.4: on at least 120 s of driving, both directions, scored under T2, the candidate
+        has P1 at most 1.00 times and Y1 at most 1.00 times the deployed model's. 15.8: no new
+        brake, mean speed at cap 1.0 not lower.
+    rollback: Relaunch with the deployed bundle dyn-v0.1-2026-11-12. The offline pass is reported as not confirmed.
+
+  - id: s5_net_shadow
+    type: human_confirm
+    description: Step 5. The net in shadow next to the geometric driver (the GP1b candidate, else v1).
+    session_step: 5
+    prompt: >
+      Step 5. The geometric driver drives; the net runs as a second node and nothing subscribes to
+      it. Same launch as step 1 at cap 1.0 plus shadow_perception_bundle. Two runs per direction.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe",
+         "shadow_perception_bundle:=/workspace/data/pnp/models/<perc>"]
+    requires: ["lap_mode:=observe: brief 29, skip if not on main"]
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 3
+    human_confirms:
+      - the shadow node latency p99 read from /pnp/shadow/perception/status
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step5_timing.json"]
+    pass_rule:
+      section: "13 section 15.8 step 5"
+      text: "shadow latency p99 under 10 ms"
+    rollback: Relaunch without shadow_perception_bundle.
+
+  - id: s6_d_v0
+    type: human_confirm
+    description: Step 6. D v0, lap-1 cap 0.5, only if D3-S0, D3-S1 and D3-C0 passed.
+    session_step: 6
+    prompt: >
+      Step 6, only if D3-S0, D3-S1 (sim, v0.3 1.4) and D3-C0 (step 1) passed. D v0 with lap-1 cap
+      0.5 and the ceiling 1.0. 10 laps per run, two runs per direction, ccw first, each run from a
+      standing start with the start voltage inside the declared window.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "v_lap1_mps:=0.5", "lap_counter:=true",
+         "require_lap_counter:=true", "lap_memory:=true", "lap_mode:=v0"]
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 10
+    human_confirms:
+      - D3-S0, D3-S1 and D3-C0 all passed before this step was started
+      - wall contacts per run noted
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step6_timing.json"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, laps, --bag, "<bag>", --out, "<out>/step6_laps.json"]
+    pass_rule:
+      section: "13 section 15.8 step 6"
+      text: "10 laps, no contact, cap rises"
+    rollback: Relaunch with lap_memory:=false (the default) and continue with the step 1 configuration.
+
+  - id: s7_d_v1
+    type: human_confirm
+    description: Step 7. D v1 in the variant the pre-registration table allows.
+    session_step: 7
+    prompt: >
+      Step 7, only after step 6. Which D v1 variant goes on the car is the table of v0.3 section
+      1.4 ("Which D v1 goes on the car"). Owner decision, not taken: whether the zone floor
+      (0.3 m/s) and the zone merge are accepted; the B4 results for conditions d and e inform it.
+      10 laps per run, two runs per direction, ccw first.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "v_lap1_mps:=0.5", "lap_counter:=true",
+         "require_lap_counter:=true", "lap_memory:=true", "lap_mode:=v1"]
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 10
+    human_confirms:
+      - the variant (d or e) is the one the v0.3 1.4 table allows, written down before the first run
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step7_timing.json"]
+    pass_rule:
+      section: "13 section 15.8 step 7"
+      text: "10 laps, no contact"
+    rollback: Relaunch with lap_mode:=v0 and continue with the step 6 configuration.
+
+  - id: s8_gp4_new_layout
+    type: human_confirm
+    description: Step 8. New layout, GP4 runs and the P5 protocol.
+    session_step: 8
+    prompt: >
+      Step 8. A layout built for the session, never driven, never mapped, in no training set.
+      Weights frozen. At least 5 runs with D on (the variant chosen by v0.3 1.4, declared before
+      the session), direction fixed for the layout, interleaved in a seeded random order with the
+      other conditions (no condition more than twice in a row), every run starting inside the
+      declared battery window. One run per condition also timed from phone video.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.5", "v_lap1_mps:=0.5", "lap_counter:=true",
+         "require_lap_counter:=true", "lap_memory:=true", "lap_mode:=v0"]
+    runs:
+      caps_mps: [1.5]
+      directions: [ccw]
+      laps_per_run: 10
+    human_confirms:
+      - the layout was never driven, mapped or trained on
+      - run order from racer_eval.interleave, seed written down
+      - one run per condition timed from phone video
+    after:
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step8_session.yaml", --out, "<out>/step8_session"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, laps, --bag, "<bag>", --reference, video, --times, "<out>/video_laps.csv"]
+    pass_rule:
+      section: "v0.2 5.2 (GP4) and 5.3"
+      text: >
+        GP4 passes if, over the D-on runs: every run completes 10 laps; Delta = T1 - T_late is
+        positive in every run, the mean Delta has a 95 percent t interval that excludes 0 and the
+        median r is at most 0.80; wall contacts over the D-on runs are no more than over the D-off
+        runs at the lap-1 cap. The ceiling is min(dynamics bundle validity, 1.5 m/s).
+    rollback: Stop the layout runs, record what ran, and continue with no D (lap_memory:=false).

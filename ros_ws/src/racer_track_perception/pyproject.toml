@@ -37,5 +37,6 @@ testpaths = ["tests"]
 omit = [
     "setup.py",
     "*/track_perception_node.py",
+    "*/scan_deskew_node.py",
     "tests/test_node_*.py",
 ]

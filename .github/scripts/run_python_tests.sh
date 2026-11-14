@@ -46,6 +46,16 @@ run "ros_ws/src/racer_laps" line90
 # Normal packages: reported, not gated.
 run "training/racer_train" report
 run "tools" report
+# tools/pnp_session (brief 34, the car session timing report): 90 percent line coverage of the
+# package itself. The `session` extra (racer_eval, scipy) is installed by --all-extras. The tests
+# that need the built limiter_whatif_cli skip here and run in the ROS job (ctest).
+echo "::group::pytest: tools/pnp_session (gate=line90 on the package)"
+if ! (cd tools && uv sync --all-extras --dev &&
+  uv run pytest tests/test_pnp_session.py --cov=pnp_session --cov-report=term-missing \
+    --cov-fail-under=90); then
+  FAIL=1
+fi
+echo "::endgroup::"
 # The racer app's backend agent (tools/racer_app/agent): the docker command whitelist, the
 # pre-drive checks, the disk guard and the HTTP API, all tested against a fake docker/systemd/ROS
 # layer. Gated at 90 percent because it decides what the app is allowed to make the car's
@@ -86,6 +96,9 @@ run "sim/bridge/racer_gym_bridge" report
 # builds), so a bare `uv run pytest` here has nothing meaningful to run -- unlike
 # sim/bridge/racer_gym_bridge or racer_tools, they have no ROS-free pure-Python logic of
 # their own to test this way (their ROS-free logic is the C++ core, gtest-covered instead).
+# racer_session_tools (brief 34) is excluded too: a C++ tool with a gtest and one stdlib-only ctest
+# script (test/check_limiter_reproduction.py), no pyproject.toml; its Python half is
+# tools/pnp_session, gated above.
 # racer_bringup is excluded for the same reason -- launch files plus an L3 launch test, no
 # pyproject.toml, nothing a bare `uv run pytest` could exercise -- and so is racer_drivers,
 # whose only .py file is test/test_pwm_output_node_launch.py: it launches the C++
@@ -100,7 +113,8 @@ if [ -d ros_ws/src ]; then
     pkg_name="$(basename "$pkg_dir")"
     if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_control" ] ||
        [ "$pkg_name" = "racer_safety" ] || [ "$pkg_name" = "racer_bringup" ] ||
-       [ "$pkg_name" = "racer_drivers" ] || [ "$pkg_name" = "racer_state" ]; then
+       [ "$pkg_name" = "racer_drivers" ] || [ "$pkg_name" = "racer_state" ] ||
+       [ "$pkg_name" = "racer_session_tools" ]; then
       continue
     fi
     run "$pkg_dir" report

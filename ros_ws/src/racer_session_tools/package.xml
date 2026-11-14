@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_session_tools</name>
+  <version>0.1.0</version>
+  <description>
+    Offline measurement tools for the car session (brief 34, pre-registration PnP v0.3 section 5).
+    limiter_whatif_cli replays a recorded /drive_raw stream through racer_safety's UNCHANGED
+    gate code (compiled read only from the sibling package, nothing in racer_safety is edited or
+    linked) once with the recorded per-cycle dt and once with the nominal period, and prints the
+    safety events the gate would have raised. ROS-free at run time, publishes nothing, drives
+    nothing. tools/pnp_session_report.py drives it.
+  </description>
+  <maintainer email="64621038+cameronjim@users.noreply.github.com">cameronjim</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

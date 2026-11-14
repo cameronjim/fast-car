@@ -60,6 +60,7 @@ from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
+from racer_tools.spin_guard import spin_until_shutdown
 from racer_tools.twist_teleop import (
     DriveCommand,
     build_twist_teleop_config,
@@ -184,7 +185,7 @@ def main(args: list | None = None) -> None:
     rclpy.init(args=args)
     node = TwistTeleopAdapterNode()
     try:
-        rclpy.spin(node)
+        spin_until_shutdown(node)
     finally:
         node.destroy_node()
         if rclpy.ok():

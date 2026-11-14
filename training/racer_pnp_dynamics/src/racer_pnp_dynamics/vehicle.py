@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 PARAMS_RELATIVE = Path("config") / "vehicle_params.yaml"
 SCHEMA_RELATIVE = Path("config") / "vehicle_params.schema.json"
 GEN_PARAMS_RELATIVE = Path("tools") / "gen_params.py"
@@ -43,6 +45,19 @@ class Vehicle:
     lidar_x_m: float
     lidar_y_m: float
     lidar_yaw_rad: float
+    # steering.yaw_rate_gain_table: (abs_angle_rad, gain) knots, ascending. Empty means gain 1.
+    yaw_gain_table: tuple[tuple[float, float], ...] = ()
+
+    def yaw_gain(self, abs_delta_rad: Any) -> Any:
+        """The measured true yaw rate per modelled yaw rate at |delta|: piecewise linear between
+        the knots of steering.yaw_rate_gain_table, held at the first and last gain outside them,
+        1 for an empty table (the same rule as racer_state::yaw_gain)."""
+        a = np.abs(np.asarray(abs_delta_rad, dtype=np.float64))
+        if not self.yaw_gain_table:
+            return np.ones_like(a)
+        knots = np.array([k[0] for k in self.yaw_gain_table], dtype=np.float64)
+        gains = np.array([k[1] for k in self.yaw_gain_table], dtype=np.float64)
+        return np.interp(a, knots, gains)
 
     @classmethod
     def from_binding(cls, vp: Any) -> Vehicle:
@@ -75,6 +90,10 @@ class Vehicle:
             lidar_x_m=float(need("sensors.lidar.mount_x_m")),
             lidar_y_m=float(need("sensors.lidar.mount_y_m")),
             lidar_yaw_rad=float(need("sensors.lidar.mount_yaw_rad")),
+            yaw_gain_table=tuple(
+                (float(p.abs_angle_rad), float(p.gain))
+                for p in need("steering.yaw_rate_gain_table")
+            ),
         )
 
 

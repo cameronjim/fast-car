@@ -1,13 +1,15 @@
 """L4, brief 29 step 0: the start-scan gate on the simulator inputs of a run where gate v1 closed
 lap 1 on a false line 3 m before the start (T2, 5.0 m straight, clockwise, seed 12, condition a).
 
-`fixtures/t2_alias_scans.npz` holds the lap node's inputs from the start scan to a little over a
-lap (see `fixtures/make_alias_fixture.py`). The loop is 15.65 m; correct laps of that run measure
+`fixtures_alias/t2_alias_scans.npz` holds the lap node's inputs from the start scan to a little over a
+lap (see `fixtures_alias/make_alias_fixture.py`). The loop is 15.65 m; correct laps of that run measure
 15.3 to 15.45 m of wheel distance and 34.0 to 34.4 s.
 
 Gate v1 (commit f45fd09) on this input (this test's config): lap 1 closes at 12.16 m, 3.2 m early.
 Gate v2 with the design's first violation limit (0.04): 13.61 m. This test fails on those and
 passes with the limit chosen on the development data (0.02).
+
+(Its own directory: `test_l4_fixture.py` caps the whole `fixtures/` directory at 500 kB.)
 
 The config is built so that the same test runs against gate v1 on main (which has no LiDAR
 position in its config): it then fails on the lap length, not on an unknown argument.
@@ -27,7 +29,7 @@ from racer_laps.lap_record import STATE_DRIVING
 from racer_laps.scan_match import scan_to_points
 from synth import BODY, MOUNT, WHEELBASE_M
 
-FIXTURE = Path(__file__).resolve().parent / "fixtures" / "t2_alias_scans.npz"
+FIXTURE = Path(__file__).resolve().parent / "fixtures_alias" / "t2_alias_scans.npz"
 #: The simulator's scan: 720 beams over 2 pi, first beam at -(719/720) pi (bridge_node).
 ANGLE_MIN = -(2.0 * math.pi * 719.0 / 720.0) / 2.0
 ANGLE_INC = 2.0 * math.pi / 720.0

@@ -35,6 +35,9 @@ source /opt/ros/humble/setup.bash
 set -u
 
 WORKSPACE_DIR="sim/bridge"
+# racer_gym_bridge exec_depends racer_tools (racer_tools.spin_guard, GitHub issue 50), so it is
+# built beside the bridge here; only the bridge package is tested.
+RACER_TOOLS_DIR="$(pwd)/ros_ws/src/racer_tools"
 
 PACKAGE_XMLS="$(find "$WORKSPACE_DIR" -maxdepth 2 -name package.xml 2>/dev/null || true)"
 
@@ -68,17 +71,17 @@ apt-get update
 
 echo "Resolving ROS package dependencies for ${WORKSPACE_DIR} with rosdep..."
 rosdep update >/dev/null
-rosdep install --from-paths "$WORKSPACE_DIR" --ignore-src -r -y
+rosdep install --from-paths "$WORKSPACE_DIR" "$RACER_TOOLS_DIR" --ignore-src -r -y
 
 cd "$WORKSPACE_DIR"
 
 COUNT="$(echo "$PACKAGE_XMLS" | wc -l | tr -d ' ')"
 echo "Found ${COUNT} package.xml file(s); running colcon build + colcon test."
 
-colcon build --symlink-install --base-paths .
+colcon build --symlink-install --base-paths . "$RACER_TOOLS_DIR"
 # console_direct+: stream each test's own stdout/stderr straight to the
 # console as it runs, instead of only colcon's pass/fail summary -- a
 # failing assertion needs its message to be actionable from the CI log
 # alone (there is no test-artifact upload from this job).
-colcon test --base-paths . --event-handlers console_direct+
+colcon test --base-paths . "$RACER_TOOLS_DIR" --packages-select racer_gym_bridge --event-handlers console_direct+
 colcon test-result --verbose

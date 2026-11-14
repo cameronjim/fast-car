@@ -29,6 +29,13 @@ INLIER_M = 0.05
 RMS_MAX_M = 0.02  # a mean residual above this is a bad match (the 5 cm band caps at 0.05)
 INLIER_SHARE_MIN = 0.7
 
+# Where the matcher starts. "identity" is T1, the v0.2 truth (it under-reads yaw rate at speed,
+# docs/notes/yaw-rate-scan-matching-2026-11-13.md). "wheel" is T2, the v0.3 truth: the matcher
+# starts from the wheel motion over the interval (wheel_seed.py). Same matcher, same flags.
+SEED_IDENTITY = "identity"
+SEED_WHEEL = "wheel"
+SEEDS = (SEED_IDENTITY, SEED_WHEEL)
+
 
 @dataclass(frozen=True)
 class MotionSeries:
@@ -42,6 +49,7 @@ class MotionSeries:
     rms_m: np.ndarray
     inlier_share: np.ndarray
     ok: np.ndarray  # bool: computed and passed the quality gate
+    seeded: np.ndarray | None = None  # bool: the match started from a wheel seed (T2 only)
 
     def ground_speed_mps(self) -> np.ndarray:
         return np.hypot(self.dx_m, self.dy_m) / self.dt_s
@@ -63,12 +71,19 @@ def scan_motion(
     later: ScanRecord,
     mount: motion.Mount,
     ignore: frozenset[tuple[int, int]] | None = None,
+    init: tuple[float, float] | None = None,
 ) -> tuple[float, float, float, float, float]:
     """(dx, dy, dyaw, rms, inlier share) of the rear axle at `later` in the frame at `earlier`.
-    Raises ValueError when a scan has too few usable returns."""
+    `init` is an optional (heading change, forward distance) to start from instead of the
+    identity (the wheel seed); the result is the whole motion, not a correction. Raises
+    ValueError when a scan has too few usable returns."""
+    from yaw_rate.matching import init_motion  # tools/ is on sys.path through .bags
+
     a = motion.scan_points(earlier, mount, 0.12, MAX_RANGE_M, ignore)
     b = motion.scan_points(later, mount, 0.12, MAX_RANGE_M, ignore)
-    rotation, translation, rms = motion.icp(b, a, inlier_m=INLIER_M)
+    r0, t0 = (np.eye(2), np.zeros(2)) if init is None else init_motion(init[0], init[1])
+    rotation, translation, rms = motion.icp(b @ r0.T + t0, a, inlier_m=INLIER_M)
+    rotation, translation = rotation @ r0, rotation @ t0 + translation
     moved = b @ rotation.T + translation
     d, _ = cKDTree(a).query(moved)
     share = float(np.mean(d < INLIER_M))
@@ -81,12 +96,17 @@ _WORK: dict[str, object] = {}
 
 def _one(i: int) -> tuple[float, ...]:
     scans: Sequence[ScanRecord] = _WORK["scans"]  # type: ignore[assignment]
+    init = _WORK.get("init")
+    start = None
+    if init is not None and np.isfinite(init[i]).all():  # type: ignore[index]
+        start = (float(init[i][0]), float(init[i][1]))  # type: ignore[index]
     try:
         return scan_motion(
             scans[i],
             scans[i + 1],
             _WORK["mount"],
             _WORK["ignore"],  # type: ignore[arg-type]
+            start,
         )
     except ValueError:
         return (np.nan,) * 5
@@ -98,15 +118,32 @@ def compute_motion(
     want: np.ndarray | None = None,
     workers: int = 1,
     ignore: frozenset[tuple[int, int]] | None = None,
+    seed: str = SEED_IDENTITY,
+    run: Run | None = None,
 ) -> MotionSeries:
-    """Motion for every interval where `want[i]` is true (all by default), the rest not ok."""
+    """Motion for every interval where `want[i]` is true (all by default), the rest not ok.
+
+    `seed` is "identity" (T1, the matcher starts from no motion) or "wheel" (T2, it starts from
+    the wheel motion over each interval, which needs `run` for the wheel speed and the gated
+    steering). Everything else, the matcher and the quality flags, is the same."""
+    if seed not in SEEDS:
+        raise ValueError(f"seed must be one of {SEEDS}, got {seed!r}")
+    if seed == SEED_WHEEL and run is None:
+        raise ValueError("seed 'wheel' needs the run (wheel speed and /drive steering)")
     n = max(len(scans) - 1, 0)
     want = np.ones(n, dtype=bool) if want is None else np.asarray(want, dtype=bool)
     mount = mount_of(vehicle)
     if ignore is None:
         ignore = motion.static_self_returns(scans, mount, body_of(vehicle))
     todo = [i for i in range(n) if want[i]]
-    _WORK.update(scans=scans, mount=mount, ignore=ignore)
+    stamps = np.array([s.stamp_s for s in scans])
+    init = None
+    if seed == SEED_WHEEL:
+        from .wheel_seed import interval_seed  # not at the top: wheel_seed imports windows
+
+        dyaw0, path0 = interval_seed(run, vehicle, stamps[:n], stamps[1 : n + 1])  # type: ignore[arg-type]
+        init = np.stack([dyaw0, path0], axis=1)
+    _WORK.update(scans=scans, mount=mount, ignore=ignore, init=init)
     if workers > 1:  # pragma: no cover - process pool, exercised by the real run only
         with multiprocessing.get_context("fork").Pool(workers) as pool:
             results = pool.map(_one, todo, chunksize=64)
@@ -115,7 +152,6 @@ def compute_motion(
     out = np.full((n, 5), np.nan)
     for i, r in zip(todo, results, strict=True):
         out[i] = r
-    stamps = np.array([s.stamp_s for s in scans])
     dt = np.diff(stamps) if n else np.zeros(0)
     with np.errstate(invalid="ignore"):
         ok = (
@@ -133,6 +169,7 @@ def compute_motion(
         rms_m=out[:, 3],
         inlier_share=out[:, 4],
         ok=ok,
+        seeded=None if init is None else (np.isfinite(init).all(axis=1) & want),
     )
 
 
@@ -147,14 +184,24 @@ def driving_intervals(run: Run, threshold_mps: float = 0.05) -> np.ndarray:
     return moving
 
 
+def motion_cache_path(cache_dir: Path, run_name: str, seed: str = SEED_IDENTITY) -> Path:
+    """Cache file of a run's motion. The seed is part of the key, so T1 and T2 never share a file;
+    the identity name is the one the v0.2 caches already have."""
+    if seed not in SEEDS:
+        raise ValueError(f"seed must be one of {SEEDS}, got {seed!r}")
+    suffix = "motion" if seed == SEED_IDENTITY else f"motion-{seed}"
+    return Path(cache_dir) / f"{run_name}.{suffix}.npz"
+
+
 def save_motion(path: Path, m: MotionSeries) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, **{k: getattr(m, k) for k in m.__dataclass_fields__})
+    arrays = {k: getattr(m, k) for k in m.__dataclass_fields__ if getattr(m, k) is not None}
+    np.savez_compressed(path, **arrays)
 
 
 def load_motion(path: Path) -> MotionSeries:
     with np.load(path) as z:
-        return MotionSeries(**{k: z[k] for k in MotionSeries.__dataclass_fields__})
+        return MotionSeries(**{k: z[k] for k in MotionSeries.__dataclass_fields__ if k in z.files})
 
 
 def compose(dx: np.ndarray, dy: np.ndarray, dyaw: np.ndarray) -> np.ndarray:

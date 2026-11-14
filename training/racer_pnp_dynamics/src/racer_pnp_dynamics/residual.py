@@ -145,9 +145,13 @@ def train_torch(  # pragma: no cover - needs torch (dependency group `train`), r
     lr: float = 3e-3,
     weight_decay: float = 1e-2,
     batch: int = 256,
+    loss_mask: np.ndarray | None = None,
 ) -> MlpWeights:
     import torch
 
+    mask = torch.ones(2, dtype=torch.float64)
+    if loss_mask is not None:
+        mask = torch.as_tensor(np.asarray(loss_mask, dtype=np.float64))
     torch.manual_seed(seed)
     net = torch.nn.Sequential(
         torch.nn.Linear(4, 32), torch.nn.Tanh(),
@@ -164,11 +168,11 @@ def train_torch(  # pragma: no cover - needs torch (dependency group `train`), r
         for i in range(0, len(xt), batch):
             idx = perm[i : i + batch]
             opt.zero_grad()
-            loss = torch.mean((net(xt[idx]) - yt[idx]) ** 2)
+            loss = torch.sum(((net(xt[idx]) - yt[idx]) * mask) ** 2) / (len(idx) * mask.sum())
             loss.backward()
             opt.step()
         with torch.no_grad():
-            val_loss = float(torch.mean((net(xv) - yv) ** 2))
+            val_loss = float(torch.sum(((net(xv) - yv) * mask) ** 2) / (len(xv) * mask.sum()))
         if val_loss < best - 1e-6:
             best, bad = val_loss, 0
             best_state = {k: v.clone() for k, v in net.state_dict().items()}

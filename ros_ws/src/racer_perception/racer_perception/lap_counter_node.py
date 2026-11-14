@@ -44,6 +44,7 @@ import time
 
 import rclpy
 from nav_msgs.msg import Odometry
+from racer_tools.spin_guard import spin_until_shutdown
 from rcl_interfaces.msg import FloatingPointRange, IntegerRange, ParameterDescriptor
 from rclpy.logging import get_logger
 from rclpy.node import Node
@@ -260,7 +261,7 @@ def main(args: list | None = None) -> None:
     code = 0
     try:
         node = LapCounterNode()
-        rclpy.spin(node)
+        spin_until_shutdown(node)
     except LapCounterUnavailable as exc:
         get_logger("lap_counter_node").error(str(exc))
         code = EXIT_UNAVAILABLE

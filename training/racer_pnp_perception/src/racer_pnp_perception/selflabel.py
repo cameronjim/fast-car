@@ -791,10 +791,41 @@ def bag_in_current_units(name: str) -> bool:
     return name >= CURRENT_UNITS_FROM
 
 
-def load_scanset(bag_dir: Path, cache_dir: Path | None = None) -> tuple[ScanSet, Any, Any]:
+# The moving test of a bag with no /odom/wheel (pre-registration v0.3 section 3.2, constants file
+# `perception.moving_speed_min_mps`): a scan counts as moving when the ICP ground speed is at least
+# this. Implemented once, here in the bag reader: such a bag's speed samples ARE the ICP ground
+# speed at each scan stamp, so every consumer (`moving_scans`, the gp1 speed bins) reads it
+# through the same arrays it reads wheel speed from.
+ICP_MOVING_MPS = 0.2
+SPEED_SOURCE_ODOM = "odom"
+SPEED_SOURCE_ICP = "icp"
+
+
+def icp_ground_speed(scans: ScanSet, series: MotionSeries) -> NDArray[np.float64]:
+    """Ground speed at every scan from the ICP motion of the interval that ends at it: the
+    distance the rear axle moved between the previous scan and this one over their stamp
+    difference. Scan 0 and a scan whose interval has no ICP result (NaN) read 0.0 m/s."""
+    n = len(scans)
+    out = np.zeros(n)
+    if n < 2:
+        return out
+    dt = np.diff(scans.stamp_s)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        v = np.hypot(series.dx_m, series.dy_m) / dt
+    out[1:] = np.where(np.isfinite(v) & (dt > 0.0), v, 0.0)
+    return out
+
+
+def load_scanset(
+    bag_dir: Path,
+    cache_dir: Path | None = None,
+    live: LiveVehicle | None = None,
+    workers: int = 1,
+) -> tuple[ScanSet, Any, Any]:
     """The scans of a bag, and the speed samples (stamp, true speed) used to say when the car is
-    moving: /odom/wheel, or /drive for a bag without odometry. The bag is read once and cached
-    as an npz under `cache_dir`."""
+    moving: /odom/wheel, or for a bag without odometry the ICP ground speed at each scan
+    (`icp_ground_speed`, ICP over every scan interval, cached next to the scans). The bag is read
+    once and cached as an npz under `cache_dir`; `speed_source` in the cache says which."""
     cache = cache_dir / f"{bag_dir.name}.scans.npz" if cache_dir is not None else None
     if cache is not None and cache.is_file():
         with np.load(cache) as z:
@@ -828,9 +859,22 @@ def load_scanset(bag_dir: Path, cache_dir: Path | None = None) -> tuple[ScanSet,
     if data.odom:
         speed_t = np.array([o.stamp_s for o in data.odom])
         speed = np.array([o.speed_mps for o in data.odom])
+        source = SPEED_SOURCE_ODOM
     else:
-        speed_t = np.array([d.stamp_s for d in data.drive])
-        speed = np.array([d.speed_mps for d in data.drive])
+        live = live or load_live_vehicle()
+        motion_path = cache_dir / f"{bag_dir.name}.motion.npz" if cache_dir is not None else None
+        if motion_path is not None and motion_path.is_file():
+            series = extend_motion(
+                load_motion(motion_path), scans, live, np.ones(len(scans) - 1, bool), workers
+            )
+        else:
+            log.info("%s: no /odom/wheel, ICP over all %d intervals", bag_dir.name, len(scans) - 1)
+            series = compute_motion(scans, live, None, workers)
+        if motion_path is not None:
+            save_motion(motion_path, series)
+        speed_t = scans.stamp_s.copy()
+        speed = icp_ground_speed(scans, series)
+        source = SPEED_SOURCE_ICP
     if cache is not None:
         cache.parent.mkdir(parents=True, exist_ok=True)
         np.savez(
@@ -843,10 +887,19 @@ def load_scanset(bag_dir: Path, cache_dir: Path | None = None) -> tuple[ScanSet,
             range_max=scans.range_max,
             speed_t=speed_t,
             speed_mps=speed,
+            speed_source=source,
             log_s=scans.log_s,
             log_t0_s=float(first.log_time_s),
         )
     return scans, speed_t, speed
+
+
+def speed_source(cache_dir: Path, bag_name: str) -> str:
+    """Where the moving test of a cached bag reads its speed from: `odom` (/odom/wheel; a cache
+    written before this field existed is odom or /drive, never ICP) or `icp`."""
+    cache = cache_dir / f"{bag_name}.scans.npz"
+    with np.load(cache) as z:
+        return str(z["speed_source"]) if "speed_source" in z.files else SPEED_SOURCE_ODOM
 
 
 def moving_scans(
@@ -888,7 +941,7 @@ def label_bag(
     live: LiveVehicle,
     split: Split | None = None,
 ) -> dict[str, Any]:
-    scans, speed_t, speed = load_scanset(bag_dir, out_dir / "cache")
+    scans, speed_t, speed = load_scanset(bag_dir, out_dir / "cache", live, workers)
     moving = moving_scans(scans, speed_t, speed, moving_mps)
     segmenter = None
     if split is not None:

@@ -166,3 +166,36 @@ def load_split(
             "the split must not change"
         )
     return parse_split(data.decode("utf-8"), workstream, digest)
+
+
+# ---------------------------------------------------------------------------------------------
+# Folds (pre-registration v0.3 section 3.2, constants file perception.folds)
+# ---------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Fold:
+    """A leave-layout-out fold: the bags removed from training, which are also its test set."""
+
+    name: str
+    heldout_bags: tuple[str, ...]
+
+
+def load_folds(split: Split, doc: dict[str, Any] | None = None) -> dict[str, Fold]:
+    """The folds of `evaluation/prereg/pnp-v0.3.yaml`. Each held-out bag must be a whole bag of
+    role `train` in the v0.2 split (it was training data in v0.2 and never judged a model); a
+    fold naming anything else is refused."""
+    from racer_pnp_perception import prereg
+
+    raw = (doc or prereg.load_v03())["perception"]["folds"]
+    folds: dict[str, Fold] = {}
+    for name, entry in raw.items():
+        bags = tuple(str(b) for b in entry["heldout_bags"])
+        for bag in bags:
+            if split.bags.get(bag) is None or split.bags[bag].whole_bag_role != ROLE_TRAIN:
+                raise SplitError(f"fold {name}: {bag} is not a whole-bag train bag of the split")
+        folds[str(name)] = Fold(str(name), bags)
+    seen = [b for f in folds.values() for b in f.heldout_bags]
+    if len(seen) != len(set(seen)):
+        raise SplitError("a bag is held out in two folds")
+    return folds

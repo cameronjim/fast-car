@@ -1,0 +1,37 @@
+# Frozen recipe of trackperc-v2 (brief 32, pre-registration v0.3 section 3). Committed BEFORE any
+# fold was trained and before H-run, A-run or a fold was scored. Its git SHA is recorded in the
+# pointer README. A change after this commit is a new freeze, listed with its reason.
+#
+# Chosen on: simulation, the `train` roles with the internal validation cut, and the 2026-11-12
+# layout bags (development data). Nothing else was looked at. No alternative was compared: the
+# candidate is the one of the pre-registration (v1 recipe plus scale augmentation plus the scan
+# refinement). A planned 2-epoch comparison of scale probability 1.0 against 0.5 was stopped
+# unfinished because the machine was contended; the registered candidate scales every real sample.
+recipe_id: trackperc-v2
+base: trackperc-v1 recipe (runs-v1/final), unchanged except for what is listed under "added"
+train:
+  sim_train: /Users/cameronjim/code/car-data/pnp/datasets/trackperc-v0-train-s0-n300000.npz
+  sim_val: /Users/cameronjim/code/car-data/pnp/datasets/trackperc-v0-val-s0-n20000.npz
+  init: /Users/cameronjim/code/car-data/pnp/runs/v0-a/model.pt   # sim-only v0 weights, as v1
+  epochs: 6
+  batch_size: 256
+  lr: 0.001
+  real_fraction: 0.75
+  seeds: [0, 1, 2]            # same seed rule as v1: final internal validation E_c, nothing else
+  labels_dir: /Users/cameronjim/code/car-data/pnp/selflabels-v0.2
+  label_bags:                 # every bag with a train role in the frozen v0.2 split
+    - 2026-11-13T22-00-40_car_teleop
+    - 2026-11-13T22-20-18_car_teleop
+    - 2026-11-13T23-19-51_car_teleop
+    - 2026-11-13T23-27-23_car_teleop
+    - 2026-11-11T03-54-11_car_teleop_cw
+    - 2026-11-11T04-20-19_car_teleop_v3
+    - 2026-10-24T23-13-18_car_teleop
+    - 2026-10-25T19-27-08_car_teleop
+added:
+  scale_augmentation: {enabled: true, probability: 1.0, range: pnp-v0.3.yaml perception.scale_augmentation_range}
+  refinement: circ_conv1d_v0_refine_v1 (refine.py constants window 0.30, max shift 0.35, per-side clearance cap)
+models:
+  full: {fold: null}
+  F1: {fold: F1}
+  F2: {fold: F2}

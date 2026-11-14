@@ -21,6 +21,10 @@ colcon build syncs stays small (`uv sync --extra plots`; CI uses --all-extras).
 Also covers tools/lap_replay.py: replays a bag (or a folder of images) through the camera lap
 counter in ros_ws/src/racer_perception to tune its thresholds (docs/notes/lap-counter-2026-11-12.md).
 Decoding the JPEG frames needs OpenCV, the optional `vision` extra (`uv sync --extra vision`).
+
+Also covers tools/pnp_session/ and tools/pnp_session_report.py (brief 34): the car session timing
+report (pre-registration PnP v0.3 section 5) and the lap observe check. They need the optional
+`session` extra (racer_eval from evaluation/analysis, which brings scipy); codegen does not.
 """
 requires-python = ">=3.11"
 dependencies = [
@@ -38,9 +42,19 @@ plots = [
 vision = [
     "opencv-python-headless>=4.9",
 ]
+# tools/pnp_session (brief 34) reuses the run finding, the 4.2 counting rule and the planner
+# acceptance of evaluation/analysis. It is an extra, not a dependency: the gen_params codegen that
+# colcon runs with `uv run --project tools` (also on the Jetson) must not install scipy.
+# Run the report with `uv run --project tools --extra session python tools/pnp_session_report.py`.
+session = [
+    "racer-eval",
+]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+racer-eval = { path = "../evaluation/analysis", editable = true }
 
 [dependency-groups]
 dev = [

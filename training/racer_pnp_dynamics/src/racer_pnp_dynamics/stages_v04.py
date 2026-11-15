@@ -186,6 +186,13 @@ def assemble_frozen(args, ctx) -> pipeline_v04.Frozen:  # pragma: no cover - rea
             if c.config.name == ship.config.name
         }
         tl4_seed[base] = ship.seed
+    # the frozen v0.3 candidates, printed in the pass and deciding nothing
+    y3 = pickle.loads((args.cache / "dyn-v0.3y-frozen.pkl").read_bytes())
+    yr3 = pickle.loads((args.cache / "dyn-v0.3yr-frozen.pkl").read_bytes())["frozen"]
+    v03 = {
+        "dyn-v0.3y": (y3.nominal, None),
+        "dyn-v0.3yr": (yr3.nominal, yr3.shipping.residual),
+    }
     return pipeline_v04.Frozen(
         v01=ctx.v01().nominal,
         n4=n4.nominal,
@@ -196,6 +203,7 @@ def assemble_frozen(args, ctx) -> pipeline_v04.Frozen:  # pragma: no cover - rea
         tl4=tl4,
         tl4_shipping_seed=tl4_seed,
         v_max_rule_mps=v_max,
+        v03=v03,
         t4_on_bound=t4_bound,
     )
 
@@ -215,16 +223,36 @@ def freeze_eval(args) -> int:  # pragma: no cover - real data
     """The one pass. Everything frozen is read from the caches; held-out truth is built here."""
     ctx = Stage1(args)
     require_measurements_committed(ctx.root)
-    token = _check_freeze(ctx.root, args.freeze_sha)
+    rehearse = bool(getattr(args, "rehearse", False))
     frozen = assemble_frozen(args, ctx)
     c = ground_motion.load_constants(_find(ground_motion.ADDENDUM_RELATIVE))
-    LOG.info(
-        "freeze %s; reading the held-out segments of 2026-11-14 for the first time", token.git_sha
-    )
-    held_t2 = segments_of_v04_bags(args, ctx.v04, ctx.vehicle, "heldout", token)
-    held_t2s = segments_of_v04_bags(
-        args, ctx.v04, ctx.vehicle, "heldout", token, variant=truth_v04.T2S
-    )
+    if rehearse:
+        # A dry run of every line of this stage on TRAIN segments in place of the held-out ones
+        # (the numbers mean nothing: the models were fitted there), writing under a scratch root.
+        # It never builds, opens or names a held-out truth, and its output is never committed.
+        scratch = args.cache / "rehearsal"
+        ctx.root = scratch
+        args.models = scratch / "models"
+        token = truth_v04.FreezeToken("0" * 40)
+        LOG.info("REHEARSAL on train segments, scratch root %s", scratch)
+        held_t2 = [s for s in ctx.new if s.split in ("train", "val") and s.run.has_odom]
+        held_t2s = [
+            s
+            for s in segments_of_v04_bags(
+                args, ctx.v04, ctx.vehicle, "train", variant=truth_v04.T2S
+            )
+            if s.split in ("train", "val") and s.run.has_odom
+        ]
+    else:
+        token = _check_freeze(ctx.root, args.freeze_sha)
+        LOG.info(
+            "freeze %s; reading the held-out segments of 2026-11-14 for the first time",
+            token.git_sha,
+        )
+        held_t2 = segments_of_v04_bags(args, ctx.v04, ctx.vehicle, "heldout", token)
+        held_t2s = segments_of_v04_bags(
+            args, ctx.v04, ctx.vehicle, "heldout", token, variant=truth_v04.T2S
+        )
     from .cli_v03 import pose_recordings
 
     recs = pose_recordings(args.bags, args.cache)
@@ -250,6 +278,7 @@ def freeze_eval(args) -> int:  # pragma: no cover - real data
         read_before = pipeline_v04.render_comparator(
             pipeline_v04.comparator_table(pb, names)
         ).replace("under T2s", "under T2 (no T2s for these segments)")
+        read_before += "\nPp and Yp are not computed here (see the main table).\n"
     out_dir = ctx.root / "training" / "pnp_models" / OUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     notes = [
@@ -350,7 +379,73 @@ def c_sha() -> str:  # pragma: no cover - real checkout
     return ground_motion.ADDENDUM_SHA256
 
 
+def render_fit_summary(n4, r4: dict, t4: dict, tl4: dict) -> str:
+    """The frozen fits in one markdown file (validation numbers only, no held-out number): N4's
+    parameters with bounds and flags, the validation selection of R4, the T4 tables with their
+    support and ties, the validation selection of TL4."""
+    lines = ["# v0.4 fits, frozen before the held-out pass", "", "## N4", ""]
+    lines += ["| parameter | dyn-v0.1 | N4 | lower | upper | free in yaw fit | on a bound | flag |",
+              "|---|---|---|---|---|---|---|---|"]  # fmt: skip
+    for r in n4.parameter_table():
+        lines.append(
+            f"| {r['parameter']} | {r['dyn_v0.1']:.5g} | {r['n4']:.5g} | {r['lower']:.4g} | "
+            f"{r['upper']:.4g} | {r['free_in_yaw_fit']} | {r['on_bound']} | {r['flag']} |"
+        )
+    lines += ["", f"Rollout objective on the validation windows: {n4.cost}.",
+              f"Unidentified: {n4.unidentified or 'none'}.", ""]  # fmt: skip
+    for base, fr in r4.items():
+        lines += [f"## R4 on {base}", "",
+                  f"Shipping {fr.shipping.config.name}, seed {fr.shipping.seed}.", "",
+                  "| config | mean validation P1 | min | per seed |", "|---|---|---|---|"]  # fmt: skip
+        for name, row in fr.selection.items():
+            if name.startswith("_"):
+                continue
+            seeds = ", ".join(f"{k} {v:.4f}" for k, v in row.items() if k.startswith("seed"))
+            lines.append(f"| {name} | {row['mean']:.4f} | {row['min']:.4f} | {seeds} |")
+        lines.append("")
+    for base, t in t4.items():
+        text = (
+            f"Smoothness weight {t.smoothness}; validation P1 by weight {t.validation_p1}; "
+            f"base validation P1 {t.nominal_validation_p1:.4f}; supported nodes on a bound: "
+            f"{t.on_bound or 'none'}."
+        )
+        head = "| steering share | speed (m/s) | alpha | supporting windows | tied to node | on a bound |"
+        lines += [f"## T4 on {base}", "", text, "", head, "|---|---|---|---|---|---|"]
+        for r in t.table_rows():
+            lines.append(
+                f"| {r['steering_share']:+.4f} | {r['speed_mps']:g} | {r['alpha']:.4f} | "
+                f"{r['supporting_windows']} | {r['tied_to'] if r['tied_to'] is not None else ''} | "
+                f"{r['on_bound']} |"
+            )
+        lines.append("")
+    for base, d in tl4.items():
+        ship = d["shipping"]
+        lines += [f"## TL4 on {base}", "",
+                  f"Shipping {ship.config.name}, seed {ship.seed}, device {ship.device}.", "",
+                  "| config | mean validation P1 | min | per seed |", "|---|---|---|---|"]  # fmt: skip
+        for name, row in d["selection"].items():
+            seeds = ", ".join(f"{k} {v:.4f}" for k, v in row.items() if k.startswith("seed"))
+            lines.append(f"| {name} | {row['mean']:.4f} | {row['min']:.4f} | {seeds} |")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def fit_summary(args) -> int:  # pragma: no cover - real data
+    root = Path(__file__).resolve().parents[4]
+    n4 = pickle.loads(_pkl(args, "n4").read_bytes())
+    bases = pipeline_v04.BASES
+    r4 = {b: pickle.loads(_pkl(args, f"r4-{_base_name(b)}").read_bytes()) for b in bases}
+    t4 = {b: pickle.loads(_pkl(args, f"t4-{_base_name(b)}").read_bytes()) for b in bases}
+    tl4 = {b: pickle.loads(_pkl(args, f"tl4-{_base_name(b)}").read_bytes()) for b in bases}
+    text = render_fit_summary(n4, r4, t4, tl4)
+    out = root / "training" / "pnp_models" / OUT_DIR / "fit-summary.md"
+    out.write_text(text, encoding="utf-8")
+    print(text)
+    return 0
+
+
 STAGE_COMMANDS = {
+    "fit-summary": fit_summary,
     "n4-fit": n4_fit,
     "r4-fit": r4_fit,
     "t4-fit": t4_fit,

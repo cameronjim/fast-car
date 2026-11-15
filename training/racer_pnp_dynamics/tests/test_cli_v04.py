@@ -13,6 +13,7 @@ def test_the_stage_commands_exist_and_the_cache_names_are_per_base():
         "r4-fit",
         "t4-fit",
         "tl4-fit",
+        "fit-summary",
         "freeze-eval",
     }
     assert stages_v04._base_name("dyn-v0.1") == "dynv01" and stages_v04._base_name("N4") == "N4"
@@ -29,6 +30,7 @@ def test_the_cli_names_its_commands():
         "r4-fit",
         "t4-fit",
         "tl4-fit",
+        "fit-summary",
         "freeze-eval",
     }
     assert cli_v04.OUT_DIR == "dyn-v0.4-2026-11-14"

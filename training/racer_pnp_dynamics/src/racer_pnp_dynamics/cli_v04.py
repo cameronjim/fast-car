@@ -261,7 +261,10 @@ COMMANDS = {
     "truth-variants": truth_variants,
     "budget": budget_cmd,
     "mb4": mb4_cmd,
-    **{n: _stage(n) for n in ("n4-fit", "r4-fit", "t4-fit", "tl4-fit", "freeze-eval")},
+    **{
+        n: _stage(n)
+        for n in ("n4-fit", "r4-fit", "t4-fit", "tl4-fit", "fit-summary", "freeze-eval")
+    },
 }
 
 
@@ -276,6 +279,11 @@ def main(argv: list[str]) -> int:  # pragma: no cover - real data
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--date", default=None, help="freeze-eval: the date of the model ids")
     parser.add_argument("--freeze-sha", default=None, help="freeze-eval: the freeze commit")
+    parser.add_argument(
+        "--rehearse",
+        action="store_true",
+        help="freeze-eval: dry run on train segments, scratch root",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     return COMMANDS[args.command](args)

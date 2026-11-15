@@ -43,6 +43,10 @@ fixed:
   wheels_off_ground_check_before_the_floor: true
   phone_films_every_step1_run: true
   camera_counter_record_hz: 10
+  camera_launch_note: >
+    The camera container is launched with the 10 Hz record rate of the counter's camera,
+    before the PnP launch: ros2 launch racer_bringup cameras.launch.py lap_record_rate_hz:=10.0
+    (brief 39, PR 188). pnp.launch.py starts the lap counter itself (lap_counter default true).
   battery_window_v: 0.8
   battery_window_rule: >
     Before the first run write down the VESC input voltage (5 s mean at rest) and the window of
@@ -71,6 +75,9 @@ fixed:
   step_one_run_rule: >
     The runbook reads step 1 as eight runs: two per direction at each cap, which is what v0.2 4.2
     needs (at least 8 standing starts at caps 0.5 and 1.0). The phone films every one.
+
+# The camera container, started before the PnP launch in every step that counts laps (brief 39).
+camera_launch: [ros2, launch, racer_bringup, cameras.launch.py, "lap_record_rate_hz:=10.0"]
 
 # The registered numbers of the variant layout protocol (v0.4 6.2, design 16.7, brief 41 section 2).
 # tools/tests/test_pnp_session_v04.py asserts they equal racer_eval.variant_form's constants.
@@ -182,7 +189,7 @@ steps:
       recorder, launch the PnP driver at cap 0.4, run the L6 checklist (board left of the car turns
       the wheels right, board right turns them left, cmd_speed_mps never above 0.4, Ctrl-C stops
       the wheels within the watchdog time, kill knob works). (4) Camera counter bench check: with
-      the counter on at the 10 Hz record rate, hold the start line mark in front of the camera
+      the camera container launched by camera_launch (lap_record_rate_hz:=10.0) first, hold the start line mark in front of the camera
       three times by hand; the counter must count three laps and the bag must hold camera frames
       at the new rate. (5) Check the bag is growing. Do all of it before anything touches the
       floor.
@@ -190,17 +197,13 @@ steps:
       - [ros2, launch, racer_bringup, pnp.launch.py,
          "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
          "backend:=geometric", "v_max_mps:=0.4", "lap_counter:=true", "require_lap_counter:=true"]
-    needs_on_main:
-      - "camera counter record rate argument: brief 39, skip the 10 Hz check if not on main"
-    pending_launch_args:
-      - {brief: 39, what: "camera counter recorded at 10 Hz while a drive is up", match: [record, hz]}
     requires: []
     runnable: true
     minimum_session: false
     human_confirms:
       - two people present and the kill knob in hand
       - wheels off the ground, the L6 checklist items all passed
-      - the camera counter counted three hand laps at the 10 Hz record rate (or the step says it was skipped, brief 39 not on main)
+      - the camera counter counted three hand laps at the 10 Hz record rate ()
       - the bag directory is growing (ls -l twice, ten seconds apart)
     after: []
     pass_rule:
@@ -219,7 +222,7 @@ steps:
     bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) with the camera counter's camera at 10 Hz (brief 39), one bag per launch; plus the phone video of every run"
     minimum_session: true
     prompt: >
-      Step 1. Battery window declared and written down. Floor, two people, kill knob in hand, the
+      Step 1. Battery window declared and written down. Camera container first (camera_launch, lap_record_rate_hz:=10.0). Floor, two people, kill knob in hand, the
       phone filming the whole lane and the start line for every run. For cap 0.5 then cap 1.0: ccw
       run, ccw run, cw run, cw run, 10 laps each, standing start, one launch per run, the same
       launch command with only v_max_mps changed. Bag growing before the first lap. After each
@@ -238,11 +241,7 @@ steps:
          "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
          "lap_memory:=true", "lap_mode:=observe"]
     needs_on_main:
-      - "camera counter 10 Hz record rate argument: brief 39, skip it if not on main (the counter then records at its default rate and M-CAM cannot be judged)"
-      - "lapref: tools/lapref.py, brief 36, skip the lapref lines if not on main"
       - "/pnp/planner/timing in the bag and racer_eval timing_chain: brief 42, skip if not on main"
-    pending_launch_args:
-      - {brief: 39, what: "camera counter recorded at 10 Hz while a drive is up", match: [record, hz]}
     after_notes:
       - "timing_chain (M-C2, M-T2, M-C3) is read next to the M-T report and has no threshold; v0.2 4.2 is judged as before (addendum 1 section 4)."
       - "v04 flags: add --owner-accepted-camera and --m-cam-held ONLY when both are true (v0.4 4.4); otherwise the reference is the phone video and --times <csv> of the hand-timed laps is needed."
@@ -261,7 +260,7 @@ steps:
       - wall contacts per run noted (people and phone video decide)
     after:
       - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, v04, --bag, "<bag>", --caps, "<caps>", --lapref-dir, "<out>/lapref", --out, "<out>/step1_v04.json"]
-      - [uv, run, --project, tools, --extra, session, python, tools/lapref.py, "<bag>", --run, "<run_start_s>", "<run_end_s>"]
+      - [uv, run, --project, tools, --extra, session, python, tools/lapref.py, "<bag>", --run, "<run_start_s>", "<run_end_s>", --out, "<out>/lapref/<run_id>.json"]
       - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, timing_chain, --bag, "<bag>", --out, "<out>/step1_timing_chain"]
       - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step1_session.yaml", --out, "<out>/step1_session"]
     pass_rule:
@@ -304,10 +303,6 @@ steps:
          "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
          "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
          "lap_memory:=true", "lap_mode:=observe"]
-    needs_on_main:
-      - "camera counter 10 Hz record rate argument: brief 39, skip it if not on main (then M-CAM cannot hold and this step is not run)"
-    pending_launch_args:
-      - {brief: 39, what: "camera counter recorded at 10 Hz while a drive is up", match: [record, hz]}
     requires:
       - {result: m_cam}
     runnable: false
@@ -352,7 +347,6 @@ steps:
          "dynamics_bundle:=/workspace/data/pnp/models/<dyn>",
          "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true"]
     needs_on_main:
-      - "pnp_data confirm: tools/pnp_data.py, brief 36, skip if not on main (the v0.3 confirm command racer_pnp_dynamics.cli confirm does the same on one bag)"
       - "a v0.4 candidate bundle: brief 37, skip the driving part if none exists"
       - "a contract 2 candidate (T4, TL4) drives only with the planner of brief 43 on main; until then this step runs its confirmation offline only and says so"
     requires: []
@@ -365,7 +359,7 @@ steps:
       - the confirmation printed PASS for this candidate on the bags of step 1 (both directions, at least 120 s)
       - no new TTC or obstacle brake against step 1 at cap 1.0
     after:
-      - [uv, run, --project, tools, python, tools/pnp_data.py, confirm, "<bag>", --candidate, "/workspace/data/pnp/models/<dyn>", --deployed, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_data.py, confirm, --bag, "<bag>", --candidate, "/workspace/data/pnp/models/<dyn>", --deployed, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12"]
       - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step2_timing.json"]
     pass_rule:
       sources:
@@ -728,8 +722,6 @@ steps:
       split.
     launch_other:
       - [ros2, launch, racer_control, gap_follow.launch.py, "profile:=race-2026-11-12", "max_speed_mps:=1.5"]
-    needs_on_main:
-      - "pnp_data runs and pnp_data split: tools/pnp_data.py, brief 36, skip the after commands if not on main"
     requires: []
     runnable: true
     runs:
@@ -740,8 +732,8 @@ steps:
       - bag growing before the run
       - kill knob in hand, stopped at the first contact
     after:
-      - [uv, run, --project, tools, python, tools/pnp_data.py, runs, "<bag>"]
-      - [uv, run, --project, tools, python, tools/pnp_data.py, split, "<bag>", --session, "<session_date>"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_data.py, runs, "<bag>"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_data.py, split, "<bag>", --session, "<session_date>"]
     pass_rule:
       sources:
         - {file: docs/notes/preregistration-pnp-v0.4.md, section: "1"}

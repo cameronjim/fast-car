@@ -4,7 +4,7 @@ It loads in the engine; every session step has a pass rule whose sources are fil
 that exist, a rollback and a `requires` list; a step with a result that is not `met` cannot be
 marked runnable; every launch command parses against the arguments the launch files declare on
 main. Tools and launch arguments of other briefs that may not be on main yet are listed in
-TOOLS_NOT_ON_MAIN and PENDING below; the test fails once one is on main and still on the list
+TOOLS_NOT_ON_MAIN, RACER_EVAL_NOT_ON_MAIN and TOPICS_NOT_ON_MAIN below; the test fails once one is on main and still on the list
 (take it off, it is then checked like any other).
 """
 
@@ -31,10 +31,7 @@ PREREG_SHA256 = "78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d6
 
 # Tools of other briefs that are not on main when this file is written: script -> brief. The test
 # fails when the script exists and is still listed.
-TOOLS_NOT_ON_MAIN: dict[str, int] = {
-    "tools/pnp_data.py": 36,
-    "tools/lapref.py": 36,
-}
+TOOLS_NOT_ON_MAIN: dict[str, int] = {}
 # racer_eval modules of other briefs, and topics, that are not on main when this file is written:
 # name -> (brief, marker file). The test fails when the marker exists and the name is still listed.
 RACER_EVAL_NOT_ON_MAIN = {
@@ -222,7 +219,7 @@ def test_step_zero_checks_the_wheels_the_counter_and_the_recorder_before_the_flo
     s0 = step("s0_build_and_bench")
     text = s0["prompt"].lower()
     assert "wheels off the ground" in text and "kill knob" in text and "growing" in text
-    assert "camera counter" in text and "10 hz" in text
+    assert "camera counter" in text and "lap_record_rate_hz:=10.0" in text
     assert any("wheels off" in c for c in s0["human_confirms"])
     assert step("s0_prereg_sha")["command"][-1] == "check-prereg"
 
@@ -486,17 +483,19 @@ def test_other_launch_commands_parse_against_their_launch_file():
             assert arg.split(":=", 1)[0] in declared, (step_id, arg)
 
 
-def test_pending_launch_arguments_are_current():
-    declared = all_declared_arguments()
-    pending = [(s["id"], p) for s in raw()["steps"] for p in s.get("pending_launch_args", [])]
-    assert pending
-    for step_id, p in pending:
-        matches = sorted(a for a in declared if all(m in a.lower() for m in p["match"]))
-        assert not matches, (
-            f"{step_id}: brief {p['brief']}'s argument is on main ({matches}): put it in the "
-            "launch commands of the step and remove the pending entry"
-        )
-        assert f"brief {p['brief']}" in " ".join(step(step_id)["needs_on_main"])
+CAMERAS = REPO / "ros_ws/src/racer_bringup/launch/cameras.launch.py"
+
+
+def test_the_camera_container_launch_uses_the_declared_record_rate_argument():
+    cmd = raw()["camera_launch"]
+    assert cmd[:4] == ["ros2", "launch", "racer_bringup", "cameras.launch.py"]
+    declared = declared_arguments(CAMERAS)
+    for arg in cmd[4:]:
+        assert arg.split(":=", 1)[0] in declared, arg
+    assert "lap_record_rate_hz:=10.0" in cmd  # brief 39, PR 188
+    assert "cameras.launch.py lap_record_rate_hz:=10.0" in raw()["fixed"]["camera_launch_note"]
+    assert "camera_launch" in step("s1_c_timing_and_d3c0")["prompt"]
+    assert "camera_launch" in step("s0_build_and_bench")["prompt"]
 
 
 def test_tools_of_other_briefs_are_listed_until_they_land():
@@ -534,12 +533,8 @@ def test_tools_of_other_briefs_are_listed_until_they_land():
 def test_steps_that_use_another_briefs_work_say_skip_if_not_on_main():
     for s in raw()["steps"]:
         text = " ".join(s.get("needs_on_main", []))
-        if any("pnp_data" in " ".join(c) for c in s.get("after", [])):
-            assert "brief 36" in text and "skip" in text, s["id"]
         if any("<fused>" in " ".join(c) for c in s.get("launch", [])):
             assert "brief 38" in text, s["id"]
-        if s.get("pending_launch_args"):
-            assert "brief 39" in text and "skip" in text, s["id"]
 
 
 def test_the_scripted_step_runs_in_the_engine_with_a_fake_runner():

@@ -78,12 +78,12 @@ def run_input(times=(5.5, 5.6, 5.7), ref=(5.5, 5.7, 5.7)) -> laps.RunLapInput:
 
 def test_read_lapref_keys(tmp_path):
     p = tmp_path / "R0.json"
-    p.write_text(json.dumps({"lap_times": [5.5, 5.6]}))
+    p.write_text(json.dumps({"lap_times_s": [5.5, 5.6]}))
     assert v04.read_lapref(p) == (5.5, 5.6)
     p.write_text(json.dumps({"lap_times_s": None}))
     assert v04.read_lapref(p) == ()  # "no periodic lap found": no laps
     p.write_text(json.dumps({"laps": 3}))
-    with pytest.raises(ValueError, match="no lap_times"):
+    with pytest.raises(ValueError, match="no lap_times_s"):
         v04.read_lapref(p)
 
 
@@ -91,11 +91,11 @@ def test_lapref_next_to_the_reference_decides_nothing(tmp_path):
     none = v04.lapref_next_to([run_input()], None)
     assert none["rows"][0]["lapref"] == "not given" and none["decides_nothing"] is True
     assert v04.lapref_next_to([run_input()], tmp_path)["rows"][0]["lapref"] == "not given"
-    (tmp_path / "R0.json").write_text(json.dumps({"lap_times": [5.5, 6.1, 5.7]}))
+    (tmp_path / "R0.json").write_text(json.dumps({"lap_times_s": [5.5, 6.1, 5.7]}))
     row = v04.lapref_next_to([run_input()], tmp_path)["rows"][0]
     assert row["count_equal"] and row["laps_compared"] == 3 and row["laps_within"] == 2
     assert row["diffs_s"] == pytest.approx([0.0, 0.4, 0.0])
-    (tmp_path / "R0.json").write_text(json.dumps({"lap_times": [5.5, 5.7]}))
+    (tmp_path / "R0.json").write_text(json.dumps({"lap_times_s": [5.5, 5.7]}))
     row = v04.lapref_next_to([run_input()], tmp_path)["rows"][0]
     assert not row["count_equal"] and row["laps_compared"] == 2 and row["n_reference"] == 3
     edge = v04.lapref_next_to([run_input(ref=(5.0, 5.0, 5.0))], tmp_path)  # exactly 0.5 s away
@@ -305,7 +305,7 @@ def test_cli_v04_runs_prints_and_writes(tmp_path, monkeypatch, capsys):
 
 
 def test_markdown_lists_lapref_rows_and_to_json_handles_numpy(tmp_path):
-    (tmp_path / "R0.json").write_text(json.dumps({"lap_times": [5.5, 6.1, 5.7]}))
+    (tmp_path / "R0.json").write_text(json.dumps({"lap_times_s": [5.5, 6.1, 5.7]}))
     doc = v04.v04_report(make_bag(), caps=[0.5], reference="camera")
     doc["lapref"] = v04.lapref_next_to([run_input()], tmp_path)
     text = v04.markdown(doc)
@@ -432,3 +432,31 @@ def test_cli_v04_with_a_b4_commit_that_cannot_be_resolved(tmp_path, monkeypatch,
     monkeypatch.setattr(cli, "_read", lambda p: make_bag())
     assert cli.main(["v04", "--bag", "x", "--no-limiter", "--b4-commit", "nosuchsha"]) == 2
     assert "Later steps" in capsys.readouterr().out
+
+
+def test_lapref_json_and_the_procedure_commands_match_what_shipped(tmp_path):
+    """Brief 36 (PR 194): lapref writes `lap_times_s`; pnp_data takes `confirm --bag`."""
+    from lapref.method import LaprefResult
+    from pnp_data import cli as pnp_data_cli
+
+    out = tmp_path / "R0.json"
+    out.write_text(json.dumps(LaprefResult(n_laps=2, lap_times_s=[5.5, 5.6]).to_dict()))
+    assert v04.read_lapref(out) == (5.5, 5.6)
+    doc = yaml.safe_load(PROCEDURE.read_text())
+    parser = pnp_data_cli.build_parser()
+    seen = 0
+    for step in doc["steps"]:
+        for cmd in step.get("after", []):
+            if "tools/pnp_data.py" in cmd:
+                args = cmd[cmd.index("tools/pnp_data.py") + 1 :]
+                args = [
+                    a.replace("<bag>", "b").replace("<session_date>", "2026-11-20") for a in args
+                ]
+                args = [a.replace("<dyn>", "d") if isinstance(a, str) else a for a in args]
+                parser.parse_args(args)
+                seen += 1
+            if "tools/lapref.py" in cmd:
+                flags = cmd[cmd.index("tools/lapref.py") + 1 :]
+                assert "--run" in flags and "--out" in flags
+                seen += 1
+    assert seen == 4  # confirm, runs, split, lapref

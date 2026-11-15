@@ -785,6 +785,12 @@ def ma2_run_cmd(args: argparse.Namespace) -> None:
         ]
     else:
         raise BatteryError(f"unknown stage {stage}")
+    if args.only:
+        wanted = args.only.split(",")
+        unknown = [n for n in wanted if n not in {j.name for j in jobs}]
+        if unknown:
+            raise BatteryError(f"--only names {unknown} are not jobs of stage {stage}")
+        jobs = [j for j in jobs if j.name in wanted]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     check_mode_of_directory(out, stage)
@@ -915,15 +921,37 @@ def load_dirs(dirs: list[Path], mode_for: dict[Path, str], conditions: tuple[str
     return runs
 
 
+def merge_reruns(runs: list, rerun_dir: Path | None, mode: str, conditions: tuple[str, ...]):
+    """Runs of `rerun_dir` replace the runs of the same condition, case, direction and seed (a
+    rerun forced by the host, reported next to the first run). Returns (runs, report lines)."""
+    if rerun_dir is None:
+        return runs, []
+    reruns = b5.load_runs(rerun_dir, mode, conditions)
+    keys = {(r.condition, *r.key) for r in reruns}
+    kept = [r for r in runs if (r.condition, *r.key) not in keys]
+    lines = [
+        f"rerun of {r.condition}/{r.case}/{r.direction}/{r.seed} from {rerun_dir.name} replaces "
+        f"the first run (the first run stays in its own directory)"
+        for r in reruns
+    ]
+    return kept + reruns, lines
+
+
 def ma2_report_text(
-    kind: str, out: Path, ma2_dir: Path | None, f_label: str, factor_dirs: list[Path]
+    kind: str,
+    out: Path,
+    ma2_dir: Path | None,
+    f_label: str,
+    factor_dirs: list[Path],
+    rerun_dir: Path | None = None,
 ) -> str:
     const = b5.load_constants()
     ext = b5.load_extensions_checked()
     if kind == "ma2":
         runs = b5.load_runs(out, "ma2", ("g", "o"))
+        runs, notes = merge_reruns(runs, rerun_dir, "ma2", ("g", "o"))
         lines = header_lines("M-A2, does a perfect track change lap time", out, const)
-        lines += [b5.ma2_report(runs, const), ""]
+        lines += [*notes, b5.ma2_report(runs, const), ""]
         lines += [
             "Stated limit: a fixed-planner oracle measures the value of a better input to THIS planner,",
             "not a bound on perception.",
@@ -983,6 +1011,7 @@ def report_cmd(args: argparse.Namespace) -> None:
             Path(args.ma2_dir) if args.ma2_dir else None,
             args.f_label,
             [Path(d) for d in args.factor_dirs],
+            Path(args.rerun_dir) if args.rerun_dir else None,
         )
     print(text)
     (out / "report.md").write_text(text + "\n")
@@ -1029,6 +1058,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--stage", default="ma2", choices=("ma2", "ma2x", "ma2w"))
     p.add_argument("--perception-bundle", default="")
     p.add_argument("--weight-factor", type=float, default=None)
+    p.add_argument("--only", default="", help="comma separated job names: a rerun of those runs")
     host(p)
     p = sub.add_parser("report")
     p.add_argument("--kind", required=True, choices=("b5", "ma2", "ma2x", "ma2w"))
@@ -1037,6 +1067,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ma2-dir", default="")
     p.add_argument("--f-label", default="")
     p.add_argument("--factor-dirs", nargs="*", default=[])
+    p.add_argument("--rerun-dir", default="", help="ma2: runs that replace first runs")
     args = parser.parse_args(argv)
     try:
         {

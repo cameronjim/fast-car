@@ -36,6 +36,9 @@ class PerceptionStats:
         self._intrusion_sum = 0.0
         self._intrusion_n = 0
         self.last_scan_s: float | None = None
+        # Scans on which `fused-v1` fell back to the tracer's track; None when not fusing, in
+        # which case the key is absent and the status is what it was before `fused-v1`.
+        self.fuse_fallbacks: int | None = None
 
     def scan_seen(self, now_s: float) -> None:
         self.scans_seen += 1
@@ -61,7 +64,11 @@ class PerceptionStats:
         lat = np.array(self._latency_ms, dtype=np.float64)
         age = self.scan_age_s(now_s)
         silent = age is None or age > SILENCE_S
+        extra: dict[str, object] = {}
+        if self.fuse_fallbacks is not None:
+            extra["fuse_net_unusable"] = int(self.fuse_fallbacks)
         return {
+            **extra,
             "backend": self.backend,
             "model_id": self.model_id,
             "payload_sha256": self.payload_sha256,

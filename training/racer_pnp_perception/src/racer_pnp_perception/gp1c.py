@@ -48,7 +48,7 @@ from racer_track_perception.core import BACKEND_GEOMETRIC, BACKEND_NET, TrackPer
 from racer_track_perception.runtime import CircConv1dV0
 from racer_track_perception.vehicle import LiveVehicle, load_live_vehicle
 
-from racer_pnp_perception import gp1, gp1b, split_v04
+from racer_pnp_perception import gp1, gp1b, split_v04, windowed
 from racer_pnp_perception.internal_val import net_from_run
 from racer_pnp_perception.split import ROLE_HELDOUT, ROLE_TRAIN, load_folds, load_split
 
@@ -489,6 +489,8 @@ def score_main(args: argparse.Namespace) -> int:
     perceivers = perceivers_from_net(net, live, bundle.model_id, cfg)
     rows: list[gp1.ScanRow] = []
     for bag in sorted(split.bags):
+        # the windowed cache only: a whole-bag read would decode reserve segments
+        windowed.require_cache(args.labels / "cache", bag)
         rows += gp1.collect_bag(
             args.bags_root / bag, args.labels, split, perceivers, live, {ROLE_HELDOUT: gp1.SET_RUN}
         )

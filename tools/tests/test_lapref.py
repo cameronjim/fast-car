@@ -325,6 +325,22 @@ def test_git_head_in_a_repo_and_outside(tmp_path: Path, monkeypatch) -> None:
     assert lapref_cli._git_head() == "unknown"
 
 
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def test_l4_golden_on_the_cut_of_l0() -> None:
+    """L4: a golden on a cut of the real L0 run (steering and wheels only, 98 kB)."""
+    golden = json.loads((FIXTURES / "lapref_l0_golden.json").read_text())
+    with np.load(FIXTURES / "lapref_l0_cut.npz") as d:
+        result = lapref(
+            d["odom_t"], d["odom_v"].astype(float), d["steer_t"], d["steer"].astype(float)
+        )
+    assert result.n_laps == golden["n_laps"] == 20  # owner observed 20 laps
+    assert result.lap_times_s == pytest.approx(golden["lap_times_s"], abs=1e-3)
+    assert result.lap_length_m == pytest.approx(golden["lap_length_m"], abs=1e-3)
+    assert result.autocorr_peak == pytest.approx(golden["autocorr_peak"], abs=1e-3)
+
+
 def test_entry_script_runs() -> None:
     import subprocess
 

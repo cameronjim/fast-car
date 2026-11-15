@@ -677,7 +677,10 @@ steps:
       8 s each, three cycles. The tool refuses a cap above the bundle's validity or above
       v_max_mps, and refuses to start if the lap node is publishing guidance: never run it with
       the lap node. It never publishes a drive topic. If it dies the planner falls back to
-      v_no_guidance_mps. Kill knob in hand, stop at the first contact. Then the same for ccw.
+      v_no_guidance_mps. Kill knob in hand, stop at the first contact. Then the same for ccw. Owner decision 7: about 10
+      minutes of driving in all, so the same schedule is driven once per direction on the lane
+      centre and once with the planner's lateral offset parameter at -0.10 m and +0.10 m (6 runs
+      of 96 s, 576 s); until that parameter exists only the lane centre is driven.
     launch:
       - [ros2, launch, racer_bringup, pnp.launch.py,
          "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
@@ -686,6 +689,8 @@ steps:
     schedule_commands:
       - [python3, tools/pnp_session/cap_schedule.py, --manifest, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12/manifest.yaml", --v-max-mps, "1.3", --write-params, "<out>/excitation_params.yaml"]
       - [python3, tools/pnp_session/cap_schedule.py, --manifest, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12/manifest.yaml", --v-max-mps, "1.3"]
+    needs_on_main:
+      - "the planner's lateral offset parameter: not on main and its name is not known to this file; skip the offset variations until it exists (lane centre only) and say so in the session log"
     requires: []
     runnable: true
     excitation:
@@ -695,6 +700,9 @@ steps:
       caps_mps: [0.5, 1.0, 0.7, 1.3]
       hold_s: 8.0
       cycles_per_direction: 3
+      lateral_offsets_m: [-0.10, 0.10]
+      max_total_driving_s: 600
+      variations_per_direction: "the lane centre, then the planner's lateral offset parameter at each of lateral_offsets_m (owner decision 7); 2 directions x 3 variations x 96 s = 576 s, under the 600 s budget"
     human_confirms:
       - the tool printed the schedule and did not refuse (a refusal is correct: do not work around it)
       - lap memory is off and no lap node is running

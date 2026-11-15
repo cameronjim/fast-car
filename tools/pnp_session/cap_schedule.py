@@ -54,6 +54,11 @@ class Excitation:
     caps_mps: tuple[float, ...]
     hold_s: float
     cycles: int
+    #: Owner decision 7: besides the lane centre, the same schedule once per direction with the
+    #: planner's lateral offset parameter at each of these values (m).
+    lateral_offsets_m: tuple[float, ...] = ()
+    #: Owner decision 7: about 10 minutes of driving in total.
+    max_total_driving_s: float = math.inf
 
 
 def load_excitation(path: Path | None = None) -> Excitation:
@@ -64,7 +69,16 @@ def load_excitation(path: Path | None = None) -> Excitation:
         tuple(float(c) for c in block["caps_mps"]),
         float(block["hold_s"]),
         int(block["cycles_per_direction"]),
+        tuple(float(x) for x in block.get("steering_variation_lateral_offsets_m", ())),
+        float(block.get("max_total_driving_s", math.inf)),
     )
+
+
+def session_driving_s(exc: Excitation, directions: int = 2) -> float:
+    """Driving time of the whole excitation: per direction one schedule on the lane centre and
+    one per lateral offset."""
+    one = len(exc.caps_mps) * exc.hold_s * exc.cycles
+    return directions * (1 + len(exc.lateral_offsets_m)) * one
 
 
 def bundle_validity_mps(manifest: Path) -> float:
@@ -215,6 +229,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"planner params written to {args.write_params}")
             return 0
         schedule = CapSchedule(exc)
+        if session_driving_s(exc) > exc.max_total_driving_s:
+            raise CapRefused(
+                f"the excitation needs {session_driving_s(exc):.0f} s of driving, the addendum "
+                f"allows {exc.max_total_driving_s:.0f} s"
+            )
         print(
             f"excitation: caps {list(exc.caps_mps)} m/s, {exc.hold_s} s each, "
             f"{exc.cycles} cycles, {schedule.duration_s:.0f} s"

@@ -218,6 +218,10 @@ python3 tools/pnp_session/cap_schedule.py --manifest /workspace/data/pnp/models/
 - It refuses to start if a cap is above the bundle's validity or above `v_max_mps` (correct: do
   not work around it), or if another node already publishes guidance. Never run it together with
   the lap node driving the cap (`lap_memory` stays off).
+- Steering variation (owner decision 7, about 10 minutes in all): the same schedule once per
+  direction on the lane centre, then with the planner's lateral offset parameter at -0.10 m and
+  +0.10 m: 2 directions x 3 variations x 96 s = 576 s, under the 600 s budget the tool checks.
+  That parameter is not on main yet: until it is, drive the lane centre only and say so.
 - Watch: contacts. Stop at the first one. The commands are model inputs, not imitation targets.
 
 ### 9b Data laps

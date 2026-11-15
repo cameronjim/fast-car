@@ -32,8 +32,8 @@ PREREG_YAML = "evaluation/prereg/pnp-v0.4.yaml"
 #: docs/notes/preregistration-pnp-v0.4.md: "Constants file ... SHA-256".
 PREREG_SHA256 = "78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63"
 ADDENDUM_YAML = "evaluation/prereg/pnp-v0.4-addendum-1.yaml"
-#: Addendum 1 (PR 189): the constants file, frozen at its first commit.
-ADDENDUM_SHA256 = "32f501bc8cbfcdb0aa052e01c6290395793bda603f4ac3f2ddb983bf076495d8"
+#: Addendum 1 (PR 189): the constants file as merged (it holds the owner decisions of 2026-11-14).
+ADDENDUM_SHA256 = "ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824"
 FROZEN_FILES = {PREREG_YAML: PREREG_SHA256, ADDENDUM_YAML: ADDENDUM_SHA256}
 #: Addendum 1 section 5.1: a lap battery result holds for later commits that change no file here.
 CODE_DIRS = ("ros_ws/src/racer_laps", "ros_ws/src/racer_planner")

@@ -7,7 +7,7 @@ perception code, before `fused-v1` was frozen, and before the result of battery 
 No result may change this file. A later correction is a new dated section appended at the end.
 
 Constants file: `evaluation/prereg/pnp-v0.4-addendum-1.yaml`, SHA-256
-`32f501bc8cbfcdb0aa052e01c6290395793bda603f4ac3f2ddb983bf076495d8`.
+`ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824`.
 
 This addendum belongs to `docs/notes/preregistration-pnp-v0.4.md` and
 `evaluation/prereg/pnp-v0.4.yaml` (SHA-256
@@ -242,7 +242,7 @@ B5 and their gates keep their results whatever B6 says.
 
 ### 5.3 M-D1, what the memory buys (development diagnostics; decide nothing)
 
-On the development cases and seeds of the yaml, conditions a, b, c, m, f, u and t. Reported
+On the development cases and seeds of the yaml, conditions a, b, c, m, f, u, t and z. Reported
 per condition: contacts, completion, late-lap time against the paired ceiling control. Reading
 fixed now, for design only: a learned value profile is part of a later D only if u or f has a
 median late-lap time at most 0.97 times m's on the same pairs with no more contacts; otherwise
@@ -279,13 +279,33 @@ contact at that station. No report calls it a safe set or claims a guarantee.
 - Obstacle variants support "adaptation on a perturbed known track", never "generalisation
   over tracks".
 
-## 8. Open owner decisions this file does not take
+## 8. Owner decisions of 2026-11-14 (given after the first commit of this file, before any result it governs; recorded here, nothing was scored in between)
 
-1. A field or log line in safety_node with the receipt time of each `/drive_raw`.
-2. The command pulse grid as a vehicle_params quantity.
-3. Bundle schema 2.0.0 for dynamics, and later whether a stable wheel-to-ground ratio belongs
-   in vehicle_params.
-4. GP3: the wording of section 1, or a successor gate with another lap count source.
-5. Inside a caution zone the cap wins and a bound below the drivable floor means hold.
-6. Whether planner fixes may merge before B5 (B6 would then be the only battery for that code).
-7. Session time for M-SID.
+1. safety_node may record the receipt time of `/drive_raw`, as instrumentation only, with no
+   change to any safety behaviour, threshold or the gating path. Consequence for section 4:
+   M-C2 and M-T2 use that record where a bag holds it and the echo where it does not; every
+   table says which. Until that record is on main and proven bit-identical, the echo is used.
+2. The command pulse grid goes into `config/vehicle_params.yaml` (schema bump, generated
+   bindings). M-C3 stays a measurement and is the calibration evidence for the value. The
+   planner may predict with the reachable command set only after that bump; such a change is
+   a planner change in the sense of section 5.1.
+3. Dynamics bundle schema 2.0.0 (section 2.2) is approved. No vehicle_params change.
+4. The GP3 wording of section 1 is accepted. GP3 will be attempted again at the next session
+   and is recorded as GP3-R1, a repeat.
+5. Inside a caution zone the cap wins; a bound below the drivable floor means hold (stop or
+   recover), never a raise. This binds every lap learning variant designed from now on. B4,
+   B5 and B6 run the registered code; their conditions are not changed. In M-D1 the
+   conditions keep the registered zone rule and the new rule is reported as an extra
+   condition z (D v1 with the new rule), development only.
+6. Brief 42 and every other change under `racer_planner`, `racer_laps`, `racer_safety`,
+   `config/vehicle_params.yaml` or the lap scoring merges after the B5 run is finished or
+   declared not run. Section 5.2 (B6) then applies to the changed code.
+7. About 10 minutes of excitation runs at the next session are approved (M-SID, section 6):
+   the cap schedule of the yaml in both directions, on the lane centre and with the lateral
+   offsets of the yaml, at most 600 s of driving in total. If the planner has no lateral
+   offset parameter on the session's code, the steering variation is driven by the gap
+   follow race profile instead and that is said.
+
+Still open, not taken here: real-time scheduling and any safety_node timing change; rf2o; the
+camera lap counter as primary timing and `lapref` as a reference; the D v1 zone-floor
+deviation of v0.3; the three lap gate v2 questions; the multi-algorithm benchmark.

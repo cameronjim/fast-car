@@ -78,6 +78,9 @@ oracle_extensions:        # M-A2x and M-A2w, diagnostics next to the unchanged M
 planner:                  # measurements only; v0.2 section 4.2 is unchanged
   replay_segments: [L0, X0, X1]         # dynamics train, lap dev: no held-out or test segment
   echo_tolerance: exact float32 equality of a passed-through field
+  # Owner decision 1 (2026-11-14): safety_node may publish the receipt time of the command it
+  # latched, instrumentation only. A bag that holds it uses it; a bag that does not uses the echo.
+  receipt_source: [safety_node receipt record if in the bag, else echo]
   limiter_replay: {id: M-T2, cycle_tolerance: 0}
 
 lap_battery_b6:
@@ -100,9 +103,23 @@ lap_diagnostics:          # M-D1, development only
     f: D v1 with the value profile frozen after the first clean lap
     u: D v1 as registered (updating value profile, value replaces progress)
     t: lap memory off, ceiling, terminal speed bound from visible curvature
+    z: D v1 with the caution zone rule of owner decision 5 (cap wins, hold below the floor)
   value_profile_reading: {max_median_ratio_to_m: 0.97}
+  # Owner decision 5 (2026-11-14), for every lap learning variant designed after B4 and B5:
+  # inside a caution zone the cap wins; a bound below the drivable floor means hold, never a
+  # raise. B4, B5 and B6 run the registered code and are not changed by this.
+  caution_zone_rule_for_later_variants: cap_wins_hold_below_floor
 
 excitation:               # M-SID, a data protocol for the next session
   caps_mps: [0.5, 1.0, 0.7, 1.3]
   hold_s: 8.0
   cycles_per_direction: 3
+  # Owner decision 7: about 10 minutes of driving in total, speed and steering variation, both
+  # directions. Steering variation: the same schedule driven once per direction on the lane
+  # centre and once with the planner's lateral offset parameter at each of these values.
+  steering_variation_lateral_offsets_m: [-0.10, 0.10]
+  max_total_driving_s: 600
+
+gp3_repeat:               # owner decision 4
+  wording: "not met as registered; 20 clean laps observed, camera count 10 of 20"
+  next_attempt: GP3-R1    # at the next session, under the unchanged rule of v0.2 section 4.3

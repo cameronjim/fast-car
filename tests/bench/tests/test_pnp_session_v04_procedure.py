@@ -14,6 +14,7 @@ import ast
 import hashlib
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +64,7 @@ def step(step_id: str) -> dict[str, Any]:
 
 def declared_arguments(path: Path) -> set[str]:
     tree = ast.parse(path.read_text())
-    return {
+    names = {
         str(node.args[0].value)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
@@ -71,6 +72,20 @@ def declared_arguments(path: Path) -> set[str]:
         and node.args
         and isinstance(node.args[0], ast.Constant)
     }
+    # gap_follow.launch.py declares its tuning arguments from module level dicts named
+    # _OPTIONAL_*_ARGS (one DeclareLaunchArgument per key, in a comprehension)
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Dict)
+            and any(
+                getattr(t, "id", "").startswith("_OPTIONAL_")
+                and getattr(t, "id", "").endswith("_ARGS")
+                for t in node.targets
+            )
+        ):
+            names |= {str(k.value) for k in node.value.keys if isinstance(k, ast.Constant)}
+    return names
 
 
 def lap_modes() -> set[str]:
@@ -411,29 +426,49 @@ def test_the_timing_chain_is_in_step_one_and_listed_until_brief_42_lands():
             assert "/drive_raw" in s["bagged"] or s["session_step"] == 0, s["id"]
 
 
-def test_the_excitation_step_follows_the_addendum_and_runs_clockwise_first():
+def test_the_excitation_step_follows_the_v05_yaml_and_runs_clockwise_first():
     s = step("s9a_excitation")
     ex = s["excitation"]
-    assert (
-        ex["directions"] == ["cw", "ccw"]
-        and ex["hold_s"] == 8.0
-        and ex["cycles_per_direction"] == 3
-    )
-    assert ex["caps_mps"] == [0.5, 1.0, 0.7, 1.3]
+    yaml_block = yaml.safe_load((REPO / ex["source"]["file"]).read_text())["excitation"]
+    assert ex["max_total_driving_s"] == yaml_block["max_total_driving_s"] == 600
+    assert ex["planned_total_driving_s"] == yaml_block["planned_total_driving_s"] == 552
+    assert sum(b["s"] for b in ex["blocks"]) == 552
+    dirs = [b["direction"] for b in ex["blocks"]]
+    assert dirs == ["cw"] * 6 + ["ccw"] * 5  # clockwise first, no G at 1.0 counter-clockwise
     assert s["minimum_session"] is True and step("s9_data_laps")["minimum_session"] is True
     assert "lap_memory" not in " ".join(" ".join(c) for c in s["launch"])  # off by default
     text = s["prompt"]
-    assert (
-        "lap node" in text
-        and "never publishes a drive topic" in text
-        and "v_no_guidance_mps" in text
-    )
-    tool = REPO / "tools/pnp_session/cap_schedule.py"
-    assert tool.is_file()
+    for needle in (
+        "a wall contact ends the blocks of that direction",
+        "rung F 1.5 only if rung F 1.4 had no contact",
+        "owner's yes",
+        "stalls twice in its first 20 s",
+        "a safety brake is not a contact",
+        "2.4 and 2.8",
+        "have not been driven on the car",
+        "STOP and a standing start every 30 s",
+    ):
+        assert needle in text, needle
+    assert (REPO / "tools/pnp_session/cap_schedule.py").is_file()
+    assert (REPO / "tools/pnp_session/excitation_plan.py").is_file()
     for cmd in s["schedule_commands"]:
         assert cmd[:2] == ["python3", "tools/pnp_session/cap_schedule.py"]
     assert not any("lap_mode" in " ".join(c) for c in s["launch"])
-    assert (REPO / ex["source"]["file"]).is_file()
+
+
+def test_the_gap_follow_lines_of_the_step_are_the_plan_tools_lines():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "excitation_plan", REPO / "tools/pnp_session/excitation_plan.py"
+    )
+    ep = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = ep  # its dataclasses look their module up here
+    spec.loader.exec_module(ep)
+    plan = [r for r in ep.build_plan(ep.load_block()) if r.block != "P"]
+    wanted = {r.launch_line()[0].split(" ", 2)[2] for r in plan}
+    got = {" ".join(c[2:]) for c in step("s9a_excitation")["launch_other"]}
+    assert got == wanted
 
 
 def test_nothing_is_runnable_that_waits_on_a_result_nobody_has():

@@ -41,7 +41,7 @@ from .vehicle import Vehicle
 from .windows import WARM_N, warm_state
 
 # SHA-256 of evaluation/prereg/pnp-v0.4-addendum-1.yaml as pre-registered (addendum 1 header).
-ADDENDUM_SHA256 = "32f501bc8cbfcdb0aa052e01c6290395793bda603f4ac3f2ddb983bf076495d8"
+ADDENDUM_SHA256 = "ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824"
 ADDENDUM_RELATIVE = Path("evaluation") / "prereg" / "pnp-v0.4-addendum-1.yaml"
 BUNDLE_SCHEMA_VERSION = "2.0.0"
 

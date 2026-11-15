@@ -51,7 +51,7 @@ run "tools" report
 # that need the built limiter_whatif_cli skip here and run in the ROS job (ctest).
 echo "::group::pytest: tools/pnp_session (gate=line90 on the package)"
 if ! (cd tools && uv sync --all-extras --dev &&
-  uv run pytest tests/test_pnp_session.py --cov=pnp_session --cov-report=term-missing \
+  uv run pytest tests/test_pnp_session.py tests/test_pnp_session_v04.py tests/test_pnp_cap_schedule.py --cov=pnp_session --cov-report=term-missing \
     --cov-fail-under=90); then
   FAIL=1
 fi

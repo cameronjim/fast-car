@@ -1,0 +1,125 @@
+# Pre-registered constants for addendum 1 to Plug-and-Play v0.4 (after the outside review of
+# 2026-11-14). Written BEFORE any v0.4 dynamics candidate was fitted, before any read of a
+# 2026-11-14 held-out or test segment, and before the result of battery B4 was known.
+# Do not edit after the first commit. Rules: docs/notes/preregistration-pnp-v0.4-addendum-1.md.
+# pnp-v0.2-split.yaml, pnp-v0.3.yaml and pnp-v0.4.yaml are unchanged and stay in force. The
+# split of the 2026-11-14 bags is the one in pnp-v0.4.yaml; this file adds no role and moves none.
+prereg_id: pnp-v0.4-addendum-1
+v04_file: evaluation/prereg/pnp-v0.4.yaml
+v04_sha256: 78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63
+
+ground_motion:            # dynamics step contract 2 and gate GP2e
+  id: GP2e
+  bundle_schema_version: "2.0.0"
+  alpha_bounds: [0.60, 1.05]            # ground distance per wheel distance
+  table:
+    steering_nodes_share_of_side_limit: [-1.0, -0.6667, -0.3333, 0.0, 0.3333, 0.6667, 1.0]
+    wheel_speed_nodes_mps: [0.25, 0.6, 0.85, 1.25, 1.5]
+    interpolation: bilinear, held constant outside the grid
+    min_windows_per_node: 30            # a node with fewer is tied to its nearest supported node
+    smoothness_weights: [0.0, 0.01, 0.1, 1.0]   # second differences; chosen by validation on train
+  learned:
+    layers: [[4, 32], [32, 32], [32, 2]]
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    d_alpha_max: 0.10                   # alpha += d_alpha_max * tanh(m[0])
+    rho_max: 0.25                       # yaw_rate *= 1 + rho_max * tanh(m[1])
+    seeds: [0, 1, 2]
+  training_windows: {horizons_s: [0.5, 1.0, 1.5], initial_speed: wheel, commands: recorded gated /drive}
+  loss: {terms: [along, cross, heading], robust: huber, weights: icp_quality}
+  validation: last 20 percent in time of every train segment, 2.0 s guard
+  alt_truth:                            # T2s
+    icp_seed_translation_scale: 0.80
+  label_sensitivity:                    # M-B4, train only, before any fit
+    seed_scales: [1.0, 0.80]
+    scan_clock_shifts_s: [-0.010, 0.010]
+    dependent_if_ratio_differs_by: 0.03
+    min_windows: 30
+  gate_table:                           # GP2e-T, against the shipping nominal
+    max_p1_ratio: 0.95
+    max_p1_ratio_bootstrap_upper: 1.00
+    max_along_ratio: 1.00
+    max_cross_ratio: 1.00
+    channel_equal_tolerance: 1.0e-6     # Y1 and S1 against the nominal
+    max_stratum_ratio: 1.05
+    max_p1_ratio_alt_truth: 1.00
+    max_pose_position_ratio: 1.00       # G1b and T2b
+  gate_learned:                         # GP2e-L, against the table model
+    max_p1_ratio: 0.95
+    max_p1_ratio_bootstrap_upper: 1.00
+    max_y1_ratio: 1.00
+    speed_equal_tolerance: 1.0e-6
+    max_seed_p1_ratio: 1.00
+    max_stratum_ratio: 1.05
+    sweep_samples: 100000
+    max_p1_ratio_alt_truth: 1.00
+    max_pose_position_ratio: 1.00
+    max_pose_yaw_ratio: 1.00
+
+perception_coverage:      # the slope limit of fused-v1 and gate GP1c-K
+  id: GP1c-K
+  grid_m: 0.01
+  slope_grid: [0.05, 0.10, 0.15, 0.20, 0.30]   # max_shift_slope, metres of shift per metre
+  development_margin:                   # the largest slope that meets these on every development set
+    max_mean_loss: 0.005
+    max_p99_loss: 0.025
+    max_mean_excess: 0.005
+    max_p99_excess: 0.025
+  gate:                                 # on A14
+    max_mean_loss: 0.01
+    max_p99_loss: 0.05
+    max_mean_excess: 0.01
+    max_p99_excess: 0.05
+
+oracle_extensions:        # M-A2x and M-A2w, diagnostics next to the unchanged M-A2
+  extra_condition: {f: "frozen learned candidate: fused-v1 if on main, else trackperc-v2 refined"}
+  extra_case: OD
+  weight_check: {parameter: boundary weight, factors: [0.5, 2.0], headroom_if_median_ratio_at_most: 0.95}
+
+planner:                  # measurements only; v0.2 section 4.2 is unchanged
+  replay_segments: [L0, X0, X1]         # dynamics train, lap dev: no held-out or test segment
+  echo_tolerance: exact float32 equality of a passed-through field
+  # Owner decision 1 (2026-11-14): safety_node may publish the receipt time of the command it
+  # latched, instrumentation only. A bag that holds it uses it; a bag that does not uses the echo.
+  receipt_source: [safety_node receipt record if in the bag, else echo]
+  limiter_replay: {id: M-T2, cycle_tolerance: 0}
+
+lap_battery_b6:
+  id: B6
+  # Runs once, on one frozen commit, only if D3-S0 and D3-S1 of B4 passed.
+  seeds: [41, 42]
+  part_1: {cases: "those of lap_battery (B4) in pnp-v0.3.yaml", gates: [D5-S0, D5-S1, D5-S2], rules: "D3-S0, D3-S1, D3-S2, unchanged"}
+  part_2: {cases: "O1 to O4 of lap_battery_b5 in pnp-v0.4.yaml", gates: [D6-S0, D6-S1, D6-S2], rules: "D4-S0, D4-S1, D4-S2, unchanged"}
+
+lap_diagnostics:          # M-D1, development only
+  cases: [T, S1, S2, S3, S4, OD]
+  seeds: [11, 12, 13]
+  directions: [ccw, cw]
+  laps: 12
+  conditions:
+    a: lap memory off, lap 1 cap
+    b: lap memory off, ceiling
+    c: D v0 (cap schedule alone)
+    m: speed memory as a bound, the planner's own progress reward, no value profile
+    f: D v1 with the value profile frozen after the first clean lap
+    u: D v1 as registered (updating value profile, value replaces progress)
+    t: lap memory off, ceiling, terminal speed bound from visible curvature
+    z: D v1 with the caution zone rule of owner decision 5 (cap wins, hold below the floor)
+  value_profile_reading: {max_median_ratio_to_m: 0.97}
+  # Owner decision 5 (2026-11-14), for every lap learning variant designed after B4 and B5:
+  # inside a caution zone the cap wins; a bound below the drivable floor means hold, never a
+  # raise. B4, B5 and B6 run the registered code and are not changed by this.
+  caution_zone_rule_for_later_variants: cap_wins_hold_below_floor
+
+excitation:               # M-SID, a data protocol for the next session
+  caps_mps: [0.5, 1.0, 0.7, 1.3]
+  hold_s: 8.0
+  cycles_per_direction: 3
+  # Owner decision 7: about 10 minutes of driving in total, speed and steering variation, both
+  # directions. Steering variation: the same schedule driven once per direction on the lane
+  # centre and once with the planner's lateral offset parameter at each of these values.
+  steering_variation_lateral_offsets_m: [-0.10, 0.10]
+  max_total_driving_s: 600
+
+gp3_repeat:               # owner decision 4
+  wording: "not met as registered; 20 clean laps observed, camera count 10 of 20"
+  next_attempt: GP3-R1    # at the next session, under the unchanged rule of v0.2 section 4.3

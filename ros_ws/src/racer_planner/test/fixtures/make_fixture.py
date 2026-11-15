@@ -249,6 +249,197 @@ metrics: {{}}
     (out / "manifest.yaml").write_text(manifest, encoding="utf-8")
 
 
+# ---- step contract 2 (addendum 1 section 2.2), written from the contract, not from the C++ ------
+
+GROUND = {
+    "alpha_min": 0.60,
+    "alpha_max": 1.05,
+    "d_alpha_max": 0.10,
+    "rho_max": 0.25,
+    "steer_nodes": [-1.0, -0.6667, -0.3333, 0.0, 0.3333, 0.6667, 1.0],
+    "speed_nodes": [0.25, 0.6, 0.85, 1.25, 1.5],
+}
+INTERPOLATION = (
+    "bilinear over steering as a share of each side's limit and wheel speed, "
+    "held constant outside the grid"
+)
+
+
+def _axis(nodes, x):
+    nodes = np.asarray(nodes, dtype=float)
+    xc = min(max(x, nodes[0]), nodes[-1])
+    hi = int(np.searchsorted(nodes, xc, side="right"))
+    hi = min(max(hi, 1), len(nodes) - 1)
+    lo = hi - 1
+    return lo, hi, (xc - nodes[lo]) / (nodes[hi] - nodes[lo])
+
+
+def table_alpha(values, delta, v, veh):
+    share = delta / veh["steering_max_rad"] if delta >= 0 else delta / -veh["steering_min_rad"]
+    i0, i1, wi = _axis(GROUND["steer_nodes"], share)
+    j0, j1, wj = _axis(GROUND["speed_nodes"], v)
+    t = values
+    return (
+        (1 - wi) * (1 - wj) * t[i0][j0]
+        + (1 - wi) * wj * t[i0][j1]
+        + wi * (1 - wj) * t[i1][j0]
+        + wi * wj * t[i1][j1]
+    )
+
+
+def step_v2(state, control, nom, veh, dt, ground):
+    """ground = (values 7x5, learned) with learned None or (weights, mean, std)."""
+    x, y, yaw, v, delta = state
+    wheel = step(state, control, nom, veh, dt, None)  # the wheel channel of contract 1
+    values, learned = ground
+    lo, hi = GROUND["alpha_min"], GROUND["alpha_max"]
+    alpha = min(max(table_alpha(values, delta, v, veh), lo), hi)
+    rho = 0.0
+    if learned is not None:
+        weights, mean, std = learned
+        m = mlp(weights, (np.array([v, delta, control[0], control[1]]) - mean) / std)
+        alpha = min(max(alpha + GROUND["d_alpha_max"] * math.tanh(m[0]), lo), hi)
+        rho = GROUND["rho_max"] * math.tanh(m[1])
+    v_g = alpha * v
+    yaw_rate = (
+        (1.0 + rho)
+        * v
+        * math.tan(delta)
+        / veh["wheelbase_m"]
+        / (1.0 + nom["understeer_s2_per_m2"] * v * v)
+    )
+    return (
+        x + v_g * math.cos(yaw) * dt,
+        y + v_g * math.sin(yaw) * dt,
+        yaw + yaw_rate * dt,
+        wheel[3],
+        wheel[4],
+    )
+
+
+def synthetic_table():
+    """Distinct values everywhere, one node on each bound (a value on a bound is inside)."""
+    rows = []
+    for i in range(7):
+        rows.append(
+            [
+                round(0.92 - 0.12 * abs(i - 3) / 3 + 0.04 * math.sin(2.0 * i + j), 6)
+                for j in range(5)
+            ]
+        )
+    rows[0][0] = GROUND["alpha_min"]
+    rows[6][4] = GROUND["alpha_max"]
+    return rows
+
+
+def make_bundle_v2(
+    out: Path,
+    vehicle: dict,
+    *,
+    learned_on: bool,
+    nominal: dict,
+    v_max: float,
+    seed: int = 1,
+    dt: float = 0.05,
+    model_id: str = "dyn-fixture-v2-2026-11-15",
+) -> tuple:
+    out.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+    n_weights = sum(o * i + o for i, o in LAYERS)
+    if learned_on:
+        weights32 = (rng.standard_normal(n_weights) * 0.4).astype("<f4")
+        mean = np.array([0.5, 0.1, 0.5, 0.1])
+        std = np.array([0.3, 0.3, 0.3, 0.3])
+    else:
+        weights32 = np.zeros(n_weights, dtype="<f4")
+        mean = np.zeros(4)
+        std = np.ones(4)
+    (out / "ground_mlp.f32").write_bytes(weights32.tobytes())
+    values = synthetic_table()
+    ground = (values, (weights32.astype(np.float64), mean, std) if learned_on else None)
+
+    rows = ["rollout,step,speed_cmd_mps,steering_cmd_rad,x_m,y_m,yaw_rad,v_mps,delta_rad"]
+    for r, (speeds, steers, start) in enumerate(rollout_controls(vehicle)):
+        state = tuple(float(f"{c:.9g}") for c in start)
+        n = len(speeds)
+        for k in range(n + 1):
+            u = (float(f"{speeds[k]:.9g}"), float(f"{steers[k]:.9g}")) if k < n else (0.0, 0.0)
+            rows.append(f"{r},{k}," + ",".join(f"{c:.9g}" for c in (*u, *state)))
+            if k < n:
+                state = step_v2(state, u, nominal, vehicle, dt, ground)
+    (out / "golden_rollouts.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    def sha(name: str) -> str:
+        return hashlib.sha256((out / name).read_bytes()).hexdigest()
+
+    nom_lines = "\n".join(f"    {k}: {v}" for k, v in nominal.items())
+    table_lines = "\n".join(f"        - [{', '.join(repr(v) for v in r)}]" for r in values)
+    manifest = f"""bundle_schema_version: "2.0.0"
+kind: dynamics
+model_id: "{model_id}"
+created_utc: "2026-11-15T00:00:00Z"
+git_sha: "0000000000000000000000000000000000000000"
+training_config_sha256: "{"0" * 64}"
+vehicle_params:
+  schema_version: "{vehicle["schema_version"]}"
+  sysid_session_id: "{vehicle["sysid_session_id"]}"
+payload:
+  - {{file: "ground_mlp.f32", sha256: "{sha("ground_mlp.f32")}"}}
+  - {{file: "golden_rollouts.csv", sha256: "{sha("golden_rollouts.csv")}"}}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: {dt}
+  nominal:
+{nom_lines}
+  ground_motion:
+    alpha_bounds: [0.6, 1.05]
+    table:
+      steering_nodes_share_of_side_limit: {GROUND["steer_nodes"]}
+      wheel_speed_nodes_mps: {GROUND["speed_nodes"]}
+      interpolation: "{INTERPOLATION}"
+      values:
+{table_lines}
+    learned:
+      enabled: {"true" if learned_on else "false"}
+      inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+      outputs: [d_alpha, rho]
+      layers: [[4, 32], [32, 32], [32, 2]]
+      activation: tanh
+      input_mean: [{", ".join(repr(float(m)) for m in mean)}]
+      input_std: [{", ".join(repr(float(s)) for s in std)}]
+      d_alpha_max: 0.1
+      rho_max: 0.25
+      file: ground_mlp.f32
+  validity: {{v_min_mps: 0.0, v_max_mps: {v_max}}}
+  golden: golden_rollouts.csv
+data: ["racer_planner contract 2 test fixture, synthetic, seed {seed}, not fitted"]
+metrics: {{}}
+"""
+    (out / "manifest.yaml").write_text(manifest, encoding="utf-8")
+    return nominal, ground
+
+
+RANDOM_HEADER = "x,y,yaw,v,delta,speed_cmd,steering_cmd,x1,y1,yaw1,v1,delta1"
+
+
+def write_random_states(path: Path, vehicle: dict, nominal: dict, ground, n=10000, seed=5, dt=0.05):
+    """n random states and controls and the contract 2 step of each, inputs to 9 digits (the
+    step is taken from the rounded inputs), outputs to 13."""
+    rng = np.random.default_rng(seed)
+    lim = float(vehicle["steering_max_rad"])
+    rows = [RANDOM_HEADER]
+    for _ in range(n):
+        u = rng.uniform(
+            [-2, -2, -4, -0.3, -1.2 * lim, -0.3, -2.5 * lim],
+            [2, 2, 4, 1.45, 1.2 * lim, 1.5, 2.5 * lim],
+        )
+        u = [float(f"{c:.9g}") for c in u]
+        out = step_v2(tuple(u[:5]), (u[5], u[6]), nominal, vehicle, dt, ground)
+        rows.append(",".join(f"{c:.9g}" for c in u) + "," + ",".join(f"{c:.13g}" for c in out))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
 def write_sidecar(out: Path, vehicle: dict) -> None:
     lines = [f"{k}: {v}" for k, v in vehicle.items()]
     (out / "vehicle_geometry.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -263,9 +454,30 @@ def main() -> None:
     ap.add_argument("--v-max", type=float, default=0.9)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--sidecar", action="store_true")
+    ap.add_argument("--contract", type=int, choices=[1, 2], default=1)
+    ap.add_argument(
+        "--random-states",
+        type=Path,
+        default=None,
+        help="contract 2 only: also write 10^4 random step cases here",
+    )
     args = ap.parse_args()
     vehicle = vehicle_numbers(read_vehicle_params(args.vehicle_params))
     nominal = NOMINAL_ASYMMETRIC if args.nominal == "asymmetric" else NOMINAL
+    if args.contract == 2:
+        nom, ground = make_bundle_v2(
+            args.out,
+            vehicle,
+            learned_on=args.residual == "on",
+            nominal=nominal,
+            v_max=args.v_max,
+            seed=args.seed,
+        )
+        if args.random_states:
+            write_random_states(args.random_states, vehicle, nom, ground)
+        if args.sidecar:
+            write_sidecar(args.out, vehicle)
+        return
     make_bundle(
         args.out,
         vehicle,

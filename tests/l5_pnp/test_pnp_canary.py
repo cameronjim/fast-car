@@ -267,6 +267,81 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
     assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
 
 
+# --- step contract 2 (brief 43) ---------------------------------------------------------------
+# The same car-like stadium run with the planner on a contract 2 bundle exported for the sim plant
+# (config/pnp/fixtures/dyn-car-2026-11-12-contract2-sim: the car bundle's nominal, ground table 1,
+# learned block off; the sim plant moves by wheel speed, so ground over wheel distance is 1).
+# Next to the 1.x run above (the CI default stays the 1.x bundle): 3 laps, 0 wall contacts, same
+# criteria. Nothing selects this bundle but this test.
+CONTRACT2_PLANNER_BUNDLE = (
+    REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-car-2026-11-12-contract2-sim"
+)
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["ccw", "cw"])
+def test_pnp_laps_with_a_contract_2_planner_bundle(reverse, tmp_path, capsys):
+    assert (CONTRACT2_PLANNER_BUNDLE / "manifest.yaml").is_file(), CONTRACT2_PLANNER_BUNDLE
+    name, params = stadium(1.0)
+    out = tmp_path / "result.json"
+    command = [
+        sys.executable,
+        str(RUNNER),
+        "--track",
+        name,
+        "--track-params-json",
+        json.dumps(params),
+        "--driver",
+        "pnp",
+        "--backend",
+        "geometric",
+        "--dynamics-bundle",
+        str(CONTRACT2_PLANNER_BUNDLE),
+        "--v-max-mps",
+        str(CAR_LIKE_V_MAX_MPS),
+        "--car",
+        "params",
+        *CAR_LIKE_PLANT,
+        "--seed",
+        str(SEED),
+        "--stop-after-laps",
+        str(LAPS),
+        "--sim-time",
+        "--duration",
+        "150",
+        "--domain-id",
+        "83",
+        "--work-dir",
+        str(tmp_path / "work"),
+        "--out",
+        str(out),
+    ]
+    if reverse:
+        command.append("--reverse")
+    proc = subprocess.run(
+        command, env=dict(os.environ), capture_output=True, text=True, timeout=500, check=False
+    )
+    assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
+    result = json.loads(out.read_text())
+    assert "error" not in result, result["error"]
+    with capsys.disabled():
+        print(
+            f"\nl5_pnp contract 2 stadium lane 1.0 {'cw' if reverse else 'ccw'}: "
+            f"laps {result['laps']} lap_times_s {result['lap_times_s']} "
+            f"safety_brakes {result['safety_brakes']} wall_contacts {result['wall_contacts']} "
+            f"min_clearance_m {result['min_body_clearance_m']} "
+            f"planner_states {result['planner_states']}"
+        )
+    assert result["laps"] >= LAPS, result.get("stopped_because")
+    assert result["wall_contacts"] == 0
+    assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
+    assert result["rate_limit_events"] == 0
+    assert result["publisher_nodes"] == {
+        "/drive_raw": ["mppi_planner_node"],
+        "/drive": ["safety_node"],
+    }
+    assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+
 # --- planner timing (2026-11-13 night, design 14.7, pre-registration 4.1) ----------------------
 # The planner's output timing against the real safety_node, on the car-like plant: no rate_limit
 # engagement, no watchdog engagement between the first non-zero /drive_raw command and the last

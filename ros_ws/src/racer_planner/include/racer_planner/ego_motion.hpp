@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 
+#include "racer_planner/dynamics_model.hpp"
 #include "racer_planner/local_track.hpp"  // Pose2
 
 namespace racer_planner {
@@ -17,9 +18,18 @@ class EgoMotion {
   // yaw_rate = v * tan(delta) / wheelbase / (1 + understeer * v^2), as in the model step.
   EgoMotion(double wheelbase_m, double understeer_s2_per_m2);
 
+  // Step contract 2 (brief 43): translate by the ground speed alpha * v and turn by the model's
+  // yaw rate (1 + rho) * v * tan(delta) / ..., both from `model`, instead of by the wheel speed.
+  // The model must outlive this object and is used from the thread that calls relative_pose and
+  // push (the learned block has scratch space). Not called for a contract 1 bundle: the dead
+  // reckoning of main is then untouched. distance_between stays in wheel distance.
+  void set_ground_model(const DynamicsModel* model) { ground_ = model; }
+
   // Samples are held (zero order) until the next one. Non finite values and times that do not
-  // advance are ignored.
-  void push(double t_s, double v_mps, double delta_rad);
+  // advance are ignored. speed_cmd and steering_cmd are the commands acting at t_s, the inputs of
+  // the contract 2 learned block (ignored without a ground model).
+  void push(double t_s, double v_mps, double delta_rad, double speed_cmd = 0.0,
+            double steering_cmd = 0.0);
   void clear();
   std::size_t size() const { return count_; }
 
@@ -38,6 +48,8 @@ class EgoMotion {
     double t = 0.0;
     double v = 0.0;
     double delta = 0.0;
+    double speed_cmd = 0.0;
+    double steering_cmd = 0.0;
   };
   static constexpr std::size_t kCapacity = 256;
   const Sample& at(std::size_t i) const {  // i = 0 is the oldest
@@ -48,6 +60,7 @@ class EgoMotion {
 
   double wheelbase_;
   double understeer_;
+  const DynamicsModel* ground_ = nullptr;
   std::array<Sample, kCapacity> buf_{};
   std::size_t head_ = 0;  // index of the oldest sample
   std::size_t count_ = 0;

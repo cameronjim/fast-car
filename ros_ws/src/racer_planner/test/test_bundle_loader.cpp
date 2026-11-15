@@ -88,8 +88,17 @@ TEST(BundleLoader, ManifestInvalidWhenTheRootIsNotAMapping) {
 
 TEST(BundleLoader, BundleSchemaVersionMismatch) {
   BundleCopy b;
-  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"2.0.0\"");
+  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"3.0.0\"");
   expect_refusal(load(b), RefusalCode::BundleSchemaVersionMismatch);
+}
+
+// Brief 43: major 2 is step contract 2 now. A 1.x manifest relabelled 2.0.0 still carries the
+// additive residual block, which a contract 2 bundle must not have (it was a version mismatch
+// before the planner implemented contract 2; the expectation changed on purpose).
+TEST(BundleLoader, ContractOneManifestRelabelledAsContractTwoIsRefusedForItsResidual) {
+  BundleCopy b;
+  b.edit_manifest("bundle_schema_version: \"1.1.0\"", "bundle_schema_version: \"2.0.0\"");
+  expect_refusal(load(b), RefusalCode::IoContractMismatch);
 }
 
 TEST(BundleLoader, MinorVersionBumpIsAccepted) {

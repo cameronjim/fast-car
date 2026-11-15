@@ -13,28 +13,36 @@ void EgoMotion::clear() {
   count_ = 0;
 }
 
-void EgoMotion::push(double t_s, double v_mps, double delta_rad) {
+void EgoMotion::push(double t_s, double v_mps, double delta_rad, double speed_cmd,
+                     double steering_cmd) {
   if (!std::isfinite(t_s) || !std::isfinite(v_mps) || !std::isfinite(delta_rad)) return;
+  if (!std::isfinite(speed_cmd)) speed_cmd = 0.0;
+  if (!std::isfinite(steering_cmd)) steering_cmd = 0.0;
   if (count_ > 0 && !(t_s > at(count_ - 1).t)) return;
   if (count_ < kCapacity) {
-    buf_[(head_ + count_) % kCapacity] = Sample{t_s, v_mps, delta_rad};
+    buf_[(head_ + count_) % kCapacity] = Sample{t_s, v_mps, delta_rad, speed_cmd, steering_cmd};
     ++count_;
   } else {
-    buf_[head_] = Sample{t_s, v_mps, delta_rad};
+    buf_[head_] = Sample{t_s, v_mps, delta_rad, speed_cmd, steering_cmd};
     head_ = (head_ + 1) % kCapacity;
   }
 }
 
 void EgoMotion::advance(Pose2* pose, const Sample& s, double dt) const {
   if (!(dt > 0.0)) return;
-  const double w = s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
+  double w = s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
+  double v = s.v;  // the speed the car translates by: the wheel speed, or the ground speed
+  if (ground_ != nullptr) {
+    v = ground_->ground_speed(s.v, s.delta, s.speed_cmd, s.steering_cmd);
+    w = ground_->ground_yaw_rate(s.v, s.delta, s.speed_cmd, s.steering_cmd);
+  }
   const double th = pose->yaw;
   if (std::fabs(w) > 1e-9) {
-    pose->x += s.v * (std::sin(th + w * dt) - std::sin(th)) / w;
-    pose->y += s.v * (std::cos(th) - std::cos(th + w * dt)) / w;
+    pose->x += v * (std::sin(th + w * dt) - std::sin(th)) / w;
+    pose->y += v * (std::cos(th) - std::cos(th + w * dt)) / w;
   } else {
-    pose->x += s.v * dt * std::cos(th);
-    pose->y += s.v * dt * std::sin(th);
+    pose->x += v * dt * std::cos(th);
+    pose->y += v * dt * std::sin(th);
   }
   pose->yaw = th + w * dt;
 }

@@ -141,6 +141,12 @@ TEST(Contract1Identity, StepEqualsMainsStepBitForBitOnRandomStates) {
         ASSERT_TRUE(same_bits(a[k], b[k])) << "residual " << residual << " i " << i << " k " << k;
         ASSERT_TRUE(same_bits(a2[k], b2[k]));
       }
+      // step_trig with the optional outputs must not change the state it returns
+      double w = 0.0, alpha = -1.0;
+      const State t = model.step_trig(s, c, std::cos(s.yaw), std::sin(s.yaw), &w, &alpha);
+      const auto a3 = as_array(t);
+      for (int k = 0; k < 5; ++k) ASSERT_TRUE(same_bits(a3[k], a[k]));
+      ASSERT_EQ(alpha, 1.0);  // contract 1: ground speed is the wheel speed
     }
   }
 }

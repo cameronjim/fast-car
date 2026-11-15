@@ -116,6 +116,7 @@ if(BUILD_TESTING)
     test/test_recovery.cpp
     test/test_ego_motion.cpp
     test/test_contract1_identity.cpp
+    test/test_contract2.cpp
     test/test_rng.cpp
     test/test_gate_predictor.cpp
     test/test_lap_profile.cpp

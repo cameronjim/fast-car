@@ -169,6 +169,26 @@ def main() -> int:
         if proc.returncode == 0 or "range" not in proc.stderr:
             print(f"an out of range parameter was accepted: {proc.returncode} {proc.stderr!r}")
             return 1
+
+        # Brief 43: the same CLI loads a step contract 2 bundle (the committed sim plant one,
+        # ground table 1) and drives the corridor, and the validity refusal works for it and for
+        # the contract 1 bundle of the same car alike (a cap above the bundle's 1.3 m/s).
+        fixtures = Path(args.repo_root) / "config" / "pnp" / "fixtures"
+        for name in ("dyn-car-2026-11-12", "dyn-car-2026-11-12-contract2-sim"):
+            car = fixtures / name
+            proc = run(args.cli, car, stream)
+            if proc.returncode != 0:
+                print(f"{name}: planner_replay_cli exited {proc.returncode}: {proc.stderr}")
+                return 1
+            crows = list(csv.DictReader(proc.stdout.splitlines()))
+            cstates = {r["state_name"] for r in crows}
+            if "FAULT" in cstates or sum(1 for r in crows if r["state_name"] == "DRIVING") < 100:
+                print(f"{name}: states {sorted(cstates)}")
+                return 1
+            proc = run(args.cli, car, stream, "--v-max", "1.4")
+            if proc.returncode == 0 or "ValidityExceeded" not in proc.stderr:
+                print(f"{name}: a cap above the validity was not refused: {proc.stderr!r}")
+                return 1
     return 0
 
 

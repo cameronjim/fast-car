@@ -136,6 +136,144 @@ std::optional<int> major_of(const std::string& v) {
   return std::atoi(v.substr(0, i).c_str());
 }
 
+// "2.0" followed by nothing or by ".patch".
+bool is_contract_2_version(const std::string& v) {
+  if (v.compare(0, 3, "2.0") != 0) return false;
+  if (v.size() == 3) return true;
+  if (v[3] != '.' || v.size() == 4) return false;
+  return std::all_of(v.begin() + 4, v.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+}
+
+bool near(double a, double b) { return std::fabs(a - b) <= 1e-9; }
+
+// Step contract 2 io block (addendum 1 section 2.2). Every constant the addendum registers is
+// compared with what this build implements; a difference is IoContractMismatch. Fills
+// params->ground and returns the golden file name. The additive 1.x residual block is not allowed.
+std::string parse_contract_2_io(const YAML::Node& io, const std::string& dir,
+                                const std::vector<PayloadChecksum>& payload,
+                                DynamicsParams* params) {
+  const RefusalCode iom = RefusalCode::IoContractMismatch;
+  if (io["residual"].IsDefined()) {
+    refuse(iom, "io.residual is not allowed in a contract 2 bundle (schema 2.0.0)");
+  }
+  const YAML::Node gm = io["ground_motion"];
+  if (!gm.IsMap()) refuse(iom, "io.ground_motion is not a mapping");
+  GroundMotionParams& g = params->ground;
+  g = GroundMotionParams{};
+  const auto bounds = double_array<2>(gm["alpha_bounds"], "ground_motion.alpha_bounds");
+  if (!near(bounds[0], kGroundAlphaMin) || !near(bounds[1], kGroundAlphaMax)) {
+    refuse(iom, "ground_motion.alpha_bounds differ from the addendum's [0.60, 1.05]");
+  }
+  const YAML::Node table = gm["table"];
+  if (!table.IsMap()) refuse(iom, "ground_motion.table is not a mapping");
+  const auto steer = double_array<kGroundSteerNodes>(table["steering_nodes_share_of_side_limit"],
+                                                     "table.steering_nodes_share_of_side_limit");
+  const auto speed = double_array<kGroundSpeedNodes>(table["wheel_speed_nodes_mps"],
+                                                     "table.wheel_speed_nodes_mps");
+  for (int i = 0; i < kGroundSteerNodes; ++i) {
+    if (!near(steer[static_cast<std::size_t>(i)], kGroundSteerNodeShare[i])) {
+      refuse(iom, "table steering nodes differ from the addendum's grid");
+    }
+  }
+  for (int j = 0; j < kGroundSpeedNodes; ++j) {
+    if (!near(speed[static_cast<std::size_t>(j)], kGroundSpeedNodeMps[j])) {
+      refuse(iom, "table wheel speed nodes differ from the addendum's grid");
+    }
+  }
+  scalar_of(table["interpolation"], iom, "table.interpolation");
+  const YAML::Node values = table["values"];
+  if (!values.IsSequence() || values.size() != static_cast<std::size_t>(kGroundSteerNodes)) {
+    refuse(iom, "table.values must have one row per steering node");
+  }
+  for (int i = 0; i < kGroundSteerNodes; ++i) {
+    const auto row =
+        double_array<kGroundSpeedNodes>(values[static_cast<std::size_t>(i)], "table.values row");
+    for (int j = 0; j < kGroundSpeedNodes; ++j) {
+      const double a = row[static_cast<std::size_t>(j)];
+      // "A table outside its bounds is refused": a value on a bound is inside.
+      if (!(a >= g.alpha_min && a <= g.alpha_max)) {
+        refuse(iom, "table value " + std::to_string(a) + " is outside the alpha bounds [" +
+                        std::to_string(g.alpha_min) + ", " + std::to_string(g.alpha_max) + "]");
+      }
+      g.table[static_cast<std::size_t>(i * kGroundSpeedNodes + j)] = a;
+    }
+  }
+  const YAML::Node learned = gm["learned"];
+  if (!learned.IsMap()) refuse(iom, "ground_motion.learned is not a mapping");
+  g.learned_enabled = bool_of(learned["enabled"], iom, "learned.enabled");
+  expect_string_list(learned["inputs"], {"v_mps", "delta_rad", "speed_cmd_mps", "steering_cmd_rad"},
+                     "learned.inputs");
+  expect_string_list(learned["outputs"], {"d_alpha", "rho"}, "learned.outputs");
+  const YAML::Node layers = learned["layers"];
+  const int expect_layers[3][2] = {
+      {kMlpIn, kMlpHidden}, {kMlpHidden, kMlpHidden}, {kMlpHidden, kMlpOut}};
+  if (!layers.IsSequence() || layers.size() != 3) refuse(iom, "learned.layers shape differs");
+  for (int i = 0; i < 3; ++i) {
+    if (!layers[i].IsSequence() || layers[i].size() != 2 ||
+        double_of(layers[i][0], iom, "layer") != expect_layers[i][0] ||
+        double_of(layers[i][1], iom, "layer") != expect_layers[i][1]) {
+      refuse(iom, "learned.layers shape differs from [[4,32],[32,32],[32,2]]");
+    }
+  }
+  if (scalar_of(learned["activation"], iom, "learned.activation") != "tanh") {
+    refuse(iom, "learned.activation is not tanh");
+  }
+  g.input_mean = double_array<kMlpIn>(learned["input_mean"], "learned.input_mean");
+  g.input_std = double_array<kMlpIn>(learned["input_std"], "learned.input_std");
+  for (double s : g.input_std) {
+    if (s == 0.0) refuse(iom, "learned.input_std has a zero entry");
+  }
+  g.d_alpha_max = double_of(learned["d_alpha_max"], iom, "learned.d_alpha_max");
+  g.rho_max = double_of(learned["rho_max"], iom, "learned.rho_max");
+  if (!near(g.d_alpha_max, kGroundDAlphaMax) || !near(g.rho_max, kGroundRhoMax)) {
+    refuse(iom, "learned.d_alpha_max or learned.rho_max differ from the addendum (0.10, 0.25)");
+  }
+  g.d_alpha_max = kGroundDAlphaMax;
+  g.rho_max = kGroundRhoMax;
+  const std::string weights_file = scalar_of(learned["file"], iom, "learned.file");
+  const std::string golden_file = scalar_of(io["golden"], iom, "io.golden");
+  if (!plain_file_name(weights_file) || !plain_file_name(golden_file)) {
+    refuse(iom, "learned.file or io.golden is not a plain file name");
+  }
+  auto listed = [&](const std::string& f) {
+    return std::any_of(payload.begin(), payload.end(),
+                       [&](const PayloadChecksum& p) { return p.file == f; });
+  };
+  if (!listed(weights_file))
+    refuse(RefusalCode::PayloadMissing, weights_file + " is not listed in payload");
+  if (!listed(golden_file))
+    refuse(RefusalCode::PayloadMissing, golden_file + " is not listed in payload");
+  const YAML::Node validity = io["validity"];
+  if (!validity.IsMap()) refuse(iom, "io.validity is not a mapping");
+  params->v_min_mps = double_of(validity["v_min_mps"], iom, "validity.v_min_mps");
+  params->v_max_mps = double_of(validity["v_max_mps"], iom, "validity.v_max_mps");
+  if (params->v_min_mps < 0.0 || params->v_max_mps <= params->v_min_mps) {
+    refuse(iom, "io.validity is not a sensible forward speed range");
+  }
+  // The weights file is present in every contract 2 bundle (zeros when the block is off).
+  std::vector<unsigned char> bytes;
+  if (!read_file_bytes(dir + weights_file, &bytes))
+    refuse(RefusalCode::PayloadMissing, weights_file + " cannot be read");
+  if (bytes.size() != static_cast<std::size_t>(kMlpWeightCount) * 4) {
+    refuse(iom, weights_file + " has " + std::to_string(bytes.size()) + " bytes, layers imply " +
+                    std::to_string(kMlpWeightCount * 4));
+  }
+  g.weights.resize(kMlpWeightCount);
+  for (int i = 0; i < kMlpWeightCount; ++i) {
+    const std::uint32_t u = std::uint32_t(bytes[4 * i]) | (std::uint32_t(bytes[4 * i + 1]) << 8) |
+                            (std::uint32_t(bytes[4 * i + 2]) << 16) |
+                            (std::uint32_t(bytes[4 * i + 3]) << 24);
+    float f;
+    std::memcpy(&f, &u, sizeof(f));
+    if (!std::isfinite(f)) refuse(iom, weights_file + " holds a non finite weight");
+    g.weights[static_cast<std::size_t>(i)] = f;
+  }
+  g.enabled = true;
+  params->step_contract = 2;
+  params->residual.enabled = false;
+  return golden_file;
+}
+
 std::vector<std::string> split_csv(const std::string& line) {
   std::vector<std::string> out;
   std::string cur;
@@ -304,10 +442,12 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
     const auto major = major_of(schema_version);
     if (!major.has_value())
       refuse(inv, "bundle_schema_version is not a version: " + schema_version);
-    if (*major != 1) {
-      refuse(RefusalCode::BundleSchemaVersionMismatch, "bundle_schema_version " + schema_version +
-                                                           " has major " + std::to_string(*major) +
-                                                           ", the planner loads major 1");
+    // Major 1 is step contract 1, major 2 is step contract 2 (addendum 1 section 2.2), which is
+    // defined for 2.0.x only: a later minor of contract 2 may carry fields this loader cannot read.
+    if (*major != 1 && !(*major == 2 && is_contract_2_version(schema_version))) {
+      refuse(RefusalCode::BundleSchemaVersionMismatch,
+             "bundle_schema_version " + schema_version +
+                 " is not one the planner loads (major 1, " + "or 2.0.x for step contract 2)");
     }
     // 4. KindMismatch
     if (kind != "dynamics") {
@@ -370,70 +510,78 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
         n.understeer_s2_per_m2 < 0.0 || n.speed_deadband_mps < 0.0 || n.speed_deadband_mps > 1.0) {
       refuse(iom, "io.nominal has a value outside the range the planner implements");
     }
-    const YAML::Node res = io["residual"];
-    if (!res.IsMap()) refuse(iom, "io.residual is not a mapping");
-    params.residual.enabled = bool_of(res["enabled"], iom, "residual.enabled");
-    expect_string_list(res["inputs"], {"v_mps", "delta_rad", "speed_cmd_mps", "steering_cmd_rad"},
-                       "residual.inputs");
-    expect_string_list(res["outputs"], {"dv_dt_mps2", "dyaw_dt_rad_per_s"}, "residual.outputs");
-    const YAML::Node layers = res["layers"];
-    const int expect_layers[3][2] = {
-        {kMlpIn, kMlpHidden}, {kMlpHidden, kMlpHidden}, {kMlpHidden, kMlpOut}};
-    if (!layers.IsSequence() || layers.size() != 3) refuse(iom, "residual.layers shape differs");
-    for (int i = 0; i < 3; ++i) {
-      if (!layers[i].IsSequence() || layers[i].size() != 2 ||
-          double_of(layers[i][0], iom, "layer") != expect_layers[i][0] ||
-          double_of(layers[i][1], iom, "layer") != expect_layers[i][1]) {
-        refuse(iom, "residual.layers shape differs from [[4,32],[32,32],[32,2]]");
+    std::string golden_file;
+    if (*major == 2) {
+      golden_file = parse_contract_2_io(io, dir, payload, &params);
+    } else {
+      if (io["ground_motion"].IsDefined()) {
+        refuse(iom, "io.ground_motion is a contract 2 block, not allowed in a 1.x bundle");
       }
-    }
-    if (scalar_of(res["activation"], iom, "residual.activation") != "tanh") {
-      refuse(iom, "residual.activation is not tanh");
-    }
-    params.residual.input_mean = double_array<kMlpIn>(res["input_mean"], "residual.input_mean");
-    params.residual.input_std = double_array<kMlpIn>(res["input_std"], "residual.input_std");
-    params.residual.output_scale =
-        double_array<kMlpOut>(res["output_scale"], "residual.output_scale");
-    for (double s : params.residual.input_std) {
-      if (s == 0.0) refuse(iom, "residual.input_std has a zero entry");
-    }
-    const std::string residual_file = scalar_of(res["file"], iom, "residual.file");
-    const std::string golden_file = scalar_of(io["golden"], iom, "io.golden");
-    if (!plain_file_name(residual_file) || !plain_file_name(golden_file)) {
-      refuse(iom, "residual.file or io.golden is not a plain file name");
-    }
-    auto listed = [&](const std::string& f) {
-      return std::any_of(payload.begin(), payload.end(),
-                         [&](const PayloadChecksum& p) { return p.file == f; });
-    };
-    if (!listed(residual_file))
-      refuse(RefusalCode::PayloadMissing, residual_file + " is not listed in payload");
-    if (!listed(golden_file))
-      refuse(RefusalCode::PayloadMissing, golden_file + " is not listed in payload");
-    const YAML::Node validity = io["validity"];
-    if (!validity.IsMap()) refuse(iom, "io.validity is not a mapping");
-    params.v_min_mps = double_of(validity["v_min_mps"], iom, "validity.v_min_mps");
-    params.v_max_mps = double_of(validity["v_max_mps"], iom, "validity.v_max_mps");
-    if (params.v_min_mps < 0.0 || params.v_max_mps <= params.v_min_mps) {
-      refuse(iom, "io.validity is not a sensible forward speed range");
-    }
-    // residual weights: raw float32 little endian
-    std::vector<unsigned char> bytes;
-    if (!read_file_bytes(dir + residual_file, &bytes))
-      refuse(RefusalCode::PayloadMissing, residual_file + " cannot be read");
-    if (bytes.size() != static_cast<std::size_t>(kMlpWeightCount) * 4) {
-      refuse(iom, residual_file + " has " + std::to_string(bytes.size()) + " bytes, layers imply " +
-                      std::to_string(kMlpWeightCount * 4));
-    }
-    params.residual.weights.resize(kMlpWeightCount);
-    for (int i = 0; i < kMlpWeightCount; ++i) {
-      const std::uint32_t u = std::uint32_t(bytes[4 * i]) | (std::uint32_t(bytes[4 * i + 1]) << 8) |
-                              (std::uint32_t(bytes[4 * i + 2]) << 16) |
-                              (std::uint32_t(bytes[4 * i + 3]) << 24);
-      float f;
-      std::memcpy(&f, &u, sizeof(f));
-      if (!std::isfinite(f)) refuse(iom, residual_file + " holds a non finite weight");
-      params.residual.weights[i] = f;
+      const YAML::Node res = io["residual"];
+      if (!res.IsMap()) refuse(iom, "io.residual is not a mapping");
+      params.residual.enabled = bool_of(res["enabled"], iom, "residual.enabled");
+      expect_string_list(res["inputs"], {"v_mps", "delta_rad", "speed_cmd_mps", "steering_cmd_rad"},
+                         "residual.inputs");
+      expect_string_list(res["outputs"], {"dv_dt_mps2", "dyaw_dt_rad_per_s"}, "residual.outputs");
+      const YAML::Node layers = res["layers"];
+      const int expect_layers[3][2] = {
+          {kMlpIn, kMlpHidden}, {kMlpHidden, kMlpHidden}, {kMlpHidden, kMlpOut}};
+      if (!layers.IsSequence() || layers.size() != 3) refuse(iom, "residual.layers shape differs");
+      for (int i = 0; i < 3; ++i) {
+        if (!layers[i].IsSequence() || layers[i].size() != 2 ||
+            double_of(layers[i][0], iom, "layer") != expect_layers[i][0] ||
+            double_of(layers[i][1], iom, "layer") != expect_layers[i][1]) {
+          refuse(iom, "residual.layers shape differs from [[4,32],[32,32],[32,2]]");
+        }
+      }
+      if (scalar_of(res["activation"], iom, "residual.activation") != "tanh") {
+        refuse(iom, "residual.activation is not tanh");
+      }
+      params.residual.input_mean = double_array<kMlpIn>(res["input_mean"], "residual.input_mean");
+      params.residual.input_std = double_array<kMlpIn>(res["input_std"], "residual.input_std");
+      params.residual.output_scale =
+          double_array<kMlpOut>(res["output_scale"], "residual.output_scale");
+      for (double s : params.residual.input_std) {
+        if (s == 0.0) refuse(iom, "residual.input_std has a zero entry");
+      }
+      const std::string residual_file = scalar_of(res["file"], iom, "residual.file");
+      golden_file = scalar_of(io["golden"], iom, "io.golden");
+      if (!plain_file_name(residual_file) || !plain_file_name(golden_file)) {
+        refuse(iom, "residual.file or io.golden is not a plain file name");
+      }
+      auto listed = [&](const std::string& f) {
+        return std::any_of(payload.begin(), payload.end(),
+                           [&](const PayloadChecksum& p) { return p.file == f; });
+      };
+      if (!listed(residual_file))
+        refuse(RefusalCode::PayloadMissing, residual_file + " is not listed in payload");
+      if (!listed(golden_file))
+        refuse(RefusalCode::PayloadMissing, golden_file + " is not listed in payload");
+      const YAML::Node validity = io["validity"];
+      if (!validity.IsMap()) refuse(iom, "io.validity is not a mapping");
+      params.v_min_mps = double_of(validity["v_min_mps"], iom, "validity.v_min_mps");
+      params.v_max_mps = double_of(validity["v_max_mps"], iom, "validity.v_max_mps");
+      if (params.v_min_mps < 0.0 || params.v_max_mps <= params.v_min_mps) {
+        refuse(iom, "io.validity is not a sensible forward speed range");
+      }
+      // residual weights: raw float32 little endian
+      std::vector<unsigned char> bytes;
+      if (!read_file_bytes(dir + residual_file, &bytes))
+        refuse(RefusalCode::PayloadMissing, residual_file + " cannot be read");
+      if (bytes.size() != static_cast<std::size_t>(kMlpWeightCount) * 4) {
+        refuse(iom, residual_file + " has " + std::to_string(bytes.size()) +
+                        " bytes, layers imply " + std::to_string(kMlpWeightCount * 4));
+      }
+      params.residual.weights.resize(kMlpWeightCount);
+      for (int i = 0; i < kMlpWeightCount; ++i) {
+        const std::uint32_t u =
+            std::uint32_t(bytes[4 * i]) | (std::uint32_t(bytes[4 * i + 1]) << 8) |
+            (std::uint32_t(bytes[4 * i + 2]) << 16) | (std::uint32_t(bytes[4 * i + 3]) << 24);
+        float f;
+        std::memcpy(&f, &u, sizeof(f));
+        if (!std::isfinite(f)) refuse(iom, residual_file + " holds a non finite weight");
+        params.residual.weights[i] = f;
+      }
     }
     // 9. GoldenRolloutMismatch
     double worst = 0.0;

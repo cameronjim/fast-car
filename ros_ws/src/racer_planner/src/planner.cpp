@@ -29,6 +29,7 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
       model_pub_(dynamics, geometry, config.tick_s),
       plan_dt_s_(dynamics.dt_s),
       model_roll_(dynamics, geometry, config.tick_s),
+      model_ego_(dynamics, geometry, config.tick_s),
       ego_(geometry.wheelbase_m, dynamics.nominal.understeer_s2_per_m2),
       solver_(solver_params(config, dynamics), DynamicsModel(dynamics, geometry, dynamics.dt_s),
               geometry, std::max(config.max_samples, config.mppi.samples)),
@@ -56,6 +57,9 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
   if (horizon_ > kMaxPlanSteps) {
     throw std::invalid_argument("racer_planner: horizon_steps above kMaxPlanSteps");
   }
+  // Step contract 2: the scan frame is dead reckoned by ground motion, like the rollouts. A
+  // contract 1 bundle leaves the dead reckoning exactly as it was.
+  if (dynamics.step_contract == 2) ego_.set_ground_model(&model_ego_);
   cfg_.mppi = solver_params(config, dynamics);
   cfg_.max_samples = std::min(std::max(config.max_samples, kMinSamples), kMaxSamples);
   solver_.set_samples(std::min(cfg_.max_samples, cfg_.mppi.samples));
@@ -161,7 +165,13 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   }
   // The dead reckoning takes the signed wheel speed (the car backs up while recovering). While
   // the wheel speed is stale it takes the model's own estimate.
-  ego_.push(now, odom_fresh ? in.wheel_speed_mps : est.v, est.delta);
+  // The commands acting now (the delayed ones) are the inputs of a contract 2 learned block; a
+  // contract 1 bundle never reads them.
+  const Control acting_now =
+      delay_ticks_ > 0 ? sh.ring[static_cast<std::size_t>(sh.ring_head)]
+                       : Control{sh.last_published.speed_mps, sh.last_published.steering_rad};
+  ego_.push(now, odom_fresh ? in.wheel_speed_mps : est.v, est.delta, acting_now.speed_cmd,
+            acting_now.steering_cmd);
 
   LogicInputs li;
   li.now_s = now;

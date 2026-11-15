@@ -393,9 +393,12 @@ class MppiPlannerNode : public rclcpp::Node {
     }
     model_id_ = loaded.bundle->model_id;
     RCLCPP_INFO(get_logger(),
-                "dynamics bundle %s loaded from %s (golden max error %.2e, residual %s)",
+                "dynamics bundle %s loaded from %s (golden max error %.2e, step contract %d, "
+                "residual %s, learned ground motion %s)",
                 model_id_.c_str(), bundle_dir.c_str(), loaded.bundle->golden_max_abs_error,
-                loaded.bundle->params.residual.enabled ? "enabled" : "off");
+                loaded.bundle->params.step_contract,
+                loaded.bundle->params.residual.enabled ? "enabled" : "off",
+                loaded.bundle->params.ground.learned_enabled ? "enabled" : "off");
     for (const auto& p : loaded.bundle->payload) {
       RCLCPP_INFO(get_logger(), "  payload %s sha256 %s", p.file.c_str(), p.sha256.c_str());
     }

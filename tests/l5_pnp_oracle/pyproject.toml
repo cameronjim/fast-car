@@ -1,0 +1,21 @@
+[project]
+name = "l5-pnp-oracle"
+version = "0.1.0"
+description = """
+The oracle track of measurement M-A2 (tests/l5_pnp_oracle, brief 40): a ground truth LocalTrack
+from the simulator's world, TEST ONLY. The L1 tests (oracle_core, the node's pose interpolation,
+the guard that the car's launch cannot start it) run here without ROS; the stamp and timing parity
+test and the canary need a sourced ROS workspace and skip here (they run in the l5-pnp-oracle CI job).
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = [".", "../../sim/bridge/racer_gym_bridge"]

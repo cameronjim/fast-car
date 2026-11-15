@@ -404,6 +404,25 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_pnp_laps_test.sh"
 
+  l5-pnp-oracle:
+    name: L5 obstacle development case OD and the oracle track (geometric and ground truth LocalTrack, parity with the perception node, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # 2026-11-15 (brief 40): the sim's solid obstacle boxes and the round donut, the test-only
+    # oracle track node, its stamp and timing parity with track_perception_node, the guard that the
+    # car's launch cannot start it, and case OD (round donut, one box on the outer wall) lapped three
+    # times with the geometric backend and with the oracle, 0 wall contacts. A copy of the
+    # l5-pnp-laps job with the package swapped (see .github/scripts/l5_pnp_oracle_test.sh).
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 oracle workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_pnp_oracle_test.sh"
+
   l5-policy:
     name: L5 policy canary (tracker handoff + policy_node + safety_node on a stadium vs the tracker alone, ros-dev + gym + torch)
     runs-on: ubuntu-latest

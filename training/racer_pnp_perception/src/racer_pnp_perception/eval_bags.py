@@ -326,6 +326,7 @@ def build_perceivers(live: LiveVehicle, bundle_dir: Path | None) -> dict[str, Tr
             net=CircConv1dV0.from_npz(bundle.payload_path("weights.npz")),
             model_id=bundle.model_id,
             refine_net=bundle.refine,  # the bundle says what runs
+            fuse_cfg=bundle.fuse_config,  # None unless the bundle declares fused-v1
         )
     return out
 

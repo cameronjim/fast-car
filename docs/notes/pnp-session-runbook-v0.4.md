@@ -5,7 +5,7 @@ For a person at the track. The full procedure with every launch command is
 16.8). Pass lines are quoted from `docs/notes/preregistration-pnp-v0.4.md` (v0.4) and the v0.2 and
 v0.3 files. The v0.3 runbook and procedure are unchanged.
 
-Steps 1, 2 and 9 (the excitation runs and the data laps) are worth a session by themselves.
+Steps 1, 2 and 9 (the M-SID2 excitation blocks) are worth a session by themselves.
 If time runs short, do those.
 
 How the 2026-11-14 run is reported, everywhere: "GP3 not met as registered; 20 clean laps
@@ -102,17 +102,9 @@ uv run --project tools --extra session python tools/pnp_session_report.py v04 --
 
 ## Step 2 Dynamics confirmation (minimum session)
 
-- On the laptop first: `tools/pnp_data.py confirm --bag <bag> --candidate <dyn> --deployed dyn-v0.1-2026-11-12`
-  (`tools/pnp_data.py confirm --bag <bag> ...`; the v0.3 `racer_pnp_dynamics.cli confirm` does the same on one bag).
-- What it has to be: on at least 120 s of Step 1's driving, both directions, P1 and Y1 at most
-  1.00 times the deployed model's (v0.4 2.5). Only then the candidate bundle goes on the car.
-- Launch (candidate): cap 1.0, lap memory off, two runs per direction, ccw first.
-- Watch: no new TTC or obstacle brake against Step 1 at cap 1.0, mean speed not lower. The timing
-  report prints both.
-- Only a contract 1 candidate (N4 or R4) can be switched on. A contract 2 candidate (T4, TL4)
-  needs brief 43 on main; until then this step runs its confirmation offline only and says so.
-- If no candidate passed: the table is the whole step. Nothing drives. Rollback is the deployed
-  bundle `dyn-v0.1-2026-11-12`.
+- No candidate exists that can be switched on, so nothing drives in this step. It only records
+  that M-B6 (brief 47) will score the frozen v0.4 models offline on this session's bags.
+- Rollback is not needed: the deployed bundle `dyn-v0.1-2026-11-12` stays on the car.
 
 ## Step 3 A cap above 1.3
 
@@ -197,12 +189,39 @@ uv run --project tools --extra session python tools/pnp_session_report.py varian
   direction, start voltage. It refuses runs of different sessions or directions. There is no
   gate. With fewer than 5 laps each no comparison is claimed (v0.4 6.5).
 
-## Step 9 Excitation runs and data laps (minimum session)
+## Step 9 Excitation runs, M-SID2 (minimum session)
 
-### 9a Excitation (M-SID)
+Registered in `docs/notes/preregistration-pnp-v0.5-dynamics.md` section 5 (yaml block
+`excitation` of `evaluation/prereg/pnp-v0.5-dynamics.yaml`, SHA-256
+`2767f297d951c11683b40834b864b832e8cbd0b01343e2765681e11b22e86a82`; design 13 section 18.6).
+This replaces the earlier 9a (PnP with lateral offsets) and 9b (data laps). Commands are model
+inputs, not imitation targets.
 
-- Per direction, clockwise FIRST (fast clockwise is the thinnest cell), one launch each, then ccw.
-- Write the planner params file, then launch, then start the schedule (inside the container):
+Print the plan first, on the laptop or in the container. It reads the yaml, prints the table
+with the exact launch lines and refuses a plan above 600 s:
+
+```sh
+python3 tools/pnp_session/excitation_plan.py --dyn <dyn> --out <out>
+```
+
+### 9a The table (552 s planned, 600 s budget)
+
+Every run in the stack with `safety_node` and the recorder, two people, kill in hand. All
+clockwise blocks first, then counter-clockwise. Gap follow lines run inside the container
+(`ros2 launch racer_control gap_follow.launch.py <arguments>`), stopped with Ctrl-C when the
+time is up.
+
+| # | Block | Launch arguments | Drive for | Sim check (3 laps) |
+|---|---|---|---|---|
+| 1 | P cw | block P below | 96 s | not simulated here |
+| 2 | G cw 1.0 | `profile:=race-2026-11-12 max_speed_mps:=1.0 a_lat_max_mps2:=2.0` | 30 s | no contact, peak 1.00 m/s |
+| 3 | G cw 1.3 | `profile:=race-2026-11-12 max_speed_mps:=1.3 a_lat_max_mps2:=2.0` | 45 s | no contact, peak 1.29 m/s |
+| 4 | L cw | `profile:=lane-2026-10-25 target_mode:=gap_deepest max_speed_mps:=0.6 reverse_escape:=false` | 40 s | no contact, peak 0.41 m/s, 0.09 m body clearance at the closest |
+| 5 | F cw 1.4 | `profile:=race-2026-11-12 max_speed_mps:=1.4 a_lat_max_mps2:=2.4` | 20 s | no contact, peak 1.39 m/s |
+| 6 | F cw 1.5 | `profile:=race-2026-11-12 max_speed_mps:=1.5 a_lat_max_mps2:=2.8` | 60 s | no contact, peak 1.49 m/s, one rate_limit event |
+| 7 to 11 | the same counter-clockwise, without G at 1.0 | | 96, 45, 40, 20, 60 s | no contact in any (peaks 1.29, 0.42, 1.39, 1.49 m/s) |
+
+Block P (the cap schedule tool is unchanged), for each direction:
 
 ```sh
 python3 tools/pnp_session/cap_schedule.py --manifest /workspace/data/pnp/models/<dyn>/manifest.yaml --v-max-mps 1.3 --write-params <out>/excitation_params.yaml
@@ -210,28 +229,62 @@ ros2 launch racer_bringup pnp.launch.py dynamics_bundle:=<dyn> backend:=geometri
 python3 tools/pnp_session/cap_schedule.py --manifest /workspace/data/pnp/models/<dyn>/manifest.yaml --v-max-mps 1.3
 ```
 
-- What it does: lap memory off, the planner's guidance input on; the tool publishes only a speed
-  cap (`LapGuidance` with `v_cap_mps` set, no profile) stepping through 0.5, 1.0, 0.7, 1.3 m/s,
-  8 s each, three cycles per direction (the list is read from the addendum yaml, never typed).
-  It never publishes a drive topic. If the tool dies, the planner falls back to
-  `v_no_guidance_mps`, the lowest cap.
-- It refuses to start if a cap is above the bundle's validity or above `v_max_mps` (correct: do
-  not work around it), or if another node already publishes guidance. Never run it together with
-  the lap node driving the cap (`lap_memory` stays off).
-- Steering variation (owner decision 7, about 10 minutes in all): the same schedule once per
-  direction on the lane centre, then with the planner's lateral offset parameter at -0.10 m and
-  +0.10 m: 2 directions x 3 variations x 96 s = 576 s, under the 600 s budget the tool checks.
-  That parameter is not on main yet: until it is, drive the lane centre only and say so.
-- Watch: contacts. Stop at the first one. The commands are model inputs, not imitation targets.
+The tool steps the cap 0.5, 1.0, 0.7, 1.3 m/s, 8 s each, three cycles (96 s), never publishes a
+drive topic, refuses a cap above the bundle's validity or `v_max_mps` (correct, do not work
+around it) and refuses to start if the lap node publishes guidance (`lap_memory` stays off).
+If the tool dies the planner falls back to `v_no_guidance_mps`, the lowest cap. If
+`cap_schedule.py` is not on the car: block P is PnP at cap 1.3 for 96 s per direction with a
+STOP and a standing start every 30 s; say so in the report.
 
-### 9b Data laps
+Rules:
 
-- Launch: `ros2 launch racer_control gap_follow.launch.py profile:=race-2026-11-12 max_speed_mps:=1.5`
-  in the stack with the safety node and the recorder, ccw then cw, 60 s each. Ramp above 1.5 only
-  as the owner says. Stop at the first contact.
-- Then on the dev machine: `tools/pnp_data.py runs <bag>`, then `tools/pnp_data.py split <bag>
-  --session <date>`. Fits refuse a bag with no committed split.
-- The number: none. The bag is the deliverable.
+- A wall contact ends the blocks of that direction.
+- Rung F 1.5 only if rung F 1.4 had no contact.
+- Block F only with the owner's yes at the track.
+- If L stalls twice in its first 20 s, stop it and go on. Its time is not given to another block.
+- A safety brake is not a contact.
+
+Said plainly:
+
+- The lateral limit values 2.4 and 2.8 m/s^2 have NOT been driven on the car. 2.0 has (by the
+  PnP runs at cap 1.3).
+- The lane profile with the deepest-ray target (block L) may stall against the island.
+
+Sim check (L5, development only, decides nothing). Brief 40's round donut (case O1) is not on
+main, so the world is the `2026-11-13-pnp-lap1` map of the car's own track, driven by
+`tests/l5_reactive_bench/track_family_runner.py --track map --driver gap_follow`, car as
+measured, noise on, seed 11, 3 laps per direction, real-time factor 1.00, at most 3 runs in
+parallel. All 10 lines: no wall contact, no stall, no reverse escape, no obstacle or TTC brake.
+Peak speed reached (odometry): G 1.0 1.00, G 1.3 1.29, L 0.41 to 0.42 (cap 0.6; mean 0.35),
+F 1.4 1.39, F 1.5 1.49 m/s; lap time 6.4 to 6.5 s (G 1.0), 5.3 to 5.6 s (G 1.3), 12.7 s (L), 5.0
+to 6.1 s (F 1.4), 4.7 to 5.0 s (F 1.5). Safety events: F 1.5 had one rate_limit at about 6.6
+s in both directions (a limiter event, not a contact). L is the tightest line: the closest body
+clearance was 0.08 to 0.09 m against 0.23 m or more for the others, so it is the block most
+likely to touch or stall on the floor. No line was changed.
+
+### 9b After the session
+
+- On the dev machine, for every bag: `uv run --project tools --extra session python tools/pnp_data.py runs <bag>`.
+- The dynamics split of this session is brief 47's (every run 55 percent, 2.0 s, the rest). The
+  v0.4 `uv run --project tools --extra session python tools/pnp_data.py split <bag> --session <date>` still runs for everything else. Fits
+  refuse a bag with no committed split.
+- The number: none. The bags are the deliverable.
+
+### Owner step list (excitation only, about 12 minutes with changeovers)
+
+1. Two people, kill knob in hand, car on the floor, start voltage written down (Before anything
+   moves). Check the app's lap counter toggle.
+2. `python3 tools/pnp_session/excitation_plan.py --dyn <dyn> --out <out>` and read the table.
+3. Clockwise first. Block P: the three block P commands above with `<dyn>` and `<out>` filled.
+   Drive 96 s, Ctrl-C the launch.
+4. G cw: launch line of row 2 for 30 s, row 3 for 45 s. Ctrl-C between them. Check the bag is
+   growing (`ls -l <bag>` twice, ten seconds apart) before each.
+5. L cw: row 4 for 40 s. Stall twice in the first 20 s: stop it and move on.
+6. F cw: say "yes" at the track, then row 5 for 20 s, and row 6 for 60 s only if row 5 had no
+   contact.
+7. Counter-clockwise: the same without G at 1.0 (rows 7 to 11).
+8. Any wall contact: stop that direction's remaining blocks and write it down (the video
+   decides).
 
 ## The variant layout protocol
 

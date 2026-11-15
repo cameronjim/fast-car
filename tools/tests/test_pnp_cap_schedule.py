@@ -29,8 +29,6 @@ def test_the_schedule_is_read_from_the_addendum_yaml():
     exc = cs.load_excitation()
     assert exc.caps_mps == (0.5, 1.0, 0.7, 1.3)
     assert exc.hold_s == 8.0 and exc.cycles == 3
-    assert exc.lateral_offsets_m == (-0.10, 0.10) and exc.max_total_driving_s == 600
-    assert cs.session_driving_s(exc) == 576.0 <= exc.max_total_driving_s
     assert yaml.safe_load(ADDENDUM.read_text())["excitation"]["caps_mps"] == list(exc.caps_mps)
 
 
@@ -142,29 +140,6 @@ def test_main_starts_the_schedule_when_nothing_refuses(tmp_path, monkeypatch, ca
         == 0
     )
     assert started == [2.0]
-    over = tmp_path / "over.yaml"
-    over.write_text(
-        yaml.safe_dump(
-            {
-                "excitation": {
-                    "caps_mps": [0.5],
-                    "hold_s": 10.0,
-                    "cycles_per_direction": 3,
-                    "steering_variation_lateral_offsets_m": [-0.1, 0.1],
-                    "max_total_driving_s": 100,
-                }
-            }
-        )
-    )
-    argv = [
-        "--manifest",
-        str(manifest(tmp_path)),
-        "--v-max-mps",
-        "1.3",
-        "--excitation-yaml",
-        str(over),
-    ]
-    assert cs.main(argv) == cs.EXIT_REFUSED and started == [2.0]
 
 
 def test_the_module_can_only_publish_the_guidance_topic():
@@ -192,12 +167,5 @@ def test_the_parser_and_the_procedure_commands_agree(tmp_path):
     step = next(x for x in doc["steps"] if x["id"] == "s9a_excitation")
     for cmd in step["schedule_commands"]:
         cs.build_parser().parse_args(cmd[2:])
-    ex = step["excitation"]
-    exc = cs.load_excitation()
-    assert (list(exc.caps_mps), exc.hold_s, exc.cycles) == (
-        ex["caps_mps"],
-        ex["hold_s"],
-        ex["cycles_per_direction"],
-    )
     assert cs.build_parser().parse_args(["--manifest", "m", "--v-max-mps", "1.3"]).v_max_mps == 1.3
     assert cs.build_parser().parse_args(["--manifest", "m", "--v-max-mps", "1.3"]).v_max_mps == 1.3

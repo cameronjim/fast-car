@@ -130,6 +130,8 @@ def write_outputs(result: SessionResult, out: Path) -> None:
     (out / "decisions.json").write_text(
         json.dumps({k: v.to_dict() for k, v in result.decisions.items()}, indent=2) + "\n"
     )
+    if result.tables:
+        (out / "tables.json").write_text(json.dumps(result.tables, indent=2) + "\n")
     (out / "summary.md").write_text(summary(result))
 
 
@@ -148,6 +150,22 @@ def summary(result: SessionResult) -> str:
             )
     flagged = [(sr.run_id, row.lap) for sr, row in result.laps if row.flag_differs]
     lines += ["", f"laps where camera and pnp times differ by more than 0.3 s: {flagged or 'none'}"]
+    table = result.tables.get("same_session")
+    if table:
+        lines += ["", f"## same_session ({table['section']}): {table['note']}", ""]
+        lines += [
+            f"- {r['driver']} {r['run_id']} {r['direction']}: {r['laps']} laps, "
+            f"mean {r['mean_lap_s']}, best {r['best_lap_s']}, "
+            f"wheel distance per lap {r['wheel_distance_per_lap_m']}, "
+            f"start {r['start_voltage_v']} V"
+            for r in table["rows"]
+        ]
+        lines.append(f"- battery window {table['battery_window']}")
+        lines.append(
+            "- comparison claim allowed"
+            if table["comparison_claim_allowed"]
+            else f"- NO comparison claim: {'; '.join(table['reasons'])}"
+        )
     for name, res in result.decisions.items():
         lines += ["", f"## {name}: {res.outcome}", ""]
         lines += [

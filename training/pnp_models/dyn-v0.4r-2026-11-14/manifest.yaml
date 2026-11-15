@@ -1,0 +1,71 @@
+bundle_schema_version: 1.1.0
+kind: dynamics
+model_id: dyn-v0.4r-2026-11-14
+created_utc: '2026-11-15T06:19:26Z'
+git_sha: 416e68501c424caeb1f6dc80b6a0ee9edc7a288c
+training_config_sha256: 6c2624b0b8727d59d67926c93eb4aab1bd99323db8283ad6766cb8482091a60e
+vehicle_params: {schema_version: 0.17.0, sysid_session_id: none-preliminary}
+payload:
+- {file: residual_mlp.f32, sha256: 80ff738eb545a261a7643f4bd4d37102b32425988701715d786cb2e556b48196}
+- {file: golden_rollouts.csv, sha256: 36283e7ba945aab9107460f52cd45df1a08c0ca7c3f93a867753813d13a48fc4}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9482438088762631, speed_deadband_mps: 0.22, speed_tau_s: 0.22460632746810144,
+    accel_max_mps2: 2.0, decel_max_mps2: 0.6731081096112491, steer_gain_left: 0.9166243626015708,
+    steer_gain_right: 1.0114633713998802, steer_offset_rad: 0.015222998571431204,
+    steer_tau_s: 0.02787697420940658, command_delay_s: 0.0, understeer_s2_per_m2: 0.10938200992093731}
+  residual:
+    enabled: true
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers:
+    - [4, 32]
+    - [32, 32]
+    - [32, 2]
+    activation: tanh
+    input_mean: [0.566238554623267, 0.115774131885612, 0.6054160241839328, 0.12085652355576329]
+    input_std: [0.2695306662373924, 0.32447385054720884, 0.26987619795091516, 0.3376485145731781]
+    output_scale: [0.0, 0.08054006196001148]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['train role under T2, split 78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63,
+    addendum ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824']
+metrics:
+  decision:
+    gate: GP2d-R yaw-only residual
+    passed: false
+    items:
+    - {name: 1a P1 ratio R / nominal, value: 0.9517194549948412, comparison: <=, threshold: 0.95,
+      passed: false, note: ''}
+    - {name: 1b upper end of the bootstrap interval of the P1 ratio, value: 0.9645517830722119,
+      comparison: <, threshold: 1.0, passed: true, note: ''}
+    - {name: 2a Y1 ratio R / nominal, value: 0.5484036174930864, comparison: <=, threshold: 1.0,
+      passed: true, note: ''}
+    - {name: 2b S1(R) minus S1(nominal), value: 0.0, comparison: <=, threshold: 1.0e-06,
+      passed: true, note: absolute difference in m/s}
+    - {name: 3 seed 0 P1 ratio to nominal, value: 0.9514378814503544, comparison: <=,
+      threshold: 1.0, passed: true, note: ''}
+    - {name: 3 seed 1 P1 ratio to nominal, value: 0.9513432928510744, comparison: <=,
+      threshold: 1.0, passed: true, note: ''}
+    - {name: 3 seed 2 P1 ratio to nominal, value: 0.9517194549948412, comparison: <=,
+      threshold: 1.0, passed: true, note: ''}
+    - {name: '4 stratum ccw:0.25-0.6 position RMSE ratio', value: 0.9911840415018252,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum ccw:0.6-0.85 position RMSE ratio', value: 0.9957443040710631,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum ccw:0.85+ position RMSE ratio', value: 0.8519465427928591,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum cw:0.25-0.6 position RMSE ratio', value: 0.9556145065320865,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum cw:0.6-0.85 position RMSE ratio', value: 0.9745117851341001,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum cw:0.85+ position RMSE ratio', value: 0.957010945118792, comparison: <=,
+      threshold: 1.05, passed: true, note: ''}
+    - {name: '5 random sweep of the validity box: finite, inside the state bounds',
+      value: 0.0, comparison: <=, threshold: 0.0, passed: true, note: 100000 rollouts
+        of 30 steps; max v 1.300 m/s}
+    - {name: 6 Yp ratio R / nominal, value: 0.7072543003256618, comparison: <=, threshold: 1.0,
+      passed: true, note: ''}

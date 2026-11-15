@@ -1,0 +1,64 @@
+bundle_schema_version: 1.1.0
+kind: dynamics
+model_id: dyn-v0.4n-2026-11-14
+created_utc: '2026-11-15T06:19:26Z'
+git_sha: 416e68501c424caeb1f6dc80b6a0ee9edc7a288c
+training_config_sha256: 6c2624b0b8727d59d67926c93eb4aab1bd99323db8283ad6766cb8482091a60e
+vehicle_params: {schema_version: 0.17.0, sysid_session_id: none-preliminary}
+payload:
+- {file: residual_mlp.f32, sha256: aa8b81d746d258905bc11c22f78ed6b9fd538b6253f38b1adf2ad74004b4268a}
+- {file: golden_rollouts.csv, sha256: 35ae126f0e790ece02b6138b4b462dd15310f8706360e5c61a1ff46926b76886}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9480433003048488, speed_deadband_mps: 0.33, speed_tau_s: 0.23592675278220868,
+    accel_max_mps2: 1.149761372628897, decel_max_mps2: 1.7592919003402259, steer_gain_left: 0.8978042059002053,
+    steer_gain_right: 0.8704226971275055, steer_offset_rad: 0.008104249014798323,
+    steer_tau_s: 0.014046479135970973, command_delay_s: 0.02, understeer_s2_per_m2: 3.1986102564238814e-15}
+  residual:
+    enabled: false
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers:
+    - [4, 32]
+    - [32, 32]
+    - [32, 2]
+    activation: tanh
+    input_mean: [0.0, 0.0, 0.0, 0.0]
+    input_std: [1.0, 1.0, 1.0, 1.0]
+    output_scale: [1.0, 1.0]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['train role under T2, split 78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63,
+    addendum ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824']
+metrics:
+  decision:
+    gate: GP2d-N classical refit
+    passed: false
+    items:
+    - {name: 1a P1 ratio N4 / v0.1, value: 0.9681608763534357, comparison: <=, threshold: 1.0,
+      passed: true, note: ''}
+    - {name: 1b upper end of the bootstrap interval of the P1 ratio, value: 0.9800034286643545,
+      comparison: <, threshold: 1.0, passed: true, note: ''}
+    - {name: 2a Y1 ratio N4 / v0.1, value: 0.653841592037537, comparison: <=, threshold: 1.0,
+      passed: true, note: ''}
+    - {name: 2b S1 ratio N4 / v0.1, value: 1.0025583464233074, comparison: <=, threshold: 1.0,
+      passed: false, note: ''}
+    - {name: '3 stratum ccw:0.25-0.6 position RMSE ratio', value: 0.9951874615749162,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '3 stratum ccw:0.6-0.85 position RMSE ratio', value: 1.010474622620856,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '3 stratum ccw:0.85+ position RMSE ratio', value: 0.9003984514285739,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '3 stratum cw:0.25-0.6 position RMSE ratio', value: 0.9584784012712066,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '3 stratum cw:0.6-0.85 position RMSE ratio', value: 0.9857638869351409,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '3 stratum cw:0.85+ position RMSE ratio', value: 0.9712636492139439,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: 4 refit parameters on a bound, value: 1.0, comparison: <=, threshold: 0.0,
+      passed: false, note: understeer_s2_per_m2}
+    - {name: 5 Yp ratio N4 / v0.1, value: 0.9253423595714444, comparison: <=, threshold: 1.0,
+      passed: true, note: ''}

@@ -142,6 +142,7 @@ class StationSet:
         caution_before_m: float = 1.0,
         caution_laps: int = 2,
         floor_mps: float = 0.0,
+        zone_merge: bool = True,
     ) -> None:
         if spacing_m <= 0.0 or min_filter_half_m < 0.0 or caution_before_m <= 0.0:
             raise ValueError("station set spacing and zone lengths must be positive")
@@ -154,6 +155,8 @@ class StationSet:
         #: No bound is below this: the planner cannot drive below its speed dead zone, so a bound
         #: under it is a stop, not a slow speed.
         self.floor_mps = float(floor_mps)
+        #: False: `add_zone` always appends (no merging of a flickering state into one zone).
+        self.zone_merge = bool(zone_merge)
         self._laps: list[StationLap] = []
         self._zones: list[CautionZone] = []
         self._l_ref = math.nan
@@ -216,6 +219,54 @@ class StationSet:
         self._rebuild()
         return True
 
+    def remove_lap(self, lap_index: int) -> bool:
+        """Drop a stored lap (it turned out to be a suspect closure). True if it was stored."""
+        kept = [lap for lap in self._laps if lap.lap_index != lap_index]
+        if len(kept) == len(self._laps):
+            return False
+        self._laps = kept
+        if self._laps:
+            self._rebuild()
+        else:
+            self._v_safe = np.zeros(0)
+            self._q = np.zeros(0)
+            self._t_best = math.nan
+        return True
+
+    def rescale(self, l_ref_m: float) -> None:
+        """Change the reference lap length. Stored laps are normalised to their own length, so
+        they keep their shape: resample them on the grid of the new length (periodic in speed).
+        Zone centres scale with the length."""
+        if not (math.isfinite(l_ref_m) and l_ref_m > self.spacing_m):
+            raise ValueError(f"reference lap length must exceed the grid spacing, got {l_ref_m}")
+        if not math.isfinite(self._l_ref) or not self._laps:
+            self._laps = []
+            self._l_ref = float(l_ref_m)
+            self._n = max(2, round(l_ref_m / self.spacing_m))
+            return
+        ratio = l_ref_m / self._l_ref
+        n_old, n_new = self._n, max(2, round(l_ref_m / self.spacing_m))
+        u_old = np.arange(n_old + 1) / n_old
+        u_new = np.arange(n_new + 1) / n_new
+        laps = []
+        for lap in self._laps:
+            v_ext = np.concatenate([lap.v_mps, lap.v_mps[:1]])
+            v = np.interp(u_new[:n_new], u_old, v_ext)
+            ctg = np.interp(u_new, u_old, lap.ctg_s)
+            laps.append(
+                StationLap(lap.lap_index, lap.lap_time_s, lap.length_m, lap.cap_mps, v, ctg)
+            )
+        self._laps = laps
+        self._zones = [
+            CautionZone(
+                z.centre_m * ratio, z.length_m, z.speed_mps, z.created_lap, z.hold_laps, z.reason
+            )
+            for z in self._zones
+        ]
+        self._l_ref = float(l_ref_m)
+        self._n = n_new
+        self._rebuild()
+
     def _rebuild(self) -> None:
         half = round(self.min_filter_half_m / self.spacing_m)
         v = np.stack([_periodic_min_filter(lap.v_mps, half) for lap in self._laps])
@@ -237,7 +288,7 @@ class StationSet:
         ):
             return None
         centre = float(centre_m) % self._l_ref
-        for k, old in enumerate(self._zones):
+        for k, old in enumerate(self._zones if self.zone_merge else ()):
             gap = abs(old.centre_m - centre)
             gap = min(gap, self._l_ref - gap)
             if old.created_lap == int(created_lap) and gap <= 0.5 * self.caution_before_m:

@@ -11,7 +11,9 @@ from racer_laps.scan_match import (
     Body,
     Mount,
     along_support,
+    freespace_violation_share,
     match_scans,
+    polar_profile,
     scan_to_points,
     surface_normals,
     thin,
@@ -180,3 +182,100 @@ def test_along_support_is_zero_in_a_straight_lane_and_high_with_end_caps() -> No
     res2 = match_scans(source, target, seed=(0.2, 0.0, 0.0))
     assert res2 is not None
     assert along_support(source, target, surface_normals(target), res2) >= 8
+
+
+# -- free-space consistency ----------------------------------------------------------------------
+
+ORIGIN = (0.0, 0.0)
+
+
+def ring(radius: float, n: int = 720, centre: tuple[float, float] = (0.0, 0.0)) -> np.ndarray:
+    a = np.linspace(-math.pi, math.pi, n, endpoint=False)
+    return np.stack([centre[0] + radius * np.cos(a), centre[1] + radius * np.sin(a)], axis=1)
+
+
+def test_polar_profile_is_the_nearest_return_per_bin_and_nan_where_unknown() -> None:
+    pts = np.array([[2.0, 0.0], [1.5, 0.0], [0.0, 3.0]])
+    prof = polar_profile(pts, ORIGIN, dilate_bins=0)
+    assert prof.shape == (360,)
+    k0 = int((0.0 + math.pi) / (2 * math.pi) * 360)  # the bin of bearing 0
+    assert prof[k0] == pytest.approx(1.5)  # the nearer of two returns in one bin
+    assert prof[int((math.pi / 2 + math.pi) / (2 * math.pi) * 360)] == pytest.approx(3.0)
+    assert np.isnan(prof[0])  # nothing at bearing -pi
+    assert np.isfinite(prof).sum() == 2
+    assert np.isnan(polar_profile(np.zeros((0, 2)), ORIGIN)).all()
+
+
+def test_the_profile_is_the_minimum_over_the_dilation_window_and_wraps() -> None:
+    bearing = math.radians(0.5)  # bin 180
+    pts = np.array([[2.0 * math.cos(bearing), 2.0 * math.sin(bearing)]])
+    prof = polar_profile(pts, ORIGIN, dilate_bins=2)
+    finite = np.flatnonzero(np.isfinite(prof))
+    assert list(finite) == [178, 179, 180, 181, 182]
+    assert np.allclose(prof[finite], 2.0)
+    # a return at bearing -pi spills over the seam into the last bins
+    seam = polar_profile(np.array([[-1.0, 1e-6]]), ORIGIN, dilate_bins=2)
+    assert np.isfinite(seam[-1]) and np.isfinite(seam[-2])
+
+
+def test_the_profile_uses_the_given_origin_not_the_frame_origin() -> None:
+    pts = ring(1.0, centre=(0.285, 0.0))
+    prof = polar_profile(pts, (0.285, 0.0), dilate_bins=0)
+    assert np.nanmax(np.abs(prof - 1.0)) < 1e-6
+    off = polar_profile(pts, ORIGIN, dilate_bins=0)
+    assert np.nanmax(np.abs(off - 1.0)) > 0.2  # seen from the wrong place the ring is not a ring
+
+
+def test_a_wall_behind_a_seen_wall_is_not_a_violation_but_one_in_front_is() -> None:
+    prof = polar_profile(ring(2.0), ORIGIN)
+    assert freespace_violation_share(ring(3.0), prof, ORIGIN) == 0.0  # behind the wall
+    assert freespace_violation_share(ring(2.0), prof, ORIGIN) == 0.0  # on it
+    assert freespace_violation_share(ring(1.9), prof, ORIGIN) == 0.0  # inside the 0.15 m margin
+    assert freespace_violation_share(ring(1.8), prof, ORIGIN) == 1.0  # in the seen free space
+
+
+def test_unknown_bins_and_points_beyond_the_range_are_not_counted() -> None:
+    half = ring(2.0)
+    half = half[half[:, 1] > 0]  # the profile only knows the upper half plane
+    prof = polar_profile(half, ORIGIN, dilate_bins=0)
+    inner = ring(1.0)
+    upper_only = inner[inner[:, 1] > 0.05]
+    lower_only = inner[inner[:, 1] < -0.05]
+    assert freespace_violation_share(lower_only, prof, ORIGIN) == 0.0  # nothing countable
+    assert freespace_violation_share(upper_only, prof, ORIGIN) == pytest.approx(1.0)
+    # the whole ring: the unknown half is in neither the numerator nor the denominator
+    assert freespace_violation_share(inner, prof, ORIGIN) == pytest.approx(1.0)
+    far = ring(5.0)
+    far_prof = polar_profile(ring(8.0), ORIGIN)
+    assert freespace_violation_share(far, far_prof, ORIGIN, max_range_m=4.0) == 0.0
+    assert freespace_violation_share(far, far_prof, ORIGIN, max_range_m=6.0) == 1.0
+    assert freespace_violation_share(np.zeros((0, 2)), prof, ORIGIN) == 0.0
+
+
+def test_a_shifted_copy_of_a_scan_violates_where_the_far_wall_moved_inside() -> None:
+    stadium = Stadium(straight_m=3.0, lane_m=0.9, island_r_m=0.5)
+    a = points_at(stadium, 0.0, -0.95, 0.0)
+    mount = (MOUNT.x_m, MOUNT.y_m)
+    b = points_at(stadium, 1.0, -0.95, 0.0)  # one metre further along the straight
+    prof_a = polar_profile(a, mount)
+    # b moved back into a's frame by the true shift: consistent
+    assert freespace_violation_share(b + np.array([1.0, 0.0]), prof_a, mount) < 0.04
+    # b moved by a wrong shift (the alias): its far end lies inside a's free space
+    assert freespace_violation_share(b + np.array([-1.0, 0.0]), prof_a, mount) > 0.04
+
+
+def test_the_mount_offset_matters() -> None:
+    # a ring of radius 2 around the LiDAR, which sits 0.285 m ahead of base_link
+    pts = ring(2.0, centre=(0.285, 0.0))
+    prof = polar_profile(pts, (0.285, 0.0))
+    assert freespace_violation_share(pts, prof, (0.285, 0.0)) == 0.0
+    # one margin inside, measured from the right origin, is a violation
+    assert freespace_violation_share(ring(1.8, centre=(0.285, 0.0)), prof, (0.285, 0.0)) == 1.0
+    # measured from base_link instead, the same inner ring is not a clean violation
+    assert freespace_violation_share(ring(1.8, centre=(0.285, 0.0)), prof, ORIGIN) < 1.0
+
+
+def test_match_result_defaults_the_violation_to_zero() -> None:
+    from racer_laps.scan_match import MatchResult
+
+    assert MatchResult(0.0, 0.0, 0.0, 0.01, 0.9, 100).freespace_violation == 0.0

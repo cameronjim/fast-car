@@ -1,7 +1,9 @@
 """Run the lap memory over a recorded bag and print the laps.
 
     python -m racer_laps.replay --bag <dir or .mcap>                         # map pose
-    python -m racer_laps.replay --bag <dir> --lap-source start_scan          # start-scan gate
+    python -m racer_laps.replay --bag <dir> --lap-source start_scan          # start-scan gate v2
+    python -m racer_laps.replay --m-r --split <split.yaml> --bags-root <dir> \\
+        --v1-laps tests/fixtures/gate_v1_laps_2026-11-13.json                 # the M-R table
 
 `--lap-source map_pose` (default) needs `/tf` (and `/tf_static` if the map to odom or odom to
 base_link link is static): bags from stack runs with `mapping:=true`. `/pnp/planner/status`,
@@ -334,7 +336,12 @@ def find_start_time(
 def default_start_scan_config(vehicle: LapVehicle) -> LapConfig:
     return LapConfig(
         lap_source="start_scan",
-        gate=GateConfig(wheelbase_m=vehicle.wheelbase_m, yaw_gain_table=vehicle.yaw_gain_table),
+        gate=GateConfig(
+            wheelbase_m=vehicle.wheelbase_m,
+            yaw_gain_table=vehicle.yaw_gain_table,
+            lidar_x_m=vehicle.mount.x_m,
+            lidar_y_m=vehicle.mount.y_m,
+        ),
     )
 
 
@@ -455,9 +462,164 @@ def format_scan_report(result: ScanReplayResult) -> str:
     return "\n".join(lines)
 
 
+# -- M-R: gate v2 against the recorded laps of gate v1 and the pose detector ---------------------
+
+#: Segment drivers M-R covers (pre-registration pnp-v0.3 section 1.5).
+M_R_DRIVERS = ("pnp", "gap_follow", "gap_follow_race", "tracker")
+#: Segments with a map pose, where every lap time is compared with the pose detector. T2a and T2b
+#: are one run split by the held-out rule: they are joined.
+M_R_POSE_SEGMENTS = ("G1a", "G1b", "T0", "T1", "T2a+T2b")
+M_R_JOINED = {"T2a+T2b": "2026-11-13T23-27-23_car_teleop"}
+#: pre-registration pnp-v0.3 1.5: every lap time within this of the pose detector.
+M_R_LAP_TOLERANCE_S = 0.3
+#: "at least two laps": a segment counts when some detector saw this many.
+M_R_MIN_LAPS = 2
+
+
+@dataclass
+class MRRow:
+    segment: str
+    v1_laps: int
+    v2_laps: int
+    pose_laps: int | None  # None: no map pose on this segment
+    v1_times: list[float]
+    v2_times: list[float]
+    pose_times: list[float]
+    v2_minus_pose: list[float]  # per lap k, v2 lap time minus pose lap time (k < both counts)
+    v1_minus_pose: list[float]
+    v2_start_bag_s: float | None = None
+
+    @property
+    def qualifies(self) -> bool:
+        return max(self.v1_laps, self.v2_laps, self.pose_laps or 0) >= M_R_MIN_LAPS
+
+    @property
+    def lap_count_ok(self) -> bool:
+        return self.v2_laps >= self.v1_laps
+
+    @property
+    def lap_times_ok(self) -> bool | None:
+        """Every v2 lap within the tolerance of the pose lap (None without a pose). A lap that
+        the pose detector has and v2 lacks makes it False; laps v2 closed beyond the pose
+        detector's count are listed in the table, not counted here."""
+        if self.pose_laps is None:
+            return None
+        if self.v2_laps < self.pose_laps:
+            return False
+        return all(abs(d) <= M_R_LAP_TOLERANCE_S for d in self.v2_minus_pose)
+
+
+def driven_segments(split: dict[str, Any]) -> list[tuple[str, str]]:
+    """(bag, segment) of every PnP, gap follow and tracker segment, then the joined ones."""
+    out = []
+    for bag, entry in split["bags"].items():
+        for seg in entry.get("segments", []):
+            if seg.get("driver") in M_R_DRIVERS:
+                out.append((bag, str(seg["name"])))
+    out.extend((bag, name) for name, bag in M_R_JOINED.items())
+    return out
+
+
+def run_m_r(
+    split_file: str | Path,
+    bags_root: str | Path,
+    v1_laps_file: str | Path,
+    vehicle: LapVehicle | None = None,
+    only: Sequence[str] | None = None,
+    tail_s: float = 0.0,
+) -> list[MRRow]:
+    """Gate v2 over every driven segment of the split, against the laps gate v1 closed (the
+    committed JSON of `record_gate_laps.py` at f45fd09) and, on the map-pose segments, against
+    the pose detector started at the same instant. `tail_s` extends the end of every window (0 is
+    the pre-registered rule: gate v2 publishes a lap up to about 0.3 m of travel after the line,
+    so a lap closed in the last 0.3 m of a segment is lost to the cut; a tail only shows that)."""
+    import json
+
+    import yaml
+
+    split = yaml.safe_load(Path(split_file).read_text(encoding="utf-8"))
+    v1 = json.loads(Path(v1_laps_file).read_text(encoding="utf-8"))["segments"]
+    vehicle = vehicle or load_live_vehicle()
+    by_bag: dict[str, list[str]] = {}
+    for bag, name in driven_segments(split):
+        if only is None or name in only:
+            by_bag.setdefault(bag, []).append(name)
+    rows: list[MRRow] = []
+    for bag, names in by_bag.items():
+        messages = list(read_messages(Path(bags_root) / bag))
+        for name in names:
+            lo, hi = segment_ranges(split_file, bag, name)
+            window = (lo, hi + tail_s)
+            result = run_replay_start_scan(messages, vehicle, window_s=window)
+            pose_laps: list[LapResult] | None = None
+            if name in M_R_POSE_SEGMENTS:
+                first = result.first_scan_log_s
+                sub = [m for m in messages if window[0] <= m[0] - first <= window[1]]
+                pose_laps = run_replay(sub, start_s=result.start_t_s).laps
+            v2_times = [lap.lap_time_s for lap in result.laps]
+            v1_times = list(v1.get(name, {}).get("lap_times_s", []))
+            pose_times = [lap.lap_time_s for lap in pose_laps] if pose_laps is not None else []
+            rows.append(
+                MRRow(
+                    segment=name,
+                    v1_laps=len(v1_times),
+                    v2_laps=len(v2_times),
+                    pose_laps=None if pose_laps is None else len(pose_laps),
+                    v1_times=v1_times,
+                    v2_times=v2_times,
+                    pose_times=pose_times,
+                    v2_minus_pose=[a - b for a, b in zip(v2_times, pose_times, strict=False)],
+                    v1_minus_pose=[a - b for a, b in zip(v1_times, pose_times, strict=False)],
+                    v2_start_bag_s=None
+                    if result.start_t_s is None
+                    else result.start_t_s - result.first_scan_log_s,
+                )
+            )
+        del messages
+    return rows
+
+
+def format_m_r(rows: Sequence[MRRow]) -> str:
+    """The M-R table and the verdict of pre-registration 1.5 (markdown)."""
+
+    def times(values: Sequence[float]) -> str:
+        return " ".join(f"{v:.2f}" for v in values) or "-"
+
+    lines = [
+        (
+            "| segment | v1 laps | v2 laps | pose laps | counts | v2 vs pose (s, per lap) | "
+            "v1 vs pose (s, per lap) |"
+        ),
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        counts = "n/a (under 2 laps)" if not r.qualifies else ("ok" if r.lap_count_ok else "FAIL")
+        pose = "-" if r.pose_laps is None else str(r.pose_laps)
+        v2d = "-" if r.pose_laps is None else (times(r.v2_minus_pose))
+        v1d = "-" if r.pose_laps is None else (times(r.v1_minus_pose))
+        lines.append(
+            f"| {r.segment} | {r.v1_laps} | {r.v2_laps} | {pose} | {counts} | {v2d} | {v1d} |"
+        )
+    qualifying = [r for r in rows if r.qualifies]
+    count_fail = [r.segment for r in qualifying if not r.lap_count_ok]
+    time_fail = [
+        r.segment for r in rows if r.pose_laps is not None and r.qualifies and not r.lap_times_ok
+    ]
+    lines.append("")
+    lines.append(
+        f"M-R lap counts (v2 closes at least as many as v1, segments with two laps): "
+        f"{'PASS' if not count_fail else 'FAIL ' + ', '.join(count_fail)}"
+    )
+    lines.append(
+        f"M-R lap times (every v2 lap within {M_R_LAP_TOLERANCE_S} s of the pose detector, map "
+        f"pose segments): {'PASS' if not time_fail else 'FAIL ' + ', '.join(time_fail)}"
+    )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--bag", required=True, type=Path, help="bag directory or .mcap file")
+    parser.add_argument("--bag", type=Path, help="bag directory or .mcap file")
     parser.add_argument("--lap-source", choices=LAP_SOURCES, default="map_pose")
     parser.add_argument("--min-lap-length-m", type=float, default=LapConfig().min_lap_length_m)
     parser.add_argument(
@@ -468,8 +630,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--split", type=Path, help="pre-registered split yaml")
     parser.add_argument("--segment", help="segment name from --split, A+B joins consecutive ones")
     parser.add_argument("--compare-pose", action="store_true", help="also run the map pose")
+    parser.add_argument(
+        "--m-r",
+        action="store_true",
+        help="M-R table (pre-registration pnp-v0.3 1.5): gate v2 on every driven segment of "
+        "--split against the recorded laps of gate v1 (--v1-laps) and, on the map-pose segments, "
+        "the pose detector. Needs --split, --bags-root and --v1-laps; --bag is not used",
+    )
+    parser.add_argument("--bags-root", type=Path, help="with --m-r: directory of the bags")
+    parser.add_argument("--v1-laps", type=Path, help="with --m-r: gate v1's recorded laps (json)")
+    parser.add_argument("--only", help="with --m-r: comma separated segment names")
+    parser.add_argument(
+        "--tail-s",
+        type=float,
+        default=0.0,
+        help="with --m-r: extend every window by this many seconds (0 = the pre-registered rule)",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if args.m_r:
+        if args.split is None or args.bags_root is None or args.v1_laps is None:
+            parser.error("--m-r needs --split, --bags-root and --v1-laps")
+        only = args.only.split(",") if args.only else None
+        rows = run_m_r(args.split, args.bags_root, args.v1_laps, only=only, tail_s=args.tail_s)
+        sys.stdout.write(format_m_r(rows) + "\n")
+        return 0
     window: tuple[float, float] | None = None
     if args.segment:
         if args.split is None:
@@ -481,6 +666,8 @@ def main(argv: list[str] | None = None) -> int:
             -math.inf if args.from_s is None else args.from_s,
             math.inf if args.to_s is None else args.to_s,
         )
+    if args.bag is None:
+        parser.error("--bag is required")
     messages = list(read_messages(args.bag))
     if args.lap_source == "start_scan":
         scan_result = run_replay_start_scan(messages, load_live_vehicle(), window_s=window)

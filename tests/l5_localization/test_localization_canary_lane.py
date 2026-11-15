@@ -25,6 +25,9 @@ import launch_testing.actions
 import launch_testing.asserts
 import rclpy
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
+import orderly_shutdown
+
 _spec = importlib.util.spec_from_file_location(
     "l5_localization_common", Path(__file__).resolve().parent / "l5_localization_common.py"
 )
@@ -77,6 +80,7 @@ class TestLocalizationCanaryLane(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         rclpy.shutdown()
+        orderly_shutdown.stop_stack()
 
     def test_laps_on_the_localised_pose(self):
         common.run_localization_canary(

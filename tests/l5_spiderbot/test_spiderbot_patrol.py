@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import math
 import signal
+import sys
 import tempfile
 import time
 import unittest
@@ -49,6 +50,9 @@ from racer_msgs.msg import SpiderbotAlert
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
+import orderly_shutdown
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RACELINE = _REPO_ROOT / "config" / "tracks" / "gym_oval" / "raceline.csv"
@@ -149,6 +153,7 @@ class TestSpiderbotPatrol(unittest.TestCase):
     def tearDownClass(cls):
         cls.node.destroy_node()
         rclpy.shutdown()
+        orderly_shutdown.stop_stack()
 
     def _spin(self, seconds: float):
         end = time.monotonic() + seconds

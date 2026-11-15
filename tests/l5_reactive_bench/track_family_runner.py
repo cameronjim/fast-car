@@ -908,6 +908,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         last_motion = None
         while True:
             rclpy.spin_once(node, timeout_sec=0.01)
+            # One callback per spin_once: with 50 Hz odometry, scans and commands the runner fell
+            # behind by up to half a second and stamped the DRIVING report late (a_T2 CI run). Drain
+            # what is ready so the receipt times it records are the arrival times.
+            for _ in range(200):
+                rclpy.spin_once(node, timeout_sec=0.0)
             if pending_reset is not None and pending_reset.done():
                 pending_reset = None
             if (

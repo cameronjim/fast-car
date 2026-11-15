@@ -49,6 +49,9 @@ import launch_testing.asserts
 import rclpy
 from launch_ros.actions import Node as LaunchNode
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
+import orderly_shutdown
+
 
 def _load_common():
     spec = importlib.util.spec_from_file_location(
@@ -79,6 +82,7 @@ class TestGapFollowEscapeCanary(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         rclpy.shutdown()
+        orderly_shutdown.stop_stack()
 
     def test_backs_out_of_the_tight_corner_and_completes_the_lap(self):
         common.run_escape_canary(self, _TIGHT_RADIUS_M, "square corner")

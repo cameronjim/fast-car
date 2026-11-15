@@ -75,6 +75,9 @@ run "tests/l5_reactive_bench" report
 # tests/l5_pnp_laps (brief 30): the lap battery decision functions and the B4 tool, with their
 # L2 properties (hypothesis). The ROS canary in the same directory skips here.
 run "tests/l5_pnp_laps" report
+# tests/launch_support: the orderly end of a launch_testing stack the L5 and e2e canaries use
+# (one DDS participant leaves at a time). ROS-free, needs /proc; skips itself elsewhere.
+run "tests/launch_support" report
 
 # tests/sim_regression (roadmap task S.6) is deliberately NOT run here: it installs and
 # steps the pinned f1tenth_gym through several maneuvers (like sim/racer_gym above), which

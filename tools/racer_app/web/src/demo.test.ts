@@ -93,6 +93,20 @@ describe("demo fake agent", () => {
     expect((await api.status()).drive.mode).toBe("pnp");
   });
 
+  it("the demo agent refuses a speed cap above the dynamics bundle's validity, like the car", async () => {
+    const { car, api } = rig();
+    car.preset("running");
+    const base = { mode: "pnp", pnp_backend: "geometric", pnp_dynamics: "dyn-v0.1-2026-11-12" };
+    const opts = await api.options();
+    expect(opts.pnp?.dynamics_v_max_mps?.["dyn-v0.1-2026-11-12"]).toBe(1.3);
+    await expect(api.startDrive({ ...base, pnp_v_max_mps: 1.5 } as never)).rejects.toMatchObject({
+      status: 400,
+      message: "speed cap 1.50 m/s is too fast for dyn-v0.1-2026-11-12: max 1.3 m/s (the bundle's validity range)",
+    });
+    await api.startDrive({ ...base, pnp_v_max_mps: 1.3 } as never);
+    expect((await api.status()).drive.mode).toBe("pnp");
+  });
+
   it("the override flow: refused as overridable, accepted with a reason, logged", async () => {
     const { car, api } = rig();
     car.preset("running");

@@ -20,18 +20,7 @@ PROCEDURE = REPO / "tests/bench/procedures/pnp_session_v03.yaml"
 LAUNCH = REPO / "ros_ws/src/racer_bringup/launch/pnp.launch.py"
 
 # (argument, value or None) -> (brief, marker file, text the marker file must contain or None)
-ALLOW = {
-    ("deskew", None): (
-        33,
-        "ros_ws/src/racer_track_perception/src/racer_track_perception/deskew.py",
-        None,
-    ),
-    ("lap_mode", "observe"): (
-        29,
-        "ros_ws/src/racer_laps/src/racer_laps/lap_memory_node.py",
-        '"observe"',
-    ),
-}
+ALLOW: dict[tuple[str, str | None], tuple[int, str, str | None]] = {}
 SESSION_STEPS = set(range(9))
 KNOWN_REPORT_COMMANDS = {"timing", "laps", "host-facts"}
 

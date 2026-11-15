@@ -19,6 +19,7 @@ import {
   parseNum,
   patch,
   pnpErrors,
+  pnpSpeedLimit,
   prefsProblems,
   samePrefs,
 } from "./prefs";
@@ -83,6 +84,7 @@ export function TuneTab() {
   const pnp = options.pnp;
   const pRange = pnp?.speed_range ?? [0.2, 1.5];
   const pErr = pnpErrors(n, options);
+  const pLimit = pnpSpeedLimit(n, options);
   const lap = lapChoice(n);
   const setGap = (v: Partial<Prefs["gap_follow"]>) => edit(patch(draft, "gap_follow", v));
   const setPnp = (v: Partial<Prefs["pnp"]>) => edit(patch(draft, "pnp", v));
@@ -161,14 +163,19 @@ export function TuneTab() {
             label="Speed cap"
             unit="m/s"
             value={n.v_max_mps}
-            min={pRange[0]}
-            max={pRange[1]}
+            min={pLimit.min}
+            max={pLimit.max}
             step={0.05}
-            fallback={d.pnp.v_max_mps}
+            fallback={Math.min(d.pnp.v_max_mps, pLimit.max)}
             error={pErr.v_max_mps}
             nullable={false}
-            onChange={(v) => setPnp({ v_max_mps: v ?? d.pnp.v_max_mps })}
+            onChange={(v) => setPnp({ v_max_mps: v ?? Math.min(d.pnp.v_max_mps, pLimit.max) })}
           />
+          {pLimit.bundle && !pErr.v_max_mps && (
+            <div class="sub">
+              max {pLimit.max} m/s for {pLimit.bundle}
+            </div>
+          )}
           <div class="field">
             <span>Perception</span>
             <div class="seg" role="group" aria-label="ML driver perception backend">
@@ -180,7 +187,12 @@ export function TuneTab() {
             </div>
           </div>
           <Field label="Dynamics">
-            <select value={n.dynamics} onChange={(e) => setPnp({ dynamics: e.currentTarget.value })} aria-label="ML driver dynamics bundle">
+            <select value={n.dynamics} onChange={(e) => {
+              // A bundle that covers less than the saved cap brings the cap down to what it covers.
+              const dynamics = e.currentTarget.value;
+              const { max } = pnpSpeedLimit({ dynamics }, options);
+              setPnp(n.v_max_mps > max ? { dynamics, v_max_mps: max } : { dynamics });
+            }} aria-label="ML driver dynamics bundle">
               <option value="">{pnp?.dynamics.length === 1 ? `auto (${pnp.dynamics[0]})` : "choose"}</option>
               {pnp?.dynamics.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>

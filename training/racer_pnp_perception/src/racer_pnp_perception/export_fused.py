@@ -126,12 +126,20 @@ def readme(model_id: str, metrics: dict[str, Any]) -> str:
         f"`evaluation/prereg/pnp-v0.4.yaml` (SHA-256 `{g.get('prereg_sha256')}`).",
         f"Frozen at git `{g.get('frozen_sha')}`; FuseConfig `{json.dumps(g.get('fuse_config'))}`.",
         "",
-        "Items 3 and 5 hold largely BY CONSTRUCTION (the valid count is at least the tracer's and the",
-        "corridor on shared stations is the tracer's). Geometric stays the launch default in every",
-        "case. A pass means a candidate backend in the layout family, on a fresh session, and says",
+        "Coverage is its own gate, GP1c-K (addendum 1 section 3.2), listed below the items.",
+        "Geometric stays the launch default in every case. A pass means a candidate backend in the layout family, on a fresh session, and says",
         "nothing about unseen layouts.",
         "",
         *_item_table(g),
+        "",
+        f"GP1c-K: {'PASS' if g['gp1c_k']['passed'] else 'FAIL'}",
+        "",
+        "| item | result | value |",
+        "|---|---|---|",
+        *[
+            f"| K{i['number']}. {i['name']} | {'PASS' if i['passed'] else 'FAIL'} | {i['value']} |"
+            for i in g["gp1c_k"]["items"]
+        ],
         "",
         "### M-A1 and the GP1c numbers, side by side",
         "",

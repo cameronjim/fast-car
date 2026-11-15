@@ -56,12 +56,9 @@ def test_everything_passing_is_a_pass_with_eight_items() -> None:
     assert [i.number for i in items] == list(range(1, 9))
 
 
-def test_items_3_and_5_carry_the_by_construction_flag() -> None:
+def test_no_item_carries_a_by_construction_flag() -> None:
     items, _o, _f = decide()
-    for n in (3, 5):
-        assert "by construction" in item(items, n).note
-    for n in (1, 2, 4, 6, 7, 8):
-        assert "by construction" not in item(items, n).note
+    assert all("construction" not in i.note for i in items)
 
 
 # ---- item 1 ---------------------------------------------------------------------------------
@@ -252,6 +249,47 @@ def test_the_report_is_strict_json_with_the_four_backends_side_by_side() -> None
     json.dumps(out, allow_nan=False)
     assert set(out["M-A1"]["H14"]) == {"geometric", "fused", "net", "net_unrefined"}
     assert set(out["M-A1"]["A14"]) == set(out["M-A1"]["H14"])
-    assert out["failed_items"] == [8]  # no canary given: not measured, not a pass
+    assert (
+        out["failed_items"] == [8] and "gp1c_k" in out
+    )  # no canary given: not measured, not a pass
     assert out["sets"] == {"H14_labelled": 400, "A14_moving": 400}
     assert "GP1c outcome" in gp1c.format_report(out)
+
+
+# ---- GP1c-K ---------------------------------------------------------------------------------
+
+
+def test_k_pass_at_threshold_over_and_empty() -> None:
+    n = 200
+    flat = [0.01] * n  # mean 0.01 at threshold, p99 0.01
+    items, ok = gp1c.decide_gp1c_k(flat, flat)
+    assert ok and len(items) == 4
+    assert not gp1c.decide_gp1c_k([0.0101] * n, flat)[1]  # mean over
+    assert not gp1c.decide_gp1c_k(flat, [0.0101] * n)[1]
+    assert not gp1c.decide_gp1c_k([0.0] * 190 + [0.0501] * 10, flat)[1]  # p99 over
+    tail = [0.0] * 190 + [0.05] * 10  # p99 exactly at the threshold
+    assert gp1c.decide_gp1c_k(tail, tail)[1]
+    items, ok = gp1c.decide_gp1c_k([], [])
+    assert not ok and "nothing to judge" in items[0].note
+    assert gp1c.decide_gp1c_k([math.nan, 0.0], [0.0, 0.0])[1]  # NaN scans are dropped
+
+
+def test_k_worst_scan_is_reported_and_outcomes_combine() -> None:
+    items, _ok = gp1c.decide_gp1c_k([0.0, 0.2], [0.0, 0.0], {"loss": {"bag": "b", "index": 3}})
+    assert items[1].value["worst_scan"] == {"bag": "b", "index": 3}
+    assert gp1c.combined_outcome(gp1c.OUTCOME_PASS, True) == gp1c.OUTCOME_K_CANDIDATE
+    assert gp1c.combined_outcome(gp1c.OUTCOME_PASS, False) == gp1c.OUTCOME_K_NOT_KEPT
+    assert gp1c.combined_outcome(gp1c.OUTCOME_NO_BETTER, True) == gp1c.OUTCOME_NO_BETTER
+
+
+def test_k_thresholds_match_the_addendum_yaml_when_present() -> None:
+    import pytest
+    import yaml
+    from racer_track_perception.vehicle import find_repo_root
+
+    path = find_repo_root() / "evaluation" / "prereg" / "pnp-v0.4-addendum-1.yaml"
+    if not path.is_file():
+        pytest.skip("addendum 1 is not on this branch yet (PR 189)")
+    gate = yaml.safe_load(path.read_text())["perception_coverage"]["gate"]
+    assert gate["max_mean_loss"] == gate["max_mean_excess"] == gp1c.K_MAX_MEAN
+    assert gate["max_p99_loss"] == gate["max_p99_excess"] == gp1c.K_MAX_P99

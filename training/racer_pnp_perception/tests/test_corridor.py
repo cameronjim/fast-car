@@ -56,8 +56,11 @@ def test_the_comparison_sees_a_zigzag_of_centres() -> None:
     geo = straight(hl=0.45, hr=0.45)
     net = straight()
     net.y_m[:] = np.where(np.arange(16) % 2 == 0, 0.12, -0.12)
-    fused = fuse.fuse_track(geo, net, fuse.FuseConfig(append_far=False))
+    unlimited = fuse.FuseConfig(append_far=False, max_shift_slope=1e9)
+    fused = fuse.fuse_track(geo, net, unlimited)
     assert corridor.compare(geo, fused)["loss"] > 0.02
+    limited = fuse.fuse_track(geo, net, fuse.FuseConfig(append_far=False, max_shift_slope=0.05))
+    assert corridor.compare(geo, limited)["loss"] < corridor.compare(geo, fused)["loss"]
 
 
 def test_no_polygon_gives_nan_and_extra_stations_are_counted() -> None:

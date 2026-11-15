@@ -509,7 +509,13 @@ def fused_bundle(tmp_path: Path) -> Path:
     manifest = yaml.safe_load((target / "manifest.yaml").read_text())
     manifest["io"]["arch"] = {
         "type": "circ_conv1d_v0_fused_v1",
-        "fuse": {"reach_m": 0.35, "edge_margin_m": 0.15, "blend": 1.0, "append_far": True},
+        "fuse": {
+            "reach_m": 0.35,
+            "edge_margin_m": 0.15,
+            "blend": 1.0,
+            "append_far": True,
+            "max_shift_slope": 0.30,
+        },
     }
     (target / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
     return target

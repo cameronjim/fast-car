@@ -50,7 +50,8 @@ def test_the_pointer_readme_starts_with_the_verdict_and_flags_the_construction(
     pointer = export_fused.write_pointer(tmp_path / "repo", out, metrics)
     text = (pointer / "README.md").read_text()
     assert text.splitlines()[0].startswith("GP1c verdict: ")
-    assert "BY CONSTRUCTION" in text
+    assert "CONSTRUCTION" not in text.upper()
+    assert "GP1c-K: " in text
     assert text.count("| H14 |") == 4 and text.count("| A14 |") == 4
     assert not (pointer / "weights.npz").exists()
     json.loads((pointer / "metrics.json").read_text())

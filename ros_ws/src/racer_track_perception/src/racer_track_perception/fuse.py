@@ -60,10 +60,14 @@ class FuseConfig:
     edge_margin_m: float = 0.15  # the centre stays at least this far from each tracer edge
     blend: float = 1.0  # 1.0 = take the net's centre where in reach
     append_far: bool = True  # add the net's stations beyond the tracer's last valid one
+    # metres of shift per metre of station spacing allowed between neighbouring stations (the
+    # Lipschitz envelope of `limit_shift_slope`, brief 38a); chosen on development sets by the
+    # rule of addendum 1 section 3.2 and frozen with the bundle
+    max_shift_slope: float = 0.30
 
     def validate(self) -> None:
         """Raise ValueError unless every field is usable (the bundle loader refuses on it)."""
-        for name in ("reach_m", "edge_margin_m", "blend"):
+        for name in ("reach_m", "edge_margin_m", "blend", "max_shift_slope"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"fuse.{name} must be a number, got {value!r}")  # noqa: TRY004
@@ -75,6 +79,8 @@ class FuseConfig:
             raise ValueError(f"fuse.reach_m must be positive, got {self.reach_m!r}")
         if self.edge_margin_m < 0.0:
             raise ValueError(f"fuse.edge_margin_m must not be negative, got {self.edge_margin_m!r}")
+        if self.max_shift_slope <= 0.0:
+            raise ValueError(f"fuse.max_shift_slope must be positive, got {self.max_shift_slope!r}")
         if not 0.0 <= self.blend <= 1.0:
             raise ValueError(f"fuse.blend must be in [0, 1], got {self.blend!r}")
 
@@ -84,6 +90,7 @@ class FuseConfig:
             "edge_margin_m": float(self.edge_margin_m),
             "blend": float(self.blend),
             "append_far": bool(self.append_far),
+            "max_shift_slope": float(self.max_shift_slope),
         }
 
     @classmethod
@@ -91,7 +98,7 @@ class FuseConfig:
         """The config a manifest carries; every key is required, none may be extra."""
         if not isinstance(raw, dict):
             raise ValueError(f"io.arch.fuse must be a mapping, got {type(raw).__name__}")  # noqa: TRY004
-        want = {"reach_m", "edge_margin_m", "blend", "append_far"}
+        want = {"reach_m", "edge_margin_m", "blend", "append_far", "max_shift_slope"}
         if set(raw) != want:
             raise ValueError(f"io.arch.fuse has keys {sorted(raw)}, needs exactly {sorted(want)}")
         cfg = cls(
@@ -99,6 +106,7 @@ class FuseConfig:
             edge_margin_m=raw["edge_margin_m"],
             blend=raw["blend"],
             append_far=raw["append_far"],
+            max_shift_slope=raw["max_shift_slope"],
         )
         cfg.validate()
         return cfg
@@ -143,6 +151,42 @@ def _nearest_on_polyline(
     return float(qx[best]), float(qy[best]), float(d[best])
 
 
+def _envelope(a: NDArray[np.float64], step: float) -> NDArray[np.float64]:
+    """min over j of (a_j + step * |i - j|) for every i (a two pass distance transform)."""
+    e = a.copy()
+    for i in range(1, len(e)):
+        e[i] = min(e[i], e[i - 1] + step)
+    for i in range(len(e) - 2, -1, -1):
+        e[i] = min(e[i], e[i + 1] + step)
+    return e
+
+
+def limit_shift_slope(d: NDArray[np.float64], slope: float) -> NDArray[np.float64]:
+    """The slope limit of brief 38a: the largest shift profile that is nowhere larger in size than
+    `d`, keeps its signs, and changes by at most `slope * STATION_SPACING_M` between neighbouring
+    stations (stations that do not move are zeros of `d`).
+
+    The Lipschitz envelope is taken for the positive and the negative part separately. Where a
+    positive and a negative station are neighbours the two envelopes can add to up to twice the
+    step; the larger of the two is then reduced until the difference is within the step (a shift
+    only ever shrinks)."""
+    step = slope * tr.STATION_SPACING_M
+    out = np.array(d, dtype=np.float64)
+    for _ in range(4 * len(out) + 4):
+        new = _envelope(np.maximum(out, 0.0), step) - _envelope(np.maximum(-out, 0.0), step)
+        for i in range(len(new) - 1):
+            a, b = new[i], new[i + 1]
+            if a * b < 0.0 and abs(a - b) > step + 1e-12:
+                if abs(a) >= abs(b):
+                    new[i] = math.copysign(max(step - abs(b), 0.0), a)
+                else:
+                    new[i + 1] = math.copysign(max(step - abs(a), 0.0), b)
+        if np.array_equal(new, out):
+            break
+        out = new
+    return out
+
+
 def fuse_track_with_outcome(
     geo: tr.LocalTrackData, net: tr.LocalTrackData, cfg: FuseConfig | None = None
 ) -> tuple[tr.LocalTrackData, FuseOutcome]:
@@ -185,6 +229,9 @@ def _fuse(geo: tr.LocalTrackData, net: tr.LocalTrackData, cfg: FuseConfig) -> tr
     cx, cy = gx.copy(), gy.copy()
     new_hl, new_hr = hl.copy(), hr.copy()
     cap = tr.HALF_WIDTH_CAP_M
+    d = np.zeros(ng)  # the shift each station would take by the rules above
+    bounds = np.zeros((ng, 2))  # the margin and cap bounds of that shift
+    has_bounds = np.zeros(ng, dtype=bool)
     for i in range(ng if ng >= 2 else 0):
         qx, qy, dist = _nearest_on_polyline(gx[i], gy[i], zx, zy)
         if dist > cfg.reach_m:
@@ -197,7 +244,14 @@ def _fuse(geo: tr.LocalTrackData, net: tr.LocalTrackData, cfg: FuseConfig) -> tr
         hi = min(hl[i] - cfg.edge_margin_m, cap - hr[i])
         if lo > hi:
             continue
-        s = min(max(min(max(want, -cfg.reach_m), cfg.reach_m), lo), hi)
+        d[i] = min(max(min(max(want, -cfg.reach_m), cfg.reach_m), lo), hi)
+        bounds[i] = (lo, hi)
+        has_bounds[i] = True
+    applied = limit_shift_slope(d, cfg.max_shift_slope)
+    for i in range(ng):
+        if not has_bounds[i]:
+            continue  # out of reach, a narrow corridor or a lone station: the tracer's centre
+        s = min(max(applied[i], bounds[i, 0]), bounds[i, 1])
         cx[i] = gx[i] + s * nrm[i, 0]
         cy[i] = gy[i] + s * nrm[i, 1]
         new_hl[i] = hl[i] - s

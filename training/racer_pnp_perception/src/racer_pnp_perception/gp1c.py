@@ -24,8 +24,9 @@ Backends of one scan, side by side: `geometric`, `fused` (the candidate), `net` 
 `net_unrefined` (v2 weights alone), the last two being M-A1. In `decide_gp1c` the candidate is
 stored under the key `net`, as in `gp1.decide_gp1b`, so the v0.2 tables and rules read it unchanged.
 
-Items 3 and 5 hold largely BY CONSTRUCTION (the valid count is at least the tracer's and the
-corridor on shared stations is the tracer's); every report flags them.
+Items 3 and 5 are simply scored (the "holds by construction" flag was withdrawn: the output
+polygon was measured and the construction does not keep the corridor, brief 38a). Coverage is its
+own gate, GP1c-K (`decide_gp1c_k`, addendum 1 section 3.2), scored in the same single pass on A14.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from racer_track_perception.core import BACKEND_GEOMETRIC, BACKEND_NET, TrackPer
 from racer_track_perception.runtime import CircConv1dV0
 from racer_track_perception.vehicle import LiveVehicle, load_live_vehicle
 
-from racer_pnp_perception import gp1, gp1b, split_v04, windowed
+from racer_pnp_perception import corridor, gp1, gp1b, split_v04, windowed
 from racer_pnp_perception.internal_val import net_from_run
 from racer_pnp_perception.split import ROLE_HELDOUT, ROLE_TRAIN, load_folds, load_split
 
@@ -69,12 +70,19 @@ CANARY_MAX_WALL_CONTACTS = 0
 FUSED = "fused"
 UNREFINED = gp1b.UNREFINED
 
-BY_CONSTRUCTION_NOTE = "holds largely by construction (the corridor and the range are the tracer's)"
 
 OUTCOME_PASS = (
     "pass: candidate backend in the layout family it trained on, on a fresh session; not "
     "evidence for unseen layouts (geometric stays deployed until the on-car rule of 3.4)"
 )
+# Addendum 1 section 3.2, yaml perception_coverage.gate (evaluation/prereg/pnp-v0.4-addendum-1.yaml).
+K_MAX_MEAN = 0.01
+K_MAX_P99 = 0.05
+OUTCOME_K_CANDIDATE = (
+    "candidate: GP1c and GP1c-K both pass (geometric stays deployed until the on-car rule of 3.4)"
+)
+OUTCOME_K_NOT_KEPT = "better centre, corridor not kept (GP1c passed, GP1c-K failed)"
+
 OUTCOME_UNDECIDED = "undecided: fewer than 300 labelled scans in H14, geometric stays"
 OUTCOME_NO_BETTER = "no better than geometric in the layout (item 2 or 3 failed), geometric stays"
 OUTCOME_NOT_ELSEWHERE = (
@@ -161,7 +169,6 @@ def decide_gp1c(
             {"v_fused": h[net].v, "v_geometric": h[geo].v},
             {"v_fused_min": h[geo].v - gp1.ITEM3_V_MARGIN},
             gp1._ge(h[net].v, h[geo].v - gp1.ITEM3_V_MARGIN),
-            BY_CONSTRUCTION_NOTE,
         )
     )
     judged = [c for c in cells if c.judged]
@@ -193,7 +200,6 @@ def decide_gp1c(
             {**value, "moving_scans": a14[net].scans},
             thr,
             ok,
-            BY_CONSTRUCTION_NOTE,
         )
     )
     if dev is None:
@@ -268,6 +274,48 @@ def decide_gp1c(
     return items, outcome, failed
 
 
+def decide_gp1c_k(
+    losses: list[float], excesses: list[float], worst: dict[str, Any] | None = None
+) -> tuple[list[gp1.Item], bool]:
+    """GP1c-K on A14: coverage loss and excess of the fused corridor polygon against the geometric
+    one (`corridor.compare`, one value per moving scan, NaN entries dropped): mean at most 0.01 and
+    p99 at most 0.05 for each. Returns the four items and whether all pass. An empty set fails."""
+    items: list[gp1.Item] = []
+    for n, (name, vals) in enumerate((("loss", losses), ("excess", excesses)), start=1):
+        v = np.array([x for x in vals if math.isfinite(x)], dtype=np.float64)
+        mean = float(v.mean()) if len(v) else math.nan
+        p99 = float(np.percentile(v, 99)) if len(v) else math.nan
+        note = "" if len(v) else "no scan compared: nothing to judge"
+        items.append(
+            gp1.Item(
+                2 * n - 1,
+                f"mean coverage {name} on A14",
+                {"mean": mean, "scans": len(v)},
+                {"max": K_MAX_MEAN},
+                gp1._le(mean, K_MAX_MEAN),
+                note,
+            )
+        )
+        items.append(
+            gp1.Item(
+                2 * n,
+                f"p99 coverage {name} on A14",
+                {"p99": p99, "worst_scan": worst.get(name) if worst else None},
+                {"max": K_MAX_P99},
+                gp1._le(p99, K_MAX_P99),
+                note,
+            )
+        )
+    return items, all(i.passed for i in items)
+
+
+def combined_outcome(gp1c_outcome: str, k_passed: bool) -> str:
+    """Candidate only if GP1c and GP1c-K both pass."""
+    if gp1c_outcome == OUTCOME_PASS:
+        return OUTCOME_K_CANDIDATE if k_passed else OUTCOME_K_NOT_KEPT
+    return gp1c_outcome
+
+
 def dev_result_from_gp1b(items: list[gp1.Item], failed: list[int]) -> DevResult:
     """Item 6 from the items of `gp1.decide_gp1b` for `fused-v1`."""
     return DevResult(
@@ -297,6 +345,21 @@ def perceivers_from_net(
         BACKEND_NET: TrackPerceiver(BACKEND_NET, live, net=net, model_id=model_id, refine_net=True),
         UNREFINED: TrackPerceiver(BACKEND_NET, live, net=net, model_id=model_id),
     }
+
+
+def score_row_with_coverage(
+    row: gp1.ScanRow,
+    scans: Any,
+    i: int,
+    perceivers: dict[str, TrackPerceiver],
+    live: LiveVehicle,
+) -> None:
+    """`gp1.score_row` plus the corridor polygon comparison of fused against geometric."""
+    gp1.score_row(row, scans, i, perceivers, live)
+    geometry = (scans.angle_min, scans.angle_increment, scans.range_min, scans.range_max)
+    geo = perceivers[BACKEND_GEOMETRIC].process(scans.ranges[i], *geometry)
+    fused = perceivers[FUSED].process(scans.ranges[i], *geometry)
+    row.coverage = corridor.compare(geo, fused)
 
 
 def candidate_rows(rows: list[gp1.ScanRow]) -> list[gp1.ScanRow]:
@@ -355,10 +418,22 @@ def gp1c_report(
 ) -> dict[str, Any]:
     h14, a14, ci_hi, cells = numbers_h14_a14(rows)
     items, outcome, failed = decide_gp1c(h14, a14, ci_hi, cells, dev, latency_p99_ms, canary)
+    cov = [r.coverage for r in rows if r.coverage is not None]
+    worst = {}
+    for key in ("loss", "excess"):
+        finite = [
+            {"bag": r.bag, "index": r.index, key: r.coverage[key]}
+            for r in rows
+            if r.coverage is not None and math.isfinite(r.coverage[key])
+        ]
+        worst[key] = max(finite, key=lambda w, key=key: w[key], default=None)
+    k_items, k_ok = decide_gp1c_k([c["loss"] for c in cov], [c["excess"] for c in cov], worst)
     return gp1._clean(
         {
             "gate": "GP1c",
-            "outcome": outcome,
+            "outcome": combined_outcome(outcome, k_ok),
+            "gp1c_outcome": outcome,
+            "gp1c_k": {"passed": k_ok, "items": [vars(i) for i in k_items]},
             "failed_items": failed,
             "items": [vars(i) for i in items],
             "bootstrap_ci_hi": ci_hi,
@@ -374,6 +449,11 @@ def gp1c_report(
 
 def format_report(result: dict[str, Any]) -> str:
     lines = [f"GP1c outcome: {result['outcome']}", f"failed items: {result['failed_items']}"]
+    lines.append(f"GP1c-K: {'PASS' if result['gp1c_k']['passed'] else 'FAIL'}")
+    for i in result["gp1c_k"]["items"]:
+        lines.append(
+            f"  K{i['number']}. {i['name']}: {'PASS' if i['passed'] else 'FAIL'} {i['value']}"
+        )
     for i in result["items"]:
         lines.append(f"  {i['number']}. {i['name']}: {'PASS' if i['passed'] else 'FAIL'}")
         if i["note"]:
@@ -492,7 +572,13 @@ def score_main(args: argparse.Namespace) -> int:
         # the windowed cache only: a whole-bag read would decode reserve segments
         windowed.require_cache(args.labels / "cache", bag)
         rows += gp1.collect_bag(
-            args.bags_root / bag, args.labels, split, perceivers, live, {ROLE_HELDOUT: gp1.SET_RUN}
+            args.bags_root / bag,
+            args.labels,
+            split,
+            perceivers,
+            live,
+            {ROLE_HELDOUT: gp1.SET_RUN},
+            scorer=score_row_with_coverage,
         )
     for r in rows:  # defence in depth: no scored scan lies in a reserve segment
         split_v04.assert_not_reserve(doc, r.bag, r.t_s, r.t_s)

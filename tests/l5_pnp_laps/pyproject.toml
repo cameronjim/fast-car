@@ -19,4 +19,4 @@ dependencies = [
 package = false
 
 [tool.pytest.ini_options]
-pythonpath = [".", "../l5_reactive_bench"]
+pythonpath = [".", "../l5_reactive_bench", "../../sim/bridge/racer_gym_bridge", "../../ros_ws/src/racer_laps/src"]

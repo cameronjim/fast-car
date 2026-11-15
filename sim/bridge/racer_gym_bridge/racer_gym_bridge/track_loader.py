@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import csv
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -266,6 +266,8 @@ class SyntheticTrack:
     occupancy_origin: tuple[float, float, float] | None = None
     occupancy_resolution_m: float = 0.05
     wall_thickness_m: float = WALL_THICKNESS_M
+    # Solid boxes against a wall (track_obstacles.apply_obstacles); the centreline bends round them.
+    obstacles: tuple = ()
 
     def bounds(self) -> tuple[float, float, float, float]:
         """(x_min, y_min, x_max, y_max) of the walls."""
@@ -286,6 +288,7 @@ class SyntheticTrack:
             self.occupancy_origin,
             self.occupancy_resolution_m,
             self.wall_thickness_m,
+            self.obstacles,
         )
 
 
@@ -426,7 +429,7 @@ def _open_room(size_m: float) -> SyntheticTrack:
     return SyntheticTrack("open_room", cx, cy, np.vstack(walls), False, 0.0)
 
 
-def build_synthetic_track(
+def _build_track_without_obstacles(
     name: str,
     lane_width_m: float = DEFAULT_LANE_WIDTH_M,
     corner_radius_m: float | None = None,
@@ -520,6 +523,20 @@ def build_synthetic_track(
     else:
         walls.append(_segments(inner, closed=True))
     return SyntheticTrack(name, cx, cy, np.vstack(walls), True, lane_width_m)
+
+
+def build_synthetic_track(
+    name: str, *args, obstacles: Sequence[Mapping] | None = None, **kwargs
+) -> SyntheticTrack:
+    """One of ``SYNTHETIC_TRACK_NAMES`` as a ``SyntheticTrack``, optionally with solid boxes
+    against its walls (``obstacles``, see track_obstacles.apply_obstacles). The other arguments are those of
+    ``_build_track_without_obstacles`` (documented there)."""
+    track = _build_track_without_obstacles(name, *args, **kwargs)
+    if obstacles:
+        from .track_obstacles import apply_obstacles
+
+        return apply_obstacles(track, obstacles)
+    return track
 
 
 def rasterize_walls(

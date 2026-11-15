@@ -22,6 +22,15 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_lap_battery_b4 test_lap_battery_b4.py
     TIMEOUT 300
   )
+  # Battery B5 and measurement M-A2 of the v0.4 pre-registration (brief 40): the D4 decision
+  # functions, the M-A2 reading, the command builders, the B4 gate and freeze check, the run
+  # machinery with a fake runner, and the innovation gate counter. Not a battery run.
+  ament_add_pytest_test(test_lap_battery_b5 test_lap_battery_b5.py
+    TIMEOUT 300
+  )
+  ament_add_pytest_test(test_lap_node_counting test_lap_node_counting.py
+    TIMEOUT 120
+  )
 endif()
 
 ament_package()

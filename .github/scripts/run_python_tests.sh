@@ -85,6 +85,9 @@ run "tests/l5_reactive_bench" report
 # tests/l5_pnp_laps (brief 30): the lap battery decision functions and the B4 tool, with their
 # L2 properties (hypothesis). The ROS canary in the same directory skips here.
 run "tests/l5_pnp_laps" report
+# tests/l5_pnp_oracle (brief 40): the oracle track's geometry and the guard that the car's launch
+# cannot start it. The ROS parity test and the canary in the same directory skip here.
+run "tests/l5_pnp_oracle" report
 # tests/launch_support: the orderly end of a launch_testing stack the L5 and e2e canaries use
 # (one DDS participant leaves at a time). ROS-free, needs /proc; skips itself elsewhere.
 run "tests/launch_support" report

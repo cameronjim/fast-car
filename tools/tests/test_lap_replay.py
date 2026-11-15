@@ -559,3 +559,57 @@ def test_main_on_a_bag_without_wheel_odometry_switches_the_start_gate_off(tmp_pa
     # the payloads are raw gray bytes, not JPEG: every frame is counted as undecodable, and the
     # report still says what it knows
     assert "no /odom/wheel in the bag" in out and "undecodable" in out
+
+
+# ----------------------------------------------------------------------- split runs, reference
+
+
+def test_split_run_resolves_a_whole_run_from_the_registered_yaml():
+    run = lap_replay.load_split_run("L0")
+    assert run.role == "dev"
+    assert run.bag.name == "2026-11-14T21-49-21_car_teleop"
+    assert run.t_from == pytest.approx(1794692965.664 + 124.9)
+    assert run.t_to == pytest.approx(1794692965.664 + 239.9)
+
+
+def test_split_run_spans_the_parts_of_a_run_cut_in_two():
+    run = lap_replay.load_split_run("X2")
+    first = 1794694074.843
+    assert run.role == "test"
+    assert (run.t_from, run.t_to) == (pytest.approx(first + 446.7), pytest.approx(first + 517.1))
+
+
+def test_split_run_refuses_an_unknown_run_and_a_changed_yaml(tmp_path):
+    with pytest.raises(SystemExit, match="not a lap run"):
+        lap_replay.load_split_run("G1a")
+    edited = tmp_path / "pnp-v0.4.yaml"
+    edited.write_bytes(lap_replay.PREREG_V04_PATH.read_bytes() + b"\n# edited\n")
+    with pytest.raises(SystemExit, match="SHA-256"):
+        lap_replay.load_split_run("L0", edited)
+
+
+def test_clip_messages_keeps_the_window_inclusive():
+    msgs = [Msg("odom", t, (0.0, None)) for t in (1.0, 2.0, 3.0, 4.0)]
+    assert [m.t for m in lap_replay.clip_messages(msgs, 2.0, 3.0)] == [2.0, 3.0]
+
+
+def test_reference_report_counts_matched_missed_and_false(tmp_path):
+    def ev(n, t):
+        return LapEvent(n, t, t, 0.9, float(n), 5.0, None)
+
+    ref = tmp_path / "lapref.json"
+    ref.write_text('{"lap_count": 3, "lap_times_s": [5.5, 5.6, 5.7]}')
+    count, times = lap_replay.load_reference(ref)
+    assert (count, times) == (3, [5.5, 5.6, 5.7])
+    equal = lap_replay.reference_report([ev(1, 5.5), ev(2, 5.7), ev(3, 5.6)], count, times)
+    assert "matched 3, missed 0, false 0" in equal[0]
+    assert "max |d| 0.10" in equal[1]
+    short = lap_replay.reference_report([ev(1, 11.1)], count, times)
+    assert "matched 1, missed 2, false 0" in short[0] and len(short) == 1
+    extra = lap_replay.reference_report([ev(i, 5.0) for i in range(5)], count, times)
+    assert "matched 3, missed 0, false 2" in extra[0]
+
+
+def test_main_split_run_rejects_a_bag_next_to_it():
+    with pytest.raises(SystemExit, match="replaces"):
+        lap_replay.main(["some.mcap", "--split-run", "L0"])

@@ -53,8 +53,8 @@ After a run, on the laptop. `<bag>` is the bag directory, `<out>` the session fo
   It must print that the SHA-256 matches. If it refuses, pull main.
 - Watch: the wheels turn right with the board on the left, left with the board on the right,
   `cmd_speed_mps` never above 0.4, Ctrl-C stops the wheels within the watchdog time, the kill knob
-  works. Camera counter on at the 10 Hz record rate (the launch argument of brief 39; if it is not
-  on main, skip the rate and say so): hold the start line mark in front of the camera three times,
+  works. Camera container first, at the 10 Hz record rate of the counter's camera
+  (`ros2 launch racer_bringup cameras.launch.py lap_record_rate_hz:=10.0`): hold the start line mark in front of the camera three times,
   the counter counts three laps.
 - Stop when: any item fails. Stay off the floor.
 - The number: none. A checklist.
@@ -62,7 +62,7 @@ After a run, on the laptop. `<bag>` is the bag directory, `<out>` the session fo
 ## Step 1 C timing and D3-C0 (minimum session)
 
 - Launch: `v_max_mps:=0.5` then `1.0`, with `lap_counter:=true require_lap_counter:=true lap_memory:=true lap_mode:=observe`
-  and the 10 Hz record rate argument. Per cap: ccw, ccw, cw, cw, 10 laps each, one launch per run,
+  with the camera container already up at `lap_record_rate_hz:=10.0`. Per cap: ccw, ccw, cw, cw, 10 laps each, one launch per run,
   only `v_max_mps` changes. The phone films the lane and the start line for all eight runs.
   (The registered 4.2 needs at least 8 standing starts at caps 0.5 and 1.0, so two runs per
   direction per cap.)
@@ -82,7 +82,7 @@ uv run --project tools --extra session python tools/pnp_session_report.py v04 --
   and obstacle brakes 0, no contact. A miss is reported with its counts and goes to the owner as a
   decision (real-time scheduling), not taken here. D3-C0: lap count equals the reference's in both
   runs and at least 18 of the 20 lap times within 0.3 s. `lapref` (`tools/lapref.py <bag> --run
-  <start> <end>`, skip if not on main) is printed next to it and decides nothing.
+  <start> <end> --out <out>/lapref/<run_id>.json`) is printed next to it and decides nothing.
 - Next to it, `racer_eval timing_chain --bag <bag>` (M-C2, M-T2, M-C3, no threshold; brief 42,
   skip if not on main, and it needs `/pnp/planner/timing` in the bag). v0.2 4.2 is judged as
   before. The report prints the GP3 wording above and whether the tool is on this checkout.
@@ -264,9 +264,9 @@ likely to touch or stall on the floor. No line was changed.
 
 ### 9b After the session
 
-- On the dev machine: `tools/pnp_data.py runs <bag>` for every bag (skip if not on main).
+- On the dev machine, for every bag: `uv run --project tools --extra session python tools/pnp_data.py runs <bag>`.
 - The dynamics split of this session is brief 47's (every run 55 percent, 2.0 s, the rest). The
-  v0.4 `tools/pnp_data.py split <bag> --session <date>` still runs for everything else. Fits
+  v0.4 `uv run --project tools --extra session python tools/pnp_data.py split <bag> --session <date>` still runs for everything else. Fits
   refuse a bag with no committed split.
 - The number: none. The bags are the deliverable.
 

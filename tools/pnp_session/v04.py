@@ -120,13 +120,12 @@ def choose_reference(owner_accepted_camera: bool, m_cam_held: bool) -> str:
 
 
 def read_lapref(path: Path) -> tuple[float, ...]:
-    """The lap times of one lapref JSON (tools/lapref.py, brief 36). A run it found no period in
+    """The lap times of one lapref JSON (tools/lapref.py, brief 36: `lap_times_s`, written with --out). A run it found no period in
     has no laps."""
     doc = json.loads(Path(path).read_text())
-    for key in ("lap_times", "lap_times_s"):
-        if key in doc:
-            return tuple(float(x) for x in doc[key] or [])
-    raise ValueError(f"{path}: no lap_times in the lapref JSON")
+    if "lap_times_s" not in doc:
+        raise ValueError(f"{path}: no lap_times_s in the lapref JSON")
+    return tuple(float(x) for x in doc["lap_times_s"] or [])
 
 
 def lapref_next_to(inputs: Sequence[laps.RunLapInput], lapref_dir: Path | None) -> dict[str, Any]:

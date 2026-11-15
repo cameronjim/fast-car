@@ -106,7 +106,12 @@ LAP_FORWARDED = {
         "Lap counter: similarity must drop below this before the next lap can count.",
         float,
     ),
-    "lap_min_lap_time_s": ("min_lap_time_s", "6.0", "Lap counter: shortest lap, seconds.", float),
+    "lap_min_lap_time_s": (
+        "min_lap_time_s",
+        "2.0",
+        "Lap counter: time floor between laps, seconds (the distance gate is the double-count guard).",
+        float,
+    ),
     "lap_min_lap_distance_m": (
         "min_lap_distance_m",
         "3.0",
@@ -235,6 +240,15 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(name, default_value=default, description=description)
         for name, (_param, default, description, _type) in RECORD_FORWARDED.items()
     ]
+    lap_record_rate_arg = DeclareLaunchArgument(
+        "lap_record_rate_hz",
+        default_value="0.0",
+        description=(
+            "Recording rate of the lap counter's camera (the one on lap_image_topic), frames per "
+            "second. 0: same as record_rate_hz (unchanged). The other camera keeps "
+            "record_rate_hz. Brief 39: 10.0 makes a bag replayable by the lap counter."
+        ),
+    )
     record_nodes = [
         Node(
             package="racer_perception",
@@ -259,6 +273,22 @@ def generate_launch_description() -> LaunchDescription:
                         param: ParameterValue(LaunchConfiguration(name), value_type=value_type)
                         for name, (param, _d, _desc, value_type) in RECORD_FORWARDED.items()
                     },
+                    "rate_hz": ParameterValue(
+                        PythonExpression(
+                            [
+                                "float('",
+                                LaunchConfiguration("lap_record_rate_hz"),
+                                "') if (float('",
+                                LaunchConfiguration("lap_record_rate_hz"),
+                                f"') > 0.0 and '{image_topic}' == '",
+                                LaunchConfiguration("lap_image_topic"),
+                                "') else float('",
+                                LaunchConfiguration("record_rate_hz"),
+                                "')",
+                            ]
+                        ),
+                        value_type=float,
+                    ),
                 }
             ],
             condition=IfCondition(
@@ -282,6 +312,7 @@ def generate_launch_description() -> LaunchDescription:
             lap_arg,
             record_arg,
             record_gate_arg,
+            lap_record_rate_arg,
             *_declare(USB_FORWARDED),
             *_declare(CSI_FORWARDED),
             *lap_args,

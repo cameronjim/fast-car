@@ -428,6 +428,8 @@ def test_cameras_record_streams_read_the_full_rate_topic_and_write_the_record_to
     context = _context(
         record_gate="true",
         record_rate_hz="5.0",
+        lap_image_topic="/camera/usb/image_raw/compressed",
+        lap_record_rate_hz="0.0",
         record_max_width_px="640",
         record_max_height_px="360",
         record_jpeg_quality="60",
@@ -452,6 +454,8 @@ def test_cameras_record_gate_false_empties_the_gate_topic():
     context = _context(
         record_gate="false",
         record_rate_hz="5.0",
+        lap_image_topic="/camera/usb/image_raw/compressed",
+        lap_record_rate_hz="0.0",
         record_max_width_px="640",
         record_max_height_px="360",
         record_jpeg_quality="60",
@@ -478,6 +482,8 @@ def test_cameras_record_nodes_never_touch_the_command_topics():
     context = _context(
         record_gate="true",
         record_rate_hz="5.0",
+        lap_image_topic="/camera/usb/image_raw/compressed",
+        lap_record_rate_hz="0.0",
         record_max_width_px="640",
         record_max_height_px="360",
         record_jpeg_quality="60",
@@ -569,3 +575,39 @@ def test_recorder_regex_takes(topic):
 def test_recorder_regex_leaves_out(topic):
     regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX
     assert re.search(regex, topic) is None, topic
+
+
+def _record_rates(**args) -> dict[str, float]:
+    entities = _load("cameras.launch.py").generate_launch_description().entities
+    nodes = _record_nodes(entities)
+    base = {
+        "record_gate": "true",
+        "record_rate_hz": "5.0",
+        "record_max_width_px": "640",
+        "record_max_height_px": "360",
+        "record_jpeg_quality": "60",
+        "record_gate_hold_s": "5.0",
+        "lap_image_topic": "/camera/usb/image_raw/compressed",
+        "lap_record_rate_hz": "0.0",
+    }
+    base.update(args)
+    context = _context(**base)
+    return {k: _node_parameters(n, context)["rate_hz"] for k, n in nodes.items()}
+
+
+def test_lap_record_rate_default_leaves_both_cameras_at_the_record_rate():
+    entities = _load("cameras.launch.py").generate_launch_description().entities
+    assert _defaults(entities)["lap_record_rate_hz"] == "0.0"
+    assert _record_rates() == {"camera_record_usb": 5.0, "camera_record_csi0": 5.0}
+
+
+def test_lap_record_rate_raises_only_the_lap_counters_camera():
+    rates = _record_rates(lap_record_rate_hz="10.0")
+    assert rates == {"camera_record_usb": 10.0, "camera_record_csi0": 5.0}
+
+
+def test_lap_record_rate_follows_lap_image_topic():
+    rates = _record_rates(
+        lap_record_rate_hz="10.0", lap_image_topic="/camera/csi0/image_raw/compressed"
+    )
+    assert rates == {"camera_record_usb": 5.0, "camera_record_csi0": 10.0}

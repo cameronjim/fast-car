@@ -571,6 +571,8 @@ class ScanRow:
     residual: dict[str, float] = field(default_factory=dict)
     deficit: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     containment: dict[str, float] = field(default_factory=dict)
+    # corridor polygon comparison of fused against geometric (gp1c only), else None
+    coverage: dict[str, Any] | None = None
 
 
 def in_segment_path(
@@ -595,6 +597,7 @@ def collect_bag(
     perceivers: dict[str, TrackPerceiver],
     live: LiveVehicle,
     role_to_set: dict[str, str] | None = None,
+    scorer: Any = None,
 ) -> list[ScanRow]:
     """Every moving scan inside a held-out segment (or held-out-layout bag), scored. With
     `role_to_set` the roles that count and the set each goes to are given (GP1b scores a fold's
@@ -648,7 +651,7 @@ def collect_bag(
             label=lab[0] if lab else None,
             label_valid=lab[1] if lab else 0,
         )
-        score_row(row, scans, int(i), perceivers, live)
+        (scorer or score_row)(row, scans, int(i), perceivers, live)
         rows.append(row)
     log.info("%s: %d moving scans in held-out segments", name, len(rows))
     return rows

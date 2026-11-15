@@ -148,13 +148,13 @@ int64_t cycle_time_ns(int k) {
          static_cast<int64_t>((k * 37) % 7) * 100'000;
 }
 
-uint32_t float_bits(float value) {
+[[maybe_unused]] uint32_t float_bits(float value) {
   uint32_t bits = 0;
   std::memcpy(&bits, &value, sizeof(bits));
   return bits;
 }
 
-uint64_t double_bits(double value) {
+[[maybe_unused]] uint64_t double_bits(double value) {
   uint64_t bits = 0;
   std::memcpy(&bits, &value, sizeof(bits));
   return bits;
@@ -187,7 +187,7 @@ struct CycleScript {
   bool inject_fault{false};
 };
 
-std::vector<CycleScript> build_script() {
+[[maybe_unused]] std::vector<CycleScript> build_script() {
   std::vector<CycleScript> script(kTotalCycles);
   std::optional<double> wall_ahead;
   std::optional<double> wall_rear;
@@ -399,7 +399,8 @@ struct ManualClock {
 
 // Feeds one scripted cycle to the node, in the order the callbacks would run: inputs 8 ms before
 // the gate cycle, then the gate cycle itself.
-void run_cycle(SafetyNode& node, const ManualClock& clock, const CycleScript& c, int k) {
+[[maybe_unused]] void run_cycle(SafetyNode& node, const ManualClock& clock, const CycleScript& c,
+                                int k) {
   clock.set(cycle_time_ns(k) - kDeliveryLeadNs);
   if (c.deliver_command) {
     auto message = std::make_shared<AckermannDriveStamped>();
@@ -564,14 +565,18 @@ int run_timing(const Options& options) {
   // measured cycle includes real publishes with real subscribers.
   auto sink = std::make_shared<rclcpp::Node>("ab_timing_sink");
   std::atomic<uint64_t> received{0};
-  const auto count = [&received](auto) { received.fetch_add(1); };
+  const auto counter = [&received](auto message_type_tag) {
+    using Message = decltype(message_type_tag);
+    return [&received](const typename Message::SharedPtr) { received.fetch_add(1); };
+  };
   auto drive_sub = sink->create_subscription<AckermannDriveStamped>(
-      "/drive", rclcpp::QoS(rclcpp::KeepLast(10)).reliable(), count);
+      "/drive", rclcpp::QoS(rclcpp::KeepLast(10)).reliable(), counter(AckermannDriveStamped{}));
   auto event_sub = sink->create_subscription<SafetyEvent>(
-      "/safety/events", rclcpp::QoS(rclcpp::KeepLast(50)).reliable(), count);
+      "/safety/events", rclcpp::QoS(rclcpp::KeepLast(50)).reliable(), counter(SafetyEvent{}));
 #ifdef AB_HAVE_CYCLE
   auto cycle_sub = sink->create_subscription<racer_msgs::msg::SafetyCycle>(
-      "/safety/cycle", rclcpp::QoS(rclcpp::KeepLast(10)).best_effort(), count);
+      "/safety/cycle", rclcpp::QoS(rclcpp::KeepLast(10)).best_effort(),
+      counter(racer_msgs::msg::SafetyCycle{}));
 #endif
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(sink);

@@ -169,7 +169,12 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/ab/reference/safety_node_main.cpp")
   racer_safety_ab_driver(ab_driver_reference "${RACER_SAFETY_AB_REFERENCE}" AB_CAPTURE=1)
   racer_safety_ab_driver(ab_driver_branch "${CMAKE_CURRENT_SOURCE_DIR}/src/safety_node.cpp"
-    AB_CAPTURE=1)
+    AB_CAPTURE=1 AB_HAVE_CYCLE=1)
+  # The same sources with their real publishers (and a real subscriber on each topic), to time
+  # the gate cycle: test/ab/measure_cycle_timing.py. Reports, asserts nothing.
+  racer_safety_ab_driver(ab_timing_reference "${RACER_SAFETY_AB_REFERENCE}")
+  racer_safety_ab_driver(ab_timing_branch "${CMAKE_CURRENT_SOURCE_DIR}/src/safety_node.cpp"
+    AB_HAVE_CYCLE=1)
   add_test(
     NAME test_safety_node_ab
     COMMAND "${Python3_EXECUTABLE}"
@@ -178,8 +183,18 @@ if(BUILD_TESTING)
             --branch "$<TARGET_FILE:ab_driver_branch>"
             --reference-source "${RACER_SAFETY_AB_REFERENCE}"
             --workdir "${CMAKE_CURRENT_BINARY_DIR}/ab_work"
+            --have-cycle
   )
   set_tests_properties(test_safety_node_ab PROPERTIES TIMEOUT 300)
+  add_test(
+    NAME test_safety_node_cycle_timing
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/ab/measure_cycle_timing.py"
+            --reference "$<TARGET_FILE:ab_timing_reference>"
+            --branch "$<TARGET_FILE:ab_timing_branch>"
+            --cycles 100000 --repeats 5
+  )
+  set_tests_properties(test_safety_node_cycle_timing PROPERTIES TIMEOUT 600)
 endif()
 
 ament_package()

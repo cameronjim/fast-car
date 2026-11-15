@@ -49,7 +49,7 @@ def git_blob_sha1(path: pathlib.Path) -> str:
 
 def run(exe: str, out: pathlib.Path, *flags: str) -> list[str]:
     result = subprocess.run(
-        [exe, "--out", str(out), *flags], capture_output=True, text=True, timeout=600
+        [exe, "--out", str(out), *flags], capture_output=True, text=True, timeout=600, check=False
     )
     if result.returncode != 0:
         sys.exit(
@@ -128,7 +128,7 @@ def main() -> None:
     if args.have_cycle:
         c = run(args.branch, work / "c.txt", "--cycle-record")
         require_identical("C (branch, publish_cycle_record true)", gated(a1), gated(c))
-        mismatches = [line for line in c if line.startswith("RECORD_MISMATCH")]
+        mismatches = [line for line in c if line.startswith("RECORD_MISMATCH ")]
         records = [line for line in c if line.startswith("R ")]
         if mismatches or len(records) != cycles:
             sys.exit(

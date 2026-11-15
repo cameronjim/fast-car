@@ -35,6 +35,12 @@ CURRENT_UNITS_BAGS = frozenset(
         "2026-11-13T23-18-49_car_teleop",
         "2026-11-13T23-19-51_car_teleop",
         "2026-11-13T23-27-23_car_teleop",
+        # 2026-11-14 (the car session of pre-registration v0.4, driven on main with the same
+        # vehicle_params 0.17.0 file, unchanged since 2026-11-13): current units
+        "2026-11-14T21-36-40_car_teleop",
+        "2026-11-14T21-37-23_car_teleop",
+        "2026-11-14T21-49-21_car_teleop",
+        "2026-11-14T22-07-50_car_teleop",
     }
 )
 LAST_OLD_UNITS_DATE = "2026-11-11"

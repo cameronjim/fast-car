@@ -74,3 +74,11 @@ def test_unknown_arch_type_exits_non_zero(tmp_path: Path) -> None:
 
     b = write_bundle(tmp_path / "b", load_live_vehicle(), future_arch)
     refused(run_node("backend:=net", f"bundle_dir:={b}"), "IoContractMismatch")
+
+
+def test_fused_bundle_without_its_config_exits_non_zero(tmp_path: Path) -> None:
+    def no_config(m: dict[str, Any]) -> None:
+        m["io"]["arch"]["type"] = "circ_conv1d_v0_fused_v1"
+
+    b = write_bundle(tmp_path / "b", load_live_vehicle(), no_config)
+    refused(run_node("backend:=net", f"bundle_dir:={b}"), "IoContractMismatch")

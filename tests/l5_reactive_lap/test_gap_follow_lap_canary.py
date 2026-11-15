@@ -57,6 +57,9 @@ import launch_testing.asserts
 import rclpy
 from launch_ros.actions import Node as LaunchNode
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
+import orderly_shutdown
+
 
 def _load_common():
     spec = importlib.util.spec_from_file_location(
@@ -85,6 +88,7 @@ class TestGapFollowLapCanary(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         rclpy.shutdown()
+        orderly_shutdown.stop_stack()
 
     def test_completes_laps_inside_the_corridor(self):
         common.run_lap_canary(self, _REVERSE_DIRECTION, "counter-clockwise")

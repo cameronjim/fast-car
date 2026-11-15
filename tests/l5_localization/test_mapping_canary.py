@@ -30,6 +30,9 @@ import launch_testing.asserts
 import rclpy
 from nav_msgs.msg import OccupancyGrid
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
+import orderly_shutdown
+
 _spec = importlib.util.spec_from_file_location(
     "l5_localization_common", Path(__file__).resolve().parent / "l5_localization_common.py"
 )
@@ -106,6 +109,7 @@ class TestMappingCanary(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         rclpy.shutdown()
+        orderly_shutdown.stop_stack()
 
     def test_saved_map_matches_the_track(self):
         node = common.create_node("l5_mapping_canary")

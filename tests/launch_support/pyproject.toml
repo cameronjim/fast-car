@@ -1,0 +1,19 @@
+[project]
+name = "launch-support"
+version = "0.1.0"
+description = """
+Helpers shared by the launch_testing canaries (tests/l5_*, tests/e2e_sim_safety). Today: the
+orderly end of a stack (orderly_shutdown.py), which keeps two participants from leaving the DDS
+domain at once. Not a package to install; a module the canaries load by path.
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

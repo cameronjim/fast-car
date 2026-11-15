@@ -58,6 +58,9 @@ from racer_msgs.msg import SafetyEvent
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
+import orderly_shutdown
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -241,6 +244,7 @@ class TestParkCanary(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         rclpy.shutdown()
+        orderly_shutdown.stop_stack()
 
     def test_finds_the_pocket_and_parks_in_it(self):
         node = rclpy.create_node("l5_park_test")

@@ -44,6 +44,7 @@ from __future__ import annotations
 import csv
 import math
 import signal
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -56,6 +57,9 @@ from launch_ros.actions import Node as LaunchNode
 from nav_msgs.msg import Odometry
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_srvs.srv import Trigger
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
+import orderly_shutdown
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RACELINE_PATH = _REPO_ROOT / "config" / "tracks" / "gym_oval" / "raceline.csv"
@@ -152,6 +156,7 @@ class TestTrackerLapCanary(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         rclpy.shutdown()
+        orderly_shutdown.stop_stack()
 
     def _nearest_s(
         self, x: float, y: float, prev_index: int, window: int = 50

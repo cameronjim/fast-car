@@ -51,8 +51,18 @@ run "tools" report
 # that need the built limiter_whatif_cli skip here and run in the ROS job (ctest).
 echo "::group::pytest: tools/pnp_session (gate=line90 on the package)"
 if ! (cd tools && uv sync --all-extras --dev &&
-  uv run pytest tests/test_pnp_session.py --cov=pnp_session --cov-report=term-missing \
+  uv run pytest tests/test_pnp_session.py tests/test_pnp_session_v04.py tests/test_pnp_cap_schedule.py tests/test_pnp_excitation_plan.py --cov=pnp_session --cov-report=term-missing \
     --cov-fail-under=90); then
+  FAIL=1
+fi
+echo "::endgroup::"
+# tools/pnp_data and tools/lapref (brief 36, the data loop and the offline lap reference): 90 percent
+# line coverage of the two packages. They need the `session` extra (racer_eval) and mcap-ros2-support,
+# both installed by --all-extras; the bag writer in the tests is mcap_ros2's.
+echo "::group::pytest: tools/pnp_data and tools/lapref (gate=line90 on the two packages)"
+if ! (cd tools && uv sync --all-extras --dev &&
+  uv run pytest tests/test_pnp_data.py tests/test_lapref.py tests/test_lapref_compare.py --cov=pnp_data --cov=lapref \
+    --cov-report=term-missing --cov-fail-under=90); then
   FAIL=1
 fi
 echo "::endgroup::"
@@ -72,6 +82,9 @@ run "tests/replay_harness" report
 run "tests/sim_in_loop" report
 run "tests/bench" report
 run "tests/l5_reactive_bench" report
+# tests/l5_pnp_laps (brief 30): the lap battery decision functions and the B4 tool, with their
+# L2 properties (hypothesis). The ROS canary in the same directory skips here.
+run "tests/l5_pnp_laps" report
 # tests/launch_support: the orderly end of a launch_testing stack the L5 and e2e canaries use
 # (one DDS participant leaves at a time). ROS-free, needs /proc; skips itself elsewhere.
 run "tests/launch_support" report

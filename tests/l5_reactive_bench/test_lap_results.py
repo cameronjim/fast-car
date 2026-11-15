@@ -255,3 +255,23 @@ def test_the_start_line_is_the_first_scan_stamped_at_or_after_the_driving_report
     assert runner.first_scan_at_or_after(stamps, None) is None
     # arrival order does not matter: scans that reached this process late or out of order
     assert runner.first_scan_at_or_after([100.2, 99.9, 100.1], 100.0) == 100.1
+
+
+def test_guidance_floor_counters_count_messages_at_the_floor() -> None:
+    counters = {"floor_mps": 0.3, "messages_with_stations": 0, "messages_floor_active": 0}
+    runner.note_guidance_floor(counters, [])  # D v0: no stations, not counted
+    runner.note_guidance_floor(counters, [1.0, 0.8, 0.5])
+    runner.note_guidance_floor(counters, [1.0, 0.30001, 0.9])  # within 1e-4 of the floor
+    runner.note_guidance_floor(counters, [0.3, 0.3])
+    runner.note_guidance_floor(counters, [0.31, 0.4])
+    assert counters == {"floor_mps": 0.3, "messages_with_stations": 4, "messages_floor_active": 2}
+    none = {"floor_mps": 0.0, "messages_with_stations": 0, "messages_floor_active": 0}
+    runner.note_guidance_floor(none, [0.05, 0.2])
+    assert none["messages_floor_active"] == 0
+
+
+def test_the_runner_parser_is_importable() -> None:
+    args = runner.build_parser().parse_args(
+        ["--track", "stadium", "--lap-bound-floor-mps", "0.0", "--no-lap-zone-merge"]
+    )
+    assert args.lap_bound_floor_mps == 0.0 and args.lap_zone_merge is False

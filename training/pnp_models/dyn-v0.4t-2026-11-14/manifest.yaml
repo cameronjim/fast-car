@@ -1,0 +1,94 @@
+bundle_schema_version: 2.0.0
+kind: dynamics
+model_id: dyn-v0.4t-2026-11-14
+created_utc: '2026-11-15T06:19:26Z'
+git_sha: 416e68501c424caeb1f6dc80b6a0ee9edc7a288c
+training_config_sha256: 6c2624b0b8727d59d67926c93eb4aab1bd99323db8283ad6766cb8482091a60e
+vehicle_params: {schema_version: 0.17.0, sysid_session_id: none-preliminary}
+payload:
+- {file: ground_mlp.f32, sha256: aa8b81d746d258905bc11c22f78ed6b9fd538b6253f38b1adf2ad74004b4268a}
+- {file: golden_rollouts.csv, sha256: 06ffcc9bb963e1dd9a9e4fea4d38b56734f5e26637f015b0860640f8054d29f7}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9482438088762631, speed_deadband_mps: 0.22, speed_tau_s: 0.22460632746810144,
+    accel_max_mps2: 2.0, decel_max_mps2: 0.6731081096112491, steer_gain_left: 0.9166243626015708,
+    steer_gain_right: 1.0114633713998802, steer_offset_rad: 0.015222998571431204,
+    steer_tau_s: 0.02787697420940658, command_delay_s: 0.0, understeer_s2_per_m2: 0.10938200992093731}
+  ground_motion:
+    alpha_bounds: [0.6, 1.05]
+    table:
+      steering_nodes_share_of_side_limit: [-1.0, -0.6667, -0.3333, 0.0, 0.3333, 0.6667,
+        1.0]
+      wheel_speed_nodes_mps: [0.25, 0.6, 0.85, 1.25, 1.5]
+      interpolation: bilinear over steering as a share of each side's limit and wheel
+        speed, held constant outside the grid
+      values:
+      - [0.7341651332184108, 0.845998084671362, 0.8582905660880303, 0.8486830753217919,
+        0.8486830753217919]
+      - [0.7866778225800868, 0.8716041793877263, 0.9325878682534857, 0.8872391260108924,
+        0.8872391260108924]
+      - [0.9853894068985073, 0.8868391064448108, 0.9423630464949816, 0.8872391260108924,
+        0.8872391260108924]
+      - [1.049999999747099, 0.9866356335705501, 0.9367820852510133, 0.8443576658826386,
+        0.8443576658826386]
+      - [0.9425441699067668, 0.8638330437930452, 0.9351506188925012, 0.9275231990404946,
+        0.9924908814556236]
+      - [0.8199669071712451, 0.8681288659516179, 0.9459898828766363, 0.9410569587721427,
+        1.0499999999999998]
+      - [0.7531748717738861, 0.9321018567684303, 0.9717885933127786, 0.966730653363196,
+        1.0499999999999998]
+    learned:
+      enabled: false
+      inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+      outputs: [d_alpha, rho]
+      layers:
+      - [4, 32]
+      - [32, 32]
+      - [32, 2]
+      activation: tanh
+      input_mean: [0.0, 0.0, 0.0, 0.0]
+      input_std: [1.0, 1.0, 1.0, 1.0]
+      d_alpha_max: 0.1
+      rho_max: 0.25
+      file: ground_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['train role under T2, split 78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63,
+    addendum ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824']
+metrics:
+  decision:
+    gate: GP2e-T ground motion table
+    passed: false
+    items:
+    - {name: 1a P1 ratio T4 / nominal, value: 0.6265397145733957, comparison: <=,
+      threshold: 0.95, passed: true, note: ''}
+    - {name: 1b upper end of the bootstrap interval of the P1 ratio, value: 0.663672468391663,
+      comparison: <, threshold: 1.0, passed: true, note: ''}
+    - {name: 2a A1 ratio T4 / nominal, value: 0.5976782726220417, comparison: <=,
+      threshold: 1.0, passed: true, note: ''}
+    - {name: 2b C1 ratio T4 / nominal, value: 0.6802651457408526, comparison: <=,
+      threshold: 1.0, passed: true, note: ''}
+    - {name: 3a Y1(T4) minus Y1(nominal), value: 0.0, comparison: <=, threshold: 1.0e-06,
+      passed: true, note: absolute rad}
+    - {name: 3b S1(T4) minus S1(nominal), value: 0.0, comparison: <=, threshold: 1.0e-06,
+      passed: true, note: absolute m/s}
+    - {name: '4 stratum ccw:0.25-0.6 position RMSE ratio', value: 0.5609371649687537,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum ccw:0.6-0.85 position RMSE ratio', value: 0.642149418525615,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum ccw:0.85+ position RMSE ratio', value: 0.7635528393837382,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum cw:0.25-0.6 position RMSE ratio', value: 0.5878412154599817,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum cw:0.6-0.85 position RMSE ratio', value: 0.560879479660788,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: '4 stratum cw:0.85+ position RMSE ratio', value: 0.6304765834613767,
+      comparison: <=, threshold: 1.05, passed: true, note: ''}
+    - {name: 5 supported table nodes on a bound, value: 2.0, comparison: <=, threshold: 0.0,
+      passed: false, note: 's+0.0000/v0.25, s+0.6667/v1.5'}
+    - {name: 6 P1 ratio T4 / nominal under T2s, value: 0.6135079863099633, comparison: <=,
+      threshold: 1.0, passed: true, note: ''}
+    - {name: 7 Pp ratio T4 / nominal, value: 0.8094695780070028, comparison: <=, threshold: 1.0,
+      passed: true, note: ''}

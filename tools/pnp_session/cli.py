@@ -3,6 +3,8 @@
     uv run --project tools python tools/pnp_session_report.py timing --bag <dir> [--out report.json]
     uv run --project tools python tools/pnp_session_report.py laps   --bag <dir>   # D3-C0
     uv run --project tools python tools/pnp_session_report.py host-facts --out-dir <dir>
+    uv run --project tools --extra session python tools/pnp_session_report.py v04 --bag <dir> ...
+    uv run --project tools --extra session python tools/pnp_session_report.py variant-form --form <f>
 
 Every command reads a bag or the host and prints. None of them drives a car, writes a parameter or
 sets a policy.
@@ -19,13 +21,15 @@ from typing import Any
 
 import numpy as np
 import yaml
+from racer_eval import variant_form
 from racer_eval.runs import Run
 
-from pnp_session import hostfacts, laps, report, timing, whatif
+from pnp_session import hostfacts, laps, report, timing, v04, whatif
 from pnp_session.bagread import SessionBag
 from pnp_session.constants import BASELINE_BAG
 
 EXIT_BASELINE_DIFFERS = 3
+EXIT_PREREG = 4
 
 
 def _read(path: Path) -> SessionBag:
@@ -184,6 +188,104 @@ def cmd_host_facts(args: argparse.Namespace, runner: hostfacts.Runner | None = N
     return 0
 
 
+def cmd_check_prereg(args: argparse.Namespace) -> int:
+    try:
+        digest = v04.check_prereg()
+    except v04.PreregMismatch as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return EXIT_PREREG
+    print(f"{v04.PREREG_YAML}: SHA-256 {digest} matches the frozen file")
+    return 0
+
+
+def _parse_results(items: Sequence[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep or value not in v04.STATUSES:
+            raise SystemExit(f"--result {item!r}: use key=met, key=unmet or key=unknown")
+        out[key] = value
+    return out
+
+
+def cmd_v04(args: argparse.Namespace, read: Callable[[Path], SessionBag] | None = None) -> int:
+    try:
+        sha = v04.check_prereg()
+    except v04.PreregMismatch as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return EXIT_PREREG
+    bag = (read or _read)(Path(args.bag))
+    reference = v04.choose_reference(args.owner_accepted_camera, args.m_cam_held)
+    video = None
+    if reference == "video" and args.times:
+        video = laps.read_video_times(Path(args.times))
+    caps = [float(x) for x in args.caps.split(",")] if args.caps else None
+    limiter: dict[str, Any]
+    if args.no_limiter:
+        limiter = whatif.not_run("--no-limiter given")
+    else:
+        try:
+            analysis = timing.analyse_timing(bag, caps, args.wall_contacts)
+            limiter = whatif.whatif_report(bag, analysis, whatif.find_cli(args.limiter_cli))
+        except whatif.LimiterUnavailable as exc:
+            limiter = whatif.not_run(str(exc))
+    doc = v04.v04_report(
+        bag,
+        caps=caps,
+        wall_contacts=args.wall_contacts,
+        reference=reference,
+        video_times=video,
+        lapref_dir=Path(args.lapref_dir) if args.lapref_dir else None,
+        results=_parse_results(args.result),
+        limiter=limiter,
+        prereg_sha256=sha,
+        code_equals_b4=v04.code_identity(args.b4_commit),
+    )
+    if args.out:
+        Path(args.out).write_text(v04.to_json(doc))
+    print(v04.markdown(doc))
+    if reference == "video" and not args.times:
+        print(
+            "D3-C0 reference is the phone video (the camera counter is not accepted as primary "
+            "with M-CAM held): pass --times <csv> of the hand-timed laps.",
+            file=sys.stderr,
+        )
+    return {"PASS": 0, "FAIL": 1}.get(doc["d3_c0"]["verdict"], 2)
+
+
+def cmd_variant_form(args: argparse.Namespace) -> int:
+    form_path = Path(args.form)
+    try:
+        form = variant_form.load_form(form_path)
+        earlier: list[tuple[str, float]] = []
+        for p in args.earlier_forms:
+            earlier += variant_form.positions_of(variant_form.load_form(Path(p)))
+        z = v04.lidar_mount_z_m()
+        checked = variant_form.check_form(form, z, earlier)
+    except variant_form.FormInvalid as exc:
+        print("VARIANT FORM REFUSED:", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"- {problem}", file=sys.stderr)
+        return 1
+    photo = form_path.parent / checked.form.photo
+    if not photo.is_file():
+        print(f"VARIANT FORM REFUSED: photo {photo} is not next to the form", file=sys.stderr)
+        return 1
+    receipt = variant_form.write_receipt(
+        form_path, checked, earlier, "vehicle_params sensors.lidar.mount_z_m via gen_params"
+    )
+    print(
+        f"variant {checked.form.variant_id}: {len(checked.form.objects)} objects, LiDAR plane "
+        f"{z:.3f} m, receipt {receipt.name}"
+    )
+    if args.conditions:
+        order = variant_form.interleaved_order(
+            checked, args.conditions.split(","), args.runs_per_condition
+        )
+        print(f"run order (seed {checked.form.seed}): {' '.join(order)}")
+    return 0
+
+
 def cmd_limiter_stream(
     args: argparse.Namespace, read: Callable[[Path], SessionBag] | None = None
 ) -> int:
@@ -254,6 +356,43 @@ def build_parser() -> argparse.ArgumentParser:
     h = sub.add_parser("host-facts", help="scheduling policy, CPU governor, load: read only")
     h.add_argument("--out-dir", required=True)
     h.set_defaults(func=cmd_host_facts)
+    sub.add_parser(
+        "check-prereg", help="refuse unless the v0.4 constants file is the frozen one"
+    ).set_defaults(func=cmd_check_prereg)
+    v = sub.add_parser(
+        "v04",
+        help="v0.4 session report: M-T, D3-C0 with its reference, lapref next to it, steps allowed",
+    )
+    v.add_argument("--bag", required=True)
+    v.add_argument("--caps", help="comma list, the cap in m/s of each PnP run in order")
+    v.add_argument("--wall-contacts", type=int, default=0)
+    v.add_argument("--owner-accepted-camera", action="store_true", help="v0.4 section 9 item 3")
+    v.add_argument("--m-cam-held", action="store_true", help="M-CAM held (v0.4 section 4.1)")
+    v.add_argument(
+        "--times", help="CSV run,lap,lap_time_s of the hand-timed laps (video reference)"
+    )
+    v.add_argument("--lapref-dir", help="directory of <run_id>.json written by tools/lapref.py")
+    v.add_argument(
+        "--result",
+        action="append",
+        default=[],
+        help="a known result, key=met|unmet|unknown (d3_s0, d3_s1, d4_s0, ... see the procedure)",
+    )
+    v.add_argument(
+        "--b4-commit",
+        help="the commit battery B4 ran on: checks the deployed racer_laps and racer_planner "
+        "against it (addendum 1 section 5.1)",
+    )
+    v.add_argument("--limiter-cli", help="path of limiter_whatif_cli")
+    v.add_argument("--no-limiter", action="store_true")
+    v.add_argument("--out", help="write the JSON here")
+    v.set_defaults(func=cmd_v04)
+    f = sub.add_parser("variant-form", help="check a variant layout form and write its receipt")
+    f.add_argument("--form", required=True)
+    f.add_argument("--earlier-forms", nargs="*", default=[], help="forms of earlier variants")
+    f.add_argument("--conditions", help="comma list: also print GP4-V's run order")
+    f.add_argument("--runs-per-condition", type=int, default=5)
+    f.set_defaults(func=cmd_variant_form)
     s = sub.add_parser(
         "limiter-stream", help="developer: the cycle stream of a bag for the tool's ctest"
     )

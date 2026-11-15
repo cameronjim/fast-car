@@ -270,6 +270,16 @@ def crossing_lap_times(crossings: list[float], start_stamp: float | None) -> lis
     return [round(b - a, 3) for a, b in pairwise(edges)]
 
 
+def note_guidance_floor(counters: dict, v_ref_mps: list[float]) -> None:
+    """Count one guidance message: it has stations, and the floor was its active bound when the
+    lowest per station bound sits at the D v1 floor (`counters["floor_mps"]`)."""
+    if not len(v_ref_mps):
+        return
+    counters["messages_with_stations"] += 1
+    if min(v_ref_mps) <= counters["floor_mps"] + 1e-4:
+        counters["messages_floor_active"] += 1
+
+
 def lap_results(
     lap_tracker,
     events: list[tuple],
@@ -751,6 +761,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     lap_events: list[dict] = []
     guidance_log: list[tuple] = []
     lap_status: dict = {}
+    # B4 report item: guidance messages with stations, and those whose lowest per station bound
+    # sits at the D v1 floor (the floor was the active bound). Counted here, not in the node.
+    guidance_floor: dict = {
+        "floor_mps": float(
+            args.lap_bound_floor_mps if args.lap_bound_floor_mps is not None else 0.3
+        ),
+        "messages_with_stations": 0,
+        "messages_floor_active": 0,
+    }
     driving_first: list[float] = []
     first_scan_after_driving: list[float] = []  # by arrival order (kept for the record only)
     scan_stamps: list[float] = []
@@ -788,6 +807,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 )
 
             def on_guidance(m) -> None:
+                note_guidance_floor(guidance_floor, list(m.v_ref_mps))
                 guidance_log.append(
                     (
                         node.get_clock().now().nanoseconds * 1e-9,
@@ -1003,6 +1023,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 for topic in ("/drive_raw", "/drive")
             }
             if args.lap_memory != "none":
+                result["guidance_floor"] = dict(guidance_floor)
                 result.update(
                     lap_results(
                         lap_tracker,
@@ -1066,7 +1087,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     return result
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The runner's argument parser (importable, so a battery command can be parsed in a test)."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -1213,7 +1235,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-dir", type=Path, help="keep the generated map, raceline and logs")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--trace-out", type=Path)
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     result = run_benchmark(args)
     text = json.dumps(result, indent=2, sort_keys=True, default=str)
     print(text)

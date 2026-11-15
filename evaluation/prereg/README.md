@@ -8,3 +8,6 @@ Run `uv run --group bags python -m racer_eval baseline --bag <bag dir>` there to
 
 `pnp-v0.3.yaml` (SHA-256 `4415b371...d7a1`) holds the constants of the v0.3 attempts: the second lap learning sim battery, the yaw dynamics gate, the perception folds and the deskew measurement.
 `docs/notes/preregistration-pnp-v0.3.md` holds their rules. It adds new gates after the v0.2 failures and changes nothing in the v0.2 files.
+
+`pnp-v0.4.yaml` (SHA-256 `78510c14...1d63`) holds the split of the 2026-11-14 car session bags (train, held-out, reserve and lap roles) and the constants of the v0.4 attempts: the dynamics gate GP2d, the perception gate GP1c, the lap timing measurements, the obstacle variant sim battery B5 and the oracle track measurement.
+`docs/notes/preregistration-pnp-v0.4.md` holds their rules. It adds new gates after the v0.3 results and changes nothing in the v0.2 and v0.3 files.

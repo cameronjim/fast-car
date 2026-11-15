@@ -113,7 +113,7 @@ class LapCounterNode(Node):
             "After a lap (or the start) similarity must first fall below this.",
             floating_point_range=unit,
         )
-        declare("min_lap_time_s", _DEFAULTS.min_lap_time_s, "Shortest possible lap, seconds.")
+        declare("min_lap_time_s", _DEFAULTS.min_lap_time_s, "Time floor between laps, seconds.")
         declare(
             "min_lap_distance_m",
             _DEFAULTS.min_lap_distance_m,

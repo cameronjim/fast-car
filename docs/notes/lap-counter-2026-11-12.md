@@ -97,7 +97,7 @@ visible on the same ROS domain (the car-camera and car-stack containers share it
 |---|---|---|
 | `similarity_threshold` | 0.80 | count a lap at a peak at or above this |
 | `rearm_threshold` | 0.55 | after a lap similarity must first drop below this |
-| `min_lap_time_s` | 6.0 | shortest possible lap (the loop is 17.6 s counter-clockwise) |
+| `min_lap_time_s` | 2.0 | time floor between laps (was 6.0, which refused 5.5 s laps; brief 39). The distance gate is the double-count guard |
 | `min_lap_distance_m` | 3.0 | shortest possible lap in odometry metres (loop 5.2 m centreline, the car drives wider) |
 | `start_speed_mps` | 0.3 | reference taken at the first frame at or above this; `<= 0`: first frame |
 | `rate_hz` | 15.0 | frames processed per second, the rest dropped (`<= 0`: all) |

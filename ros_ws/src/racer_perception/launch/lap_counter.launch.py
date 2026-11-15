@@ -41,7 +41,7 @@ ARGUMENTS = {
     "rate_hz": ("15.0", "Maximum frames processed per second.", float),
     "similarity_threshold": ("0.8", "Count a lap at a similarity peak at or above this.", float),
     "rearm_threshold": ("0.55", "Similarity must drop below this before the next lap.", float),
-    "min_lap_time_s": ("6.0", "Shortest possible lap, seconds.", float),
+    "min_lap_time_s": ("2.0", "Time floor between laps, seconds.", float),
     "min_lap_distance_m": ("3.0", "Shortest possible lap, metres of odometry.", float),
     "start_speed_mps": ("0.3", "Capture the reference at the first frame at this speed.", float),
 }

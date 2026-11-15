@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from racer_track_perception import geometric, preprocess, refine, selfcheck
+from racer_track_perception import fuse, geometric, preprocess, refine, selfcheck
 from racer_track_perception import track as tr
 from racer_track_perception.runtime import CircConv1dV0
 from racer_track_perception.vehicle import LiveVehicle
@@ -53,6 +53,7 @@ class TrackPerceiver:
         model_id: str | None = None,
         refine_net: bool = False,
         refine_cfg: refine.RefineConfig | None = None,
+        fuse_cfg: fuse.FuseConfig | None = None,
     ) -> None:
         if backend not in (BACKEND_NET, BACKEND_GEOMETRIC):
             raise ValueError(f"backend must be 'net' or 'geometric', got {backend!r}")
@@ -65,6 +66,13 @@ class TrackPerceiver:
         # `Bundle.refine`: the bundle's io.arch.type says the net output is refined against the
         # scan. Only the net backend has an output to refine; geometric-v1 is the scan itself.
         self.refine_net = bool(refine_net) and backend == BACKEND_NET
+        # `Bundle.fuse_config`: `fused-v1` (design 16.4) runs the tracer, the net with its
+        # refinement and `fuse.fuse_track`. It implies the refinement.
+        self.fuse_cfg = fuse_cfg if backend == BACKEND_NET else None
+        if self.fuse_cfg is not None:
+            self.refine_net = True
+        # Scans on which the fusion fell back to the tracer's track (net output unusable).
+        self.fuse_fallbacks = 0
         self.model_id = (model_id or "unknown") if backend == BACKEND_NET else GEOMETRIC_MODEL_ID
         self._refine_cfg = refine_cfg or refine.RefineConfig(sigma_max_m=sigma_max_m)
         self._geo_cfg = geometric.GeometricConfig(
@@ -94,6 +102,13 @@ class TrackPerceiver:
                 track = net_output_to_track(self.net.forward(tensor), self.sigma_max_m)
                 if self.refine_net:
                     track = refine.refine_track(track, points, self._refine_cfg)
+                if self.fuse_cfg is not None:
+                    geo = geometric.trace(
+                        points, self.vehicle.body.half_width_m, self.sigma_max_m, self._geo_cfg
+                    )
+                    track, outcome = fuse.fuse_track_with_outcome(geo, track, self.fuse_cfg)
+                    if outcome is fuse.FuseOutcome.NET_UNUSABLE:
+                        self.fuse_fallbacks += 1
             else:
                 track = geometric.trace(
                     points, self.vehicle.body.half_width_m, self.sigma_max_m, self._geo_cfg

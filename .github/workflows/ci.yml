@@ -159,6 +159,21 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/ros_build_test.sh"
 
+  safety-package-untouched:
+    name: racer_safety diff guard (only the approved files change, gate library read only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    # Brief 45, owner decision 1 of 2026-11-14: the one approved change to racer_safety is
+    # receipt-time instrumentation in safety_node.cpp. See the script's header for the allowed
+    # files; it needs the base branch's history, hence fetch-depth 0.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Diff of ros_ws/src/racer_safety against the base branch
+        run: .github/scripts/check_safety_untouched.sh "origin/${{ github.base_ref }}"
+
   racer-safety-coverage:
     name: racer_safety gate-logic branch coverage (100% gate, ros-dev)
     runs-on: ubuntu-latest

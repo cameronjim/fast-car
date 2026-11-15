@@ -142,6 +142,7 @@ class Stage1:  # pragma: no cover - real data
         )
         motions = load_motions(runs, self.vehicle, args.cache, SEED_WHEEL, args.workers)
         older = [s for r in runs for s in make_segments(r, motions.get(r.name), self.v02)]
+        self.older_all = older  # incl. the v0.2 held-out segments, read only by `freeze-eval`
         self.older = [s for s in older if s.split in ("train", "val")]
         self.new = segments_of_v04_bags(args, self.v04, self.vehicle, "train")
         self.train = [s for s in self.new if s.split in ("train", "val")] + self.older
@@ -246,11 +247,21 @@ def budget_cmd(args) -> int:  # pragma: no cover - real data
     return 0
 
 
+def _stage(name: str):  # pragma: no cover - real data
+    def run(args) -> int:
+        from .stages_v04 import STAGE_COMMANDS
+
+        return STAGE_COMMANDS[name](args)
+
+    return run
+
+
 COMMANDS = {
     "truth-train": truth_train,
     "truth-variants": truth_variants,
     "budget": budget_cmd,
     "mb4": mb4_cmd,
+    **{n: _stage(n) for n in ("n4-fit", "r4-fit", "t4-fit", "tl4-fit", "freeze-eval")},
 }
 
 
@@ -263,6 +274,8 @@ def main(argv: list[str]) -> int:  # pragma: no cover - real data
     parser.add_argument("--models", type=Path, default=DATA_ROOT / "pnp" / "models")
     parser.add_argument("--cache", type=Path, default=DATA_ROOT / "pnp" / "cache")
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--date", default=None, help="freeze-eval: the date of the model ids")
+    parser.add_argument("--freeze-sha", default=None, help="freeze-eval: the freeze commit")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     return COMMANDS[args.command](args)

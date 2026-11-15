@@ -67,4 +67,33 @@ Development result against the acceptance line: **L0 does not give 20 at the rec
 
 ## 3. M-CAM on the lap test runs
 
-See the section added below after the one replay.
+Candidate frozen at git `387f7548c9a3618ba73f7cf176e4bed7f299508e` (code unchanged since). One
+replay of K1, K2, X2, X4, X7 with `lap_replay.py --split-run <run> --image-topic
+/camera/usb/record/compressed`, default parameters (2.0 s floor), the recorded 4.73 Hz stream,
+the tool's own reference capture. Not repeated.
+
+**Which reference.** Section 4.1 says the count of 4.2's reference (lapref). lapref then failed
+M-L1 (PR 194: K1 10 of 12, K2 9 of 11, X2 3 of 4, X4 7 of 9 within 0.3 s, X7 double laps), and
+4.3 says that then neither lapref nor the gate is trusted on the strength of the other and the
+phone video decides; 9.3 leaves "whether lapref may be a reference" to the owner. No test run was
+filmed. The registration therefore does not name a usable reference for this case. **No pass or
+fail is declared.** Counts side by side:
+
+| Run | Camera counter (this replay) | lapref | Gate v2 | Wheel distance check |
+|---|---|---|---|---|
+| K1 | 7 (16.8, 5.5, 5.6, 11.2, 11.4, 5.6, 5.6 s) | 12 | 12 | |
+| K2 | 8 (7.3, 6.2, 6.1, 12.3, 6.1, 6.1, 6.3, 12.1 s) | 11 | 11 | |
+| X2 | 1 (14.7 s) | 4 | 4 | |
+| X4 | 9 (7.96 to 9.15 s) | 9 | 9 | |
+| X7 | 3 (18.9, 9.1, 27.4 s) | 7 (double laps, wrong) | 14 (consistent with 75.9 m) | 14 laps of about 5.2 m |
+
+Reading, no threshold applied: the counter equals both candidates on X4 only. On K1, K2, X2 and
+X7 it is below every candidate, with no count above any of them (no false count against either
+reference). Its misses at the recorded rate are the same effect as the dev runs (section 1: the
+recorded stream peaks 0.72 to 0.90 against 0.96 to 0.99 live; near misses 0.68 to 0.79 are listed
+in the replay output of each run), and the dev table showed the recorded rate cannot decide
+runs that the live counter counted fully (X5 8 of 8 live, 2 in replay). By 4.1's own rule these
+four runs are therefore "cannot be applied at the recorded rate", not a pass and not a measured
+failure of the live counter. X4 matches but is one run. The test of the counter at full rate
+needs the next session's 10 Hz stream (`lap_record_rate_hz:=10`, brief 41) and a filmed
+reference.

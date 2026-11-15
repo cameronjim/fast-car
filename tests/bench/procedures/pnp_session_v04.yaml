@@ -121,6 +121,7 @@ steps:
     type: scripted
     description: Step 0, first thing. Refuse unless the v0.4 constants file is the frozen one.
     session_step: 0
+    bagged: "the bench bag of the L6 run (growing check); camera frames at the record rate for the counter check"
     command: [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, check-prereg]
     expect:
       returncode: 0
@@ -137,6 +138,7 @@ steps:
     type: human_confirm
     description: Step 0. Build, L6 wheels off the ground, the camera counter bench check.
     session_step: 0
+    bagged: "the bench bag of the L6 run (growing check); camera frames at the record rate for the counter check"
     prompt: >
       Step 0. (1) Two people present, kill knob in hand. (2) Pull main, then build on the Jetson:
       colcon build --packages-select racer_planner racer_track_perception racer_laps racer_perception
@@ -178,6 +180,7 @@ steps:
       camera counter on at the 10 Hz record rate, the phone filming every run. Two runs per
       direction at each cap, ccw first, 10 laps each, from a standing start.
     session_step: 1
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) with the camera counter's camera at 10 Hz (brief 39), one bag per launch; plus the phone video of every run"
     minimum_session: true
     prompt: >
       Step 1. Battery window declared and written down. Floor, two people, kill knob in hand, the
@@ -246,6 +249,7 @@ steps:
     type: human_confirm
     description: Step 2 (minimum session). The dynamics confirmation on step 1's bags; the candidate bundle drives only if it holds.
     session_step: 2
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames); the confirmation table is printed and saved in <out>"
     minimum_session: true
     prompt: >
       Step 2, on the laptop first: pnp_data confirm on step 1's bags (deployed model dyn-v0.1,
@@ -287,6 +291,7 @@ steps:
     type: human_confirm
     description: Step 3. A cap above 1.3, only with a bundle whose validity allows it. Two runs per direction, lap memory off.
     session_step: 3
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames), one bag per launch"
     prompt: >
       Step 3, only if the active bundle's io.validity.v_max_mps is above 1.3 (the app refuses a cap
       above it, which is correct). Two runs per direction at the new cap, ccw first, lap memory off,
@@ -328,6 +333,7 @@ steps:
     type: human_confirm
     description: Step 4. The fused backend in shadow next to the geometric driver, then driving at 1.0 against a geometric run, same direction.
     session_step: 4
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) including /pnp/shadow/* for the shadow run"
     prompt: >
       Step 4. First the shadow: the geometric driver drives at cap 1.0 and fused-v1 runs as the
       second node, nothing subscribes to it; read the shadow latency p99 from
@@ -377,6 +383,7 @@ steps:
     type: human_confirm
     description: Step 5. D v0 on the plain donut, lap-1 cap 0.5, only if D3-S0, D3-S1 (B4) and D3-C0 passed.
     session_step: 5
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) including /pnp/lap/event and the lap memory status"
     prompt: >
       Step 5, only if D3-S0 and D3-S1 (sim, B4) and D3-C0 (step 1) passed. D v0 with lap-1 cap 0.5
       and the ceiling 1.0. 10 laps per run, two runs per direction, ccw first, each from a standing
@@ -412,6 +419,7 @@ steps:
     type: human_confirm
     description: Step 6. Variant layout 1, geometric, D off, 0.5 then 1.0, both directions, fused in shadow.
     session_step: 6
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) including /pnp/shadow/*; the variant form and its photo are saved next to the bag"
     prompt: >
       Step 6. Build variant 1 by the protocol of the runbook and fill its form BEFORE the first
       run: at least two solid objects against a wall, the lane changed by at least 0.15 m at two or
@@ -459,6 +467,7 @@ steps:
     type: human_confirm
     description: Step 7. GP4-V on a NEW variant (variant 2), only if D4-S0 and D4-S1 (B5) passed and step 5 passed.
     session_step: 7
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) including /pnp/lap/event; the variant form, its receipt and photo are saved next to the bag; phone video of one run per condition"
     prompt: >
       Step 7, only if D4-S0 and D4-S1 (B5) and step 5 passed. Build variant 2, a NEW variant not
       driven before this step (v0.2 5.2 says "never driven"; the strict reading needs it), fill and
@@ -520,6 +529,7 @@ steps:
     type: human_confirm
     description: Step 8. The mapped tracker and PnP back to back on the plain donut, same direction, 5 laps each, same battery window.
     session_step: 8
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) for the PnP runs and, for the tracker runs, the bag the app's tracker card records (with the pose topic); start voltages in the session file"
     prompt: >
       Step 8, on the plain donut (remove the objects first). The tracker is started from the app's
       tracker card exactly as on 2026-11-13 (map 2026-11-13-pnp-lap1 or a fresh map of this donut,
@@ -561,6 +571,7 @@ steps:
     type: human_confirm
     description: Step 9 (minimum session). Data laps, gap follow race profile at 1.5 and above, both directions, 60 s each.
     session_step: 9
+    bagged: "the stack recorder's bag (gap follow race profile, /drive_raw, /drive, /safety/events, /odom/wheel, /scan); nothing else matters"
     minimum_session: true
     prompt: >
       Step 9. Gap follow with the race profile, 60 s per run, ccw then cw, at 1.5 m/s and above:

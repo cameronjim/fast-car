@@ -125,6 +125,7 @@ def test_every_session_step_has_sources_a_rollback_and_a_requires_list():
         assert str(s.get("rollback", "")).strip(), s["id"]
         assert isinstance(s.get("requires"), list), s["id"]
         assert isinstance(s.get("runnable"), bool), s["id"]
+        assert str(s.get("bagged", "")).strip(), s["id"]
         assert "id" in s and s["type"] in ("human_confirm", "scripted")
 
 

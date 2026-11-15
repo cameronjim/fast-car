@@ -202,7 +202,18 @@ def _git(*args: str) -> str:
     return out.stdout
 
 
+GIT_SHA_ENV = "B4_GIT_SHA"
+
+
 def git_sha() -> str:
+    """HEAD of the checkout. Inside the container the worktree's git directory is not mounted, so
+    the caller may state the SHA it verified on the host (B4_GIT_SHA, a 40 hex digit string); the
+    working tree check is then the caller's too (see check_clean)."""
+    stated = os.environ.get(GIT_SHA_ENV, "")
+    if stated:
+        if len(stated) != 40 or any(c not in "0123456789abcdef" for c in stated):
+            raise BatteryError(f"{GIT_SHA_ENV} is not a 40 digit SHA")
+        return stated
     return _git("rev-parse", "HEAD").strip()
 
 
@@ -214,6 +225,8 @@ def dirty_paths() -> list[str]:
 
 
 def check_clean() -> None:
+    if os.environ.get(GIT_SHA_ENV):
+        return  # git is not available here: the caller checked the tree on the host
     dirty = dirty_paths()
     if dirty:
         raise BatteryError(f"the working tree is dirty under the tested code: {dirty[:8]}")

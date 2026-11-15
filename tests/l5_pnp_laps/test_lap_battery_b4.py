@@ -777,3 +777,13 @@ def test_the_runner_script_is_where_the_builder_says() -> None:
     assert bb.RUNNER.exists() and bb.DEFAULT_BUNDLE.exists()
     assert shutil.which(sys.executable) is not None
     assert not math.isnan(bb.STARVED_GAP_S)
+
+
+def test_a_stated_git_sha_replaces_git_in_the_container(monkeypatch) -> None:
+    monkeypatch.setenv(bb.GIT_SHA_ENV, "b" * 40)
+    monkeypatch.setattr(bb, "_git", lambda *a: (_ for _ in ()).throw(AssertionError("no git")))
+    assert bb.git_sha() == "b" * 40
+    bb.check_clean()
+    monkeypatch.setenv(bb.GIT_SHA_ENV, "xyz")
+    with pytest.raises(bb.BatteryError):
+        bb.git_sha()

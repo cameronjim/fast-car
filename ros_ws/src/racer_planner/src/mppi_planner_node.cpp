@@ -759,13 +759,16 @@ class MppiPlannerNode : public rclcpp::Node {
       }
       pub_gaps_ = 0;
       gap_log_s_ = pin.now_s;
-      RCLCPP_INFO(get_logger(),
-                  "freshness by stamp: odom not later %u, odom zero stamp %u, guidance not later "
-                  "%u, guidance zero stamp %u; actuator estimate from /drive: corrected %u, equal "
-                  "%u, fallback to published %u",
-                  odom_stale_stamp_.load(), odom_zero_stamp_.load(), guidance_stale_stamp_.load(),
-                  guidance_zero_stamp_.load(), planner_->gated_corrected_ticks(),
-                  planner_->gated_equal_ticks(), planner_->gated_fallback_ticks());
+      RCLCPP_INFO(
+          get_logger(),
+          "freshness by stamp (a stamp not later than the last accepted one is dropped by "
+          "design, so a looped replay hits NO_ODOM): odom not later %u, odom zero stamp %u, "
+          "guidance not later %u, guidance zero stamp %u; actuator estimate from /drive: corrected "
+          "%u, equal "
+          "%u, fallback to published %u",
+          odom_stale_stamp_.load(), odom_zero_stamp_.load(), guidance_stale_stamp_.load(),
+          guidance_zero_stamp_.load(), planner_->gated_corrected_ticks(),
+          planner_->gated_equal_ticks(), planner_->gated_fallback_ticks());
     }
 
     const TickOutput out = planner_->publish(pin);

@@ -29,11 +29,14 @@ gives exactly the old behaviour. Limits: a gate output that arrives later than t
 publish is attributed to the wrong tick; with a ring of zero ticks the estimate is moved by the
 difference the gated command makes to the one step it already acted for.
 
-### A hazard the owner should know about
+### Looped replay hits NO_ODOM, by design (owner decision 2026-11-14)
 
-A source whose header stamps jump backwards for good (a clock reset, a looped bag replay) is
-never accepted again by the stamp rule, so NO_ODOM follows. This is the rule as written in the
-brief. It does not occur with a live car or the sim; it matters for bag replay tools that loop.
+A source whose header stamps jump backwards for good (a clock reset, a looped bag replay) is never
+accepted again by the stamp rule, so NO_ODOM follows. The owner kept the rule: on the car stamps
+come from system time and do not go backwards. The 10 s log line of the counters says so.
+A gated message later than the next tick's publish is attributed to the wrong tick; accepted for
+now. The safety receipt record (brief 45, `/safety/cycle`) is approved, and `timing_chain` prefers
+it where the bag has it.
 
 ## Speed limiter attribution (PlannerTiming.speed_limiter)
 

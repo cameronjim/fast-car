@@ -56,6 +56,16 @@ if ! (cd tools && uv sync --all-extras --dev &&
   FAIL=1
 fi
 echo "::endgroup::"
+# tools/pnp_data and tools/lapref (brief 36, the data loop and the offline lap reference): 90 percent
+# line coverage of the two packages. They need the `session` extra (racer_eval) and mcap-ros2-support,
+# both installed by --all-extras; the bag writer in the tests is mcap_ros2's.
+echo "::group::pytest: tools/pnp_data and tools/lapref (gate=line90 on the two packages)"
+if ! (cd tools && uv sync --all-extras --dev &&
+  uv run pytest tests/test_pnp_data.py tests/test_lapref.py tests/test_lapref_compare.py --cov=pnp_data --cov=lapref \
+    --cov-report=term-missing --cov-fail-under=90); then
+  FAIL=1
+fi
+echo "::endgroup::"
 # The racer app's backend agent (tools/racer_app/agent): the docker command whitelist, the
 # pre-drive checks, the disk guard and the HTTP API, all tested against a fake docker/systemd/ROS
 # layer. Gated at 90 percent because it decides what the app is allowed to make the car's

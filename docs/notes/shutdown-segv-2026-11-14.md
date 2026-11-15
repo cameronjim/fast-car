@@ -70,7 +70,7 @@ All local runs: ros-dev image, pinned to 2 CPUs, serial, 2026-11-14.
 
 | | Before (all processes SIGINT at once) | After (one at a time) |
 |---|---|---|
-| CI, last 289 runs since 2026-10-28 | `exit code -11` in 11 runs | this PR's runs, below |
+| CI, last 289 runs since 2026-10-28 | `exit code -11` in 11 runs | 0 in this PR's last CI run |
 | rclpy stress nodes, shared topics | 4 SIGSEGV in 8,790 exits | 0 in 500 exits |
 | L5 park canary, real | 0 in 60 | 0 in 21 |
 | L5 tracker lap canary, real | 0 in 20 | 0 in 21 |

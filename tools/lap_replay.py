@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import math
 import sys
 from collections.abc import Callable, Iterable, Iterator
@@ -50,6 +52,11 @@ from racer_perception.lap_counter import (
 )
 from racer_perception.lap_frames import decode_gray
 from racer_perception.throttle import FrameThrottle
+
+#: The frozen v0.4 pre-registration (docs/notes/preregistration-pnp-v0.4.md). Checked on every
+#: --split-run; a mismatch is a refusal, never a warning.
+PREREG_V04_PATH = Path(__file__).resolve().parents[1] / "evaluation" / "prereg" / "pnp-v0.4.yaml"
+PREREG_V04_SHA256 = "78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63"
 
 DEFAULT_RATE_HZ = 15.0
 DEFAULT_REDUCTION = 4
@@ -130,6 +137,98 @@ def replay(
             raise ValueError(f"unknown message kind {m.kind!r}")
     out.final_status = counter.status()
     return out
+
+
+# ----------------------------------------------------------------------------- split runs
+
+
+@dataclass(frozen=True)
+class SplitRun:
+    """A whole lap run of the v0.4 yaml: one bag and an absolute log-time window."""
+
+    name: str
+    bag: Path
+    t_from: float
+    t_to: float
+    role: str  # lap role: dev | test | unused
+
+
+def load_split_run(name: str, yaml_path: Path | None = None) -> SplitRun:
+    """Resolve a run name (L0, X3, K1, ...) of `lap_runs` in the v0.4 yaml to its bag and its
+    log-time window. A run given as parts (X2a, X2b) spans from the first part's start to the
+    last part's end (the guard between them included). Refuses a yaml whose SHA-256 is not the
+    registered one. Replaces brief 36's loader only until that is on main."""
+    import yaml
+
+    path = yaml_path or PREREG_V04_PATH
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != PREREG_V04_SHA256:
+        raise SystemExit(
+            f"{path}: SHA-256 {digest} is not the registered {PREREG_V04_SHA256}; refusing"
+        )
+    doc = yaml.safe_load(raw)["split_2026_11_14"]
+    roles = {n: role for role, names in doc["lap_runs"].items() for n in names}
+    if name not in roles:
+        raise SystemExit(f"--split-run {name!r}: not a lap run; known: {sorted(roles)}")
+    parts = []
+    for bag, entry in doc["bags"].items():
+        for seg in entry.get("segments", []):
+            seg_name = seg["name"]
+            base = seg_name[:-1] if seg_name[-1] in "ab" and seg_name[:-1] in roles else seg_name
+            if base == name:
+                parts.append((bag, entry["first_scan_log_time_s"], seg))
+    if not parts:
+        raise SystemExit(f"--split-run {name!r}: no segment in the yaml")
+    bags = {p[0] for p in parts}
+    if len(bags) != 1:
+        raise SystemExit(f"--split-run {name!r}: parts in several bags: {sorted(bags)}")
+    bag, first, _ = parts[0]
+    return SplitRun(
+        name=name,
+        bag=Path(doc["bags_root"]) / bag,
+        t_from=first + min(p[2]["from"] for p in parts),
+        t_to=first + max(p[2]["to"] for p in parts),
+        role=roles[name],
+    )
+
+
+def clip_messages(messages: Iterable[Msg], t_from: float, t_to: float) -> Iterator[Msg]:
+    """Only the messages inside [t_from, t_to] (log time)."""
+    for m in messages:
+        if t_from <= m.t <= t_to:
+            yield m
+
+
+def load_reference(path: Path) -> tuple[int, list[float]]:
+    """(lap count, lap times) of a lapref JSON: `lap_count` and `lap_times_s`."""
+    doc = json.loads(path.read_text())
+    times = doc.get("lap_times_s", doc.get("lap_times"))
+    count = doc.get("lap_count", None if times is None else len(times))
+    if count is None:
+        raise SystemExit(f"{path}: no lap_count / lap_times_s")
+    return int(count), [float(t) for t in (times or [])]
+
+
+def reference_report(events: list[LapEvent], ref_count: int, ref_times: list[float]) -> list[str]:
+    """Counts only (lapref's crossing stamps are not the gate's, so laps are compared by number
+    and time, never by stamp). matched = min(counted, reference); missed = reference laps the
+    counter lacks; false = counted laps beyond the reference."""
+    n = len(events)
+    lines = [
+        (
+            f"reference: {ref_count} laps; counter: {n}; matched {min(n, ref_count)}, "
+            f"missed {max(0, ref_count - n)}, false {max(0, n - ref_count)}"
+        )
+    ]
+    if ref_times and n == ref_count:
+        diffs = [e.lap_time_s - r for e, r in zip(events, ref_times, strict=True)]
+        lines.append(
+            "lap time minus reference, s: "
+            + ", ".join(f"{d:+.2f}" for d in diffs)
+            + f"  (max |d| {max(abs(d) for d in diffs):.2f})"
+        )
+    return lines
 
 
 # ----------------------------------------------------------------------------- sources
@@ -434,6 +533,15 @@ def parse_params(pairs: list[str], base: LapConfig) -> LapConfig:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("bag", nargs="?", type=Path, help="an .mcap file or a bag directory")
+    parser.add_argument(
+        "--split-run",
+        metavar="NAME",
+        help="a lap run of evaluation/prereg/pnp-v0.4.yaml (L0, X0, K1, ...): its bag and window "
+        "(the yaml's SHA-256 is checked)",
+    )
+    parser.add_argument(
+        "--reference", type=Path, help="a lapref JSON: print matched, missed and false counts"
+    )
     parser.add_argument("--images", type=Path, help="a folder of images instead of a bag")
     parser.add_argument("--fps", type=float, default=15.0, help="folder mode frame rate (15)")
     parser.add_argument("--odom-csv", type=Path, help="folder mode odometry: t_s,speed_mps,x_m")
@@ -464,8 +572,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if (args.bag is None) == (args.images is None):
-        raise SystemExit("give either a bag or --images FOLDER")
+    window: SplitRun | None = None
+    if args.split_run:
+        if args.bag is not None or args.images is not None:
+            raise SystemExit("--split-run replaces the bag argument and --images")
+        window = load_split_run(args.split_run)
+        args.bag = window.bag
+    elif (args.bag is None) == (args.images is None):
+        raise SystemExit(
+            "give either a bag or --images FOLDER (or --split-run NAME instead of both)"
+        )
     cfg = parse_params(args.param, LapConfig())
     notes: list[str] = []
     if args.images is not None:
@@ -493,8 +609,17 @@ def main(argv: list[str] | None = None) -> int:
         if counts.get(args.yaw_topic, 0) == 0:
             notes.append(f"no {args.yaw_topic} in the bag: heading turns not available")
         messages = iter_bag_messages(args.bag, image_topic, args.odom_topic, args.yaw_topic)
+        if window is not None:
+            notes.append(
+                f"split run {window.name} (lap role {window.role}): log time "
+                f"{window.t_from:.3f} to {window.t_to:.3f} of {args.bag.name}"
+            )
+            messages = clip_messages(messages, window.t_from, window.t_to)
     result = replay(messages, cfg, args.rate_hz, args.decode_reduction)
     print(format_report(result, source, notes, args.bucket_s))
+    if args.reference:
+        ref_count, ref_times = load_reference(args.reference)
+        print("\n" + "\n".join(reference_report(result.events, ref_count, ref_times)))
     if args.trace_csv:
         write_trace_csv(args.trace_csv, result)
         print(f"\ntrace written to {args.trace_csv}")

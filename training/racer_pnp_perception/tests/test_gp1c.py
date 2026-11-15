@@ -293,3 +293,30 @@ def test_k_thresholds_match_the_addendum_yaml_when_present() -> None:
     gate = yaml.safe_load(path.read_text())["perception_coverage"]["gate"]
     assert gate["max_mean_loss"] == gate["max_mean_excess"] == gp1c.K_MAX_MEAN
     assert gate["max_p99_loss"] == gate["max_p99_excess"] == gp1c.K_MAX_P99
+
+
+def test_load_addendum_refuses_another_digest_and_other_thresholds(tmp_path) -> None:
+    import pytest
+
+    p = tmp_path / "a.yaml"
+    p.write_text("perception_coverage:\n  gate: {max_mean_loss: 0.01}\n")
+    with pytest.raises(ValueError, match="SHA-256"):
+        gp1c.load_addendum(p)
+    import hashlib
+
+    sha = hashlib.sha256(p.read_bytes()).hexdigest()
+    with pytest.raises((ValueError, KeyError)):
+        gp1c.load_addendum(p, sha)
+    p.write_text(
+        "perception_coverage:\n  gate: {max_mean_loss: 0.02, max_mean_excess: 0.02,"
+        " max_p99_loss: 0.05, max_p99_excess: 0.05}\n"
+    )
+    sha = hashlib.sha256(p.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="differs"):
+        gp1c.load_addendum(p, sha)
+    p.write_text(
+        "perception_coverage:\n  gate: {max_mean_loss: 0.01, max_mean_excess: 0.01,"
+        " max_p99_loss: 0.05, max_p99_excess: 0.05}\n"
+    )
+    sha = hashlib.sha256(p.read_bytes()).hexdigest()
+    assert gp1c.load_addendum(p, sha)["gate"]["max_p99_loss"] == 0.05

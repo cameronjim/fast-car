@@ -78,6 +78,9 @@ OUTCOME_PASS = (
 # Addendum 1 section 3.2, yaml perception_coverage.gate (evaluation/prereg/pnp-v0.4-addendum-1.yaml).
 K_MAX_MEAN = 0.01
 K_MAX_P99 = 0.05
+# docs/notes/preregistration-pnp-v0.4-addendum-1.md: constants file SHA-256 (amended in PR 189).
+ADDENDUM_SHA256 = "ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824"
+ADDENDUM_RELATIVE_PATH = Path("evaluation") / "prereg" / "pnp-v0.4-addendum-1.yaml"
 OUTCOME_K_CANDIDATE = (
     "candidate: GP1c and GP1c-K both pass (geometric stays deployed until the on-car rule of 3.4)"
 )
@@ -272,6 +275,32 @@ def decide_gp1c(
     else:
         outcome = OUTCOME_PASS
     return items, outcome, failed
+
+
+def load_addendum(
+    path: Path | None = None, expected_sha256: str = ADDENDUM_SHA256
+) -> dict[str, Any]:
+    """The `perception_coverage` block of addendum 1, refusing a file whose SHA-256 is not the
+    registered one or whose gate thresholds differ from the constants of this module."""
+    import hashlib
+
+    import yaml
+    from racer_track_perception.vehicle import find_repo_root
+
+    p = Path(path) if path is not None else find_repo_root() / ADDENDUM_RELATIVE_PATH
+    data = p.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != expected_sha256:
+        raise ValueError(f"{p}: SHA-256 {digest} is not the registered {expected_sha256}")
+    block = yaml.safe_load(data.decode("utf-8"))["perception_coverage"]
+    gate = block["gate"]
+    ok = (
+        gate["max_mean_loss"] == gate["max_mean_excess"] == K_MAX_MEAN
+        and gate["max_p99_loss"] == gate["max_p99_excess"] == K_MAX_P99
+    )
+    if not ok:
+        raise ValueError(f"{p}: the GP1c-K gate differs from the thresholds coded in gp1c.py")
+    return block
 
 
 def decide_gp1c_k(
@@ -558,6 +587,7 @@ def score_main(args: argparse.Namespace) -> int:
     if args.out.exists():
         raise SystemExit(f"refusing to overwrite {args.out}: the fresh sets are scored once")
     refuse_unless_frozen(args.frozen_sha)
+    load_addendum()  # refuses a changed addendum or a gate that differs from the code
     doc, digest = split_v04.read_yaml(args.prereg)
     split = split_v04.perception_split_from_doc(doc, digest)
     live = load_live_vehicle()

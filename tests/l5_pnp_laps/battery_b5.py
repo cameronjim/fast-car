@@ -103,10 +103,10 @@ def check_obstacle_tracks(const: b5.Constants, data_root: Path) -> list[str]:
             try:
                 track, params = case_track(spec, data_root)
                 if track == "map":
-                    from pipeline import raceline_from_map
+                    import tempfile
 
                     sys.path.insert(0, str(REPO_ROOT / "tools" / "track_session"))
-                    import tempfile
+                    from pipeline import raceline_from_map
 
                     with tempfile.TemporaryDirectory() as tmp:
                         csv = Path(tmp) / "centre.csv"

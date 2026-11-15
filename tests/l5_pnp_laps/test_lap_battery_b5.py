@@ -939,3 +939,44 @@ def test_registered_generated_cases_build_and_meet_the_start_rule() -> None:
         assert by_case[case].split(":")[1].strip().startswith("ok"), by_case[case]
     # O4 needs the map under car-data: without it the check reports a failure, it does not crash
     assert "FAILED" in by_case["battery O4"]
+
+
+# -- reruns forced by the host -----------------------------------------------------------------------------
+
+
+def write_run(
+    path: Path, condition: str, case: str, direction: str, laps: int, late: float
+) -> None:
+    r = fake_result(laps=laps)
+    r["gt_lap_times_by_crossing_s"] = [20.0] + [late] * (laps - 1)
+    r["battery_b5"] = {"mode": "ma2"}
+    (path / f"{condition}_{case}_{direction}_11.json").write_text(json.dumps(r))
+
+
+def test_a_rerun_directory_replaces_the_first_run_and_says_so(tmp_path: Path) -> None:
+    first, rerun = tmp_path / "first", tmp_path / "rerun"
+    first.mkdir()
+    rerun.mkdir()
+    for case in ("T", "S1", "S2", "S3", "S4"):
+        for d in DIRS:
+            write_run(first, "g", case, d, 6, 10.0)
+            write_run(first, "o", case, d, 6, 10.0)
+    write_run(first, "o", "S3", "ccw", 2, 10.0)  # the run the host put to sleep
+    write_run(rerun, "o", "S3", "ccw", 6, 9.9)
+    runs = b5.load_runs(first, "ma2", ("g", "o"))
+    merged, notes = bb.merge_reruns(runs, rerun, "ma2", ("g", "o"))
+    assert len(merged) == len(runs)
+    assert len(notes) == 1 and "o/S3/ccw/11" in notes[0] and "first run stays" in notes[0]
+    pairs = b5.pairs_against(merged, "o", "g", CONST)
+    assert all(p.valid for p in pairs) and len(pairs) == 10
+    assert bb.merge_reruns(runs, None, "ma2", ("g", "o")) == (runs, [])
+
+
+def test_ma2_only_names_must_be_jobs_of_the_stage(tmp_path: Path, monkeypatch) -> None:
+    ran: list = []
+    monkeypatch.setattr(bb, "run_jobs", lambda jobs, *a, **k: ran.append([j.name for j in jobs]))
+    monkeypatch.setattr(bb.b4t, "check_clean", lambda: None)
+    monkeypatch.setattr(bb.b4t, "git_sha", lambda: "0" * 40)
+    assert bb.main(["ma2", "--out", str(tmp_path / "o"), "--only", "o_S3_ccw_11"]) == 0
+    assert ran == [["o_S3_ccw_11"]]
+    assert bb.main(["ma2", "--out", str(tmp_path / "p"), "--only", "o_ZZ_ccw_11"]) == 2

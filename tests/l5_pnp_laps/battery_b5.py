@@ -960,9 +960,12 @@ def ma2_report_text(
     if kind == "ma2x":
         if ma2_dir is None:
             raise BatteryError("report ma2x needs --ma2-dir (the M-A2 runs, conditions g and o)")
-        runs = b5.load_runs(out, "ma2x", ("g", "o", "f")) + b5.load_runs(ma2_dir, "ma2", ("g", "o"))
+        base_runs, notes = merge_reruns(
+            b5.load_runs(ma2_dir, "ma2", ("g", "o")), rerun_dir, "ma2", ("g", "o")
+        )
+        runs = b5.load_runs(out, "ma2x", ("g", "o", "f")) + base_runs
         lines = header_lines("M-A2x, the learned candidate as a third condition", out, const)
-        lines += [b5.ma2x_report(runs, f_label, const)]
+        lines += [*notes, "", b5.ma2x_report(runs, f_label, const)]
         return "\n".join(lines)
     if kind == "ma2w":
         lines = header_lines("M-A2w, boundary weight at half and double", out, const)

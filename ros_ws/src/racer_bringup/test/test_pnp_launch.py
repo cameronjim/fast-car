@@ -250,7 +250,9 @@ def test_recorder_in_graph_times_out_without_one(monkeypatch) -> None:
     assert _module().recorder_in_graph(0.2) is False
 
 
-@pytest.mark.parametrize("topic", ["/pnp/local_track", "/pnp/planner/status", "/pnp/plan"])
+@pytest.mark.parametrize(
+    "topic", ["/pnp/local_track", "/pnp/planner/status", "/pnp/planner/timing", "/pnp/plan"]
+)
 def test_recorder_regex_takes_the_pnp_topics(topic) -> None:
     regex = _load("car_teleop.launch.py")._RECORDED_TOPIC_REGEX
     assert re.search(regex, topic), topic

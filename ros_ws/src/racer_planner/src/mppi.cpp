@@ -58,6 +58,7 @@ MppiSolver::MppiSolver(const MppiParams& params, const DynamicsModel& model,
       hit_(static_cast<std::size_t>(capacity_)),
       cls_(static_cast<std::size_t>(capacity_)),
       u_new_(static_cast<std::size_t>(horizon_)),
+      probe_(static_cast<std::size_t>(horizon_)),
       plan_(static_cast<std::size_t>(horizon_) + 1) {
   GaussianRng rng(params.seed);
   for (double& n : noise_) n = rng.normal();
@@ -305,6 +306,41 @@ void MppiSolver::build_samples(const SolveInput&, double v_cap) {
   }
 }
 
+SpeedLimiter MppiSolver::limiter_of(const SolveInput& in, const Ctx& ctx, const CostBreakdown& base,
+                                    double plan_speed_mps, double v_cap) {
+  if (!(plan_speed_mps >= std::max(p_.speed_floor_mps, 1e-3))) return SpeedLimiter::kNone;
+  const int T = horizon_;
+  for (int t = 0; t < T; ++t) {
+    probe_[t] = Control{u_new_[t].speed_cmd + p_.limiter_probe_mps, u_new_[t].steering_cmd};
+  }
+  CostBreakdown pb;
+  evaluate(in, ctx, probe_.data(), &pb, nullptr);
+  const double d_clear = pb.clearance - base.clearance;
+  const double d_term = pb.terminal - base.terminal;
+  const double d_gate = pb.gate - base.gate;
+  const double d_lap = pb.lap_trust - base.lap_trust;
+  const double reward = -((pb.progress - base.progress) + (pb.lap_terminal - base.lap_terminal));
+  const double d[4] = {d_clear, d_term, d_gate, d_lap};
+  double positive = 0.0;
+  int arg = -1;
+  double arg_v = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    if (!(d[i] > 0.0)) continue;  // also drops NaN
+    positive += d[i];
+    if (arg < 0 || d[i] > arg_v) {
+      arg = i;
+      arg_v = d[i];
+    }
+  }
+  if (arg >= 0 && positive >= std::max(reward, 0.0)) {
+    static constexpr SpeedLimiter kOf[4] = {SpeedLimiter::kClearance, SpeedLimiter::kTerminal,
+                                            SpeedLimiter::kGate, SpeedLimiter::kLapBound};
+    return kOf[arg];
+  }
+  return plan_speed_mps >= v_cap - p_.limiter_cap_band_mps ? SpeedLimiter::kCap
+                                                           : SpeedLimiter::kSampleChoice;
+}
+
 SolveOutput MppiSolver::solve(const SolveInput& in) {
   const int T = horizon_;
   const int N = samples_;
@@ -346,9 +382,13 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
   out.best_cost = j_min;
   out.collision_fraction = static_cast<double>(hits) / N;
   out.all_collide = hits == N;
+  // The weighted mean rollout, for the plan topic and the status numbers (and, since brief 42,
+  // the check of the final sequence).
+  CostBreakdown pbd;
   if (out.all_collide) {
     const Control* vb = &v_[static_cast<std::size_t>(best) * T];
     for (int t = 0; t < T; ++t) u_new_[t] = Control{0.0, vb[t].steering_cmd};
+    out.final_sequence = FinalSequence::kAllCollide;
   } else {
     // The samples fall in two classes: those that move (mean speed command over the first
     // plan_window_s at or above the floor) and those that stand. A weighted mean across the two
@@ -375,10 +415,14 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
     const unsigned char best_class = best_move + p_.move_margin < best_still ? 1 : 0;
     int in_class = 0;
     double j_min_c = 1e300;
+    int best_clean = -1;  // the cheapest collision free sample of the chosen class
     for (int k = 0; k < N; ++k) {
       if (hit_[k] || cls_[k] != best_class) continue;
       scratch_[in_class++] = cost_[k];
-      j_min_c = std::min(j_min_c, cost_[k]);
+      if (cost_[k] < j_min_c) {
+        j_min_c = cost_[k];
+        best_clean = k;
+      }
     }
     // Robust temperature: the spread of the class sets the scale, lambda is a fraction of
     // (median - minimum) with a floor so a flat cost field does not give an arbitrary weighting.
@@ -403,7 +447,20 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
       c.steering_cmd /= wsum;
     }
     smooth_steering_3tap(u_new_.data(), T);
+    // The mean is not a sample: two clean families on either side of an obstacle average into a
+    // sequence through it. It is evaluated like every sample, and a collision or a non finite cost
+    // replaces it by the best clean sample of its class, which was evaluated and is feasible.
+    const double jf = evaluate(in, ctx, u_new_.data(), &pbd, plan_.data());
+    const bool unchecked_bad = pbd.collided || !std::isfinite(jf);
+    out.unchecked_final_collided = unchecked_bad && best_clean >= 0;
+    if (out.unchecked_final_collided && p_.check_final_sequence) {
+      const Control* vb = &v_[static_cast<std::size_t>(best_clean) * T];
+      for (int t = 0; t < T; ++t) u_new_[t] = vb[t];
+      out.final_sequence = FinalSequence::kFallback;
+      evaluate(in, ctx, u_new_.data(), &pbd, plan_.data());
+    }
   }
+  if (out.all_collide) evaluate(in, ctx, u_new_.data(), &pbd, plan_.data());
   out.cmd = u_new_[0];
   if (ctx.use_gate) {
     out.cmd_would_trip = would_trip_exact(*in.gate, out.cmd.steering_cmd, out.cmd.speed_cmd,
@@ -416,11 +473,10 @@ SolveOutput MppiSolver::solve(const SolveInput& in) {
     for (int t = 0; t < n; ++t) sum += u_new_[t].speed_cmd;
     out.plan_speed_mps = sum / n;
   }
-  // The weighted mean rollout, for the plan topic and the status numbers.
-  CostBreakdown pbd;
-  evaluate(in, ctx, u_new_.data(), &pbd, plan_.data());
   out.plan_progress_m = pbd.progress_m;
   out.plan_min_clearance_m = pbd.min_clearance_m;
+  out.final_cost = pbd;
+  out.speed_limiter = limiter_of(in, ctx, pbd, out.plan_speed_mps, v_cap);
   // Warm start: advance the sequence by tick_s / dt of a model step with linear interpolation,
   // the last value held.
   const double f = clamp_double(p_.tick_s / model_.dt(), 0.0, 1.0);

@@ -45,6 +45,7 @@
 #include <racer_pnp_msgs/msg/lap_guidance.hpp>
 #include <racer_pnp_msgs/msg/local_track.hpp>
 #include <racer_pnp_msgs/msg/planner_status.hpp>
+#include <racer_pnp_msgs/msg/planner_timing.hpp>
 #include <rcl_interfaces/msg/floating_point_range.hpp>
 #include <rcl_interfaces/msg/integer_range.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
@@ -72,6 +73,7 @@ namespace {
 
 using AckermannMsg = ackermann_msgs::msg::AckermannDriveStamped;
 using PlannerStatusMsg = racer_pnp_msgs::msg::PlannerStatus;
+using PlannerTimingMsg = racer_pnp_msgs::msg::PlannerTiming;
 
 constexpr double kBodyMarginM = 0.02;  // same rule as the perception input in the contract
 constexpr std::size_t kMaxScanPoints = 8192;
@@ -92,7 +94,18 @@ struct GatedInfo {
   double stamp_s = 0.0;
   double speed_mps = 0.0;
   double steering_rad = 0.0;
+  double header_stamp_s = 0.0;  // the message's own stamp: safety_node's cycle time (0: none)
+  std::uint64_t seq = 0;        // counts the messages received
 };
+
+// The sources and times of one solve, for PlannerTiming (looked up by solve start).
+struct SolveRecord {
+  double start_s = 0.0, end_s = 0.0;
+  double scan_stamp_s = 0.0, scan_receipt_s = 0.0;
+  double track_stamp_s = 0.0, track_receipt_s = 0.0;
+  double odom_stamp_s = 0.0, odom_receipt_s = 0.0;
+};
+constexpr int kEchoHistory = 16;
 
 // "T:D,T:D,...": T seconds after the first DRIVING solve the solve thread sleeps D seconds.
 // Sorted by T. False with a reason on a malformed list, a negative T or a D outside (0, 10].
@@ -442,6 +455,7 @@ class MppiPlannerNode : public rclcpp::Node {
     drive_pub_ = create_publisher<AckermannMsg>("/drive_raw", reliable_10);
     status_pub_ = create_publisher<PlannerStatusMsg>("/pnp/planner/status", reliable_50);
     plan_pub_ = create_publisher<nav_msgs::msg::Path>("/pnp/plan", reliable_5);
+    timing_pub_ = create_publisher<PlannerTimingMsg>("/pnp/planner/timing", reliable_50);
     const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(tick_s_));
     solve_timer_ = create_wall_timer(period, std::bind(&MppiPlannerNode::on_solve_timer, this),
@@ -495,8 +509,17 @@ class MppiPlannerNode : public rclcpp::Node {
     return static_cast<double>(t.sec) + 1e-9 * static_cast<double>(t.nanosec);
   }
 
+  // The header stamp as seconds; zero (unset) falls back to the arrival time, `fell_back` says so.
+  static double header_seconds(const builtin_interfaces::msg::Time& t) {
+    return static_cast<double>(t.sec) + 1e-9 * static_cast<double>(t.nanosec);
+  }
+  static bool stamp_unset(const builtin_interfaces::msg::Time& t) {
+    return t.sec == 0 && t.nanosec == 0;
+  }
+
   // -- callbacks -----------------------------------------------------------------------------
   void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+    const double receipt = now().seconds();
     const std::size_t n =
         scan_to_points(msg->ranges.data(), msg->ranges.size(), msg->angle_min, msg->angle_increment,
                        msg->range_min, msg->range_max, laser_yaw_rad_, geometry_, kBodyMarginM,
@@ -529,9 +552,11 @@ class MppiPlannerNode : public rclcpp::Node {
     std::lock_guard<std::mutex> lock(field_mutex_);
     field_ = target;
     scan_stamp_s_ = stamp;
+    scan_receipt_s_ = receipt;
   }
 
   void on_track(const racer_pnp_msgs::msg::LocalTrack::SharedPtr msg) {
+    track_receipt_s_ = now().seconds();
     track_.stamp_s = stamp_or_now(msg->header.stamp);
     track_.frame_id = msg->header.frame_id;
     track_.station_spacing_m = msg->station_spacing_m;
@@ -555,18 +580,47 @@ class MppiPlannerNode : public rclcpp::Node {
   void on_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
     const double v = msg->twist.twist.linear.x;
     if (!std::isfinite(v)) return;  // a bad sample does not refresh the staleness clock
+    // Freshness is measured from the source's header stamp (claude-docs/13 17.4.2): a sample whose
+    // stamp is not later than the last accepted one (a republished or delayed old one) refreshes
+    // nothing, a zero stamp falls back to the arrival time. Both are counted.
+    const double arrival = now().seconds();
+    double stamp = header_seconds(msg->header.stamp);
+    const StampVerdict verdict =
+        judge_stamp(stamp_unset(msg->header.stamp), stamp, has_odom_, odom_stamp_s_);
+    if (verdict == StampVerdict::kRejectNotLater) {
+      odom_stale_stamp_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    if (verdict == StampVerdict::kAcceptNoStamp) {
+      stamp = arrival;
+      odom_zero_stamp_.fetch_add(1, std::memory_order_relaxed);
+    }
     wheel_speed_mps_ = v;
-    odom_stamp_s_ = now().seconds();
+    odom_stamp_s_ = stamp;
+    odom_receipt_s_ = arrival;
     has_odom_ = true;
   }
 
   void on_guidance(const racer_pnp_msgs::msg::LapGuidance::SharedPtr msg) {
+    const double now_s = now().seconds();
+    // Same rule as the odometry: the age is from the header stamp, a stamp not later than the last
+    // accepted one refreshes nothing, a zero stamp falls back to the arrival time (both counted).
+    double gstamp = header_seconds(msg->header.stamp);
+    const StampVerdict gverdict =
+        judge_stamp(stamp_unset(msg->header.stamp), gstamp, has_guidance_, guidance_stamp_s_);
+    if (gverdict == StampVerdict::kRejectNotLater) {
+      guidance_stale_stamp_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    if (gverdict == StampVerdict::kAcceptNoStamp) {
+      gstamp = now_s;
+      guidance_zero_stamp_.fetch_add(1, std::memory_order_relaxed);
+    }
     guidance_v_cap_mps_ = msg->v_cap_mps;
-    guidance_stamp_s_ = now().seconds();
+    guidance_stamp_s_ = gstamp;
     has_guidance_ = true;
     // The per station profile (empty in D v0). A refused one is counted and logged at most once
     // per second; the planner then runs without a profile (the speed cap above still holds).
-    const double now_s = now().seconds();
     const LapProfileStatus st =
         make_lap_profile(msg->s_m.data(), msg->v_ref_mps.data(), msg->cost_to_go_s.data(),
                          msg->s_m.size(), msg->v_ref_mps.size(), msg->cost_to_go_s.size(),
@@ -591,7 +645,9 @@ class MppiPlannerNode : public rclcpp::Node {
     g.speed_mps = msg->drive.speed;
     g.steering_rad = std::isfinite(msg->drive.steering_angle) ? msg->drive.steering_angle : 0.0;
     g.stamp_s = now().seconds();
+    g.header_stamp_s = header_seconds(msg->header.stamp);
     std::lock_guard<std::mutex> lock(gated_mutex_);
+    g.seq = gated_.seq + 1;
     gated_ = g;
   }
 
@@ -613,6 +669,7 @@ class MppiPlannerNode : public rclcpp::Node {
       std::this_thread::sleep_for(std::chrono::duration<double>(d));
     }
     TickInput in;
+    SolveRecord rec;
     in.now_s = now().seconds();
     if (last_solve_tick_s_ > 0.0 && in.now_s - last_solve_tick_s_ > 0.040) {
       solve_gaps_.fetch_add(1, std::memory_order_relaxed);
@@ -623,6 +680,8 @@ class MppiPlannerNode : public rclcpp::Node {
     in.gated_stamp_s = g.stamp_s;
     in.gated_speed_mps = g.speed_mps;
     in.gated_steering_rad = g.steering_rad;
+    in.gated_seq = g.seq;
+    in.gated_receipt_s = g.stamp_s;
     in.has_odom = has_odom_;
     in.odom_stamp_s = odom_stamp_s_;
     in.wheel_speed_mps = wheel_speed_mps_;
@@ -631,7 +690,14 @@ class MppiPlannerNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(field_mutex_);
       products = field_;
       in.scan_stamp_s = scan_stamp_s_;
+      rec.scan_stamp_s = scan_stamp_s_;
+      rec.scan_receipt_s = scan_receipt_s_;
     }
+    rec.start_s = in.now_s;
+    rec.track_stamp_s = has_track_ ? track_.stamp_s : 0.0;
+    rec.track_receipt_s = has_track_ ? track_receipt_s_ : 0.0;
+    rec.odom_stamp_s = has_odom_ ? odom_stamp_s_ : 0.0;
+    rec.odom_receipt_s = has_odom_ ? odom_receipt_s_ : 0.0;
     in.has_scan = products != nullptr;
     in.field = products ? &products->field : nullptr;
     in.freespace = products ? &products->freespace : nullptr;
@@ -649,6 +715,12 @@ class MppiPlannerNode : public rclcpp::Node {
 
     const SolveReport rep = planner_->solve(in);
     if (rep.bunched) return;
+    rec.end_s = now().seconds();
+    {
+      std::lock_guard<std::mutex> lock(record_mutex_);
+      records_[record_head_] = rec;
+      record_head_ = (record_head_ + 1) % records_.size();
+    }
     if (rep.state == PlannerState::Driving && !have_driving_) {
       have_driving_ = true;
       driving_since_s_ = in.now_s;
@@ -670,6 +742,9 @@ class MppiPlannerNode : public rclcpp::Node {
     pin.has_gated = g.has;
     pin.gated_stamp_s = g.stamp_s;
     pin.gated_steering_rad = g.steering_rad;
+    pin.gated_speed_mps = g.speed_mps;
+    pin.gated_seq = g.seq;
+    pin.gated_receipt_s = g.stamp_s;
     if (last_pub_tick_s_ > 0.0 && pin.now_s - last_pub_tick_s_ > 0.040) ++pub_gaps_;
     last_pub_tick_s_ = pin.now_s;
     if (pin.now_s - gap_log_s_ >= 10.0) {
@@ -684,6 +759,13 @@ class MppiPlannerNode : public rclcpp::Node {
       }
       pub_gaps_ = 0;
       gap_log_s_ = pin.now_s;
+      RCLCPP_INFO(get_logger(),
+                  "freshness by stamp: odom not later %u, odom zero stamp %u, guidance not later "
+                  "%u, guidance zero stamp %u; actuator estimate from /drive: corrected %u, equal "
+                  "%u, fallback to published %u",
+                  odom_stale_stamp_.load(), odom_zero_stamp_.load(), guidance_stale_stamp_.load(),
+                  guidance_zero_stamp_.load(), planner_->gated_corrected_ticks(),
+                  planner_->gated_equal_ticks(), planner_->gated_fallback_ticks());
     }
 
     const TickOutput out = planner_->publish(pin);
@@ -741,6 +823,8 @@ class MppiPlannerNode : public rclcpp::Node {
       status_.perception_model_id = perception_model_id_;
     }
     status_pub_->publish(status_);
+    publish_timing(out, stamp, g, drive.drive.speed, drive.drive.steering_angle,
+                   !out.drive_suppressed);
 
     if (out.plan_stale && !stale_logged_) {
       RCLCPP_WARN(get_logger(), "plan stale: the newest plan is %.3f s old, publishing speed 0",
@@ -760,6 +844,65 @@ class MppiPlannerNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "state %d -> %d", static_cast<int>(last_state_),
                   static_cast<int>(out.state));
       last_state_ = out.state;
+    }
+  }
+
+  // One PlannerTiming per publish tick. The echo is looked up before this tick's command is
+  // added to the history: a gated message cannot answer a command that was just published.
+  void publish_timing(const TickOutput& out, const rclcpp::Time& stamp, const GatedInfo& g,
+                      float speed, float steering, bool published) {
+    PlannerTimingMsg m;
+    m.header.stamp = stamp;
+    m.cycle = cycle_;
+    SolveRecord rec;
+    bool found = false;
+    {
+      std::lock_guard<std::mutex> lock(record_mutex_);
+      for (const auto& r : records_) {
+        if (r.start_s > 0.0 && r.start_s == out.plan_time_s) {
+          rec = r;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {  // the solve is still finishing: the newest finished one gives the sources
+        const std::size_t newest = (record_head_ + records_.size() - 1) % records_.size();
+        rec = records_[newest];
+      }
+    }
+    m.scan_stamp_s = rec.scan_stamp_s;
+    m.scan_receipt_s = rec.scan_receipt_s;
+    m.track_stamp_s = rec.track_stamp_s;
+    m.track_receipt_s = rec.track_receipt_s;
+    m.odom_stamp_s = rec.odom_stamp_s;
+    m.odom_receipt_s = rec.odom_receipt_s;
+    m.solve_start_s = out.plan_time_s > 0.0 ? out.plan_time_s : rec.start_s;
+    m.solve_end_s = found ? rec.end_s : m.solve_start_s + std::max(0.0, out.solve_time_s);
+    m.gated_stamp_s = g.has ? g.header_stamp_s : 0.0;
+    m.gated_receipt_s = g.has ? g.stamp_s : 0.0;
+    m.gated_echo_cycle = 0;
+    if (g.has) {
+      const float gs = static_cast<float>(g.speed_mps);
+      const float gd = static_cast<float>(g.steering_rad);
+      for (int i = 0; i < echo_n_; ++i) {
+        const auto& e =
+            echo_[static_cast<std::size_t>((echo_head_ + kEchoHistory - 1 - i) % kEchoHistory)];
+        if (e.speed == gs && e.steering == gd) {
+          m.gated_echo_cycle = e.cycle;
+          break;
+        }
+      }
+    }
+    m.final_sequence = static_cast<uint8_t>(out.final_sequence);
+    if (out.has_final_sequence) {
+      m.cost_terms.assign(out.cost_terms.begin(), out.cost_terms.end());
+    }
+    m.speed_limiter = static_cast<uint8_t>(out.speed_limiter);
+    timing_pub_->publish(m);
+    if (published) {
+      echo_[static_cast<std::size_t>(echo_head_)] = EchoEntry{cycle_, speed, steering};
+      echo_head_ = (echo_head_ + 1) % kEchoHistory;
+      echo_n_ = std::min(echo_n_ + 1, kEchoHistory);
     }
   }
 
@@ -837,6 +980,7 @@ class MppiPlannerNode : public rclcpp::Node {
   rclcpp::Publisher<AckermannMsg>::SharedPtr drive_pub_;
   rclcpp::Publisher<PlannerStatusMsg>::SharedPtr status_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr plan_pub_;
+  rclcpp::Publisher<PlannerTimingMsg>::SharedPtr timing_pub_;
   rclcpp::TimerBase::SharedPtr solve_timer_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 
@@ -847,13 +991,20 @@ class MppiPlannerNode : public rclcpp::Node {
   bool have_prev_goal_ = false;  // scan thread only
   PointXY prev_goal_{0.0, 0.0};
   double scan_stamp_s_ = 0.0;
+  double scan_receipt_s_ = 0.0;
   std::vector<PointXY> points_;
 
   // command group state (the solve timer and the small callbacks never run concurrently)
   LocalTrackData track_;
   bool has_track_ = false;
   double wheel_speed_mps_ = 0.0;
-  double odom_stamp_s_ = 0.0;
+  double odom_stamp_s_ = 0.0;  // the source's header stamp (arrival when it had none)
+  double odom_receipt_s_ = 0.0;
+  double track_receipt_s_ = 0.0;
+  std::atomic<std::uint32_t> odom_stale_stamp_{0};
+  std::atomic<std::uint32_t> odom_zero_stamp_{0};
+  std::atomic<std::uint32_t> guidance_stale_stamp_{0};
+  std::atomic<std::uint32_t> guidance_zero_stamp_{0};
   bool has_odom_ = false;
   double guidance_v_cap_mps_ = 0.0;
   double guidance_stamp_s_ = 0.0;
@@ -878,6 +1029,20 @@ class MppiPlannerNode : public rclcpp::Node {
   std::mutex meta_mutex_;
   std::string perception_model_id_;
   std::atomic<std::uint32_t> perception_id_version_{0};
+
+  // timing chain: solve records (written by the solve timer, read by the publish timer) and the
+  // published commands of the last kEchoHistory ticks (publish timer only)
+  std::mutex record_mutex_;
+  std::array<SolveRecord, 4> records_{};
+  std::size_t record_head_ = 0;
+  struct EchoEntry {
+    std::uint32_t cycle = 0;
+    float speed = 0.0f;
+    float steering = 0.0f;
+  };
+  std::array<EchoEntry, kEchoHistory> echo_{};
+  int echo_head_ = 0;
+  int echo_n_ = 0;
 
   // publish timer state
   std::uint32_t status_id_version_ = 0;

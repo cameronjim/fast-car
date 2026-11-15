@@ -35,7 +35,7 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from racer_eval import interventions
+from racer_eval import interventions, timing_chain
 
 from pnp_session import detail as detail_mod
 from pnp_session.bagread import SessionBag
@@ -86,13 +86,18 @@ def cycle_table(bag: SessionBag, arrival: str = "stamp") -> tuple[NDArray[np.flo
     first one it is zero with an infinite age. `arrival` is the recorder's receive time ("recv")
     or the command's own header stamp ("stamp"); the recorder's receive time can lag the sender by
     hundreds of milliseconds (up to 0.37 s in 2026-11-13T22-20-18)."""
-    if arrival not in ("recv", "stamp"):
-        raise ValueError("arrival must be recv or stamp")
+    if arrival not in ("recv", "stamp", "echo"):
+        raise ValueError("arrival must be recv, stamp or echo")
     stamp = np.asarray(bag.drv_stamp, dtype=np.float64)
     n = len(stamp)
     dt = np.zeros(n, dtype=np.float64)
     if n > 1:
         dt[1:] = np.diff(stamp)
+    if arrival == "echo":
+        # M-T2: the command latched at each cycle read back from the echo of /drive (exact float32
+        # equality of a passed-through field), not guessed from arrival times.
+        lat = latched_from_bag(bag)
+        return stamp, dt, lat.steer, lat.speed, lat.age
     raw = np.asarray(bag.draw_t if arrival == "recv" else bag.draw_stamp, dtype=np.float64)
     order = np.argsort(raw, kind="stable")
     recv = raw[order]
@@ -105,6 +110,22 @@ def cycle_table(bag: SessionBag, arrival: str = "stamp") -> tuple[NDArray[np.flo
     speed[have] = bag.draw_speed[order][idx[have]]
     age[have] = stamp[have] - recv[idx[have]]
     return stamp, dt, steer, speed, age
+
+
+def chain_inputs(bag: SessionBag) -> timing_chain.ChainInputs:
+    """The echo part of the timing chain needs only /drive_raw and /drive."""
+    return timing_chain.ChainInputs(
+        cmd_stamp=np.asarray(bag.draw_stamp, dtype=np.float64),
+        cmd_speed=np.asarray(bag.draw_speed, dtype=np.float64),
+        cmd_steer=np.asarray(bag.draw_steer, dtype=np.float64),
+        cyc_stamp=np.asarray(bag.drv_stamp, dtype=np.float64),
+        cyc_speed=np.asarray(bag.drv_speed, dtype=np.float64),
+        cyc_steer=np.asarray(bag.drv_steer, dtype=np.float64),
+    )
+
+
+def latched_from_bag(bag: SessionBag) -> timing_chain.Latched:
+    return timing_chain.latched_commands(chain_inputs(bag))
 
 
 def write_stream(
@@ -237,6 +258,7 @@ def whatif_report(
     cli: Path,
     work_dir: Path | None = None,
     arrival: str = "stamp",
+    match_tol_s: float = LIMITER_MATCH_TOL_S,
 ) -> dict[str, Any]:
     """Both replays, clips counted per run and pooled in the counting windows, and the
     reproduction check against the recorded rate_limit engagements."""
@@ -286,11 +308,11 @@ def whatif_report(
             if _in_any(float(bag.ev_t[i]), windows)
         ]
         rep = [ln for ln in _engage(teacher_lines, source) if _in_any(float(ln["t"]), windows)]
-        repro[source] = compare_events(rec, rep)
+        repro[source] = compare_events(rec, rep, match_tol_s)
         free = [
             ln for ln in _engage(results["recorded"], source) if _in_any(float(ln["t"]), windows)
         ]
-        repro[source + "_free_running"] = compare_events(rec, free)
+        repro[source + "_free_running"] = compare_events(rec, free, match_tol_s)
     return {
         "status": "run",
         "tool": CLI_NAME,
@@ -307,6 +329,38 @@ def whatif_report(
             "no scan (the obstacle gate never trips), no wheel odometry; the age of /drive_raw "
             "uses the command's header stamp as its arrival, not safety_node's own receive time"
         ),
+    }
+
+
+#: M-T2 (addendum 1 section 4): a replayed engagement is "at the same cycle" when its cycle stamp is
+#: the recorded one (cycle_tolerance 0 in the yaml); 1e-6 s absorbs only the 9 decimals of the
+#: stream file and the bag axis, a cycle is 20 ms.
+M_T2_CYCLE_TOL_S = 1e-6
+
+
+def m_t2_report(
+    bag: SessionBag,
+    analysis: TimingAnalysis,
+    cli: Path,
+    work_dir: Path | None = None,
+) -> dict[str, Any]:
+    """M-T2, the limiter replay with the latched command of each safety cycle taken from the echo
+    of /drive. It "reproduces" if every rate_limit ENGAGE of the bag is reproduced at the same
+    cycle (missed is 0); extra engagements and the cycles where the echo is ambiguous are listed.
+    The M-T result (recorder receive time or stamp as arrival) stays as it is next to this."""
+    rep = whatif_report(bag, analysis, cli, work_dir, arrival="echo", match_tol_s=M_T2_CYCLE_TOL_S)
+    lat = latched_from_bag(bag)
+    repro = rep["reproduction_recorded_dt"]["rate_limit"]
+    return {
+        "id": "M-T2",
+        "latch_source": lat.source,
+        "reproduces": repro["missed"] == 0 and repro["recorded"] > 0,
+        "rate_limit": repro,
+        "watchdog": rep["reproduction_recorded_dt"]["watchdog"],
+        "cycles": rep["cycles"],
+        "ambiguous_cycles": [float(lat.stamp[i]) for i in lat.ambiguous],
+        "ambiguous_share": len(lat.ambiguous) / max(len(lat.stamp), 1),
+        "replay": rep,
     }
 
 

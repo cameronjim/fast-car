@@ -32,7 +32,7 @@ import pytest
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from launch_ros.actions import Node as LaunchNode
-from racer_pnp_msgs.msg import PlannerStatus
+from racer_pnp_msgs.msg import PlannerStatus, PlannerTiming
 from rclpy.qos import QoSReliabilityPolicy
 
 V_MAX = 0.5
@@ -79,6 +79,10 @@ class TestPlannerNodeNominal(unittest.TestCase):
         )
         cls.node.create_subscription(
             PlannerStatus, "/pnp/planner/status", cls.status.append, common.reliable(50)
+        )
+        cls.timing: list[PlannerTiming] = []
+        cls.node.create_subscription(
+            PlannerTiming, "/pnp/planner/timing", cls.timing.append, common.reliable(50)
         )
         cls.feeder = common.Feeder(cls.node, speed_mps=0.3)
 
@@ -162,6 +166,65 @@ class TestPlannerNodeNominal(unittest.TestCase):
         self.assertEqual(nonempty[-1].header.frame_id, "base_link")
         self.assertEqual(len(nonempty[-1].poses), 31)
         self.assertGreater(nonempty[-1].poses[-1].pose.position.x, 0.2)
+
+    def test_d_timing_is_published_every_tick_with_finite_ordered_fields(self):
+        self.feeder.pump(2.0)
+        self.timing.clear()
+        self.status.clear()
+        self.feeder.pump(3.0)
+        self.assertGreater(len(self.timing), 120, "fewer than 40 Hz on /pnp/planner/timing")
+        self.assertAlmostEqual(len(self.timing), len(self.status), delta=3)
+        cycles = [t.cycle for t in self.timing]
+        self.assertEqual(
+            cycles, list(range(cycles[0], cycles[0] + len(cycles))), "a tick is missing"
+        )
+        scalars = ["scan_stamp_s", "scan_receipt_s", "track_stamp_s", "track_receipt_s", "odom_stamp_s", "odom_receipt_s", "solve_start_s", "solve_end_s", "gated_stamp_s", "gated_receipt_s"]
+        for t in self.timing[-100:]:
+            for name in scalars:
+                self.assertTrue(math.isfinite(getattr(t, name)), name)
+            publish = t.header.stamp.sec + 1e-9 * t.header.stamp.nanosec
+            # a source's stamp is not after its receipt, the solve starts after the sources it
+            # used arrived and ends before this publish
+            self.assertLessEqual(t.scan_stamp_s, t.scan_receipt_s + 1e-3)
+            self.assertLessEqual(t.odom_stamp_s, t.odom_receipt_s + 1e-3)
+            self.assertLessEqual(t.scan_receipt_s, t.solve_start_s + 1e-3)
+            self.assertLessEqual(t.track_receipt_s, t.solve_start_s + 1e-3)
+            self.assertLessEqual(t.odom_receipt_s, t.solve_start_s + 1e-3)
+            self.assertLessEqual(t.solve_start_s, t.solve_end_s)
+            self.assertLessEqual(t.solve_end_s, publish + 1e-3)
+            self.assertIn(t.final_sequence, (0, 1, 2))
+            self.assertEqual(len(t.cost_terms), 11)
+            self.assertTrue(all(math.isfinite(c) for c in t.cost_terms))
+            self.assertLessEqual(t.speed_limiter, PlannerTiming.SPEED_LIMITER_SAMPLE_CHOICE)
+            # no safety_node in this test: no gated message, no echo
+            self.assertEqual(t.gated_stamp_s, 0.0)
+            self.assertEqual(t.gated_echo_cycle, 0)
+        self.assertEqual(len(self.gated), 0, "the planner (or something) published /drive")
+
+    def test_e_an_odometry_sample_without_a_stamp_falls_back_to_arrival(self):
+        self.feeder.odom_stamp_override = 0.0
+        try:
+            self.feeder.pump(2.0)
+            states = {s.state for s in self.status[-30:]}
+            self.assertEqual(states, {PlannerStatus.STATE_DRIVING}, f"states {states}")
+        finally:
+            self.feeder.odom_stamp_override = None
+        self.feeder.pump(1.0)
+
+    def test_f_a_repeated_old_stamp_refreshes_nothing(self):
+        # Samples keep arriving but carry one old stamp: arrival time no longer makes them fresh.
+        # (On the arrival-time rule this stayed DRIVING.)
+        self.feeder.pump(1.0)
+        self.assertEqual(self.status[-1].state, PlannerStatus.STATE_DRIVING)
+        self.feeder.odom_stamp_override = self.node.get_clock().now().nanoseconds * 1e-9 - 0.5
+        try:
+            self.feeder.pump(1.5)
+        finally:
+            self.feeder.odom_stamp_override = None
+        self.assertEqual(self.status[-1].state, PlannerStatus.STATE_NO_ODOM)
+        # an honest source recovers it (its stamps advance again)
+        self.feeder.pump(2.0)
+        self.assertEqual(self.status[-1].state, PlannerStatus.STATE_DRIVING)
 
 
 @launch_testing.post_shutdown_test()

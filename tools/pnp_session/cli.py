@@ -90,6 +90,12 @@ def cmd_timing(args: argparse.Namespace, read: Callable[[Path], SessionBag] | No
             limiter = whatif.not_run(str(exc))
     is_baseline = bag.name.startswith(BASELINE_BAG) or args.check_baseline
     doc = report.assemble(bag.name, analysis.report, limiter, is_baseline)
+    if getattr(args, "m_t2", False):
+        # M-T2 (addendum 1 section 4): next to M-T, whose result above stays as it is.
+        try:
+            doc["m_t2"] = whatif.m_t2_report(bag, analysis, whatif.find_cli(args.limiter_cli))
+        except whatif.LimiterUnavailable as exc:
+            doc["m_t2"] = whatif.not_run(str(exc))
     if args.out:
         Path(args.out).write_text(
             json.dumps(doc, indent=2, sort_keys=True, default=_json_default) + "\n"
@@ -224,6 +230,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     t.add_argument("--limiter-cli", help="path of limiter_whatif_cli")
     t.add_argument("--no-limiter", action="store_true", help="skip the rate limiter what-if")
+    t.add_argument(
+        "--m-t2",
+        action="store_true",
+        help="also the M-T2 limiter replay with the latched command read back from /drive",
+    )
     t.add_argument(
         "--check-baseline",
         action="store_true",

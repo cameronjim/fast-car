@@ -123,6 +123,7 @@ if(BUILD_TESTING)
     test/test_planner_properties.cpp
     test/test_planner_timing.cpp
     test/test_planner_timing_properties.cpp
+    test/test_planner_correctness.cpp
     TIMEOUT 120
   )
   add_dependencies(test_racer_planner_core racer_planner_generate_vehicle_params)

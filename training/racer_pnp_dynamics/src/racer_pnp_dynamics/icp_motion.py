@@ -120,12 +120,19 @@ def compute_motion(
     ignore: frozenset[tuple[int, int]] | None = None,
     seed: str = SEED_IDENTITY,
     run: Run | None = None,
+    seed_scale: float = 1.0,
+    clock_shift_s: float = 0.0,
 ) -> MotionSeries:
     """Motion for every interval where `want[i]` is true (all by default), the rest not ok.
 
     `seed` is "identity" (T1, the matcher starts from no motion) or "wheel" (T2, it starts from
     the wheel motion over each interval, which needs `run` for the wheel speed and the gated
-    steering). Everything else, the matcher and the quality flags, is the same."""
+    steering). Everything else, the matcher and the quality flags, is the same.
+
+    `seed_scale` (default 1.0) multiplies the wheel translation of the seed (T2s, addendum 1
+    section 2.4) and `clock_shift_s` (default 0.0) shifts the scan stamps when the wheel speed and
+    the steering are looked up for the seed (the M-B4 clock sensitivity). Neither touches the
+    matcher; with the defaults the result is bit-identical to before."""
     if seed not in SEEDS:
         raise ValueError(f"seed must be one of {SEEDS}, got {seed!r}")
     if seed == SEED_WHEEL and run is None:
@@ -141,7 +148,9 @@ def compute_motion(
     if seed == SEED_WHEEL:
         from .wheel_seed import interval_seed  # not at the top: wheel_seed imports windows
 
-        dyaw0, path0 = interval_seed(run, vehicle, stamps[:n], stamps[1 : n + 1])  # type: ignore[arg-type]
+        dyaw0, path0 = interval_seed(  # type: ignore[arg-type]
+            run, vehicle, stamps[:n] + clock_shift_s, stamps[1 : n + 1] + clock_shift_s, seed_scale
+        )
         init = np.stack([dyaw0, path0], axis=1)
     _WORK.update(scans=scans, mount=mount, ignore=ignore, init=init)
     if workers > 1:  # pragma: no cover - process pool, exercised by the real run only

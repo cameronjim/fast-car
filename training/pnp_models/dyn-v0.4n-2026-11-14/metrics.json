@@ -1,0 +1,104 @@
+{
+  "decision": {
+    "gate": "GP2d-N classical refit",
+    "passed": false,
+    "items": [
+      {
+        "name": "1a P1 ratio N4 / v0.1",
+        "value": 0.9681608763534357,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "1b upper end of the bootstrap interval of the P1 ratio",
+        "value": 0.9800034286643545,
+        "comparison": "<",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "2a Y1 ratio N4 / v0.1",
+        "value": 0.653841592037537,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "2b S1 ratio N4 / v0.1",
+        "value": 1.0025583464233074,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": false,
+        "note": ""
+      },
+      {
+        "name": "3 stratum ccw:0.25-0.6 position RMSE ratio",
+        "value": 0.9951874615749162,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3 stratum ccw:0.6-0.85 position RMSE ratio",
+        "value": 1.010474622620856,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3 stratum ccw:0.85+ position RMSE ratio",
+        "value": 0.9003984514285739,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3 stratum cw:0.25-0.6 position RMSE ratio",
+        "value": 0.9584784012712066,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3 stratum cw:0.6-0.85 position RMSE ratio",
+        "value": 0.9857638869351409,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3 stratum cw:0.85+ position RMSE ratio",
+        "value": 0.9712636492139439,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 refit parameters on a bound",
+        "value": 1.0,
+        "comparison": "<=",
+        "threshold": 0.0,
+        "passed": false,
+        "note": "understeer_s2_per_m2"
+      },
+      {
+        "name": "5 Yp ratio N4 / v0.1",
+        "value": 0.9253423595714444,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      }
+    ]
+  }
+}

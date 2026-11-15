@@ -27,10 +27,16 @@ SUBSTEPS = 10
 
 
 def interval_seed(
-    run: Run, vehicle: Vehicle, t0_s: np.ndarray, t1_s: np.ndarray
+    run: Run,
+    vehicle: Vehicle,
+    t0_s: np.ndarray,
+    t1_s: np.ndarray,
+    translation_scale: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """(heading change in rad, path length in m) of each interval [t0_s[i], t1_s[i]], NaN where
-    the speed or the steering command is missing anywhere in it."""
+    the speed or the steering command is missing anywhere in it. `translation_scale` multiplies
+    the path length only (T2s of addendum 1 section 2.4 uses 0.80); the default 1.0 changes no
+    bit of the T2 seed."""
     t0 = np.asarray(t0_s, dtype=np.float64)
     t1 = np.asarray(t1_s, dtype=np.float64)
     h = (t1 - t0) / SUBSTEPS
@@ -41,4 +47,6 @@ def interval_seed(
         rate = vehicle.yaw_gain(delta) * v * np.tan(delta) / vehicle.wheelbase_m
         dyaw = (rate * h[:, None]).sum(axis=1)
         path = (v * h[:, None]).sum(axis=1)
+    if translation_scale != 1.0:
+        path = path * translation_scale
     return dyaw, path

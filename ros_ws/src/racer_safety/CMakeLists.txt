@@ -151,6 +151,35 @@ if(BUILD_TESTING)
             --exe "$<TARGET_FILE:safety_node>" --iterations 20
   )
   set_tests_properties(test_safety_node_sigint PROPERTIES TIMEOUT 300)
+
+  # Deterministic A/B proof for safety_node (brief 45): one driver source, compiled textually
+  # against a frozen copy of main's safety_node.cpp (test/ab/reference/) and against this
+  # package's src/safety_node.cpp, fed one scripted input sequence under a manual clock. See
+  # test/ab/safety_node_ab_driver.cpp and test/ab/check_safety_node_ab.py.
+  function(racer_safety_ab_driver target node_source)
+    add_executable(${target} test/ab/safety_node_ab_driver.cpp)
+    add_dependencies(${target} racer_safety_generate_vehicle_params)
+    target_include_directories(${target} PRIVATE "${RACER_GENERATED_DIR}")
+    target_compile_definitions(${target} PRIVATE AB_NODE_SOURCE="${node_source}" ${ARGN})
+    target_link_libraries(${target} racer_safety_core)
+    ament_target_dependencies(${target} rclcpp rcl_interfaces ackermann_msgs sensor_msgs
+      nav_msgs racer_msgs)
+  endfunction()
+  set(RACER_SAFETY_AB_REFERENCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/ab/reference/safety_node_main.cpp")
+  racer_safety_ab_driver(ab_driver_reference "${RACER_SAFETY_AB_REFERENCE}" AB_CAPTURE=1)
+  racer_safety_ab_driver(ab_driver_branch "${CMAKE_CURRENT_SOURCE_DIR}/src/safety_node.cpp"
+    AB_CAPTURE=1)
+  add_test(
+    NAME test_safety_node_ab
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/ab/check_safety_node_ab.py"
+            --ref "$<TARGET_FILE:ab_driver_reference>"
+            --branch "$<TARGET_FILE:ab_driver_branch>"
+            --reference-source "${RACER_SAFETY_AB_REFERENCE}"
+            --workdir "${CMAKE_CURRENT_BINARY_DIR}/ab_work"
+  )
+  set_tests_properties(test_safety_node_ab PROPERTIES TIMEOUT 300)
 endif()
 
 ament_package()

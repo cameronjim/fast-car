@@ -1,0 +1,708 @@
+// safety_node: ROS 2 plumbing around racer_safety's gate logic core (roadmap milestone 1,
+// claude-docs/04-architecture.md, claude-docs/05-safety.md).
+//
+// Sole publisher of /drive (claude-docs/05-safety.md layer 3). Subscribes /drive_raw
+// (command path, reliable) and /scan (sensor data, best_effort) per claude-docs/10-
+// conventions.md's QoS rule. Every physical bound fed into `racer_safety::SafetyLimits`
+// comes ONLY from the generated vehicle_params binding (CLAUDE.md invariant 2); tuning
+// knobs that are not physical constants (control rate, watchdog cadence) are declared ROS
+// parameters instead.
+//
+// Fail-closed (claude-docs/05-safety.md: "any internal error -> brake command, not
+// passthrough"): the entire per-cycle body runs inside a try/catch, and ANY exception --
+// including the test-only `inject_fault` parameter below -- results in publishing a
+// zero-throttle command and an `internal_fault` /safety/events record, never a silent crash
+// or passthrough.
+//
+// WHAT "BRAKE" MEANS HERE, PHYSICALLY. This node's only lever is the /drive `speed` field,
+// and "brake" means it writes 0.0 there. Downstream, racer_drivers/pwm_output_node maps speed
+// 0 to actuation.throttle_pwm_neutral_us, which a VESC in PPM mode reads as zero current --
+// a COAST, not a deceleration. A moving car whose gate engages here keeps rolling. Real
+// deceleration has to come from layer 2 (the VESC's configured PPM control type, see
+// docs/notes/first-boot-runbook.md's VESC Tool step) or from a future closed-loop vesc_node,
+// never from this file. gate_logic.hpp's GateResult note carries the full version.
+//
+// EVENT STREAM SEMANTICS (GitHub issue #37). /safety/events carries gate TRANSITIONS, not a
+// per-cycle status dump: one record when a gate engages, one when that engagement releases
+// (carrying its duration), and nothing in between. This node does not decide that -- it
+// hands each cycle's engaged-gate set to `racer_safety::GateEventTracker` (gate_logic.hpp,
+// where the semantics and the reasoning live) and publishes whatever transitions come back.
+// claude-docs/05-safety.md's "an unlogged intervention is a bug" still holds: every
+// intervention still produces exactly one engage record. An intervention COUNT
+// (claude-docs/09-evaluation.md) is a count of PHASE_ENGAGE records.
+//
+// CLOCK POLICY (read before changing any time arithmetic below). This node uses TWO clocks,
+// deliberately, and they are not interchangeable:
+//
+//   * `steady_clock_` (RCL_STEADY_TIME, the OS monotonic clock) is the ONLY clock used to
+//     MEASURE ELAPSED TIME: the /drive_raw watchdog age and the rate-limiter's dt. A
+//     monotonic clock cannot be stepped, cannot run backwards, and cannot be frozen by an
+//     absent /clock publisher.
+//   * `this->now()` (the node's ROS clock) is used ONLY to STAMP outgoing messages
+//     (/drive headers, /safety/events), where a bag-consistent, sim-consistent ROS
+//     timestamp is exactly what a consumer wants.
+//
+// Using the ROS clock to measure durations was the root cause of GitHub issue #22 (a
+// negative /drive_raw age observed under a stepped host clock). With `use_sim_time:=false`
+// the ROS clock is CLOCK_REALTIME, which NTP, a VM resync, or an operator running `date`
+// can step in either direction; with `use_sim_time:=true` and no /clock publisher yet, it
+// is frozen at zero, which makes every measured age exactly 0.0 -- i.e. the watchdog would
+// consider a permanently silent /drive_raw permanently FRESH. Both failure modes are
+// removed by measuring on the steady clock. See test/test_safety_node_clock_launch.py.
+//
+// /scan -> FORWARD-SECTOR MINIMUM RANGE (2026-10-06). The obstacle gate (TTC brake + distance
+// floor, gate_logic.hpp) brakes on the nearest valid return inside +/-
+// limits.ttc_forward_sector_half_angle_rad of the car's +x axis, not over the whole 360 degree
+// scan. Each laser bearing is turned into a vehicle bearing with the LiDAR mount yaw, which
+// comes from vehicle_params sensors.lidar.mount_yaw_rad (pi on this car), resolved by
+// racer_safety::resolve_laser_yaw_rad exactly the way racer_control's nodes resolve it.
+// laser_yaw_from_vehicle_params (default true) must stay true on the car; it is false ONLY for
+// the simulator (racer_gym_bridge's /scan is aligned to the vehicle, yaw 0) and synthetic-scan
+// tests. forward_sector.hpp documents which returns count.
+//
+// CORRIDOR, NOT WEDGE (2026-10-06, floor test). Inside that sector a return now counts only if
+// it lies in a straight corridor ahead of the car, |y| <= chassis.width_m / 2 +
+// limits.obstacle_corridor_margin_m, both from the generated binding, and the distance the gate
+// sees is the along-track x, not the slant range. A bag beside the path no longer brakes the
+// car. The sector half angle is kept as an outer bound only. forward_sector.hpp has the rule.
+// Since the arc corridor below, that straight corridor applies to a straight request only.
+//
+// ARC CORRIDOR, RECOMPUTED EVERY GATE CYCLE (2026-10-06, late floor test). The corridor now
+// follows the arc the REQUESTED steering sweeps (forward_sector.hpp "ARC CORRIDOR"), using
+// chassis.wheelbase_m, steering.max_angle_rad and sensors.lidar.mount_x_m / mount_y_m from the
+// generated binding (the node refuses to start if a mount offset is null). Because the in-path
+// distance now depends on the request, it is no longer reduced once per scan: on_scan only
+// keeps the latest LaserScan, and on_timer reduces that scan on EVERY cycle with the cached
+// /drive_raw steering, right before the gate runs. That is what lets a latched car release by
+// steering away: the gate sees the path the car is being asked to take on this cycle, even
+// while the steering hold has frozen the output. (Bag 2026-10-06T22-12-40_car_teleop: with the
+// straight corridor a car stopped against a wall at full lock away from it stayed latched for
+// 20 to 37 s.) Before the first scan the distance is +infinity, as before. Since schema 0.11.0
+// the band's outer edge is the outer front corner's sweep, hypot(wheelbase_m +
+// front_overhang_m, |R| + half width) (forward_sector.hpp "OUTER BOUNDARY"). Since schema
+// 0.12.0 a return between |R| + half width and that edge (the outer-corner band) counts only
+// within limits.outer_corner_horizon_m of arc; the body band keeps the quarter turn
+// (forward_sector.hpp "OUTER-CORNER HORIZON"). The rear corridor gets the same split.
+//
+// REAR CORRIDOR (2026-10-06 night). A reverse request is now judged like a forward one, on the
+// arc corridor mirrored behind the car (forward_sector.hpp "REAR CORRIDOR") with the distance
+// measured from the rear bumper line, chassis.rear_overhang_m behind the rear axle (schema
+// 0.10.0). on_timer reduces the last scan a second time each cycle, along the reverse arc of
+// the cached request's steering, and hands it to the gate's rear obstacle gate, which has its
+// own latch (gate_logic.hpp "THE REAR OBSTACLE GATE"). It is computed every cycle, whatever the
+// request's direction, because the rear latch's release needs it too; a forward or zero
+// request never trips the rear gate. This node threads the rear latch like the forward one and
+// holds it across an internal fault. gap_follow_node's reverse escape backs the car out of a
+// corner it cannot drive round; it goes through this gate like every other command.
+//
+// STEERING HOLD (2026-10-06 late). Once the obstacle latch has held the /drive speed at zero
+// for vehicle_params limits.obstacle_steering_hold_after_s, the gate freezes the steering
+// output until the latch releases (a car parked against an obstacle stops hunting its servo).
+// This node only threads the hold timer from cycle to cycle, like the latch, and keeps an
+// engaged hold reported across an internal fault. gate_logic.hpp has the rule and the reasons.
+//
+// DISTANCE FROM THE BODY AND SPEED FOR THE TTC (2026-11-02, schema 0.13.0,
+// docs/notes/safety-floor-review-2026-11-02.md). The in-path distances are now measured from the
+// swept body (front bumper / leading corner forward, rear bumper / leading corner in reverse),
+// PathGeometry::distance_from_body true (forward_sector.hpp "DISTANCE FROM THE BODY"), and the
+// TTC divides by the request raised to a speed estimate (gate_logic.hpp "SPEED FOR THE TTC"):
+// the decaying bound of this node's own outputs, falling at vehicle_params
+// actuation.stop_deceleration_mps2 and threaded from cycle to cycle like the latch, and the
+// measured wheel speed from /odom/wheel (nav_msgs/Odometry twist.twist.linear.x, racer_drivers/
+// vesc_odometry_node, KeepLast(10) best_effort: it is sensor data, and a best_effort subscriber
+// matches that node's reliable publisher) while it is at most wheel_odom_timeout_s old on the
+// steady clock. OPTIONAL: the simulator and every bag before 2026-11 have no /odom/wheel; without
+// it, or when it goes stale, the measured term is simply absent and the request and the output
+// bound still apply. It can only raise the TTC speed, never lower it below the request.
+//
+// JUDGED SPEED FROM THE MEASURED WHEEL SPEED (2026-11-12, schema 0.15.0,
+// docs/notes/safety-race-retune-2026-11-12.md). While /odom/wheel is fresh the TTC is divided by
+// max(measured, min(request, measured + actuation.peak_acceleration_mps2 *
+// actuation.stop_latency_s)) instead: the decaying bound is not used, and the judged speed is never
+// above what the rule above would judge, so it can only remove a trip. gate_logic.hpp has the
+// reasons and the numbers.
+#include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <csignal>
+#include <limits>
+#include <memory>
+#include <nav_msgs/msg/odometry.hpp>
+#include <optional>
+#include <racer_msgs/msg/safety_event.hpp>
+#include <rcl_interfaces/msg/floating_point_range.hpp>
+#include <rcl_interfaces/msg/integer_range.hpp>
+#include <rcl_interfaces/msg/parameter_descriptor.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <vehicle_params_generated.hpp>
+
+#include "racer_safety/forward_sector.hpp"
+#include "racer_safety/gate_logic.hpp"
+
+namespace racer_safety {
+
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+
+}  // namespace
+
+class SafetyNode : public rclcpp::Node {
+ public:
+  SafetyNode()
+      : Node("safety_node"),
+        previous_output_(DriveCommand{0.0, 0.0}),
+        has_received_command_(false),
+        has_evaluated_before_(false) {
+    const rclcpp::QoS command_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
+    const rclcpp::QoS scan_qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
+    const rclcpp::QoS events_qos = rclcpp::QoS(rclcpp::KeepLast(50)).reliable();
+
+    drive_raw_sub_ = this->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
+        "/drive_raw", command_qos,
+        std::bind(&SafetyNode::on_drive_raw, this, std::placeholders::_1));
+    scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
+        "/scan", scan_qos, std::bind(&SafetyNode::on_scan, this, std::placeholders::_1));
+    // Measured wheel speed for the TTC (this file's "SPEED FOR THE TTC"); optional.
+    rcl_interfaces::msg::ParameterDescriptor odom_topic_descriptor;
+    odom_topic_descriptor.description =
+        "nav_msgs/Odometry topic whose twist.twist.linear.x (m/s, forward positive) raises the TTC "
+        "speed when it is higher than the request (gate_logic.hpp SPEED FOR THE TTC). Optional: "
+        "without it the request and the output bound still apply.";
+    const std::string odom_topic = this->declare_parameter<std::string>(
+        "wheel_odom_topic", "/odom/wheel", odom_topic_descriptor);
+    wheel_odom_timeout_s_ = declare_positive_double(
+        "wheel_odom_timeout_s", 0.1,
+        "The /odom/wheel speed counts for the TTC while it is at most this old (s, steady clock). "
+        "vesc_odometry_node publishes at 50 Hz, so 0.1 s is five missed messages.");
+    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+        odom_topic, scan_qos, std::bind(&SafetyNode::on_odom, this, std::placeholders::_1));
+
+    drive_pub_ =
+        this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive", command_qos);
+    events_pub_ =
+        this->create_publisher<racer_msgs::msg::SafetyEvent>("/safety/events", events_qos);
+
+    // control_period_s_ MUST be set before build_limits() runs (it feeds
+    // SafetyLimits::control_period_s, which the watchdog timeout is computed from) --
+    // this is why `gate_` is a std::optional constructed here in the body rather than in the
+    // member-initializer list, where this parameter would not exist yet.
+    const double control_rate_hz =
+        declare_positive_double("control_rate_hz", 50.0,
+                                "Watchdog/gate evaluation rate (claude-docs/04-architecture.md: "
+                                "the command path runs at 50 Hz).");
+    control_period_s_ = 1.0 / control_rate_hz;
+    gate_.emplace(build_limits());
+    configure_scan_sector();
+
+    rcl_interfaces::msg::ParameterDescriptor inject_fault_descriptor;
+    inject_fault_descriptor.description =
+        "TEST-ONLY. When true, every cycle raises an internal fault before evaluating any "
+        "gate, to exercise the fail-closed path (claude-docs/12-testing.md L3: 'publishes "
+        "brake on internal exception'). Never set outside a test.";
+    this->declare_parameter<bool>("inject_fault", false, inject_fault_descriptor);
+
+    const auto period = std::chrono::duration<double>(control_period_s_);
+    timer_ = this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+                                     std::bind(&SafetyNode::on_timer, this));
+
+    RCLCPP_INFO(
+        this->get_logger(),
+        "safety_node up: %.1f Hz, watchdog=%d missed cycles, min forward clearance "
+        "%.3f m, path corridor +/-%.3f m along the requested steering arc (wheelbase "
+        "%.4f m, lidar at x %.3f m y %.3f m, front bumper at x %.3f m from the rear axle, "
+        "outer-corner band to %.3f m of arc) inside a +/-%.3f rad "
+        "outer sector, rear corridor mirrored behind the car from the rear bumper line "
+        "%.3f m behind the rear axle, laser yaw %.6f rad, steering hold after %.3f s on the "
+        "obstacle latch, distances from the swept body, TTC speed bound decaying at %.2f m/s^2, "
+        "wheel speed from %s while fresh (%.2f s), "
+        "ttc_brake_s=%s, ttc_warning_s=%s",
+        control_rate_hz, gate_limits_.watchdog_missed_cycles, *gate_limits_.min_forward_clearance_m,
+        corridor_half_width_m_, path_geometry_.wheelbase_m, path_geometry_.lidar_mount_x_m,
+        path_geometry_.lidar_mount_y_m, path_geometry_.body_front_x_m,
+        path_geometry_.outer_corner_horizon_m, sector_half_angle_rad_, rear_overhang_m_,
+        laser_yaw_rad_, gate_limits_.obstacle_steering_hold_after_s,
+        *gate_limits_.speed_bound_deceleration_mps2, odom_sub_->get_topic_name(),
+        wheel_odom_timeout_s_,
+        gate_limits_.ttc_brake_s.has_value()
+            ? std::to_string(*gate_limits_.ttc_brake_s).c_str()
+            : "unset (untuned; TTC gate is a no-op -- claude-docs/06-vehicle-params.md)",
+        gate_limits_.ttc_warning_s.has_value() ? std::to_string(*gate_limits_.ttc_warning_s).c_str()
+                                               : "unset");
+  }
+
+ private:
+  double declare_positive_double(const std::string& name, double default_value,
+                                 const std::string& description) {
+    rcl_interfaces::msg::ParameterDescriptor descriptor;
+    descriptor.description = description;
+    rcl_interfaces::msg::FloatingPointRange range;
+    range.from_value = 1e-6;
+    range.to_value = 1e6;
+    descriptor.floating_point_range = {range};
+    return this->declare_parameter<double>(name, default_value, descriptor);
+  }
+
+  SafetyLimits build_limits() {
+    // Every physical bound here comes ONLY from the generated vehicle_params binding
+    // (CLAUDE.md invariant 2, claude-docs/06-vehicle-params.md rule 3) -- never hand-typed.
+    // watchdog_missed_cycles is node-level tuning (the watchdog cadence), not a physical
+    // constant, so it is a declared ROS parameter instead.
+    rcl_interfaces::msg::ParameterDescriptor watchdog_descriptor;
+    watchdog_descriptor.description =
+        "Missed /drive_raw cycles before the watchdog brakes (claude-docs/04-architecture.md: "
+        "'missing /drive_raw for 3 cycles -> brake command').";
+    rcl_interfaces::msg::IntegerRange watchdog_range;
+    watchdog_range.from_value = 1;
+    watchdog_range.to_value = 100;
+    watchdog_descriptor.integer_range = {watchdog_range};
+    const int watchdog_missed_cycles = static_cast<int>(
+        this->declare_parameter<int>("watchdog_missed_cycles", 3, watchdog_descriptor));
+
+    // ttc_warning_s / ttc_brake_s are vehicle_params.yaml's limits.ttc_warning_s/ttc_brake_s
+    // (CLAUDE.md invariant 2: this is their ONE source of truth). Since 2026-09-13 the
+    // committed file holds PROVISIONAL values (0.36 s warn / 0.35 s brake since 2026-10-06,
+    // raised from 1.0 / 0.5 after the bench limit cycle; NOT tuned against this car's
+    // measured braking distance -- see that file's comments and GitHub issue #36), so the TTC
+    // gate is ARMED whenever a /scan is present rather than the documented no-op it used to be.
+    // `null` there still maps to std::nullopt, which SafetyLimits/evaluate() treat as a no-op (the
+    // TTC gate does not brake), and that path is unchanged. With no /scan publisher at all the gate
+    // stays a no-op regardless of these values, because there is no range to compute a TTC from.
+    // These are declared as ROS parameters ANYWAY, defaulting to whatever vehicle_params
+    // currently holds (a negative default when it is null, meaning "unconfigured"), so that:
+    // (a) once a real tuned value is committed to vehicle_params.yaml, this node picks it up
+    // automatically with no launch file needing to change, and (b) a launch file can still
+    // override it. A value <= 0 means "unconfigured" (TTC gate disabled).
+    rcl_interfaces::msg::ParameterDescriptor ttc_warning_descriptor;
+    ttc_warning_descriptor.description =
+        "TTC warning threshold, seconds (<=0 means unconfigured/disabled). Defaults to "
+        "vehicle_params.yaml's limits.ttc_warning_s.";
+    rcl_interfaces::msg::FloatingPointRange ttc_range;
+    ttc_range.from_value = -1.0;
+    ttc_range.to_value = 30.0;
+    ttc_warning_descriptor.floating_point_range = {ttc_range};
+    const double ttc_warning_default = VEHICLE_PARAMS.limits.ttc_warning_s.has_value()
+                                           ? *VEHICLE_PARAMS.limits.ttc_warning_s
+                                           : -1.0;
+    const double ttc_warning_param = this->declare_parameter<double>(
+        "ttc_warning_s", ttc_warning_default, ttc_warning_descriptor);
+
+    rcl_interfaces::msg::ParameterDescriptor ttc_brake_descriptor;
+    ttc_brake_descriptor.description =
+        "TTC brake threshold, seconds (<=0 means unconfigured/disabled). Defaults to "
+        "vehicle_params.yaml's limits.ttc_brake_s.";
+    ttc_brake_descriptor.floating_point_range = {ttc_range};
+    const double ttc_brake_default =
+        VEHICLE_PARAMS.limits.ttc_brake_s.has_value() ? *VEHICLE_PARAMS.limits.ttc_brake_s : -1.0;
+    const double ttc_brake_param =
+        this->declare_parameter<double>("ttc_brake_s", ttc_brake_default, ttc_brake_descriptor);
+
+    SafetyLimits limits;
+    limits.steering_min_rad = VEHICLE_PARAMS.steering.min_angle_rad;
+    limits.steering_max_rad = VEHICLE_PARAMS.steering.max_angle_rad;
+    limits.steering_rate_min_rad_per_s = VEHICLE_PARAMS.steering.min_rate_rad_per_s;
+    limits.steering_rate_max_rad_per_s = VEHICLE_PARAMS.steering.max_rate_rad_per_s;
+    limits.speed_min_mps = VEHICLE_PARAMS.limits.min_velocity_mps;
+    limits.speed_max_mps = VEHICLE_PARAMS.limits.global_speed_cap_mps;
+    limits.max_acceleration_mps2 = VEHICLE_PARAMS.actuation.max_acceleration_mps2;
+    limits.ttc_warning_s =
+        ttc_warning_param > 0.0 ? std::optional<double>(ttc_warning_param) : std::nullopt;
+    limits.ttc_brake_s =
+        ttc_brake_param > 0.0 ? std::optional<double>(ttc_brake_param) : std::nullopt;
+    // Distance floor of the obstacle gate (schema 0.7.0, required, so always set here). The
+    // latch hysteresis factors stay at SafetyLimits' documented defaults (gate tuning, not
+    // physics; see gate_logic.hpp).
+    limits.min_forward_clearance_m = VEHICLE_PARAMS.limits.min_forward_clearance_m;
+    // Steering hold on the obstacle latch (schema 0.7.3, required, so always set here; see
+    // gate_logic.hpp "STEERING HOLD WHILE PARKED ON THE OBSTACLE LATCH").
+    limits.obstacle_steering_hold_after_s = VEHICLE_PARAMS.limits.obstacle_steering_hold_after_s;
+    // The decaying output bound's deceleration (schema 0.13.0, required, so always set; see
+    // gate_logic.hpp "SPEED FOR THE TTC").
+    limits.speed_bound_deceleration_mps2 = VEHICLE_PARAMS.actuation.stop_deceleration_mps2;
+    // The measured-speed model (schema 0.15.0, required, so always set; used while /odom/wheel is
+    // fresh, see gate_logic.hpp "JUDGED SPEED FROM THE MEASURED WHEEL SPEED").
+    racer_safety::MeasuredSpeedModel measured_speed_model;
+    measured_speed_model.latency_s = VEHICLE_PARAMS.actuation.stop_latency_s;
+    measured_speed_model.peak_acceleration_mps2 = VEHICLE_PARAMS.actuation.peak_acceleration_mps2;
+    limits.measured_speed_model = measured_speed_model;
+    limits.watchdog_missed_cycles = watchdog_missed_cycles;
+    limits.control_period_s = control_period_s_;
+    gate_limits_ = limits;
+    return limits;
+  }
+
+  // In-path test for the obstacle gate: outer sector half angle, corridor half width and the
+  // arc path model from vehicle_params, LiDAR yaw resolved against the binding (see this
+  // file's "/scan -> FORWARD-SECTOR MINIMUM RANGE", "CORRIDOR, NOT WEDGE" and "ARC CORRIDOR"
+  // notes). Throws (the node refuses to start) when the yaw parameter disagrees with the
+  // binding or the LiDAR mount is null.
+  void configure_scan_sector() {
+    sector_half_angle_rad_ = VEHICLE_PARAMS.limits.ttc_forward_sector_half_angle_rad;
+    corridor_half_width_m_ = corridor_half_width_m(
+        VEHICLE_PARAMS.chassis.width_m, VEHICLE_PARAMS.limits.obstacle_corridor_margin_m);
+    // The arc corridor's path model (forward_sector.hpp "ARC CORRIDOR"). The LiDAR mount is
+    // nullable in the schema; without it the arc cannot be placed, so refuse to start rather
+    // than guess an offset (CLAUDE.md invariant 2).
+    if (!VEHICLE_PARAMS.sensors.lidar.mount_x_m.has_value() ||
+        !VEHICLE_PARAMS.sensors.lidar.mount_y_m.has_value()) {
+      throw std::invalid_argument(
+          "safety_node: vehicle_params sensors.lidar.mount_x_m / mount_y_m is null; the arc "
+          "corridor needs the LiDAR position relative to the rear axle; refusing to start");
+    }
+    path_geometry_.wheelbase_m = VEHICLE_PARAMS.chassis.wheelbase_m;
+    path_geometry_.max_steering_angle_rad = VEHICLE_PARAMS.steering.max_angle_rad;
+    path_geometry_.lidar_mount_x_m = *VEHICLE_PARAMS.sensors.lidar.mount_x_m;
+    path_geometry_.lidar_mount_y_m = *VEHICLE_PARAMS.sensors.lidar.mount_y_m;
+    // Rear axle to front bumper line: the outer front corner's sweep bounds the arc band
+    // (forward_sector.hpp "OUTER BOUNDARY"; schema 0.11.0, required, so always set).
+    path_geometry_.body_front_x_m =
+        VEHICLE_PARAMS.chassis.wheelbase_m + VEHICLE_PARAMS.chassis.front_overhang_m;
+    // Arc horizon of the outer-corner band, forward and rear (forward_sector.hpp "OUTER-CORNER
+    // HORIZON"; schema 0.12.0, required, so always set).
+    path_geometry_.outer_corner_horizon_m = VEHICLE_PARAMS.limits.outer_corner_horizon_m;
+    // Distances from the swept body, not the LiDAR head (forward_sector.hpp "DISTANCE FROM THE
+    // BODY", schema 0.13.0). Always on in the node; the legacy reference exists for the replay.
+    path_geometry_.distance_from_body = true;
+    // The rear corridor's reference line (schema 0.10.0, required, so always set).
+    rear_overhang_m_ = VEHICLE_PARAMS.chassis.rear_overhang_m;
+
+    rcl_interfaces::msg::ParameterDescriptor yaw_descriptor;
+    yaw_descriptor.description =
+        "LiDAR mounting yaw in base_link (rad, CCW positive; pi = facing backwards). With "
+        "laser_yaw_from_vehicle_params true, only used while vehicle_params "
+        "sensors.lidar.mount_yaw_rad is null; once that is measured it wins and a disagreeing "
+        "non-zero value here refuses to start. With it false, used as given.";
+    rcl_interfaces::msg::FloatingPointRange yaw_range;
+    yaw_range.from_value = -kPi;
+    yaw_range.to_value = kPi;
+    yaw_descriptor.floating_point_range = {yaw_range};
+    const double yaw_param =
+        this->declare_parameter<double>("laser_yaw_offset_rad", 0.0, yaw_descriptor);
+
+    rcl_interfaces::msg::ParameterDescriptor from_params_descriptor;
+    from_params_descriptor.description =
+        "true (default, the real car): LiDAR yaw comes from vehicle_params "
+        "sensors.lidar.mount_yaw_rad when set. false: SIMULATOR AND SYNTHETIC-SCAN TESTS ONLY, "
+        "ignore the binding and use laser_yaw_offset_rad as given.";
+    const bool yaw_from_vehicle_params = this->declare_parameter<bool>(
+        "laser_yaw_from_vehicle_params", true, from_params_descriptor);
+    if (!yaw_from_vehicle_params) {
+      RCLCPP_INFO(this->get_logger(),
+                  "safety_node: laser_yaw_from_vehicle_params is false, ignoring vehicle_params "
+                  "sensors.lidar.mount_yaw_rad and using laser_yaw_offset_rad = %.6f rad (sim "
+                  "or synthetic-scan fixture only)",
+                  yaw_param);
+    }
+    const std::optional<double> yaw = resolve_laser_yaw_rad(
+        VEHICLE_PARAMS.sensors.lidar.mount_yaw_rad, yaw_param, yaw_from_vehicle_params);
+    if (!yaw.has_value()) {
+      throw std::invalid_argument(
+          "safety_node: laser_yaw_offset_rad disagrees with vehicle_params "
+          "sensors.lidar.mount_yaw_rad with laser_yaw_from_vehicle_params true (or is not "
+          "finite); refusing to start");
+    }
+    laser_yaw_rad_ = *yaw;
+  }
+
+  void on_drive_raw(const ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg) {
+    last_command_.steering_angle_rad = static_cast<double>(msg->drive.steering_angle);
+    last_command_.speed_mps = static_cast<double>(msg->drive.speed);
+    // Steady clock, NOT this->now() -- see this file's CLOCK POLICY comment. This value is
+    // only ever used as the left operand of an elapsed-time subtraction, never as a stamp.
+    last_drive_raw_steady_ = steady_clock_.now();
+    has_received_command_ = true;
+  }
+
+  // Keeps the latest scan only; it is reduced to an in-path distance on every gate cycle with
+  // that cycle's requested steering (in_path_distance_m), not here. See "ARC CORRIDOR,
+  // RECOMPUTED EVERY GATE CYCLE" at the top of this file.
+  void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg) { last_scan_ = msg; }
+
+  // Keeps the latest measured wheel speed and its arrival time (steady clock, CLOCK POLICY).
+  void on_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    last_odom_speed_mps_ = msg->twist.twist.linear.x;
+    last_odom_steady_ = steady_clock_.now();
+    has_odom_ = true;
+  }
+
+  // The in-path distance the obstacle gate sees this cycle: the last scan, reduced along the
+  // arc `requested_steering_rad` sweeps (forward_sector.hpp). +infinity before the first scan.
+  double in_path_distance_m(double requested_steering_rad) const {
+    if (!last_scan_) {
+      return std::numeric_limits<double>::infinity();
+    }
+    ScanGeometry geometry;
+    geometry.angle_min_rad = static_cast<double>(last_scan_->angle_min);
+    geometry.angle_increment_rad = static_cast<double>(last_scan_->angle_increment);
+    geometry.range_min_m = static_cast<double>(last_scan_->range_min);
+    geometry.range_max_m = static_cast<double>(last_scan_->range_max);
+    return min_path_distance_m(geometry, last_scan_->ranges, laser_yaw_rad_, sector_half_angle_rad_,
+                               corridor_half_width_m_, path_geometry_, requested_steering_rad);
+  }
+
+  // The same for the rear corridor: the last scan along the REVERSE arc of
+  // `requested_steering_rad`, from the rear bumper line (forward_sector.hpp "REAR CORRIDOR").
+  // +infinity before the first scan.
+  double rear_path_distance_m(double requested_steering_rad) const {
+    if (!last_scan_) {
+      return std::numeric_limits<double>::infinity();
+    }
+    ScanGeometry geometry;
+    geometry.angle_min_rad = static_cast<double>(last_scan_->angle_min);
+    geometry.angle_increment_rad = static_cast<double>(last_scan_->angle_increment);
+    geometry.range_min_m = static_cast<double>(last_scan_->range_min);
+    geometry.range_max_m = static_cast<double>(last_scan_->range_max);
+    return min_rear_path_distance_m(geometry, last_scan_->ranges, laser_yaw_rad_,
+                                    sector_half_angle_rad_, corridor_half_width_m_, path_geometry_,
+                                    rear_overhang_m_, requested_steering_rad);
+  }
+
+  void publish_event(const SafetyEventRecord& record, const rclcpp::Time& stamp) {
+    racer_msgs::msg::SafetyEvent event_msg;
+    event_msg.stamp = stamp;
+    switch (record.severity) {
+      case EventSeverity::kInfo:
+        event_msg.severity = racer_msgs::msg::SafetyEvent::SEVERITY_INFO;
+        break;
+      case EventSeverity::kWarning:
+        event_msg.severity = racer_msgs::msg::SafetyEvent::SEVERITY_WARNING;
+        break;
+      case EventSeverity::kBrake:
+        event_msg.severity = racer_msgs::msg::SafetyEvent::SEVERITY_BRAKE;
+        break;
+    }
+    switch (record.phase) {
+      case EventPhase::kEngage:
+        event_msg.phase = racer_msgs::msg::SafetyEvent::PHASE_ENGAGE;
+        break;
+      case EventPhase::kRelease:
+        event_msg.phase = racer_msgs::msg::SafetyEvent::PHASE_RELEASE;
+        break;
+    }
+    event_msg.duration_s = record.duration_s;
+    event_msg.source = gate_source_to_string(record.source);
+    event_msg.detail = record.detail;
+    events_pub_->publish(event_msg);
+  }
+
+  // Publishes the transition records (if any) that this cycle's engaged-gate set implies.
+  // EVERY /safety/events record leaves the node through here, fault path included, so the
+  // engage/release pairing can never get out of step between the two paths.
+  void publish_transitions(const std::vector<GateActivation>& activations,
+                           const std::vector<GateActivation>& release_notes,
+                           const rclcpp::Time& steady_now, const rclcpp::Time& stamp) {
+    // Steady clock, NOT `stamp` -- durations are elapsed time (CLOCK POLICY, top of file).
+    for (const SafetyEventRecord& record :
+         event_tracker_.update(activations, steady_now.seconds(), release_notes)) {
+      publish_event(record, stamp);
+    }
+  }
+
+  void publish_drive(const DriveCommand& cmd, const rclcpp::Time& stamp) {
+    ackermann_msgs::msg::AckermannDriveStamped drive_msg;
+    drive_msg.header.stamp = stamp;
+    drive_msg.header.frame_id = "base_link";
+    drive_msg.drive.steering_angle = static_cast<float>(cmd.steering_angle_rad);
+    drive_msg.drive.speed = static_cast<float>(cmd.speed_mps);
+    drive_pub_->publish(drive_msg);
+  }
+
+  void on_timer() {
+    // Never evaluate or publish against a context that is shutting down (see main()).
+    if (!rclcpp::ok()) {
+      return;
+    }
+    // `now` stamps outgoing messages; `steady_now` measures elapsed time. See CLOCK POLICY.
+    const rclcpp::Time now = this->now();
+    const rclcpp::Time steady_now = steady_clock_.now();
+    try {
+      // Read the LIVE parameter value every cycle, not a construction-time snapshot: a test
+      // (or an operator) flips this at runtime via the standard ROS 2 set_parameters service,
+      // and a cached member would never see that change (claude-docs/12-testing.md L3: "fail-
+      // closed on injected internal fault" needs this to actually take effect mid-run).
+      if (this->get_parameter("inject_fault").as_bool()) {
+        throw std::runtime_error(
+            "safety_node: test-only injected fault (inject_fault parameter is true)");
+      }
+
+      GateInput input;
+      input.command = has_received_command_ ? last_command_ : DriveCommand{0.0, 0.0};
+      input.drive_raw_age_s = has_received_command_
+                                  ? (steady_now - last_drive_raw_steady_).seconds()
+                                  : std::numeric_limits<double>::infinity();
+      input.dt_s =
+          has_evaluated_before_ ? (steady_now - last_eval_steady_).seconds() : control_period_s_;
+      // Reduced HERE, every cycle, with this cycle's requested steering (the arc corridor).
+      input.min_scan_range_m = in_path_distance_m(input.command.steering_angle_rad);
+      input.min_rear_scan_range_m = rear_path_distance_m(input.command.steering_angle_rad);
+      input.ttc_brake_latched = ttc_brake_latched_;
+      input.reverse_brake_latched = reverse_brake_latched_;
+      input.obstacle_hold_timer_s = obstacle_hold_timer_s_;
+      input.speed_bound_forward_mps = speed_bound_forward_mps_;
+      input.speed_bound_reverse_mps = speed_bound_reverse_mps_;
+      if (has_odom_ && (steady_now - last_odom_steady_).seconds() <= wheel_odom_timeout_s_) {
+        input.measured_speed_mps = last_odom_speed_mps_;
+      }
+      input.has_pose_input = false;  // TODO(roadmap 2.6): wire from /pose once it exists.
+      input.pose_covariance_trace = 0.0;
+
+      const GateResult result = gate_->evaluate(input, previous_output_);
+      publish_drive(result.output, now);
+      publish_transitions(result.activations, result.releases, steady_now, now);
+      previous_output_ = result.output;
+      ttc_brake_latched_ = result.ttc_brake_latched;
+      reverse_brake_latched_ = result.reverse_brake_latched;
+      obstacle_hold_timer_s_ = result.obstacle_hold_timer_s;
+      speed_bound_forward_mps_ = result.speed_bound_forward_mps;
+      speed_bound_reverse_mps_ = result.speed_bound_reverse_mps;
+      last_eval_steady_ = steady_now;
+      has_evaluated_before_ = true;
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(this->get_logger(), "safety_node: internal fault, commanding zero throttle: %s",
+                   e.what());
+      // Same helper the gates use, so the fail-closed path and the gate paths can never
+      // disagree about what "safe output" means (gate_logic.hpp).
+      const DriveCommand safe_output = zero_throttle_command(previous_output_);
+      publish_drive(safe_output, now);
+      // Routed through the SAME tracker as the nominal path: a sustained fault is ONE
+      // internal_fault engagement (not one record per cycle, GitHub issue #37), and any gate
+      // that was engaged before the fault gets its release record here, because the fault
+      // short-circuits gate evaluation and those gates are no longer being reported.
+      std::vector<GateActivation> fault_activations{
+          GateActivation{GateSource::kInternalFault, EventSeverity::kBrake,
+                         std::string("internal fault: ") + e.what()}};
+      // The obstacle-gate latch is HELD across a fault (the gate did not run, so nothing can
+      // judge a release) and its engagement keeps being reported, same as the watchdog and
+      // command-sanity short-circuits do in gate_logic.cpp.
+      if (reverse_brake_latched_) {
+        fault_activations.push_back(
+            GateActivation{GateSource::kTtcReverse, EventSeverity::kBrake,
+                           "reverse ttc brake latch held across an internal fault"});
+      }
+      if (ttc_brake_latched_) {
+        fault_activations.push_back(
+            GateActivation{GateSource::kTtc, EventSeverity::kBrake,
+                           "ttc brake latch held across an internal fault"});
+        // Same for an engaged steering hold: its timer is held as it is (the gate did not
+        // run) and its engagement keeps being reported, through the gate's own helpers so the
+        // detail matches. safe_output already holds the previous steering, the held angle.
+        if (gate_->steering_hold_engaged(obstacle_hold_timer_s_)) {
+          fault_activations.push_back(
+              gate_->steering_hold_activation(safe_output.steering_angle_rad));
+        }
+      }
+      publish_transitions(fault_activations, {}, steady_now, now);
+      previous_output_ = safe_output;
+      last_eval_steady_ = steady_now;
+      has_evaluated_before_ = true;
+    }
+  }
+
+  std::optional<SafetyGateLogic> gate_;
+  // Turns the gate's per-cycle engaged-gate set into engage/release records; owns the
+  // "which gates are currently engaged" state (racer_safety::GateEventTracker).
+  GateEventTracker event_tracker_;
+  SafetyLimits gate_limits_;
+  double control_period_s_{0.02};
+
+  DriveCommand previous_output_;
+  DriveCommand last_command_;
+  // Monotonic-clock timestamps used ONLY for elapsed-time measurement (CLOCK POLICY, top of
+  // file). Both are default-constructed with the steady clock's own time source so a
+  // subtraction against `steady_clock_.now()` can never mix time sources.
+  rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
+  rclcpp::Time last_drive_raw_steady_{0, 0, RCL_STEADY_TIME};
+  rclcpp::Time last_eval_steady_{0, 0, RCL_STEADY_TIME};
+  // Latest /scan, reduced per gate cycle (in_path_distance_m). Null until the first scan.
+  sensor_msgs::msg::LaserScan::SharedPtr last_scan_;
+  // Obstacle-gate latch, threaded through evaluate() like previous_output_ (gate_logic.hpp).
+  bool ttc_brake_latched_{false};
+  // The rear obstacle gate's latch, threaded the same way (gate_logic.hpp "THE REAR OBSTACLE
+  // GATE").
+  bool reverse_brake_latched_{false};
+  // Steering-hold timer on that latch, threaded the same way (gate_logic.hpp).
+  std::optional<double> obstacle_hold_timer_s_;
+  // The decaying output speed bounds, threaded the same way (gate_logic.hpp "SPEED FOR THE
+  // TTC"). Held, not advanced, across an internal fault (the gate did not run).
+  double speed_bound_forward_mps_{0.0};
+  double speed_bound_reverse_mps_{0.0};
+  // Latest /odom/wheel speed and its arrival on the steady clock (on_odom).
+  double last_odom_speed_mps_{0.0};
+  rclcpp::Time last_odom_steady_{0, 0, RCL_STEADY_TIME};
+  bool has_odom_{false};
+  double wheel_odom_timeout_s_{0.1};
+  // In-path test (configure_scan_sector).
+  double sector_half_angle_rad_{0.0};
+  double corridor_half_width_m_{0.0};
+  double laser_yaw_rad_{0.0};
+  PathGeometry path_geometry_;
+  double rear_overhang_m_{0.0};
+  bool has_received_command_;
+  bool has_evaluated_before_;
+
+  rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_raw_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_pub_;
+  rclcpp::Publisher<racer_msgs::msg::SafetyEvent>::SharedPtr events_pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
+};
+
+}  // namespace racer_safety
+
+namespace {
+
+// Set by the SIGINT / SIGTERM handler below, polled by the spin loop in main(). A lock-free atomic
+// flag is one of the few things a signal handler may touch.
+std::atomic<bool> g_stop_requested{false};
+
+extern "C" void request_stop(int /*signal*/) { g_stop_requested.store(true); }
+
+}  // namespace
+
+// SHUTDOWN. rclcpp's default SIGINT handler runs rclcpp::shutdown() on its own thread, which
+// invalidates the rcl context while this node's executor thread can be in the middle of a callback
+// (a /drive publish, a subscription take) on that same context, and then the node is destroyed
+// against a context that is already gone. CI on 2026-11-10 saw safety_node die with exit code -11
+// (SIGSEGV) at test shutdown, right after its neighbour exited on the same SIGINT. A segfault in
+// the safety node is not acceptable even at shutdown, so this process handles the signals itself:
+// the handler only sets a flag, the one executor thread notices it between callbacks, the node
+// stops being spun and is destroyed with the context still valid, and only then is the context
+// shut down. Nothing runs concurrently with the teardown. (The window is a few microseconds wide
+// per cycle, which is why it takes many runs to hit; test/check_safety_node_sigint.py repeats
+// the shutdown with the inputs streaming.)
+int main(int argc, char** argv) {
+  rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+  struct sigaction action {};
+  action.sa_handler = request_stop;
+  sigemptyset(&action.sa_mask);
+  sigaction(SIGINT, &action, nullptr);
+  sigaction(SIGTERM, &action, nullptr);
+
+  int status = 0;
+  try {
+    auto node = std::make_shared<racer_safety::SafetyNode>();
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    // Wakes at least every 20 ms (and on the signal's EINTR) to look at the flag.
+    while (rclcpp::ok() && !g_stop_requested.load()) {
+      executor.spin_once(std::chrono::milliseconds(20));
+    }
+    executor.remove_node(node);
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger("safety_node"), "safety_node: fatal startup error: %s",
+                 e.what());
+    status = 1;
+  }
+  // The node and the executor are gone; only now does the context go.
+  if (rclcpp::ok()) {
+    rclcpp::shutdown();
+  }
+  return status;
+}

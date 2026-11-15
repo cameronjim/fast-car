@@ -7,6 +7,7 @@ exactly the wanted similarity, so these tests do not depend on any image maths.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -142,3 +143,42 @@ def test_the_count_bound_holds_for_random_peaks():
         speed = float(rng.uniform(0.2, 1.5))
         counter, events = drive(cfg, crossings, speed=speed)
         assert len(events) <= counter.distance_m / cfg.min_lap_distance_m
+
+
+# ------------------------------------------------------------------ L4: a cut of the GP3 run
+
+#: Recorded 2026-11-14 (L0 cut, thresholds as shipped). Old rule: every second crossing refused.
+GOLDEN_NEW_LAP_TIMES_S = [5.5, 5.5, 5.4, 5.7, 5.7, 5.7]
+GOLDEN_OLD_LAP_TIMES_S = [11.0, 6.3, 10.5, 6.4]
+_FIXTURE = Path(__file__).parent / "fixtures" / "lap_L0_cut_thumbs.npz"
+
+
+def _replay_fixture(cfg: LapConfig):
+    """The cut of L0 (2026-11-14 GP3, usb record stream, 4.7 Hz, 64 x 48 gray thumbnails,
+    36 s starting 4.9 s into the run, after the launch) through LapCounter in clock order."""
+    z = np.load(_FIXTURE)
+    frames = list(zip(z["frame_t"], z["thumbs"], strict=True))
+    odom = list(zip(z["odom_t"], z["odom_speed"], z["odom_x"], strict=True))
+    counter = LapCounter(cfg)
+    events = []
+    i = 0
+    for t, thumb in frames:
+        while i < len(odom) and odom[i][0] <= t:
+            counter.update_odom(float(odom[i][0]), float(odom[i][1]), float(odom[i][2]))
+            i += 1
+        ev = counter.update_frame(float(t), thumb)
+        if ev is not None:
+            events.append(ev)
+    return events
+
+
+def test_the_fixture_is_small():
+    assert _FIXTURE.stat().st_size < 500_000
+
+
+def test_golden_replay_of_the_gp3_cut_counts_the_5p6_s_laps():
+    new = _replay_fixture(LapConfig())
+    old = _replay_fixture(LapConfig(min_lap_time_s=6.0))
+    assert [round(e.lap_time_s, 1) for e in new] == GOLDEN_NEW_LAP_TIMES_S
+    assert [round(e.lap_time_s, 1) for e in old] == GOLDEN_OLD_LAP_TIMES_S
+    assert len(new) > len(old)

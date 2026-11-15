@@ -1,0 +1,741 @@
+# Car session procedure, Plug-and-Play v0.4 (claude-docs/13-plug-and-play.md sections 16.7 and
+# 16.8, steps 0 to 9). Brief 41. Loads in racer_bench.engine (steps are human_confirm or
+# scripted); the extra keys of a step (session_step, launch, requires, pass_rule, rollback, ...)
+# are read by tests/bench/tests/test_pnp_session_v04_procedure.py, by
+# tools/pnp_session/v04.py (the steps a result allows) and by the runbook
+# docs/notes/pnp-session-runbook-v0.4.md. The v0.3 procedure (pnp_session_v03.yaml) is unchanged.
+#
+# Nothing here sets a scheduling policy, a CPU governor, a watchdog limit, a limiter dt or a safety
+# parameter. Where the owner's decision is needed the step says "owner decision, not taken".
+# One change per step, numbers read before the next step, a failed step rolls back and the
+# session goes on with the previous configuration.
+#
+# Keys of a step:
+#   requires:       RESULTS that must be `met` before the step may run (ids of `results` below).
+#                   `runnable` is true only if every required result is met; the test checks it.
+#   needs_on_main:  tools or launch arguments of briefs 36 to 40 that may not be on main yet; the
+#                   step says "skip if not on main" for them (the allow list of the test).
+#   pass_rule:      `sources` (file and section that exist) and `text`.
+#   minimum_session: steps 1, 2 and 9 (the excitation runs and the data laps) are worth a
+#                   session by themselves (design 16.8, brief 41a).
+#   requires entries: {result: id}, or {any_of: [[ids], [ids]]} met when every id of one
+#                   branch is met (steps 5 and 7: the B4 code or B6, addendum 1 section 5.2).
+#
+# Placeholders in commands: <bag> the bag directory of the run, <out> the session output
+# directory, <dyn> and <perc> and <fused> model bundle names under /workspace/data/pnp/models,
+# <caps> the comma list of the caps of the PnP runs of the bag in order, <new_cap> a cap above 1.3
+# and <ceiling> min(active bundle validity, 1.5), as the step says.
+name: pnp_session_v04
+description: >
+  Order of the next car session (13 section 16.8): C timing and D3-C0, the dynamics
+  confirmation, a cap above 1.3, the fused backend in shadow, D v0, the first obstacle variant,
+  GP4-V on a new variant, the tracker against PnP, data laps. Pass rules are quoted from
+  docs/notes/preregistration-pnp-v0.4.md and the v0.2 and v0.3 files with their section numbers.
+
+# Fixed before the day. Not left to the day.
+fixed:
+  caps_mps_step1: [0.5, 1.0]
+  direction_order: [ccw, cw]
+  runs_per_direction_per_step: 2
+  laps_per_run_step1: 10
+  people: 2
+  kill_knob_in_hand: true
+  wheels_off_ground_check_before_the_floor: true
+  phone_films_every_step1_run: true
+  camera_counter_record_hz: 10
+  camera_launch_note: >
+    The camera container is launched with the 10 Hz record rate of the counter's camera,
+    before the PnP launch: ros2 launch racer_bringup cameras.launch.py lap_record_rate_hz:=10.0
+    (brief 39, PR 188). pnp.launch.py starts the lap counter itself (lap_counter default true).
+  battery_window_v: 0.8
+  battery_window_rule: >
+    Before the first run write down the VESC input voltage (5 s mean at rest) and the window of
+    0.8 V it must stay inside at the start of every run (v0.2 5.2). A run that starts outside it is
+    not run until the battery is swapped. The tracker and PnP runs of step 8 share one window.
+  recorder_rule: >
+    The bag directory must be growing before the first lap (ls -l twice, ten seconds apart).
+    pnp.launch.py refuses without a recorder; that is the guard working. Never turn the
+    recorder requirement off.
+  app_rule: >
+    The app refuses a cap above the active bundle's validity. That is correct: do not work around
+    it. The app's lap counter toggle persists across runs: look at it before every run.
+  pull_main_rule: Pull main again if a PR merges mid-session, and rebuild before the next step.
+  no_settings_changed: >
+    No step sets a scheduling policy (chrt, nice), a CPU governor, a watchdog limit, a limiter dt,
+    a safety_node parameter or a vehicle_params value. Host facts are read only.
+  gp3_record: "GP3 not met as registered; 20 clean laps observed, camera count 10 of 20"
+  gp3_repeat_rule: >
+    A 20 lap run at the next session is GP3-R1 (GP3-R2 and so on after it): a repeat under the
+    unchanged rule of v0.2 4.3, laps counted by the camera counter, with its own outcome. It is
+    never reported as GP3 (addendum 1 section 1).
+  timing_chain_rule: >
+    Every PnP run bags /drive_raw, /drive, /safety/events and, when brief 42 is on main,
+    /pnp/planner/timing. Step 1's report points at racer_eval timing_chain (M-C2, M-T2, M-C3, no
+    threshold); v0.2 4.2 is judged as before.
+  step_one_run_rule: >
+    The runbook reads step 1 as eight runs: two per direction at each cap, which is what v0.2 4.2
+    needs (at least 8 standing starts at caps 0.5 and 1.0). The phone films every one.
+
+# The camera container, started before the PnP launch in every step that counts laps (brief 39).
+camera_launch: [ros2, launch, racer_bringup, cameras.launch.py, "lap_record_rate_hz:=10.0"]
+
+# The registered numbers of the variant layout protocol (v0.4 6.2, design 16.7, brief 41 section 2).
+# tools/tests/test_pnp_session_v04.py asserts they equal racer_eval.variant_form's constants.
+variant_protocol:
+  min_objects: 2
+  min_lane_change_m: 0.15
+  min_places_changing_lane: 2
+  min_remaining_lane_m: 0.80
+  objects_against_a_wall: true
+  free_standing_objects: false
+  min_height_over_lidar_plane: "the LiDAR height from the vehicle binding plus 0.02 m"
+  positions_not_used_in_an_earlier_session: true
+  not_driven_before_the_protocols_first_run: true
+  form_saved_next_to_the_bag: true
+  without_the_form: "variant not documented, and the runs cannot be GP4-V runs"
+  step6_and_step7_use_different_variants: true
+  interleave: "racer_eval.interleave with the seed written into the form before the first run"
+  gp4v_label: "GP4-V, lap learning on an obstacle variant of a known track"
+
+# Results that gate later steps. All `unknown` when this file was written (2026-11-14): B4 had not
+# reported (PR 185), B5 was not built, nothing of step 1 was measured. `tools/pnp_session/v04.py`
+# evaluates a step against these statuses plus the ones given with `--result key=met` and the
+# D3-C0 verdict it computes. A step with an unmet or unknown requirement is not runnable.
+results:
+  d3_s0:
+    source: {file: docs/notes/preregistration-pnp-v0.3.md, section: "1.4"}
+    what: "B4 gate D3-S0 (lap bookkeeping in sim), report on PR 185"
+    status: unknown
+  d3_s1:
+    source: {file: docs/notes/preregistration-pnp-v0.3.md, section: "1.4"}
+    what: "B4 gate D3-S1 (D v0 may go on the car), report on PR 185"
+    status: unknown
+  d3_c0:
+    source: {file: docs/notes/preregistration-pnp-v0.4.md, section: "4.4"}
+    what: "D3-C0 on the car, from step 1 (pnp_session_report.py v04)"
+    status: unknown
+  d4_s0:
+    source: {file: docs/notes/preregistration-pnp-v0.4.md, section: "5"}
+    what: "B5 gate D4-S0 (lap bookkeeping on obstacle variants in sim)"
+    status: unknown
+  d4_s1:
+    source: {file: docs/notes/preregistration-pnp-v0.4.md, section: "5"}
+    what: "B5 gate D4-S1 (D v0 on obstacle variants in sim)"
+    status: unknown
+  bundle_validity_above_1_3:
+    source: {file: docs/notes/preregistration-pnp-v0.4.md, section: "2.4"}
+    what: "an active bundle whose io.validity.v_max_mps is above 1.3 (the fast validity item passed)"
+    status: unknown
+  fused_bundle_frozen:
+    source: {file: docs/notes/preregistration-pnp-v0.4.md, section: "3.1"}
+    what: "the frozen fused-v1 bundle (brief 38) is exported and on the car"
+    status: unknown
+  m_cam:
+    source: {file: docs/notes/preregistration-pnp-v0.4.md, section: "4.1"}
+    what: "M-CAM held: the changed camera counter was accepted for use (brief 39)"
+    status: unknown
+  code_equals_b4:
+    source: {file: docs/notes/preregistration-pnp-v0.4-addendum-1.md, section: "5.1"}
+    what: "the deployed racer_laps and racer_planner equal the commit B4 ran on (pnp_session_report.py v04 --b4-commit <sha>, git tree of both directories, clean)"
+    status: unknown
+  d5_s0:
+    source: {file: docs/notes/preregistration-pnp-v0.4-addendum-1.md, section: "5.2"}
+    what: "B6 part 1 gate D5-S0 (the B4 cases, seeds 41 and 42)"
+    status: unknown
+  d5_s1:
+    source: {file: docs/notes/preregistration-pnp-v0.4-addendum-1.md, section: "5.2"}
+    what: "B6 part 1 gate D5-S1"
+    status: unknown
+  d6_s0:
+    source: {file: docs/notes/preregistration-pnp-v0.4-addendum-1.md, section: "5.2"}
+    what: "B6 part 2 gate D6-S0 (the B5 cases O1 to O4, seeds 41 and 42)"
+    status: unknown
+  d6_s1:
+    source: {file: docs/notes/preregistration-pnp-v0.4-addendum-1.md, section: "5.2"}
+    what: "B6 part 2 gate D6-S1"
+    status: unknown
+  step5_passed:
+    source: {file: docs/notes/preregistration-pnp-v0.4.md, section: "6.1"}
+    what: "step 5 (D v0 on the plain donut) passed in this session"
+    status: unknown
+
+steps:
+  - id: s0_prereg_sha
+    type: scripted
+    description: Step 0, first thing. Refuse unless the v0.4 constants file is the frozen one.
+    session_step: 0
+    bagged: "the bench bag of the L6 run (growing check); camera frames at the record rate for the counter check"
+    command: [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, check-prereg]
+    expect:
+      returncode: 0
+    requires: []
+    runnable: true
+    after: []
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "0"}
+      text: "evaluation/prereg/pnp-v0.4.yaml has SHA-256 78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63"
+    rollback: Pull main. Nothing runs on a different file.
+
+  - id: s0_build_and_bench
+    type: human_confirm
+    description: Step 0. Build, L6 wheels off the ground, the camera counter bench check.
+    session_step: 0
+    bagged: "the bench bag of the L6 run (growing check); camera frames at the record rate for the counter check"
+    prompt: >
+      Step 0. (1) Two people present, kill knob in hand. (2) Pull main, then build on the Jetson:
+      colcon build --packages-select racer_planner racer_track_perception racer_laps racer_perception
+      racer_bringup. (3) Chassis secured, ALL WHEELS OFF THE GROUND, start the stack with the
+      recorder, launch the PnP driver at cap 0.4, run the L6 checklist (board left of the car turns
+      the wheels right, board right turns them left, cmd_speed_mps never above 0.4, Ctrl-C stops
+      the wheels within the watchdog time, kill knob works). (4) Camera counter bench check: with
+      the camera container launched by camera_launch (lap_record_rate_hz:=10.0) first, hold the start line mark in front of the camera
+      three times by hand; the counter must count three laps and the bag must hold camera frames
+      at the new rate. (5) Check the bag is growing. Do all of it before anything touches the
+      floor.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=0.4", "lap_counter:=true", "require_lap_counter:=true"]
+    requires: []
+    runnable: true
+    minimum_session: false
+    human_confirms:
+      - two people present and the kill knob in hand
+      - wheels off the ground, the L6 checklist items all passed
+      - the camera counter counted three hand laps at the 10 Hz record rate ()
+      - the bag directory is growing (ls -l twice, ten seconds apart)
+    after: []
+    pass_rule:
+      sources:
+        - {file: docs/notes/pnp-session-runbook-v0.4.md, section: "Step 0"}
+      text: "L6 checklist passed (13 section 14.7 bench numbers are not re-measured here), camera counter counts the bench laps, bag growing"
+    rollback: Stay off the floor. Fix the build or the bench result first; no later step starts.
+
+  - id: s1_c_timing_and_d3c0
+    type: human_confirm
+    description: >
+      Step 1 (minimum session). C as on 2026-11-14, caps 0.5 then 1.0, lap memory in observe mode,
+      camera counter on at the 10 Hz record rate, the phone filming every run. Two runs per
+      direction at each cap, ccw first, 10 laps each, from a standing start.
+    session_step: 1
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) with the camera counter's camera at 10 Hz (brief 39), one bag per launch; plus the phone video of every run"
+    minimum_session: true
+    prompt: >
+      Step 1. Battery window declared and written down. Camera container first (camera_launch, lap_record_rate_hz:=10.0). Floor, two people, kill knob in hand, the
+      phone filming the whole lane and the start line for every run. For cap 0.5 then cap 1.0: ccw
+      run, ccw run, cw run, cw run, 10 laps each, standing start, one launch per run, the same
+      launch command with only v_max_mps changed. Bag growing before the first lap. After each
+      run: v04 report. Do not change anything between runs. A miss of v0.2 4.2 is reported with its
+      counts and goes to the owner as a decision (owner decision, not taken: real-time scheduling
+      of the planner process, any safety_node timing change). Which reference D3-C0 uses is
+      v0.4 4.4: the camera counter only if the owner accepted it and M-CAM held, else the phone
+      video, which is filmed in any case.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=0.5", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe"]
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe"]
+    needs_on_main:
+      - "/pnp/planner/timing in the bag and racer_eval timing_chain: brief 42, skip if not on main"
+    after_notes:
+      - "timing_chain (M-C2, M-T2, M-C3) is read next to the M-T report and has no threshold; v0.2 4.2 is judged as before (addendum 1 section 4)."
+      - "v04 flags: add --owner-accepted-camera and --m-cam-held ONLY when both are true (v0.4 4.4); otherwise the reference is the phone video and --times <csv> of the hand-timed laps is needed."
+      - "lapref prints its JSON: save it as <out>/lapref/<run_id>.json for each run (run_id as in the laps table, R0, R1, ...; the run's start and end in bag seconds come from pnp_data runs or the v04 timing table)."
+    requires: []
+    runnable: true
+    runs:
+      caps_mps: [0.5, 1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 10
+    human_confirms:
+      - battery window declared and the start voltage inside it
+      - bag growing, camera lap counter running (require_lap_counter true did not refuse)
+      - the app's lap counter toggle looked at before each run
+      - the phone films every run and the start line
+      - wall contacts per run noted (people and phone video decide)
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, v04, --bag, "<bag>", --caps, "<caps>", --lapref-dir, "<out>/lapref", --out, "<out>/step1_v04.json"]
+      - [uv, run, --project, tools, --extra, session, python, tools/lapref.py, "<bag>", --run, "<run_start_s>", "<run_end_s>", --out, "<out>/lapref/<run_id>.json"]
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, timing_chain, --bag, "<bag>", --out, "<out>/step1_timing_chain"]
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step1_session.yaml", --out, "<out>/step1_session"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.2.md, section: "4.2"}
+        - {file: docs/notes/preregistration-pnp-v0.3.md, section: "1.5"}
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "4.4"}
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "6.3"}
+      text: >
+        v0.2 4.2 judged again from the M-T report: over at least 300 s of PnP driving and at least
+        8 standing starts at caps 0.5 and 1.0, watchdog at most 0.2 per minute, rate_limit at most
+        0.2 per minute, no event of either kind in the first 2.0 s of at least 7 of 8 starts, TTC
+        and obstacle brakes 0 at caps up to 1.0, no wall contact; a miss is reported and goes to
+        the owner. D3-C0 (v0.3 1.5, v0.4 4.4): the lap count equals the reference's in both runs
+        and at least 18 of the 20 lap times agree within 0.3 s; the reference is the camera lap
+        counter if the owner accepted it and M-CAM held, otherwise the phone video of the same
+        runs; lapref is printed next to it and decides nothing.
+    rollback: >
+      A miss of 4.2 is reported with its counts and the next step (real-time scheduling) goes to
+      the owner as a decision, not taken here; the session goes on with the same configuration. A
+      fail of D3-C0 means D does not drive the cap in this session (steps 5 and 7 are not run).
+
+  - id: s1b_gp3_r1
+    type: human_confirm
+    optional: true
+    description: >
+      Step 1b (optional, after step 1). GP3-R1: a 20 lap repeat at cap 1.0, ccw, laps counted by
+      the camera lap counter. Needs M-CAM held. The 2026-11-14 run stays "GP3 not met as
+      registered; 20 clean laps observed, camera count 10 of 20".
+    session_step: 1
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames at 10 Hz); phone video"
+    prompt: >
+      Step 1b, only after step 1 and only if M-CAM held (the changed counter was accepted). One
+      continuous run, one launch, 20 consecutive laps, cap 1.0, ccw, nobody touches the car, lap
+      memory in observe mode. Laps are counted by the camera lap counter and cross-checked by
+      wheel distance. The result is named GP3-R1, a repeat under the unchanged rule of v0.2 4.3.
+      It is never reported as GP3, and it does not change the record of 2026-11-14.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "lap_memory:=true", "lap_mode:=observe"]
+    requires:
+      - {result: m_cam}
+    runnable: false
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw]
+      laps_per_run: 20
+    human_confirms:
+      - M-CAM held before this step was started
+      - nobody touched the car or the knob during the run
+      - wall contacts, recoveries and BLOCKED holds noted from people and video
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step1b_timing.json"]
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step1b_session.yaml", --out, "<out>/step1b_session"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.2.md, section: "4.3"}
+        - {file: docs/notes/preregistration-pnp-v0.4-addendum-1.md, section: "1"}
+      text: >
+        GP3-R1, a repeat under the unchanged rule of v0.2 4.3: one continuous run, one launch,
+        nobody touches the car: 20 consecutive laps with no wall contact, laps counted by the
+        camera lap counter and cross-checked by wheel distance (at least 0.9 times 20 lap
+        lengths), no BLOCKED hold over 5 s. Reported as GP3-R1, never as GP3.
+    rollback: A failed repeat is the GP3-R1 result and is written down. Continue with the step 1 configuration.
+
+  - id: s2_dynamics_confirmation
+    type: human_confirm
+    description: Step 2 (minimum session). The dynamics confirmation on step 1's bags; the candidate bundle drives only if it holds.
+    session_step: 2
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames); the confirmation table is printed and saved in <out>"
+    minimum_session: true
+    prompt: >
+      Step 2, on the laptop first: pnp_data confirm on step 1's bags (deployed model dyn-v0.1,
+      residual off), both directions, at least 120 s of driving. Only a candidate whose printed
+      table has P1 and Y1 ratios at most 1.00 goes on the car, and only a contract 1 candidate
+      (N4 or R4): a contract 2 candidate (T4, TL4) needs brief 43 on main, and until then its
+      confirmation is offline only and the step says so. Then launch with the candidate
+      bundle, two runs per direction, ccw first, at cap 1.0, lap memory off. If no candidate
+      passed, this step is the confirmation table alone and nothing drives.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/<dyn>",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true"]
+    needs_on_main:
+      - "a v0.4 candidate bundle: brief 37, skip the driving part if none exists"
+      - "a contract 2 candidate (T4, TL4) drives only with the planner of brief 43 on main; until then this step runs its confirmation offline only and says so"
+    requires: []
+    runnable: true
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 3
+    human_confirms:
+      - the confirmation printed PASS for this candidate on the bags of step 1 (both directions, at least 120 s)
+      - no new TTC or obstacle brake against step 1 at cap 1.0
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_data.py, confirm, --bag, "<bag>", --candidate, "/workspace/data/pnp/models/<dyn>", --deployed, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step2_timing.json"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "2.5"}
+        - {file: docs/notes/preregistration-pnp-v0.3.md, section: "2.4"}
+      text: >
+        v0.4 2.5: on at least 120 s of driving with the deployed model, both directions, a
+        candidate has P1 at most 1.00 times and Y1 at most 1.00 times the deployed model's before
+        it is switched on. Then on the car: no new TTC or obstacle brake, mean speed at cap 1.0
+        not lower than step 1's, over two runs per direction (design 16.8 step 2).
+    rollback: Relaunch with the deployed bundle dyn-v0.1-2026-11-12. The offline pass is reported as not confirmed.
+
+  - id: s3_cap_above_1_3
+    type: human_confirm
+    description: Step 3. A cap above 1.3, only with a bundle whose validity allows it. Two runs per direction, lap memory off.
+    session_step: 3
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames), one bag per launch"
+    prompt: >
+      Step 3, only if the active bundle's io.validity.v_max_mps is above 1.3 (the app refuses a cap
+      above it, which is correct). Two runs per direction at the new cap, ccw first, lap memory off,
+      compared with the runs at 1.3 of the same session: drive two runs per direction at 1.3 first
+      if step 1 and 2 did not include them. A 20 lap run at another cap is a repeat at that cap,
+      not GP3 (GP3 is "not met as registered"; a 20 lap run is GP3-R1 at 1.0 only).
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/<dyn>",
+         "backend:=geometric", "v_max_mps:=<new_cap>", "lap_counter:=true", "require_lap_counter:=true"]
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/<dyn>",
+         "backend:=geometric", "v_max_mps:=1.3", "lap_counter:=true", "require_lap_counter:=true"]
+    requires:
+      - {result: bundle_validity_above_1_3}
+    runnable: false
+    runs:
+      caps_mps: ["<new_cap>", 1.3]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 3
+    human_confirms:
+      - the active bundle's validity printed by the app is above the new cap
+      - the runs at 1.3 are of this session (same bags' date)
+    after:
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step3_session.yaml", --out, "<out>/step3_session"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step3_timing.json"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "6.4"}
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "2.4"}
+      text: >
+        Two runs per direction at the new cap with the lap memory off, compared with the runs at
+        1.3 of the same session: no TTC or obstacle brake, no contact, mean wheel speed not lower.
+        The cap is within the bundle's validity. The session file's cap_step block prints every
+        item.
+    rollback: Relaunch at 1.3 and continue with the step 2 configuration.
+
+  - id: s4_fused_shadow
+    type: human_confirm
+    description: Step 4. The fused backend in shadow next to the geometric driver, then driving at 1.0 against a geometric run, same direction.
+    session_step: 4
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) including /pnp/shadow/* for the shadow run"
+    prompt: >
+      Step 4. First the shadow: the geometric driver drives at cap 1.0 and fused-v1 runs as the
+      second node, nothing subscribes to it; read the shadow latency p99 from
+      /pnp/shadow/perception/status on the Orin. Then, only if it is under 10 ms, drive with
+      backend:=net and the fused bundle at cap 1.0, ccw, and one geometric run in the same
+      direction, same battery window. Reported as "same layout family": the donut of 2026-11-14 is
+      not an unseen layout. Whether a variant counts as a layout the net never trained on is the
+      owner's decision (v0.4 section 9 item 8), not taken here.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "shadow_perception_bundle:=/workspace/data/pnp/models/<fused>"]
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=net", "perception_bundle:=/workspace/data/pnp/models/<fused>",
+         "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true"]
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true"]
+    needs_on_main:
+      - "the fused bundle: brief 38 (trackperc-v2f-<date>), skip if not exported"
+    requires:
+      - {result: fused_bundle_frozen}
+    runnable: false
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw, ccw]
+      laps_per_run: 3
+    human_confirms:
+      - the shadow latency p99 read from /pnp/shadow/perception/status (under 10 ms before it drives)
+      - the geometric run and the fused run are the same direction and inside the battery window
+      - the result is written as "same layout family"
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step4_timing.json"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "3.4"}
+        - {file: docs/notes/preregistration-pnp-v0.2.md, section: "2"}
+      text: >
+        Shadow first, p99 under 10 ms on the Orin; then driving at the same cap as a geometric run
+        in the same direction: mean track confidence at least the geometric run's minus 0.03 and no
+        new TTC or obstacle brake. Reported as "same layout family", never as an unseen layout.
+    rollback: Relaunch with backend:=geometric and no shadow bundle.
+
+  - id: s5_d_v0_plain_donut
+    type: human_confirm
+    description: Step 5. D v0 on the plain donut, lap-1 cap 0.5, only if D3-S0, D3-S1 (B4) and D3-C0 passed.
+    session_step: 5
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) including /pnp/lap/event and the lap memory status"
+    prompt: >
+      Step 5, only if D3-S0 and D3-S1 (sim, B4) and D3-C0 (step 1) passed. D v0 with lap-1 cap 0.5
+      and the ceiling 1.0, with either the code B4 ran on (checked by the v04 report with
+      --b4-commit) or B6 passed (D5-S0 and D5-S1). 10 laps per run, two runs per direction, ccw first, each from a standing
+      start with the start voltage inside the declared window.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "v_lap1_mps:=0.5", "lap_counter:=true",
+         "require_lap_counter:=true", "lap_memory:=true", "lap_mode:=v0"]
+    requires:
+      - {result: d3_s0}
+      - {result: d3_s1}
+      - {result: d3_c0}
+      - any_of: [[code_equals_b4], [d5_s0, d5_s1]]
+    runnable: false
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 10
+    human_confirms:
+      - D3-S0, D3-S1 and D3-C0 all passed before this step was started
+      - wall contacts per run noted
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step5_timing.json"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, laps, --bag, "<bag>", --out, "<out>/step5_laps.json"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "6.1"}
+        - {file: docs/notes/preregistration-pnp-v0.3.md, section: "1.5"}
+      text: "10 laps per run, no contact, the cap rises lap over lap (design 16.8 step 5)"
+    rollback: Relaunch with lap_memory:=false (the default) and continue with the step 1 configuration.
+
+  - id: s6_variant_1_d_off
+    type: human_confirm
+    description: Step 6. Variant layout 1, geometric, D off, 0.5 then 1.0, both directions, fused in shadow.
+    session_step: 6
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) including /pnp/shadow/*; the variant form and its photo are saved next to the bag"
+    prompt: >
+      Step 6. Build variant 1 by the protocol of the runbook and fill its form BEFORE the first
+      run: at least two solid objects against a wall, the lane changed by at least 0.15 m at two or
+      more places, at least 0.80 m of lane left at each object, positions never used, nothing
+      reflective or glass, height over the LiDAR plane plus the margin, a photo. Check the form
+      with the variant-form command; without a passing check the runs are "variant not
+      documented". Then geometric, D off, cap 0.5 then 1.0, ccw first, two runs per direction,
+      with the fused backend running in shadow. Variant 1 is DRIVEN by this step, so it is not the
+      GP4-V variant (step 7 builds variant 2).
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=0.5", "lap_counter:=true", "require_lap_counter:=true",
+         "shadow_perception_bundle:=/workspace/data/pnp/models/<fused>"]
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true",
+         "shadow_perception_bundle:=/workspace/data/pnp/models/<fused>"]
+    needs_on_main:
+      - "the fused bundle for the shadow: brief 38, relaunch without shadow_perception_bundle if not exported"
+    requires: []
+    runnable: true
+    variant_form:
+      file: "<out>/variant1_form.yaml"
+      check: [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, variant-form, --form, "<out>/variant1_form.yaml"]
+    runs:
+      caps_mps: [0.5, 1.0]
+      directions: [ccw, ccw, cw, cw]
+      laps_per_run: 3
+    human_confirms:
+      - the variant form is filled, its check printed a receipt, the photo is next to it
+      - the form is saved next to the bag
+      - wall contacts per run noted
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, variant-form, --form, "<out>/variant1_form.yaml"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, timing, --bag, "<bag>", --caps, "<caps>", --out, "<out>/step6_timing.json"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "6.2"}
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "3.4"}
+      text: "laps complete and no contact on the variant with D off (design 16.8 step 6); the fused shadow numbers are reported as a variant, not as an unseen layout"
+    rollback: Remove the objects, return to the plain donut, continue with the step 1 configuration.
+
+  - id: s7_gp4v_variant_2
+    type: human_confirm
+    description: Step 7. GP4-V on a NEW variant (variant 2), only if D4-S0 and D4-S1 (B5) passed and step 5 passed.
+    session_step: 7
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) including /pnp/lap/event; the variant form, its receipt and photo are saved next to the bag; phone video of one run per condition"
+    prompt: >
+      Step 7, only if D4-S0 and D4-S1 (B5) and step 5 passed, and either the code B4 ran on is
+      deployed or B6 passed (D5-S0, D5-S1, D6-S0, D6-S1). Build variant 2, a NEW variant not
+      driven before this step (v0.2 5.2 says "never driven"; the strict reading needs it), fill and
+      check its form, write the interleave seed into the form BEFORE the first run, then print the
+      run order with the variant-form command. At least 5 D-on runs and 5 D-off runs at the lap-1
+      cap 0.5 (condition a), direction fixed (ccw), 10 laps each from a standing start, every run
+      starting inside the declared battery window, no condition more than twice in a row. D-on is
+      the D variant declared before the session (v0, or v1 only if the v0.3 1.4 table allows it).
+      One run per condition is also timed from the phone video. The ceiling is min(active bundle
+      validity, 1.5). Reported as GP4-V, never as GP4.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=<ceiling>", "v_lap1_mps:=0.5", "lap_counter:=true",
+         "require_lap_counter:=true", "lap_memory:=true", "lap_mode:=v0"]
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=<ceiling>", "v_lap1_mps:=0.5", "lap_counter:=true",
+         "require_lap_counter:=true", "lap_memory:=true", "lap_mode:=v1"]
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=0.5", "lap_counter:=true", "require_lap_counter:=true"]
+    requires:
+      - {result: d4_s0}
+      - {result: d4_s1}
+      - {result: step5_passed}
+      - any_of: [[code_equals_b4], [d5_s0, d5_s1, d6_s0, d6_s1]]
+    runnable: false
+    variant_form:
+      file: "<out>/variant2_form.yaml"
+      earlier_forms: ["<out>/variant1_form.yaml"]
+      check: [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, variant-form, --form, "<out>/variant2_form.yaml", --earlier-forms, "<out>/variant1_form.yaml", --conditions, "d_on,d_off", --runs-per-condition, "5"]
+    runs:
+      caps_mps: ["<ceiling>", 0.5]
+      directions: [ccw]
+      laps_per_run: 10
+    human_confirms:
+      - D4-S0, D4-S1 and step 5 passed before this step was started
+      - variant 2 is a new variant, not variant 1 and never driven; its form is checked, the seed is in it, the photo is next to it
+      - run order from the form's seed (racer_eval.interleave), printed before the first run
+      - every run starts inside the battery window
+      - one run per condition timed from phone video
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, variant-form, --form, "<out>/variant2_form.yaml", --earlier-forms, "<out>/variant1_form.yaml"]
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step7_session.yaml", --out, "<out>/step7_session"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_session_report.py, laps, --bag, "<bag>", --reference, video, --times, "<out>/video_laps.csv"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.2.md, section: "5.2"}
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "6.2"}
+      text: >
+        GP4-V (v0.2 5.2 word for word, on a variant, "GP4-V, lap learning on an obstacle variant of
+        a known track"): over the D-on runs every run completes 10 laps; Delta = T1 - T_late is
+        positive in every run, the mean Delta has a 95 percent t interval that excludes 0 and the
+        median r is at most 0.80; wall contacts over the D-on runs are no more than over the D-off
+        runs at the lap-1 cap. Thresholds are the GP4 constants (racer_eval.gp4v).
+    rollback: Stop the layout runs, record what ran, and continue with no D (lap_memory:=false).
+
+  - id: s8_tracker_against_pnp
+    type: human_confirm
+    description: Step 8. The mapped tracker and PnP back to back on the plain donut, same direction, 5 laps each, same battery window.
+    session_step: 8
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /lap/event, /odom/wheel, /scan, camera frames) for the PnP runs and, for the tracker runs, the bag the app's tracker card records (with the pose topic); start voltages in the session file"
+    prompt: >
+      Step 8, on the plain donut (remove the objects first). The tracker is started from the app's
+      tracker card exactly as on 2026-11-13 (map 2026-11-13-pnp-lap1 or a fresh map of this donut,
+      the 1.5 m/s line, AMCL placed where the car is). Drive 5 laps with the tracker, then 5 laps
+      with PnP at cap 1.0 (lap memory off), same direction, one battery window written down at the
+      start of the pair. Write each run's start voltage in the session file. This table is the only
+      basis for a tracker comparison; there is no gate.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.0", "lap_counter:=true", "require_lap_counter:=true"]
+    tracker_start: >
+      The app's tracker card (localization, AMCL, the raceline), not a command line here: the card
+      checks AMCL and the map. AMCL publishes only after 5 cm of motion: republish /initialpose or
+      place the car where AMCL thinks it is.
+    requires: []
+    runnable: true
+    runs:
+      caps_mps: [1.0]
+      directions: [ccw]
+      laps_per_run: 5
+    human_confirms:
+      - plain donut, objects removed
+      - tracker and PnP runs are the same direction, in one battery window, in this session
+      - start voltage of every run written in the session file
+    after:
+      - [uv, run, --project, evaluation/analysis, --group, bags, python, -m, racer_eval, session, --bags, "<bag>", --conditions, "<out>/step8_session.yaml", --out, "<out>/step8_session"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "6.5"}
+      text: >
+        A comparison table, no gate: both driven in the same session on the same layout, same
+        direction, at least 5 laps each. tables.json carries laps, mean and best lap time, wheel
+        distance per lap, direction and the battery voltage at the start; runs of different
+        sessions or directions are refused.
+    rollback: Nothing to roll back; with fewer than 5 laps each no comparison is claimed.
+
+  - id: s9a_excitation
+    type: human_confirm
+    description: Step 9a (minimum session). M-SID excitation runs, PnP with the cap stepped through the addendum list, clockwise first.
+    session_step: 9
+    minimum_session: true
+    bagged: "the stack recorder's bag (/drive_raw, /drive, /safety/events, /pnp/*, /pnp/lap/guidance, /odom/wheel, /scan, camera frames); commands are model inputs, not imitation targets"
+    prompt: >
+      Step 9a (M-SID). Per direction, clockwise FIRST (fast clockwise is the thinnest cell), one
+      launch each. Write the planner params file with the tool, then launch the PnP planner with
+      lap_memory off and that params file (it turns the planner's guidance input on and sets
+      v_no_guidance_mps to the lowest cap), then start the cap schedule tool. It steps the cap
+      through 0.5, 1.0, 0.7, 1.3 m/s (the list of evaluation/prereg/pnp-v0.4-addendum-1.yaml),
+      8 s each, three cycles. The tool refuses a cap above the bundle's validity or above
+      v_max_mps, and refuses to start if the lap node is publishing guidance: never run it with
+      the lap node. It never publishes a drive topic. If it dies the planner falls back to
+      v_no_guidance_mps. Kill knob in hand, stop at the first contact. Then the same for ccw. Owner decision 7: about 10
+      minutes of driving in all, so the same schedule is driven once per direction on the lane
+      centre and once with the planner's lateral offset parameter at -0.10 m and +0.10 m (6 runs
+      of 96 s, 576 s); until that parameter exists only the lane centre is driven.
+    launch:
+      - [ros2, launch, racer_bringup, pnp.launch.py,
+         "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.1-2026-11-12",
+         "backend:=geometric", "v_max_mps:=1.3", "lap_counter:=true", "require_lap_counter:=true",
+         "params_file:=<out>/excitation_params.yaml"]
+    schedule_commands:
+      - [python3, tools/pnp_session/cap_schedule.py, --manifest, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12/manifest.yaml", --v-max-mps, "1.3", --write-params, "<out>/excitation_params.yaml"]
+      - [python3, tools/pnp_session/cap_schedule.py, --manifest, "/workspace/data/pnp/models/dyn-v0.1-2026-11-12/manifest.yaml", --v-max-mps, "1.3"]
+    needs_on_main:
+      - "the planner's lateral offset parameter: not on main and its name is not known to this file; skip the offset variations until it exists (lane centre only) and say so in the session log"
+    requires: []
+    runnable: true
+    excitation:
+      directions: [cw, ccw]
+      directions_note: "clockwise first: fast clockwise is the thinnest cell of the data"
+      source: {file: evaluation/prereg/pnp-v0.4-addendum-1.yaml, key: excitation}
+      caps_mps: [0.5, 1.0, 0.7, 1.3]
+      hold_s: 8.0
+      cycles_per_direction: 3
+      lateral_offsets_m: [-0.10, 0.10]
+      max_total_driving_s: 600
+      variations_per_direction: "the lane centre, then the planner's lateral offset parameter at each of lateral_offsets_m (owner decision 7); 2 directions x 3 variations x 96 s = 576 s, under the 600 s budget"
+    human_confirms:
+      - the tool printed the schedule and did not refuse (a refusal is correct: do not work around it)
+      - lap memory is off and no lap node is running
+      - bag growing, kill knob in hand
+    after: []
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4-addendum-1.md, section: "6"}
+      text: "M-SID, a data protocol: per direction the cap stepped through the yaml list, held 8 s each, three cycles; commands are model inputs, not imitation targets; the bags get their roles by the future_sessions rule"
+    rollback: Stop the tool and the launch. The bag is the deliverable.
+
+  - id: s9_data_laps
+    type: human_confirm
+    description: Step 9b (minimum session). Data laps, gap follow race profile at 1.5 and above, both directions, 60 s each.
+    session_step: 9
+    bagged: "the stack recorder's bag (gap follow race profile, /drive_raw, /drive, /safety/events, /odom/wheel, /scan); nothing else matters"
+    minimum_session: true
+    prompt: >
+      Step 9. Gap follow with the race profile, 60 s per run, ccw then cw, at 1.5 m/s and above:
+      ramp the cap in steps the owner agrees in the moment, kill knob in hand, stop at the first
+      contact. Nothing but the bag matters here. Then, on the dev machine: pnp_data runs on each
+      new bag, then pnp_data split with the session date. Fits refuse a bag with no committed
+      split.
+    launch_other:
+      - [ros2, launch, racer_control, gap_follow.launch.py, "profile:=race-2026-11-12", "max_speed_mps:=1.5"]
+    requires: []
+    runnable: true
+    runs:
+      caps_mps: [1.5]
+      directions: [ccw, cw]
+      seconds_per_run: 60
+    human_confirms:
+      - bag growing before the run
+      - kill knob in hand, stopped at the first contact
+    after:
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_data.py, runs, "<bag>"]
+      - [uv, run, --project, tools, --extra, session, python, tools/pnp_data.py, split, "<bag>", --session, "<session_date>"]
+    pass_rule:
+      sources:
+        - {file: docs/notes/preregistration-pnp-v0.4.md, section: "1"}
+      text: "bagged; the roles of the new bags come from the committed split of the session (rule, not hand)"
+    rollback: Stop. The bag is the deliverable.

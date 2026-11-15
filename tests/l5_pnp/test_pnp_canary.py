@@ -26,6 +26,8 @@ import json
 import math
 import os
 import random
+import shutil
+import statistics
 import subprocess
 import sys
 from pathlib import Path
@@ -474,3 +476,119 @@ def test_pnp_planner_timing_full_matrix(track, reverse, v_max, stalls, laps, tmp
     run_timing_case(
         track, reverse, v_max, stalls, laps, tmp_path, capsys, domain_id=84 + DOMAIN_OFFSET
     )
+
+
+# --- fused-v1 against the geometric backend (brief 38, pre-registration v0.4 section 3.2 item 8) ---
+# The same cases and seed, once with the geometric backend and once with `backend net` and a bundle
+# that declares `io.arch.type: circ_conv1d_v0_fused_v1`. Every case must complete with 0 wall
+# contacts and the fused median lap time must be at most 1.03 times the geometric one.
+#
+# The bundle: the frozen `trackperc-v2f-*` weights are not in git (car-data), so CI builds a fused
+# bundle from the committed released v0 weights, which exercises the whole fused path (tracer, net,
+# refinement, fusion, bundle contract) on the real node. Set RACER_L5_PNP_FUSED_BUNDLE to the
+# directory of the real v2f bundle to run the same comparison with it. The geometric runs above
+# stay the default canary.
+FUSED_MAX_LAP_RATIO = (
+    1.03  # evaluation/prereg/pnp-v0.4.yaml perception.sim_canary_max_lap_time_ratio
+)
+FUSED_CASES = [
+    pytest.param(STADIUM, False, id="stadium-ccw"),
+    pytest.param(STADIUM, True, id="stadium-cw"),
+    pytest.param(ROUNDED_RECT, False, id="rounded_rect-ccw"),
+]
+
+
+def fused_bundle(tmp_path: Path) -> Path:
+    override = os.environ.get("RACER_L5_PNP_FUSED_BUNDLE")
+    if override:
+        return Path(override)
+    if not (PERCEPTION_BUNDLE / "manifest.yaml").is_file():
+        pytest.skip(f"released perception bundle not committed yet: {PERCEPTION_BUNDLE}")
+    target = tmp_path / "fused_bundle"
+    shutil.copytree(PERCEPTION_BUNDLE, target)
+    manifest = yaml.safe_load((target / "manifest.yaml").read_text())
+    manifest["io"]["arch"] = {
+        "type": "circ_conv1d_v0_fused_v1",
+        "fuse": {
+            "reach_m": 0.35,
+            "edge_margin_m": 0.15,
+            "blend": 1.0,
+            "append_far": True,
+            "max_shift_slope": 0.30,
+        },
+    }
+    (target / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+    return target
+
+
+def run_comparison_case(track, reverse, backend, bundle, tmp_path, domain_id):
+    name, params = track
+    out = tmp_path / f"result-{backend}.json"
+    command = [
+        sys.executable,
+        str(RUNNER),
+        "--track",
+        name,
+        "--track-params-json",
+        json.dumps(params),
+        "--driver",
+        "pnp",
+        "--backend",
+        backend,
+        "--dynamics-bundle",
+        str(PLANNER_BUNDLE),
+        "--v-max-mps",
+        str(V_MAX_MPS),
+        "--car",
+        "params",
+        "--seed",
+        str(SEED),
+        "--stop-after-laps",
+        str(LAPS),
+        "--sim-time",
+        "--duration",
+        "150",
+        "--domain-id",
+        str(domain_id),
+        "--work-dir",
+        str(tmp_path / f"work-{backend}"),
+        "--out",
+        str(out),
+    ]
+    if bundle is not None:
+        command += ["--perception-bundle", str(bundle)]
+    if reverse:
+        command.append("--reverse")
+    proc = subprocess.run(
+        command, env=dict(os.environ), capture_output=True, text=True, timeout=500, check=False
+    )
+    assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
+    result = json.loads(out.read_text())
+    assert "error" not in result, result["error"]
+    return result
+
+
+@pytest.mark.parametrize(("track", "reverse"), FUSED_CASES)
+def test_pnp_fused_backend_laps_as_fast_as_geometric(track, reverse, tmp_path, capsys):
+    assert (DYNAMICS_BUNDLE / "manifest.yaml").is_file(), DYNAMICS_BUNDLE
+    assert (PLANNER_BUNDLE / "manifest.yaml").is_file(), PLANNER_BUNDLE
+    bundle = fused_bundle(tmp_path)
+    geo = run_comparison_case(track, reverse, "geometric", None, tmp_path, 86)
+    fused = run_comparison_case(track, reverse, "net", bundle, tmp_path, 87)
+    name = track[0]
+    with capsys.disabled():
+        print(
+            f"\nl5_pnp fused {name} {'cw' if reverse else 'ccw'}: "
+            f"geometric lap_times_s {geo['lap_times_s']} wall_contacts {geo['wall_contacts']}; "
+            f"fused lap_times_s {fused['lap_times_s']} wall_contacts {fused['wall_contacts']} "
+            f"safety_brakes {fused['safety_brakes']} planner_states {fused['planner_states']}"
+        )
+    for result in (geo, fused):
+        assert result["laps"] >= LAPS, result.get("stopped_because")
+        assert result["wall_contacts"] == 0
+    assert fused["publisher_nodes"] == {
+        "/drive_raw": ["mppi_planner_node"],
+        "/drive": ["safety_node"],
+    }
+    ratio = statistics.median(fused["lap_times_s"]) / statistics.median(geo["lap_times_s"])
+    assert ratio <= FUSED_MAX_LAP_RATIO, f"fused median lap time is {ratio:.3f} times geometric"

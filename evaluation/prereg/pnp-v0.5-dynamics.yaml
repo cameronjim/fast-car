@@ -1,0 +1,181 @@
+# Pre-registered constants for Plug-and-Play v0.5 dynamics: step contract 2.1, the candidates T5
+# and TL5, the gates GP2f-S, GP2f-T, GP2f-L, GP2f-V and GP2f-C, the excitation protocol M-SID2 of
+# the 2026-11-15 car session and the rule that gives that session's runs their dynamics roles.
+# Written 2026-11-14 (night), after the v0.4 dynamics held-out pass (PR 193, freeze commit
+# 416e68501c424caeb1f6dc80b6a0ee9edc7a288c) and BEFORE the 2026-11-15 session was driven, before
+# any v0.5 code and before any v0.5 fit.
+# Do not edit after the first commit. Rules: docs/notes/preregistration-pnp-v0.5-dynamics.md.
+# pnp-v0.2-split.yaml, pnp-v0.3.yaml, pnp-v0.4.yaml and pnp-v0.4-addendum-1.yaml are unchanged
+# and stay in force. No gate, threshold or result of theirs is edited here.
+prereg_id: pnp-v0.5-dynamics
+v04_file: evaluation/prereg/pnp-v0.4.yaml
+v04_sha256: 78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63
+v04_addendum_file: evaluation/prereg/pnp-v0.4-addendum-1.yaml
+v04_addendum_sha256: ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824
+
+base_nominal: dyn-v0.1-2026-11-12   # wheel channel, steering channel and understeer, all unchanged
+truth: wheel_seeded_icp             # T2 of v0.3, flags and windows as in pnp-v0.4.yaml `dynamics`
+alt_truth: {icp_seed_translation_scale: 0.80}   # T2s of addendum 1
+
+# Dynamics roles of the data. Nothing here gives or moves a perception or lap role.
+data_roles:
+  train:
+    - v0.2 split train segments
+    - the legacy train part
+    - the dynamics train segments of 2026-11-14 (pnp-v0.4.yaml)
+    - the train parts of the 2026-11-15 runs by `session_2026_11_15` below
+  selection:   # read before by five v0.4 models: never fitted on, used only to choose settings
+    - the dynamics heldout segments of 2026-11-14 (K1, K2, X2b, X3b, X4b, X5b, X6b, X7b)
+  heldout:     # decides GP2f; scored once, in one pass, after every v0.5 candidate is frozen
+    - the heldout parts of the 2026-11-15 runs by `session_2026_11_15` below
+  reported_only:
+    - the v0.2 split heldout segments (read before)
+
+# The rule for the 2026-11-15 session. One rule for every run, no cells, no labels, no choice.
+session_2026_11_15:
+  run: >-
+    as tools/pnp_data defines it: a stretch of /pnp/planner/status with no gap above 2 s, or in a
+    bag without planner status a stretch of non-zero /drive_raw commands; from the first non-zero
+    command to the last status or command
+  applies_to: every run of every bag of the session, whatever drove it and on whatever layout
+  min_run_s: 15.0                 # shorter: unused
+  min_wheel_distance_m: 1.0       # less: unused (the wheels did not turn)
+  train_share: 0.55               # the first 55 percent of the run's duration
+  guard_s: 2.0                    # unused
+  heldout: the rest of the run
+  sample_rule: a sample belongs to a part only if every message it was built from lies inside it
+  file: evaluation/prereg/sessions/2026-11-15-dynamics-v05.yaml   # written by a tool, committed with its SHA-256 before any fit
+  order: [carry_over, split, fit]   # M-B6 first, then the split file, then fits
+
+contract:                 # step contract 2.1
+  bundle_schema_version: "2.1.0"
+  alpha_bounds: [0.70, 1.05]          # ground distance per wheel distance
+  yaw_gain_bounds: [-0.25, 0.25]      # gamma: yaw_rate *= 1 + gamma
+  bound_margin: 0.005                 # a node within this of a bound is "on a bound"
+  table:
+    steering_nodes_share_of_side_limit: [-1.0, -0.5, 0.0, 0.5, 1.0]
+    wheel_speed_nodes_mps: [0.35, 0.6, 0.85, 1.1, 1.3, 1.5]
+    interpolation: bilinear, held constant outside the grid
+    yaw_gain_centre_column: 0.0       # gamma at steering 0 is fixed, not fitted
+  learned:                            # unchanged from contract 2.0
+    layers: [[4, 32], [32, 32], [32, 2]]
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    d_alpha_max: 0.10
+    rho_max: 0.25
+
+table_fit:                # T5: both tables, classical
+  windows: {length_s: 0.5, start_period_s: 0.25}
+  speed_input: measured wheel speed     # never the model's predicted speed
+  steering_input: the base nominal's steering state under the recorded gated /drive commands
+  min_measured_wheel_speed_mps: 0.30    # a window with any sample below this is not used
+  targets: {alpha: ground distance along the heading over the window (T2), gamma: yaw change over the window (T2)}
+  loss: {robust: huber, huber_delta: 1.345, weights: icp_quality, scale: train RMS of the base nominal's residual}
+  smoothness_weights: [0.01, 0.1, 1.0, 10.0]   # second differences; alpha by selection A1, gamma by selection Y1
+  cell: nearest node of the window's mean steering share and mean measured wheel speed
+  min_windows_per_node: 60
+  unsupported_node: >-
+    copies the nearest supported node of its own steering column (nearest in speed); if the
+    column has none, the nearest supported node of its speed row on the same side
+  split_half: {block_s: 10.0, halves: [odd blocks, even blocks]}
+
+learned_fit:              # TL5: the bounded network on the frozen T5
+  windows: {horizons_s: [0.5, 1.0, 1.5], initial_speed: wheel, commands: recorded gated /drive}
+  loss: {terms: [along, cross, heading], robust: huber, huber_delta: 1.345, weights: icp_quality}
+  configs: [{weight_decay: 1.0e-3}, {weight_decay: 1.0e-2}]
+  seeds: [0, 1, 2]
+  chosen_by: selection P1
+
+measurements:
+  m_b5:                   # the v0.5 table method on data that exists tonight; before the session data is fitted
+    train: [v0.2 split train segments, the legacy train part, the dynamics train segments of 2026-11-14]
+    stop_if_supported_node_on_bound: true
+  m_b6:                   # frozen v0.4 models on the fresh session, before the split file
+    models: [dyn-v0.1, dyn-v0.4n, dyn-v0.4r, dyn-v0.4t, dyn-v0.4tl]
+    freeze_commit: 416e68501c424caeb1f6dc80b6a0ee9edc7a288c
+    data: every PnP run of the 2026-11-15 session, whole
+
+metrics:
+  horizons_s: [0.5, 1.0, 1.5]
+  window_start_period_s: 0.25
+  min_start_speed_mps: 0.25
+  speed_bins_mps: [0.25, 0.6, 0.85, 1.25]
+  min_windows_per_stratum: 30
+  bootstrap: {block_s: 5.0, resamples: 2000, seed: 0}
+  near_limit: {min_mean_abs_steering_share: 0.85, min_windows_per_side: 30}
+  transition: {min_speed_command_change_mps: 0.2, min_windows: 30}
+  pose_check_segments: [G1b, T2b]
+
+gate_support:             # GP2f-S
+  max_supported_nodes_on_bound: 0
+  max_split_half_difference_alpha: 0.05
+  max_split_half_difference_gamma: 0.08
+  min_heldout_step_share_in_supported_cells: 0.95
+
+gate_table:               # GP2f-T, T5 against the base nominal
+  max_p1_ratio: 0.90
+  max_p1_ratio_bootstrap_upper: 0.95
+  max_along_ratio: 1.00
+  max_cross_ratio: 1.00
+  max_y1_ratio: 0.90
+  speed_equal_tolerance: 1.0e-6
+  max_stratum_ratio: 1.05
+  per_direction: {max_p1_ratio: 0.95, max_y1_ratio: 1.00}
+  yaw_bias: {max_abs_radps: 0.03, or_max_share_of_nominal_abs_bias: 0.5}
+  max_near_limit_ratio: 1.00
+  max_transition_ratio: 1.00
+  max_p1_ratio_alt_truth: 1.00
+  max_pose_position_ratio: 1.00
+  max_pose_yaw_ratio: 1.00
+
+gate_learned:             # GP2f-L, TL5 against T5
+  max_p1_ratio: 0.95
+  max_p1_ratio_bootstrap_upper: 1.00
+  max_y1_ratio: 1.00
+  speed_equal_tolerance: 1.0e-6
+  max_seed_p1_ratio: 1.00
+  max_stratum_ratio: 1.05
+  per_direction: {max_p1_ratio: 1.00}
+  max_near_limit_ratio: 1.05
+  max_transition_ratio: 1.05
+  sweep_samples: 100000
+  saturation: {level: 0.9, max_heldout_step_share: 0.01}
+  max_p1_ratio_alt_truth: 1.00
+  max_pose_position_ratio: 1.00
+  max_pose_yaw_ratio: 1.00
+
+gate_validity:            # GP2f-V
+  cap_mps: 1.5
+  default_mps: 1.3
+  turning_nodes_abs_share: [0.5, 1.0]
+  fast_items:
+    - {min_start_speed_mps: 1.15, min_windows_per_direction: 30, max_ratio: 1.00}
+    - {min_start_speed_mps: 1.30, min_windows_per_direction: 30, max_ratio: 1.00}
+
+gate_confirmation:        # GP2f-C, at the first car session after the fit
+  golden_rollout_tolerance: 1.0e-9
+  fresh_driving: {min_total_s: 120, min_per_direction_s: 40, max_p1_ratio: 1.00, max_y1_ratio: 1.00, min_step_share_in_supported_cells: 0.95}
+  switch_on: {cap_mps: 1.0, laps_per_model_per_direction: 5, max_contacts: 0, max_extra_safety_brakes: 0, min_mean_wheel_speed_ratio: 0.98}
+  cap_ladder_mps: [1.4, 1.5]
+  cap_ladder_runs_per_direction: 2
+
+excitation:               # M-SID2, 2026-11-15; every run through safety_node, bagged
+  max_total_driving_s: 600          # owner decision 7 of 2026-11-14
+  planned_total_driving_s: 552
+  order: all clockwise blocks first, then counter-clockwise
+  stop_rule: a wall contact ends the blocks of that direction; a rung of F is driven only if the rung below had no contact
+  blocks:
+    P:    # speed transitions, the PnP planner under the cap schedule of pnp-v0.4-addendum-1.yaml
+      caps_mps: [0.5, 1.0, 0.7, 1.3]
+      hold_s: 8.0
+      cycles: 3
+      runs: [{direction: cw, s: 96}, {direction: ccw, s: 96}]
+    G:    # steering variation, gap follow race profile, lateral limit raised to what the PnP runs at 1.3 already drove
+      launch: {profile: race-2026-11-12, a_lat_max_mps2: 2.0}
+      runs: [{direction: cw, max_speed_mps: 1.0, s: 30}, {direction: cw, max_speed_mps: 1.3, s: 45}, {direction: ccw, max_speed_mps: 1.3, s: 45}]
+    L:    # steering at the limit, slow
+      launch: {profile: lane-2026-10-25, target_mode: gap_deepest, max_speed_mps: 0.6, reverse_escape: false}
+      runs: [{direction: cw, s: 40}, {direction: ccw, s: 40}]
+    F:    # above 1.3, gap follow race profile, a ladder; needs the owner's yes at the track
+      launch: {profile: race-2026-11-12}
+      rungs: [{max_speed_mps: 1.4, a_lat_max_mps2: 2.4, s: 20}, {max_speed_mps: 1.5, a_lat_max_mps2: 2.8, s: 60}]
+      directions: [cw, ccw]

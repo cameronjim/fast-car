@@ -1,0 +1,8 @@
+{
+  "decision": {
+    "gate": "GP2e-L learned correction (not evaluated: GP2e-T failed)",
+    "passed": false,
+    "items": [],
+    "evaluated": false
+  }
+}

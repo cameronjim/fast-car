@@ -83,7 +83,14 @@
         "properties": {"kind": {"const": "dynamics"}},
         "required": ["kind"]
       },
-      "then": {"properties": {"io": {"$ref": "#/$defs/io_dynamics"}}}
+      "then": {
+        "if": {
+          "properties": {"bundle_schema_version": {"pattern": "^2\\."}},
+          "required": ["bundle_schema_version"]
+        },
+        "then": {"properties": {"io": {"$ref": "#/$defs/io_dynamics_v2"}}},
+        "else": {"properties": {"io": {"$ref": "#/$defs/io_dynamics"}}}
+      }
     }
   ],
   "$defs": {
@@ -249,6 +256,92 @@
             "v_max_mps": {"type": "number", "exclusiveMinimum": 0}
           }
         },
+        "golden": {"type": "string", "minLength": 1}
+      }
+    },
+    "io_dynamics_v2": {
+      "description": "Step contract 2 (bundle_schema_version 2.x): the wheel channel of contract 1 and a ground motion block in place of the additive residual (addendum 1 section 2.2). No `residual` key is allowed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "control", "dt_s", "nominal", "ground_motion", "validity", "golden"],
+      "properties": {
+        "state": {"$ref": "#/$defs/string_list"},
+        "control": {"$ref": "#/$defs/string_list"},
+        "dt_s": {"type": "number", "exclusiveMinimum": 0},
+        "nominal": {"$ref": "#/$defs/io_dynamics/properties/nominal"},
+        "ground_motion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["alpha_bounds", "table", "learned"],
+          "properties": {
+            "alpha_bounds": {
+              "type": "array",
+              "items": {"type": "number", "exclusiveMinimum": 0},
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "table": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "steering_nodes_share_of_side_limit",
+                "wheel_speed_nodes_mps",
+                "interpolation",
+                "values"
+              ],
+              "properties": {
+                "steering_nodes_share_of_side_limit": {
+                  "$ref": "#/$defs/number_list",
+                  "minItems": 2
+                },
+                "wheel_speed_nodes_mps": {"$ref": "#/$defs/number_list", "minItems": 2},
+                "interpolation": {"type": "string", "minLength": 1},
+                "values": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {"$ref": "#/$defs/number_list", "minItems": 2}
+                }
+              }
+            },
+            "learned": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "inputs",
+                "outputs",
+                "layers",
+                "activation",
+                "input_mean",
+                "input_std",
+                "d_alpha_max",
+                "rho_max",
+                "file"
+              ],
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "inputs": {"$ref": "#/$defs/string_list"},
+                "outputs": {"$ref": "#/$defs/string_list"},
+                "layers": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 1},
+                    "minItems": 2,
+                    "maxItems": 2
+                  }
+                },
+                "activation": {"type": "string", "minLength": 1},
+                "input_mean": {"$ref": "#/$defs/number_list"},
+                "input_std": {"$ref": "#/$defs/number_list"},
+                "d_alpha_max": {"type": "number", "minimum": 0},
+                "rho_max": {"type": "number", "minimum": 0},
+                "file": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        },
+        "validity": {"$ref": "#/$defs/io_dynamics/properties/validity"},
         "golden": {"type": "string", "minLength": 1}
       }
     }

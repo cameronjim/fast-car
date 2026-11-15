@@ -49,16 +49,33 @@ def freeze(git_sha: str) -> FreezeToken:
     return FreezeToken(git_sha)
 
 
-def _file(bag: str, segment: str) -> str:
-    return f"{bag}.{segment}.motion-wheel.npz"
+# Truth variants (addendum 1 section 2.4). "" is T2; the others are the M-B4 label sensitivity
+# runs and T2s. The variant is part of the file name, so no variant overwrites another.
+T2 = ""
+T2S = "s0.80"
+CLOCK_PLUS = "shift+0.010"
+CLOCK_MINUS = "shift-0.010"
+VARIANTS = {
+    T2: (1.0, 0.0),
+    T2S: (0.80, 0.0),
+    CLOCK_PLUS: (1.0, 0.010),
+    CLOCK_MINUS: (1.0, -0.010),
+}  # variant -> (seed translation scale, scan clock shift in s)
 
 
-def train_path(cache_dir: Path, bag: str, segment: str) -> Path:
-    return Path(cache_dir) / TRAIN_DIR / _file(bag, segment)
+def _file(bag: str, segment: str, variant: str = T2) -> str:
+    if variant not in VARIANTS:
+        raise ValueError(f"unknown truth variant {variant!r}")
+    tag = "" if variant == T2 else f"-{variant}"
+    return f"{bag}.{segment}.motion-wheel{tag}.npz"
 
 
-def heldout_path(cache_dir: Path, bag: str, segment: str) -> Path:
-    return Path(cache_dir) / HELDOUT_DIR / _file(bag, segment)
+def train_path(cache_dir: Path, bag: str, segment: str, variant: str = T2) -> Path:
+    return Path(cache_dir) / TRAIN_DIR / _file(bag, segment, variant)
+
+
+def heldout_path(cache_dir: Path, bag: str, segment: str, variant: str = T2) -> Path:
+    return Path(cache_dir) / HELDOUT_DIR / _file(bag, segment, variant)
 
 
 @dataclass(frozen=True)
@@ -85,25 +102,27 @@ def read_slice(path: Path) -> Slice:
         return Slice(int(z["first"]), MotionSeries(**{k: z[k] for k in fields if k in z.files}))
 
 
-def load_stage1_motion(cache_dir: Path, bag: str, segment: str, role: str) -> Slice:
+def load_stage1_motion(
+    cache_dir: Path, bag: str, segment: str, role: str, variant: str = T2
+) -> Slice:
     """What the budget, the fits and the residual training use. Refuses a held-out segment."""
     if role != "train":
         raise HeldoutLocked(
             f"{bag}/{segment} has role {role!r}: stage 1 (budget, fits, residual training) reads "
             "train segments only"
         )
-    return read_slice(train_path(cache_dir, bag, segment))
+    return read_slice(train_path(cache_dir, bag, segment, variant))
 
 
 def load_heldout_motion(
-    cache_dir: Path, bag: str, segment: str, role: str, token: FreezeToken
+    cache_dir: Path, bag: str, segment: str, role: str, token: FreezeToken, variant: str = T2
 ) -> Slice:
     """The one reader of the held-out cache: the frozen pass, with its freeze token."""
     if not isinstance(token, FreezeToken):
         raise HeldoutLocked("the held-out truth needs a FreezeToken (see truth_v04.freeze)")
     if role != "heldout":
         raise HeldoutLocked(f"{bag}/{segment} has role {role!r}, not heldout")
-    return read_slice(heldout_path(cache_dir, bag, segment))
+    return read_slice(heldout_path(cache_dir, bag, segment, variant))
 
 
 def segment_intervals(stamps_s: np.ndarray, t_from_s: float, t_to_s: float) -> tuple[int, int]:
@@ -142,7 +161,7 @@ def assemble(stamps_s: np.ndarray, slices: Sequence[Slice]) -> MotionSeries:
 
 
 def compute_segment_slice(  # pragma: no cover - real data (ICP on the bag)
-    run, vehicle, ignore, t_from_s: float, t_to_s: float, workers: int = 2
+    run, vehicle, ignore, t_from_s: float, t_to_s: float, workers: int = 2, variant: str = T2
 ) -> Slice:
     """T2 of the scan intervals inside [t_from_s, t_to_s] (run time) and nothing else."""
     from .icp_motion import SEED_WHEEL, compute_motion, driving_intervals
@@ -152,9 +171,11 @@ def compute_segment_slice(  # pragma: no cover - real data (ICP on the bag)
     n = len(stamps) - 1
     want = np.zeros(n, dtype=bool)
     want[i0:i1] = driving_intervals(run)[i0:i1]
+    scale, shift = VARIANTS[variant]
     full = compute_motion(
-        run.scans, vehicle, want, workers=workers, ignore=ignore, seed=SEED_WHEEL, run=run
-    )
+        run.scans, vehicle, want, workers=workers, ignore=ignore, seed=SEED_WHEEL, run=run,
+        seed_scale=scale, clock_shift_s=shift,
+    )  # fmt: skip
     cut = {
         k: getattr(full, k)[i0:i1]
         for k in MotionSeries.__dataclass_fields__

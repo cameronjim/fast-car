@@ -2,6 +2,8 @@
 
     python -m racer_pnp_dynamics.cli_v04 truth-train   # T2 of the train segments of 2026-11-14
     python -m racer_pnp_dynamics.cli_v04 budget        # M-B3 and M-B2 (train only, before any fit)
+    python -m racer_pnp_dynamics.cli_v04 truth-variants  # T2s and clock shifted T2 (train, M-B4)
+    python -m racer_pnp_dynamics.cli_v04 mb4           # M-B4 (train only, before any fit)
 
 Stages that fit (`n4-fit`, `r4-fit`) and the single held-out pass (`freeze-eval`) are added by the
 commits that introduce them. The v0.4 constants file is checked against its pre-registered SHA-256
@@ -18,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import budget, split_v04, truth_v04
+from . import budget, label_sensitivity, split_v04, truth_v04
 from .dataset import Segment, by_split, drop_nested, make_segments
 from .evaluate import eval_set
 from .icp_motion import SEED_WHEEL
@@ -56,7 +58,12 @@ def check_v03_file() -> None:  # pragma: no cover - real checkout layout
 
 
 def segments_of_v04_bags(  # pragma: no cover - real data
-    args, split: Split, vehicle, role: str, token: truth_v04.FreezeToken | None = None
+    args,
+    split: Split,
+    vehicle,
+    role: str,
+    token: truth_v04.FreezeToken | None = None,
+    variant: str = truth_v04.T2,
 ) -> list[Segment]:
     """Segments (train and val parts, or heldout) of the 2026-11-14 bags. Train slices are cached
     under TRAIN_DIR, held-out slices under HELDOUT_DIR; held-out ones are only computed or read
@@ -79,9 +86,9 @@ def segments_of_v04_bags(  # pragma: no cover - real data
         slices = []
         for seg in wanted:
             if role == "train":
-                path = truth_v04.train_path(args.cache, name, seg.name)
+                path = truth_v04.train_path(args.cache, name, seg.name, variant)
             else:
-                path = truth_v04.heldout_path(args.cache, name, seg.name)
+                path = truth_v04.heldout_path(args.cache, name, seg.name, variant)
             if not path.is_file():
                 if ignore is None:
                     ignore = scan_motion_tools.static_self_returns(
@@ -89,15 +96,23 @@ def segments_of_v04_bags(  # pragma: no cover - real data
                     )
                 LOG.info("T2 (%s) of %s/%s", role, name, seg.name)
                 sl = truth_v04.compute_segment_slice(
-                    run, vehicle, ignore, t_ref + seg.t_from_s, t_ref + seg.t_to_s, args.workers
+                    run,
+                    vehicle,
+                    ignore,
+                    t_ref + seg.t_from_s,
+                    t_ref + seg.t_to_s,
+                    args.workers,
+                    variant,
                 )
                 truth_v04.save_slice(path, sl)
             if role == "train":
-                slices.append(truth_v04.load_stage1_motion(args.cache, name, seg.name, role))
+                slices.append(
+                    truth_v04.load_stage1_motion(args.cache, name, seg.name, role, variant)
+                )
             else:
                 assert token is not None
                 slices.append(
-                    truth_v04.load_heldout_motion(args.cache, name, seg.name, role, token)
+                    truth_v04.load_heldout_motion(args.cache, name, seg.name, role, token, variant)
                 )
         motion = truth_v04.assemble(np.array(stamps), slices)
         keep = ("train", "val") if role == "train" else ("heldout",)
@@ -151,6 +166,45 @@ def truth_train(args) -> int:  # pragma: no cover - real data
     return 0
 
 
+def truth_variants(args) -> int:  # pragma: no cover - real data
+    """T2s and the two clock shifted truths of the train segments of 2026-11-14 (M-B4)."""
+    ctx = Stage1(args)
+    for variant in (truth_v04.T2S, truth_v04.CLOCK_PLUS, truth_v04.CLOCK_MINUS):
+        segs = segments_of_v04_bags(args, ctx.v04, ctx.vehicle, "train", variant=variant)
+        LOG.info("variant %s: %d segments", variant or "T2", len(segs))
+    return 0
+
+
+def mb4_cmd(args) -> int:  # pragma: no cover - real data
+    """M-B4 on the train segments of 2026-11-14 (the variants are computed only there)."""
+    ctx = Stage1(args)
+    base = [s for s in ctx.new if s.split in ("train", "val") and s.run.has_odom]
+    variants = {}
+    for variant in (truth_v04.T2S, truth_v04.CLOCK_PLUS, truth_v04.CLOCK_MINUS):
+        segs = segments_of_v04_bags(args, ctx.v04, ctx.vehicle, "train", variant=variant)
+        variants[variant] = [s for s in segs if s.split in ("train", "val") and s.run.has_odom]
+    shifts = {v: truth_v04.VARIANTS[v][1] for v in variants}
+    table = label_sensitivity.sensitivity_table(base, variants, shifts)
+    rejection = label_sensitivity.rejection_table(base)
+    text = label_sensitivity.render_mb4(
+        table,
+        rejection,
+        list(variants),
+        [
+            (
+                "Segments: the train and internal validation parts of the train segments of "
+                "2026-11-14 only; the variants are computed there and not on the older bags."
+            ),
+            f"Constants file evaluation/prereg/pnp-v0.4.yaml, SHA-256 {ctx.v04.sha256}.",
+        ],
+    )
+    out = ctx.root / "training" / "pnp_models" / OUT_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "M-B4.md").write_text(text, encoding="utf-8")
+    print(text)
+    return 0
+
+
 def budget_cmd(args) -> int:  # pragma: no cover - real data
     """M-B3 and M-B2 for dyn-v0.1, train data only; writes the two markdown files."""
     ctx = Stage1(args)
@@ -192,7 +246,12 @@ def budget_cmd(args) -> int:  # pragma: no cover - real data
     return 0
 
 
-COMMANDS = {"truth-train": truth_train, "budget": budget_cmd}
+COMMANDS = {
+    "truth-train": truth_train,
+    "truth-variants": truth_variants,
+    "budget": budget_cmd,
+    "mb4": mb4_cmd,
+}
 
 
 def main(argv: list[str]) -> int:  # pragma: no cover - real data

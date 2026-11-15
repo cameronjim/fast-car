@@ -30,9 +30,9 @@ from .windows import INTERVAL_N, WARM_N, warm_state, wheel_at
 
 HORIZON_S = 1.0
 UNREACHABLE_IF_PERFECT_YAW_RATIO_ABOVE = 0.95  # yaml dynamics.budget_measurement
-UNREACHABLE_SENTENCE = (
-    "item 1 of GP2d-R is out of reach for a yaw-only model on this data"  # pre-registration 2.2
-)
+# Brief 37b: written as "not expected", never "impossible": the perfect yaw oracle is a diagnostic,
+# not a bound.
+UNREACHABLE_SENTENCE = "a yaw-only model is not expected to meet item 1 of GP2d-R on this data"
 
 
 @dataclass(frozen=True)

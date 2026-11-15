@@ -5,7 +5,12 @@ For a person at the track. The full procedure with every launch command is
 16.8). Pass lines are quoted from `docs/notes/preregistration-pnp-v0.4.md` (v0.4) and the v0.2 and
 v0.3 files. The v0.3 runbook and procedure are unchanged.
 
-Steps 1, 2 and 9 are worth a session by themselves. If time runs short, do those.
+Steps 1, 2 and 9 (the excitation runs and the data laps) are worth a session by themselves.
+If time runs short, do those.
+
+How the 2026-11-14 run is reported, everywhere: "GP3 not met as registered; 20 clean laps
+observed, camera count 10 of 20". A 20 lap run at this session is GP3-R1 (Step 1b), a
+repeat under the unchanged rule of v0.2 4.3, never GP3.
 
 ## Before anything moves
 
@@ -17,6 +22,8 @@ Steps 1, 2 and 9 are worth a session by themselves. If time runs short, do those
 - Nothing in this session sets a scheduling policy, a CPU governor, a watchdog limit, a limiter dt
   or a safety parameter. Where it says "owner decision, not taken", write the table down and go
   on.
+- Every PnP run bags `/drive_raw`, `/drive`, `/safety/events` and, when brief 42 is on main,
+  `/pnp/planner/timing` (skip it if it is not on main).
 - Wall contacts are what the two people and the phone video say. The video decides.
 
 ### Gotchas of 2026-11-14
@@ -76,8 +83,22 @@ uv run --project tools --extra session python tools/pnp_session_report.py v04 --
   decision (real-time scheduling), not taken here. D3-C0: lap count equals the reference's in both
   runs and at least 18 of the 20 lap times within 0.3 s. `lapref` (`tools/lapref.py <bag> --run
   <start> <end>`, skip if not on main) is printed next to it and decides nothing.
-- The report ends with a table of which later steps these results allow.
+- Next to it, `racer_eval timing_chain --bag <bag>` (M-C2, M-T2, M-C3, no threshold; brief 42,
+  skip if not on main, and it needs `/pnp/planner/timing` in the bag). v0.2 4.2 is judged as
+  before. The report prints the GP3 wording above and whether the tool is on this checkout.
+- The report ends with a table of which later steps these results allow. Run it with
+  `--b4-commit <sha>` (the commit battery B4 ran on) so it can check the deployed planner and
+  lap code (Steps 5 and 7), and with `--result key=met` for B4, B5 and B6 results.
 - If D3-C0 fails: D does not drive the cap this session (Steps 5 and 7 are not run).
+
+## Step 1b GP3-R1 (optional, after Step 1)
+
+- Only if M-CAM held (the changed camera counter was accepted). Launch as Step 1 at
+  `v_max_mps:=1.0` in observe mode: one continuous run, one launch, 20 consecutive laps, ccw,
+  nobody touches the car.
+- Laps are counted by the camera counter and cross-checked by wheel distance (at least 0.9
+  times 20 lap lengths); a BLOCKED hold over 5 s fails it; no wall contact.
+- It is named GP3-R1 (GP3-R2 after it), its outcome is its own, and it is never reported as GP3.
 
 ## Step 2 Dynamics confirmation (minimum session)
 
@@ -88,6 +109,8 @@ uv run --project tools --extra session python tools/pnp_session_report.py v04 --
 - Launch (candidate): cap 1.0, lap memory off, two runs per direction, ccw first.
 - Watch: no new TTC or obstacle brake against Step 1 at cap 1.0, mean speed not lower. The timing
   report prints both.
+- Only a contract 1 candidate (N4 or R4) can be switched on. A contract 2 candidate (T4, TL4)
+  needs brief 43 on main; until then this step runs its confirmation offline only and says so.
 - If no candidate passed: the table is the whole step. Nothing drives. Rollback is the deployed
   bundle `dyn-v0.1-2026-11-12`.
 
@@ -102,7 +125,7 @@ uv run --project tools --extra session python tools/pnp_session_report.py v04 --
   (`new`, `reference`, `bundle_manifest`, and per run `direction` and `lap_memory: off`).
 - What it has to be (v0.4 6.4): no TTC or obstacle brake, no contact, mean wheel speed not lower
   than at 1.3, the cap within the bundle's validity. Every item is printed.
-- A 20 lap run at another cap is a repeat at that cap, not GP3.
+- A 20 lap run at another cap is a repeat at that cap, named GP3-R1 at 1.0 only, never GP3.
 
 ## Step 4 Fused backend in shadow, then driving
 
@@ -118,7 +141,10 @@ uv run --project tools --extra session python tools/pnp_session_report.py v04 --
 
 ## Step 5 D v0 on the plain donut
 
-- Only if D3-S0 and D3-S1 (B4, PR 185) and D3-C0 (Step 1) passed. Check the table from the v04
+- Only if D3-S0 and D3-S1 (B4, PR 185) and D3-C0 (Step 1) passed, AND either the deployed
+  planner and lap code are the code B4 ran on (the report checks the git trees of
+  `ros_ws/src/racer_laps` and `ros_ws/src/racer_planner` against `--b4-commit`, and a dirty or
+  hot-copied directory fails it) or B6 passed on the changed code (D5-S0 and D5-S1). Check the table from the v04
   report, or run it again with `--result d3_s0=met --result d3_s1=met`.
 - Launch: `v_max_mps:=1.0 v_lap1_mps:=0.5 lap_memory:=true lap_mode:=v0`, 10 laps per run, two
   runs per direction, ccw first, each start inside the battery window.
@@ -137,7 +163,8 @@ uv run --project tools --extra session python tools/pnp_session_report.py v04 --
 
 ## Step 7 GP4-V on variant 2
 
-- Only if D4-S0 and D4-S1 (B5) and Step 5 passed.
+- Only if D4-S0 and D4-S1 (B5) and Step 5 passed, AND either the deployed code is the code B4
+  ran on or B6 passed (D5-S0, D5-S1, D6-S0 and D6-S1).
 - Build variant 2, a NEW variant, never driven. Write the interleave seed into its form BEFORE
   the first run, check the form against variant 1's (positions must not repeat), and print the
   run order:
@@ -170,7 +197,30 @@ uv run --project tools --extra session python tools/pnp_session_report.py varian
   direction, start voltage. It refuses runs of different sessions or directions. There is no
   gate. With fewer than 5 laps each no comparison is claimed (v0.4 6.5).
 
-## Step 9 Data laps (minimum session)
+## Step 9 Excitation runs and data laps (minimum session)
+
+### 9a Excitation (M-SID)
+
+- Per direction, clockwise FIRST (fast clockwise is the thinnest cell), one launch each, then ccw.
+- Write the planner params file, then launch, then start the schedule (inside the container):
+
+```sh
+python3 tools/pnp_session/cap_schedule.py --manifest /workspace/data/pnp/models/<dyn>/manifest.yaml --v-max-mps 1.3 --write-params <out>/excitation_params.yaml
+ros2 launch racer_bringup pnp.launch.py dynamics_bundle:=<dyn> backend:=geometric v_max_mps:=1.3 lap_counter:=true require_lap_counter:=true params_file:=<out>/excitation_params.yaml
+python3 tools/pnp_session/cap_schedule.py --manifest /workspace/data/pnp/models/<dyn>/manifest.yaml --v-max-mps 1.3
+```
+
+- What it does: lap memory off, the planner's guidance input on; the tool publishes only a speed
+  cap (`LapGuidance` with `v_cap_mps` set, no profile) stepping through 0.5, 1.0, 0.7, 1.3 m/s,
+  8 s each, three cycles per direction (the list is read from the addendum yaml, never typed).
+  It never publishes a drive topic. If the tool dies, the planner falls back to
+  `v_no_guidance_mps`, the lowest cap.
+- It refuses to start if a cap is above the bundle's validity or above `v_max_mps` (correct: do
+  not work around it), or if another node already publishes guidance. Never run it together with
+  the lap node driving the cap (`lap_memory` stays off).
+- Watch: contacts. Stop at the first one. The commands are model inputs, not imitation targets.
+
+### 9b Data laps
 
 - Launch: `ros2 launch racer_control gap_follow.launch.py profile:=race-2026-11-12 max_speed_mps:=1.5`
   in the stack with the safety node and the recorder, ccw then cw, 60 s each. Ramp above 1.5 only

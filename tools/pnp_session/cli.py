@@ -233,6 +233,7 @@ def cmd_v04(args: argparse.Namespace, read: Callable[[Path], SessionBag] | None 
         results=_parse_results(args.result),
         limiter=limiter,
         prereg_sha256=sha,
+        code_equals_b4=v04.code_identity(args.b4_commit),
     )
     if args.out:
         Path(args.out).write_text(v04.to_json(doc))
@@ -365,6 +366,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="a known result, key=met|unmet|unknown (d3_s0, d3_s1, d4_s0, ... see the procedure)",
+    )
+    v.add_argument(
+        "--b4-commit",
+        help="the commit battery B4 ran on: checks the deployed racer_laps and racer_planner "
+        "against it (addendum 1 section 5.1)",
     )
     v.add_argument("--limiter-cli", help="path of limiter_whatif_cli")
     v.add_argument("--no-limiter", action="store_true")

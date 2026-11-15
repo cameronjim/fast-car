@@ -1,5 +1,6 @@
 {
   "bag": "pnp_session_r2_cut.mcap",
+  "code_identity": null,
   "d3_c0": {
     "count_equal_all_runs": true,
     "laps_compared": 0,
@@ -44,6 +45,10 @@
     "file": "evaluation/prereg/pnp-v0.4.yaml",
     "sha256": "78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63"
   },
+  "records": {
+    "gp3": "GP3 not met as registered; 20 clean laps observed, camera count 10 of 20",
+    "gp3_repeat": "A 20 lap run at the next session is GP3-R1 (a repeat under the unchanged rule of v0.2 4.3, laps counted by the camera counter), never GP3"
+  },
   "report": "v04",
   "results_used": {
     "d3_c0": "unknown"
@@ -72,6 +77,18 @@
       "minimum_session": true,
       "requires": [],
       "runnable": true,
+      "step": 1
+    },
+    {
+      "blocked_by": [
+        "m_cam is unknown"
+      ],
+      "id": "s1b_gp3_r1",
+      "minimum_session": false,
+      "requires": [
+        "m_cam"
+      ],
+      "runnable": false,
       "step": 1
     },
     {
@@ -110,14 +127,18 @@
       "blocked_by": [
         "d3_s0 is unknown",
         "d3_s1 is unknown",
-        "d3_c0 is unknown"
+        "d3_c0 is unknown",
+        "either (code_equals_b4 is unknown) or (d5_s0 is unknown and d5_s1 is unknown)"
       ],
       "id": "s5_d_v0_plain_donut",
       "minimum_session": false,
       "requires": [
         "d3_s0",
         "d3_s1",
-        "d3_c0"
+        "d3_c0",
+        "code_equals_b4",
+        "d5_s0",
+        "d5_s1"
       ],
       "runnable": false,
       "step": 5
@@ -134,14 +155,20 @@
       "blocked_by": [
         "d4_s0 is unknown",
         "d4_s1 is unknown",
-        "step5_passed is unknown"
+        "step5_passed is unknown",
+        "either (code_equals_b4 is unknown) or (d5_s0 is unknown and d5_s1 is unknown and d6_s0 is unknown and d6_s1 is unknown)"
       ],
       "id": "s7_gp4v_variant_2",
       "minimum_session": false,
       "requires": [
         "d4_s0",
         "d4_s1",
-        "step5_passed"
+        "step5_passed",
+        "code_equals_b4",
+        "d5_s0",
+        "d5_s1",
+        "d6_s0",
+        "d6_s1"
       ],
       "runnable": false,
       "step": 7
@@ -153,6 +180,14 @@
       "requires": [],
       "runnable": true,
       "step": 8
+    },
+    {
+      "blocked_by": [],
+      "id": "s9a_excitation",
+      "minimum_session": true,
+      "requires": [],
+      "runnable": true,
+      "step": 9
     },
     {
       "blocked_by": [],

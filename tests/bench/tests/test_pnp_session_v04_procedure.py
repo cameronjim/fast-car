@@ -35,6 +35,14 @@ TOOLS_NOT_ON_MAIN: dict[str, int] = {
     "tools/pnp_data.py": 36,
     "tools/lapref.py": 36,
 }
+# racer_eval modules of other briefs, and topics, that are not on main when this file is written:
+# name -> (brief, marker file). The test fails when the marker exists and the name is still listed.
+RACER_EVAL_NOT_ON_MAIN = {
+    "timing_chain": (42, "evaluation/analysis/src/racer_eval/timing_chain.py"),
+}
+TOPICS_NOT_ON_MAIN = {
+    "/pnp/planner/timing": (42, "ros_ws/src/racer_pnp_msgs/msg/PlannerTiming.msg"),
+}
 SESSION_STEPS = list(range(10))
 MINIMUM_SESSION = {1, 2, 9}
 KNOWN_REPORT_COMMANDS = {"timing", "laps", "host-facts", "v04", "variant-form", "check-prereg"}
@@ -87,6 +95,24 @@ def heading_exists(path: Path, section: str) -> bool:
     return re.search(rf"^#+ {re.escape(section)}(?:[ .]|$)", text, re.MULTILINE) is not None
 
 
+def unmet_of(req: dict[str, Any], status: dict[str, str]) -> list[str]:
+    """Results a `requires` entry still waits for: {result: id} needs id met; {any_of: [[ids],
+    [ids]]} is met when every id of at least one branch is (empty list: met)."""
+    if "result" in req:
+        return [] if status[req["result"]] == "met" else [req["result"]]
+    best: list[str] | None = None
+    for branch in req["any_of"]:
+        missing = [r for r in branch if status[r] != "met"]
+        if not missing:
+            return []
+        best = missing if best is None or len(missing) < len(best) else best
+    return best or []
+
+
+def requirement_ids(req: dict[str, Any]) -> set[str]:
+    return {req["result"]} if "result" in req else {r for b in req["any_of"] for r in b}
+
+
 def runnable_problems(doc: dict[str, Any]) -> list[str]:
     """A step marked runnable with a result that is not met, or one whose mark is not the rule."""
     status = {k: v["status"] for k, v in doc["results"].items()}
@@ -94,7 +120,7 @@ def runnable_problems(doc: dict[str, Any]) -> list[str]:
     for s in doc["steps"]:
         if "session_step" not in s:
             continue
-        unmet = [r["result"] for r in s["requires"] if status[r["result"]] != "met"]
+        unmet = [m for r in s["requires"] for m in unmet_of(r, status)]
         if s["runnable"] and unmet:
             problems.append(f"{s['id']} is marked runnable but {unmet} is not met")
         if not s["runnable"] and not unmet:
@@ -145,6 +171,7 @@ def test_the_cited_files_are_the_registered_ones():
         "docs/notes/preregistration-pnp-v0.2.md",
         "docs/notes/preregistration-pnp-v0.3.md",
         "docs/notes/preregistration-pnp-v0.4.md",
+        "docs/notes/preregistration-pnp-v0.4-addendum-1.md",
         "docs/notes/pnp-session-runbook-v0.4.md",
     }
     assert "preregistration-pnp-v0.4.md" in " ".join(cited)
@@ -254,7 +281,7 @@ def test_requires_ids_are_in_the_results_registry_with_known_statuses():
     doc = raw()
     for s in session_steps():
         for r in s["requires"]:
-            assert r["result"] in doc["results"], (s["id"], r)
+            assert requirement_ids(r) <= set(doc["results"]), (s["id"], r)
     for k, v in doc["results"].items():
         assert v["status"] in RESULT_STATUSES, k
         assert v["what"].strip(), k
@@ -268,7 +295,7 @@ def test_a_step_with_an_unmet_requirement_cannot_be_marked_runnable():
             s["runnable"] = True
     assert "s5_d_v0_plain_donut is marked runnable" in " ".join(runnable_problems(wrongly_open))
     wrongly_shut = raw()
-    for k in ("d3_s0", "d3_s1", "d3_c0"):
+    for k in ("d3_s0", "d3_s1", "d3_c0", "code_equals_b4"):
         wrongly_shut["results"][k]["status"] = "met"
     assert "marked not runnable" in " ".join(runnable_problems(wrongly_shut))
     wrongly_shut["steps"][[s["id"] for s in wrongly_shut["steps"]].index("s5_d_v0_plain_donut")][
@@ -281,19 +308,139 @@ def test_a_step_with_an_unmet_requirement_cannot_be_marked_runnable():
 
 
 def test_the_registered_preconditions_are_the_requirements():
-    needs = {s["session_step"]: {r["result"] for r in s["requires"]} for s in session_steps()}
-    assert needs[5] == {"d3_s0", "d3_s1", "d3_c0"}  # v0.4 6.1
-    assert needs[7] == {"d4_s0", "d4_s1", "step5_passed"}  # v0.4 6.2
-    assert needs[3] == {"bundle_validity_above_1_3"}  # v0.4 6.4
-    assert needs[4] == {"fused_bundle_frozen"}
-    for n in (0, 1, 2, 6, 8, 9):
-        assert needs[n] == set(), n
+    needs = {
+        s["id"]: {i for r in s["requires"] for i in requirement_ids(r)} for s in session_steps()
+    }
+    code_or_b6 = {"code_equals_b4", "d5_s0", "d5_s1"}
+    assert needs["s5_d_v0_plain_donut"] == {"d3_s0", "d3_s1", "d3_c0"} | code_or_b6  # 6.1, add. 5.2
+    assert needs["s7_gp4v_variant_2"] == (
+        {"d4_s0", "d4_s1", "step5_passed", "d6_s0", "d6_s1"} | code_or_b6
+    )  # v0.4 6.2, add. 5.2
+    assert needs["s3_cap_above_1_3"] == {"bundle_validity_above_1_3"}  # v0.4 6.4
+    assert needs["s4_fused_shadow"] == {"fused_bundle_frozen"}
+    assert needs["s1b_gp3_r1"] == {"m_cam"}  # brief 41a: GP3-R1 needs M-CAM held
+    for sid in (
+        "s0_prereg_sha",
+        "s0_build_and_bench",
+        "s1_c_timing_and_d3c0",
+        "s2_dynamics_confirmation",
+        "s6_variant_1_d_off",
+        "s8_tracker_against_pnp",
+        "s9a_excitation",
+        "s9_data_laps",
+    ):
+        assert needs[sid] == set(), sid
+
+
+def _with(doc: dict[str, Any], **statuses: str) -> dict[str, Any]:
+    for k, v in statuses.items():
+        doc["results"][k]["status"] = v
+    return doc
+
+
+def _runnable(doc: dict[str, Any], step_id: str) -> bool:
+    status = {k: v["status"] for k, v in doc["results"].items()}
+    s = next(x for x in doc["steps"] if x["id"] == step_id)
+    return not [m for r in s["requires"] for m in unmet_of(r, status)]
+
+
+def test_steps_five_and_seven_open_on_the_b4_code_or_on_b6_and_on_nothing_else():
+    d3 = {"d3_s0": "met", "d3_s1": "met", "d3_c0": "met"}
+    d4 = {"d4_s0": "met", "d4_s1": "met", "step5_passed": "met"}
+    five, seven = "s5_d_v0_plain_donut", "s7_gp4v_variant_2"
+    assert not _runnable(_with(raw(), **d3), five)  # neither branch
+    # branch 1: the deployed code is the code B4 ran on
+    assert _runnable(_with(raw(), **d3, code_equals_b4="met"), five)
+    assert not _runnable(_with(raw(), **d3, code_equals_b4="unmet"), five)
+    # branch 2: B6 passed on the changed code, D5 for the plain donut
+    assert _runnable(_with(raw(), **d3, d5_s0="met", d5_s1="met"), five)
+    assert not _runnable(_with(raw(), **d3, d5_s0="met"), five)
+    assert not _runnable(_with(raw(), **d3, d5_s0="met", d5_s1="unmet"), five)
+    # the B6 branch alone does not skip the B4 gates it requires them to have passed
+    assert not _runnable(
+        _with(raw(), d3_s0="unmet", d3_s1="met", d3_c0="met", code_equals_b4="met"), five
+    )
+    # step 7: D6 in addition on the B6 branch
+    assert not _runnable(_with(raw(), **d4), seven)
+    assert _runnable(_with(raw(), **d4, code_equals_b4="met"), seven)
+    assert not _runnable(_with(raw(), **d4, d5_s0="met", d5_s1="met"), seven)
+    assert _runnable(_with(raw(), **d4, d5_s0="met", d5_s1="met", d6_s0="met", d6_s1="met"), seven)
+    assert not _runnable(_with(raw(), **d4, d5_s0="met", d5_s1="met", d6_s0="met"), seven)
+    # runnable_problems sees an any_of step marked open without either branch
+    bad = _with(raw(), **d3)
+    next(x for x in bad["steps"] if x["id"] == five)["runnable"] = True
+    assert "s5_d_v0_plain_donut is marked runnable" in " ".join(runnable_problems(bad))
+
+
+def test_gp3_is_worded_as_not_met_as_registered_and_later_runs_are_gp3_r1():
+    fixed = raw()["fixed"]
+    assert fixed["gp3_record"] == (
+        "GP3 not met as registered; 20 clean laps observed, camera count 10 of 20"
+    )
+    assert (
+        "GP3-R1" in fixed["gp3_repeat_rule"] and "never reported as GP3" in fixed["gp3_repeat_rule"]
+    )
+    text = PROCEDURE.read_text() + RUNBOOK.read_text()
+    assert not re.search(r"GP3 (PASSED|passed)", text)
+    s1b = step("s1b_gp3_r1")
+    assert s1b["optional"] is True and s1b["session_step"] == 1
+    assert s1b["runs"]["laps_per_run"] == 20 and s1b["runs"]["caps_mps"] == [1.0]
+    assert "GP3-R1" in s1b["pass_rule"]["text"] and "never as GP3" in s1b["pass_rule"]["text"]
+    order = [s["id"] for s in raw()["steps"]]
+    assert (
+        order.index("s1b_gp3_r1") == order.index("s1_c_timing_and_d3c0") + 1
+    )  # right after step 1
+
+
+def test_the_timing_chain_is_in_step_one_and_listed_until_brief_42_lands():
+    for name, (brief, marker) in RACER_EVAL_NOT_ON_MAIN.items():
+        assert not (REPO / marker).is_file(), (
+            f"racer_eval {name} (brief {brief}) is on main: take it off the list"
+        )
+    for topic, (brief, marker) in TOPICS_NOT_ON_MAIN.items():
+        assert not (REPO / marker).is_file(), (
+            f"{topic} (brief {brief}) is on main: take it off the list"
+        )
+    s1 = step("s1_c_timing_and_d3c0")
+    assert any("timing_chain" in c for c in s1["after"])
+    assert "brief 42" in " ".join(s1["needs_on_main"]) and "skip" in " ".join(s1["needs_on_main"])
+    assert "/pnp/planner/timing" in raw()["fixed"]["timing_chain_rule"]
+    assert "judged as before" in raw()["fixed"]["timing_chain_rule"]
+    for s in session_steps():
+        if s["session_step"] in (1, 9) or "pnp.launch.py" in str(s.get("launch", "")):
+            assert "/drive_raw" in s["bagged"] or s["session_step"] == 0, s["id"]
+
+
+def test_the_excitation_step_follows_the_addendum_and_runs_clockwise_first():
+    s = step("s9a_excitation")
+    ex = s["excitation"]
+    assert (
+        ex["directions"] == ["cw", "ccw"]
+        and ex["hold_s"] == 8.0
+        and ex["cycles_per_direction"] == 3
+    )
+    assert ex["caps_mps"] == [0.5, 1.0, 0.7, 1.3]
+    assert s["minimum_session"] is True and step("s9_data_laps")["minimum_session"] is True
+    assert "lap_memory" not in " ".join(" ".join(c) for c in s["launch"])  # off by default
+    text = s["prompt"]
+    assert (
+        "lap node" in text
+        and "never publishes a drive topic" in text
+        and "v_no_guidance_mps" in text
+    )
+    tool = REPO / "tools/pnp_session/cap_schedule.py"
+    assert tool.is_file()
+    for cmd in s["schedule_commands"]:
+        assert cmd[:2] == ["python3", "tools/pnp_session/cap_schedule.py"]
+    assert not any("lap_mode" in " ".join(c) for c in s["launch"])
+    assert (REPO / ex["source"]["file"]).is_file()
 
 
 def test_nothing_is_runnable_that_waits_on_a_result_nobody_has():
     status = {k: v["status"] for k, v in raw()["results"].items()}
     assert set(status.values()) == {"unknown"}  # nothing in this file was measured yet
     assert {s["session_step"] for s in session_steps() if s["runnable"]} == {0, 1, 2, 6, 8, 9}
+    assert not step("s1b_gp3_r1")["runnable"]
 
 
 # ------------------------------------------------------------------------ commands that exist
@@ -375,7 +522,13 @@ def test_tools_of_other_briefs_are_listed_until_they_land():
                 sub = cmd[cmd.index("tools/pnp_session_report.py") + 1]
                 assert sub in KNOWN_REPORT_COMMANDS, (s["id"], sub)
             if "racer_eval" in cmd:
-                assert cmd[cmd.index("racer_eval") + 1] == "session"
+                sub = cmd[cmd.index("racer_eval") + 1]
+                if sub in RACER_EVAL_NOT_ON_MAIN:
+                    brief = RACER_EVAL_NOT_ON_MAIN[sub][0]
+                    needs = " ".join(s["needs_on_main"])
+                    assert f"brief {brief}" in needs and "skip" in needs, (s["id"], sub)
+                else:
+                    assert sub == "session", (s["id"], sub)
 
 
 def test_steps_that_use_another_briefs_work_say_skip_if_not_on_main():

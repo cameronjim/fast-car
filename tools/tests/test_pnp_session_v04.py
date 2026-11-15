@@ -40,6 +40,9 @@ def test_check_prereg_refuses_a_changed_or_missing_file(tmp_path, monkeypatch, c
     with pytest.raises(v04.PreregMismatch, match="pull main"):
         v04.check_prereg(tmp_path)
     shutil.copy(REPO / v04.PREREG_YAML, tmp_path / v04.PREREG_YAML)
+    with pytest.raises(v04.PreregMismatch, match="addendum-1"):
+        v04.check_prereg(tmp_path)  # the addendum's constants file is checked too
+    shutil.copy(REPO / v04.ADDENDUM_YAML, tmp_path / v04.ADDENDUM_YAML)
     assert v04.check_prereg(tmp_path) == v04.PREREG_SHA256
     with (tmp_path / v04.PREREG_YAML).open("a") as f:
         f.write("# edited\n")
@@ -106,19 +109,40 @@ def test_default_statuses_open_only_the_steps_without_results_to_wait_for():
     steps = v04.allowed_steps(v04.load_procedure(), {})
     open_steps = {s["step"] for s in steps if s["runnable"]}
     assert open_steps == {0, 1, 2, 6, 8, 9}
+    ids = {s["id"] for s in steps if s["runnable"]}
+    assert {"s9a_excitation", "s9_data_laps", "s1_c_timing_and_d3c0"} <= ids
+    assert "s1b_gp3_r1" not in ids
     blocked = {s["step"]: s["blocked_by"] for s in steps if not s["runnable"]}
-    assert blocked[5] == ["d3_s0 is unknown", "d3_s1 is unknown", "d3_c0 is unknown"]
+    assert blocked[5][:3] == ["d3_s0 is unknown", "d3_s1 is unknown", "d3_c0 is unknown"]
+    assert blocked[5][3].startswith("either (code_equals_b4 is unknown) or (d5_s0 is unknown")
+    assert blocked[1] == ["m_cam is unknown"]  # GP3-R1 needs M-CAM
     assert {s["step"] for s in steps if s["minimum_session"]} == {1, 2, 9}
+    assert {s["id"] for s in steps if s["minimum_session"]} == {
+        "s1_c_timing_and_d3c0",
+        "s2_dynamics_confirmation",
+        "s9a_excitation",
+        "s9_data_laps",
+    }
 
 
 def test_results_open_steps_and_unmet_blocks_like_unknown():
     proc = v04.load_procedure()
     met = {"d3_s0": "met", "d3_s1": "met", "d3_c0": "met"}
-    assert next(s for s in v04.allowed_steps(proc, met) if s["step"] == 5)["runnable"]
-    unmet = v04.allowed_steps(proc, {**met, "d3_c0": "unmet"})
-    assert not next(s for s in unmet if s["step"] == 5)["runnable"]
-    seven = v04.allowed_steps(proc, {**met, "d4_s0": "met", "d4_s1": "met", "step5_passed": "met"})
-    assert next(s for s in seven if s["step"] == 7)["runnable"]
+
+    def runnable(results, step):
+        return next(s for s in v04.allowed_steps(proc, results) if s["step"] == step)["runnable"]
+
+    assert not runnable(met, 5)  # B4 gates alone: neither the B4 code nor B6
+    assert runnable({**met, "code_equals_b4": "met"}, 5)
+    assert runnable({**met, "d5_s0": "met", "d5_s1": "met"}, 5)
+    assert not runnable({**met, "d5_s0": "met"}, 5)
+    assert not runnable({**met, "d3_c0": "unmet", "code_equals_b4": "met"}, 5)
+    d4 = {"d4_s0": "met", "d4_s1": "met", "step5_passed": "met", "code_equals_b4": "met"}
+    assert runnable(d4, 7)
+    b6 = {"d4_s0": "met", "d4_s1": "met", "step5_passed": "met", "d5_s0": "met", "d5_s1": "met"}
+    assert not runnable(b6, 7)  # D6 in addition
+    assert runnable({**b6, "d6_s0": "met", "d6_s1": "met"}, 7)
+    assert runnable({"m_cam": "met"}, 1)
     with pytest.raises(ValueError, match="unknown result"):
         v04.allowed_steps(proc, {"nope": "met"})
     with pytest.raises(ValueError, match="use one of"):
@@ -223,6 +247,14 @@ def test_a_passing_d3c0_opens_step_five_only_with_b4():
         reference="camera",
         results={"d3_c0": "met", "d3_s0": "met", "d3_s1": "met"},
     )
+    assert not next(s for s in doc["steps"] if s["step"] == 5)["runnable"]  # code or B6 missing
+    doc = v04.v04_report(
+        bag,
+        caps=[0.5],
+        reference="camera",
+        results={"d3_c0": "met", "d3_s0": "met", "d3_s1": "met"},
+        code_equals_b4=("met", "same tree"),
+    )
     assert next(s for s in doc["steps"] if s["step"] == 5)["runnable"]
 
 
@@ -325,3 +357,78 @@ def test_cli_variant_form_check_receipt_and_order(tmp_path, monkeypatch, capsys)
     form.write_text(yaml.safe_dump(low))
     assert cli.main(["variant-form", "--form", str(form)]) == 1
     assert "under the LiDAR plane" in capsys.readouterr().err
+
+
+def test_the_report_carries_the_gp3_record_and_the_timing_chain_line():
+    doc = r2_report()
+    assert doc["records"]["gp3"] == (
+        "GP3 not met as registered; 20 clean laps observed, camera count 10 of 20"
+    )
+    assert "GP3-R1" in doc["records"]["gp3_repeat"] and "never GP3" in doc["records"]["gp3_repeat"]
+    text = v04.markdown(doc)
+    assert "GP3 not met as registered" in text and "Timing chain" in text
+    assert "timing_chain" in text  # not on main: says so; on main: says how to run it
+
+
+def test_report_uses_the_code_identity_result():
+    doc = v04.v04_report(
+        make_bag(), caps=[0.5], reference="camera", code_equals_b4=("met", "equal to abc")
+    )
+    assert doc["results_used"]["code_equals_b4"] == "met" and doc["code_identity"] == "equal to abc"
+
+
+def _git(root, *args):
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_code_identity_compares_the_trees_of_the_planner_and_lap_directories(tmp_path):
+    import subprocess
+
+    assert v04.code_identity(None)[0] == "unknown"
+    for d in v04.CODE_DIRS:
+        (tmp_path / d).mkdir(parents=True)
+        (tmp_path / d / "a.txt").write_text("one")
+    (tmp_path / "other.txt").write_text("x")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "b4")
+    b4 = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    assert v04.code_identity(b4, tmp_path)[0] == "met"
+    (tmp_path / "other.txt").write_text("y")  # outside the two directories: still the same code
+    _git(tmp_path, "commit", "-q", "-am", "elsewhere")
+    assert v04.code_identity(b4, tmp_path)[0] == "met"
+    (tmp_path / v04.CODE_DIRS[1] / "a.txt").write_text("hot copied")  # uncommitted
+    status, why = v04.code_identity(b4, tmp_path)
+    assert status == "unmet" and "uncommitted" in why
+    _git(tmp_path, "commit", "-q", "-am", "planner changed")
+    status, why = v04.code_identity(b4, tmp_path)
+    assert status == "unmet" and "differs" in why
+    assert v04.code_identity("nosuchsha", tmp_path)[0] == "unknown"
+    assert v04.code_identity(b4, tmp_path / "not-a-repo")[0] == "unknown"
+
+
+def test_requirement_blockers_all_shapes():
+    status = {"a": "met", "b": "unknown", "c": "met", "d": "unmet"}
+    assert v04.requirement_blockers({"result": "a"}, status) == (["a"], [])
+    assert v04.requirement_blockers({"result": "b"}, status) == (["b"], ["b is unknown"])
+    ids, why = v04.requirement_blockers({"any_of": [["b"], ["a", "c"]]}, status)
+    assert ids == ["b", "a", "c"] and why == []
+    ids, why = v04.requirement_blockers({"any_of": [["b"], ["a", "d"]]}, status)
+    assert why == ["either (b is unknown) or (d is unmet)"]
+
+
+def test_cli_v04_with_a_b4_commit_that_cannot_be_resolved(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_read", lambda p: make_bag())
+    assert cli.main(["v04", "--bag", "x", "--no-limiter", "--b4-commit", "nosuchsha"]) == 2
+    assert "Later steps" in capsys.readouterr().out

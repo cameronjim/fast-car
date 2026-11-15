@@ -15,6 +15,7 @@ wholly inside that one segment, otherwise it is `unused`.
 
 from __future__ import annotations
 
+import itertools
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,7 +196,7 @@ def _join_lap_run(name: str, role: str, segments: list[Segment]) -> LapRun:
     bags = {s.bag for s in parts}
     if len(bags) != 1:
         raise SplitError(f"lap run {name}: its parts are in several bags {sorted(bags)}")
-    for a, b in zip(parts, parts[1:], strict=False):
+    for a, b in itertools.pairwise(parts):
         if b.t_from - a.t_to > _MAX_PART_GAP_S:
             raise SplitError(f"lap run {name}: parts {a.name} and {b.name} are not consecutive")
     wrong = [s.name for s in parts if s.lap != role]
@@ -240,7 +241,7 @@ def parse_v04(doc: dict[str, Any], digest: str) -> SplitV04:
             continue
         parsed = [_segment(str(bag), raw) for raw in entry["segments"]]
         ordered = sorted(parsed, key=lambda s: s.t_from)
-        for a, b in zip(ordered, ordered[1:], strict=False):
+        for a, b in itertools.pairwise(ordered):
             if b.t_from < a.t_to:
                 raise SplitError(f"{bag}: segments {a.name} and {b.name} overlap")
         segments.extend(parsed)

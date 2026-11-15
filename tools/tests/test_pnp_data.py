@@ -16,11 +16,11 @@ pytest.importorskip("mcap_ros2")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lapref.bag import read_signals  # noqa: E402
-from pnp_data import cli, guard, mcapread, runs, session_split  # noqa: E402
-from pnp_data import confirm as confirm_mod  # noqa: E402
-from pnp_data.runs import RunRow  # noqa: E402
-from pnp_data.session_split import SessionRun, SplitRefused  # noqa: E402
+from lapref.bag import read_signals
+from pnp_data import cli, guard, mcapread, runs, session_split
+from pnp_data import confirm as confirm_mod
+from pnp_data.runs import RunRow
+from pnp_data.session_split import SessionRun, SplitRefused
 
 REPO = Path(__file__).resolve().parents[2]
 FIX = Path(__file__).resolve().parent / "fixtures"
@@ -92,8 +92,14 @@ def write_bag(path: Path, drive_raw, odom, status, drive=(), scan_at=0.0, scan=T
                 }
                 events.append((ns(t), topic, s_drive, msg))
         for t, v in odom:
-            msg = {"twist": {"twist": {"linear": {"x": v, "y": 0.0, "z": 0.0},
-                                       "angular": {"x": 0.0, "y": 0.0, "z": 0.0}}}}
+            msg = {
+                "twist": {
+                    "twist": {
+                        "linear": {"x": v, "y": 0.0, "z": 0.0},
+                        "angular": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    }
+                }
+            }
             events.append((ns(t), "/odom/wheel", s_odom, msg))
         for t in status:
             events.append((ns(t), "/pnp/planner/status", s_status, {"header": stamp, "state": 1}))
@@ -124,7 +130,9 @@ def small_bag(tmp_path_factory) -> Path:
 
 
 def test_read_columns_puts_times_on_the_scan_axis(small_bag: Path) -> None:
-    t0, cols = mcapread.read_columns(small_bag, {"/odom/wheel": lambda m: (m.twist.twist.linear.x,)})
+    t0, cols = mcapread.read_columns(
+        small_bag, {"/odom/wheel": lambda m: (m.twist.twist.linear.x,)}
+    )
     assert t0 == pytest.approx(1_700_000_000.0)
     odom = cols["/odom/wheel"]
     assert odom[0, 0] == pytest.approx(0.0) and odom[1, 0] == pytest.approx(0.1)
@@ -157,7 +165,7 @@ def test_a_truncated_file_is_read_as_far_as_it_goes(small_bag: Path, tmp_path: P
     cut = tmp_path / "cut.mcap"
     data = small_bag.read_bytes()
     cut.write_bytes(data[: int(len(data) * 0.6)])
-    t0, cols = mcapread.read_columns(cut, {"/odom/wheel": lambda m: (m.twist.twist.linear.x,)})
+    _t0, cols = mcapread.read_columns(cut, {"/odom/wheel": lambda m: (m.twist.twist.linear.x,)})
     assert 0 < len(cols["/odom/wheel"]) < 900
 
 
@@ -214,7 +222,10 @@ def test_distance_ignores_gaps_and_short_input() -> None:
 
 
 CUT_RUNS = FIX / "pnp_data_l0_cut.npz"
-L0 = (124.9, 239.9)  # pnp-v0.4.yaml split_2026_11_14, bag 2026-11-14T21-49-21_car_teleop, segment L0
+L0 = (
+    124.9,
+    239.9,
+)  # pnp-v0.4.yaml split_2026_11_14, bag 2026-11-14T21-49-21_car_teleop, segment L0
 
 
 @pytest.mark.skipif(not CUT_RUNS.is_file(), reason="the L0 cut fixture is not committed yet")
@@ -232,7 +243,9 @@ def test_runs_reproduce_the_yaml_boundaries_of_l0() -> None:
 # -- the split of a new session --------------------------------------------------------------------
 
 
-def row(rid: str, start: float, end: float, cap: float, direction: str, dist: float = 50.0) -> RunRow:
+def row(
+    rid: str, start: float, end: float, cap: float, direction: str, dist: float = 50.0
+) -> RunRow:
     return RunRow(rid, "pnp", start, end, cap, direction, dist, cap + 0.1)
 
 
@@ -297,7 +310,10 @@ def test_speed_cell_is_the_cap_rounded_to_a_tenth() -> None:
 
 
 def test_an_undriven_run_is_refused_unless_named() -> None:
-    runs_ = [sr(BAG_A, "R0", 0.0, 60.0, 1.0, "ccw", dist=0.0), sr(BAG_A, "R1", 70.0, 130.0, 1.0, "ccw")]
+    runs_ = [
+        sr(BAG_A, "R0", 0.0, 60.0, 1.0, "ccw", dist=0.0),
+        sr(BAG_A, "R1", 70.0, 130.0, 1.0, "ccw"),
+    ]
     with pytest.raises(SplitRefused, match="wheels did not turn"):
         session_split.split_runs(runs_)
     segs = session_split.split_runs(runs_, [f"{BAG_A}:R0"])
@@ -317,11 +333,11 @@ def test_the_golden_parses_to_the_same_roles() -> None:
     import yaml
 
     doc = yaml.safe_load((FIX / "pnp_data_session_split_golden.yaml").read_text())
-    roles = {
-        s["name"]: s["dynamics"] for bag in doc["bags"].values() for s in bag["segments"]
-    }
+    roles = {s["name"]: s["dynamics"] for bag in doc["bags"].values() for s in bag["segments"]}
     assert roles["S1a"] == "train" and roles["S1b"] == "heldout" and roles["S2"] == "unused"
-    assert all(s["dynamics"] == s["perception"] for b in doc["bags"].values() for s in b["segments"])
+    assert all(
+        s["dynamics"] == s["perception"] for b in doc["bags"].values() for s in b["segments"]
+    )
 
 
 def test_write_split_refuses_old_bags_overwrite_and_bad_sessions(tmp_path: Path) -> None:
@@ -462,15 +478,25 @@ def test_cli_split_writes_once_and_prints_the_sha(small_bag: Path, capsys, tmp_p
 def test_cli_split_refuses_a_changed_rule_file(small_bag: Path, capsys, tmp_path: Path) -> None:
     fake = tmp_path / "rule.yaml"
     fake.write_text("prereg_id: other\n")
-    argv = ["split", str(small_bag), "--session", "2026-11-20", "--rule-file", str(fake),
-            "--out-dir", str(tmp_path / "o")]
+    argv = [
+        "split",
+        str(small_bag),
+        "--session",
+        "2026-11-20",
+        "--rule-file",
+        str(fake),
+        "--out-dir",
+        str(tmp_path / "o"),
+    ]
     assert cli.main(argv) == 2
     assert "not the registered" in capsys.readouterr().err
     assert not (tmp_path / "o").exists()
 
 
 def test_cli_guard_exit_codes(tmp_path: Path, capsys) -> None:
-    assert cli.main(["guard", "2026-11-13T22-00-40_car_teleop", "--sessions-dir", str(tmp_path)]) == 0
+    assert (
+        cli.main(["guard", "2026-11-13T22-00-40_car_teleop", "--sessions-dir", str(tmp_path)]) == 0
+    )
     assert "hand split" in capsys.readouterr().out
     assert cli.main(["guard", BAG_A, "--sessions-dir", str(tmp_path)]) == 1
     assert "REFUSED" in capsys.readouterr().out

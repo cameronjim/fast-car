@@ -14,10 +14,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lapref import cli as lapref_cli  # noqa: E402
-from lapref import method  # noqa: E402
-from lapref.bag import TOPICS, Signals  # noqa: E402
-from lapref.method import MIN_RETURNED_LAP_M, lapref  # noqa: E402
+from lapref import cli as lapref_cli
+from lapref import method
+from lapref.bag import TOPICS, Signals
+from lapref.method import MIN_RETURNED_LAP_M, lapref
 
 try:
     from hypothesis import HealthCheck, given, settings
@@ -155,7 +155,12 @@ def test_a_standing_car_has_no_laps() -> None:
 
 @pytest.mark.parametrize(
     ("odom_t", "steer_t"),
-    [([], [0.0, 1.0]), ([0.0, 1.0], []), ([0.0], [0.0, 1.0]), ([float("nan")] * 3, [0.0, 1.0, 2.0])],
+    [
+        ([], [0.0, 1.0]),
+        ([0.0, 1.0], []),
+        ([0.0], [0.0, 1.0]),
+        ([float("nan")] * 3, [0.0, 1.0, 2.0]),
+    ],
 )
 def test_degenerate_inputs_return_no_laps(odom_t, steer_t) -> None:
     result = lapref(odom_t, [1.0] * len(odom_t), steer_t, [0.1] * len(steer_t))
@@ -185,9 +190,12 @@ def test_result_dict_is_json_ready() -> None:
     json.dumps(d)
     assert d["n_laps"] == 4
     assert d["mean_lap_time_s"] == pytest.approx(np.mean(d["lap_times_s"]))
-    assert run_lapref(Signals(np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0))).to_dict()[
-        "mean_lap_time_s"
-    ] is None
+    assert (
+        run_lapref(Signals(np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0))).to_dict()[
+            "mean_lap_time_s"
+        ]
+        is None
+    )
 
 
 def test_parabola_and_pearson_edges() -> None:
@@ -245,7 +253,9 @@ def test_cli_run_from_a_cached_bag(tmp_path: Path, capsys) -> None:
 
 def test_cli_exit_status_is_1_without_laps(tmp_path: Path, capsys) -> None:
     t = np.arange(0.0, 60.0, 0.02)
-    Signals(t, np.full(len(t), 0.1), t, np.full(len(t), 1.0)).save(tmp_path / "b.lapref-signals.npz")
+    Signals(t, np.full(len(t), 0.1), t, np.full(len(t), 1.0)).save(
+        tmp_path / "b.lapref-signals.npz"
+    )
     assert lapref_cli.main(["/x/b", "--run", "0", "60", "--cache", str(tmp_path)]) == 1
     assert json.loads(capsys.readouterr().out)["n_laps"] == 0
 
@@ -290,14 +300,21 @@ def test_cli_split_run_roles(tmp_path: Path, monkeypatch) -> None:
     assert lapref_cli.resolve_split_run("K1", bag_test, scoring_test=True)[2] == "test"
 
 
-def test_cli_split_run_records_the_git_head_for_a_test_run(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_cli_split_run_records_the_git_head_for_a_test_run(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
     sig, _ = synth(n_laps=4)
     sig.save(tmp_path / "bagZ.lapref-signals.npz")
     monkeypatch.setattr(
         lapref_cli, "resolve_split_run", lambda name, bag, scoring: (0.0, 500.0, "test")
     )
     monkeypatch.setattr(lapref_cli, "_git_head", lambda: "abc123")
-    assert lapref_cli.main(["/x/bagZ", "--split-run", "K1", "--scoring-test", "--cache", str(tmp_path)]) == 0
+    assert (
+        lapref_cli.main(
+            ["/x/bagZ", "--split-run", "K1", "--scoring-test", "--cache", str(tmp_path)]
+        )
+        == 0
+    )
     printed = json.loads(capsys.readouterr().out)
     assert printed["git_head"] == "abc123" and printed["split_run"] == "K1"
 

@@ -459,4 +459,4 @@ def test_lapref_json_and_the_procedure_commands_match_what_shipped(tmp_path):
                 flags = cmd[cmd.index("tools/lapref.py") + 1 :]
                 assert "--run" in flags and "--out" in flags
                 seen += 1
-    assert seen == 4  # confirm, runs, split, lapref
+    assert seen == 3  # runs, split, lapref (brief 41b: step 2 has no confirm, no candidate exists)

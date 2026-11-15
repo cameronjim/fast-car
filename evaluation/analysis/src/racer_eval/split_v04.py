@@ -48,7 +48,7 @@ class UnknownBag(KeyError):
 
 
 def default_path() -> Path:
-    return Path(__file__).resolve().parents[4] / "prereg" / "pnp-v0.4.yaml"
+    return Path(__file__).resolve().parents[3] / "prereg" / "pnp-v0.4.yaml"
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,30 @@
+# Split of the session 2026-11-20 by the registered rule (pnp-v0.4.yaml, future_sessions).
+# Written by tools/pnp_data.py split, before anything is fitted on the train part.
+# Do not edit after the first commit. Times are bag seconds (after the first /scan).
+session: 2026-11-20
+rule_file_sha256: abababababababababababababababababababababababababababababababab
+rule:
+  single_run_train_share: 0.55
+  guard_s: 2
+  min_run_s: 15
+  multi_run_cell_heldout: last_run_of_the_cell
+  roles: the same for dynamics and perception; laps are not assigned
+bags:
+  2026-11-20T10-00-00_car_teleop:
+    first_scan_log_time_s: 1.500
+    segments:
+      - {name: S1a, run: R0, from: 10, to: 48.5, direction: ccw, cap_mps: 1, dynamics: train, perception: train}  # the only run of its cell: first 55 percent
+      - {name: S1b, run: R0, from: 50.5, to: 80, direction: ccw, cap_mps: 1, dynamics: heldout, perception: heldout}  # the only run of its cell: after a 2.0 s guard
+      - {name: S2, run: R1, from: 100, to: 110, direction: cw, cap_mps: 1, dynamics: unused, perception: unused}  # shorter than 15 s
+      - {name: S3, run: R2, from: 130, to: 200, direction: cw, cap_mps: 0.5, dynamics: train, perception: train}  # one of 2 runs of its cell, not the last
+      - {name: S4, run: R3, from: 220, to: 290, direction: cw, cap_mps: 0.5, dynamics: heldout, perception: heldout}  # last of 2 runs of its cell
+  2026-11-20T10-30-00_car_teleop:
+    first_scan_log_time_s: 2.250
+    segments:
+      - {name: S5, run: R0, from: 5, to: 45, direction: ccw, cap_mps: 0.7, dynamics: train, perception: train}  # one of 3 runs of its cell, not the last
+      - {name: S6, run: R1, from: 60, to: 100, direction: ccw, cap_mps: 0.7, dynamics: train, perception: train}  # one of 3 runs of its cell, not the last
+      - {name: S7, run: R2, from: 120, to: 160, direction: ccw, cap_mps: 0.7, dynamics: heldout, perception: heldout}  # last of 3 runs of its cell
+      - {name: S8a, run: R3, from: 180, to: 213, direction: cw, cap_mps: 1.3, dynamics: train, perception: train}  # the only run of its cell: first 55 percent
+      - {name: S8b, run: R3, from: 215, to: 240, direction: cw, cap_mps: 1.3, dynamics: heldout, perception: heldout}  # the only run of its cell: after a 2.0 s guard
+      - {name: S9a, run: R4, from: 260, to: 298.5, direction: cw, cap_mps: 0.7, dynamics: train, perception: train}  # the only run of its cell: first 55 percent
+      - {name: S9b, run: R4, from: 300.5, to: 330, direction: cw, cap_mps: 0.7, dynamics: heldout, perception: heldout}  # the only run of its cell: after a 2.0 s guard

@@ -58,8 +58,8 @@ class LapConfig:
     similarity_threshold: float = 0.80
     #: After a lap (or at the start) the similarity must first fall below this.
     rearm_threshold: float = 0.55
-    #: A lap cannot be shorter than this many seconds.
-    min_lap_time_s: float = 6.0
+    #: Time floor between laps, seconds. Not the double-count guard (min_lap_distance_m is).
+    min_lap_time_s: float = 2.0
     #: A lap cannot be shorter than this many metres of odometry path length.
     min_lap_distance_m: float = 3.0
     #: The run starts (reference captured) once the speed is at least this. <= 0: first frame.

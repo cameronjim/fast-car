@@ -1,0 +1,203 @@
+# Pre-registered constants for Plug-and-Play v0.4: the split of the 2026-11-14 car session bags,
+# the dynamics gate GP2d, the perception gate GP1c, the lap timing measurements (M-LR, M-L1,
+# M-CAM), the obstacle variant sim battery B5 and the oracle track measurement M-A2.
+# Written 2026-11-14 after the car session of that day and BEFORE any model was fitted or scored
+# on its bags, and before the result of battery B4 (pnp-v0.3.yaml) was known.
+# Do not edit after the first commit. Rationale and decision rules:
+# docs/notes/preregistration-pnp-v0.4.md.
+# pnp-v0.2-split.yaml and pnp-v0.3.yaml are unchanged and stay in force.
+prereg_id: pnp-v0.4
+v02_split_file: evaluation/prereg/pnp-v0.2-split.yaml
+v02_split_sha256: bc5185c912ece67a6177581f1b37adaaa9101b34ee1efe9881af7723681aef83
+v03_file: evaluation/prereg/pnp-v0.3.yaml
+v03_sha256: 4415b3719a29cfb08d5f5242ac6cdc5b35fee87e132c6d2939dfa0758808d7a1
+
+# Split of the 2026-11-14 bags.
+# Time axis: seconds after the first /scan message of the bag (recorder log time), as in
+# pnp-v0.2-split.yaml. The sample rule is the same: a sample belongs to a segment only if every
+# message it was built from lies inside [from, to] of that one segment.
+# A run is the stretch from its first non-zero /drive_raw command to its last
+# /pnp/planner/status. Every run here is a PnP run (geometric-v1, dyn-v0.1, lap memory off).
+# Roles:
+#   dynamics    train | heldout | unused
+#               heldout decides GP2d and is scored once, after every v0.4 candidate is frozen
+#   perception  heldout | reserve | unused
+#               heldout decides GP1c (the same scans as the dynamics heldout segments);
+#               reserve is not read by any perception code in v0.4, neither trained on nor scored
+#   lap         dev | test | unused, given per whole run (a run cut in two keeps one lap role)
+#               dev may be read without limit by the lap reference, the lap gate replay and the
+#               camera counter replay; test is scored once by each of them, frozen
+# Cut rule (v0.2 section 1): a speed and direction cell with two or more runs gives whole runs
+# to heldout; a cell with one run is cut in time, first 55 percent train, 2.0 s unused, the rest
+# heldout.
+split_2026_11_14:
+  bags_root: /Users/cameronjim/code/car-data/bags
+  layout: "donut loop, about 5.2 to 6.1 m of wheel distance per lap depending on speed"
+  bags:
+    2026-11-14T21-36-40_car_teleop:
+      whole_bag: {dynamics: unused, perception: unused, lap: unused}   # 31 s, no PnP run
+    2026-11-14T21-37-23_car_teleop:
+      first_scan_log_time_s: 1794692247.836
+      segments:
+        # 201.1 to 224.6: commands with the wheels not turning (wheel distance 0.0 m): unused.
+        - {name: K1, from: 235.8, to: 306.9, direction: ccw, cap_mps: 1.0, dynamics: heldout, perception: heldout, lap: test}
+        - {name: K2, from: 348.8, to: 417.7, direction: cw, cap_mps: 1.0, dynamics: heldout, perception: heldout, lap: test}
+    2026-11-14T21-49-21_car_teleop:
+      first_scan_log_time_s: 1794692965.664
+      segments:
+        # The GP3 run: 20 laps, owner observed.
+        - {name: L0, from: 124.9, to: 239.9, direction: ccw, cap_mps: 1.0, dynamics: train, perception: reserve, lap: dev}
+    2026-11-14T22-07-50_car_teleop:
+      first_scan_log_time_s: 1794694074.843
+      segments:
+        - {name: X0, from: 246.5, to: 348.3, direction: ccw, cap_mps: 1.0, dynamics: train, perception: reserve, lap: dev}
+        - {name: X1, from: 370.5, to: 428.8, direction: cw, cap_mps: 1.0, dynamics: train, perception: reserve, lap: dev}
+        - {name: X2a, from: 446.7, to: 485.4, direction: cw, cap_mps: 0.5, dynamics: train, perception: reserve, lap: test}
+        - {name: X2b, from: 487.4, to: 517.1, direction: cw, cap_mps: 0.5, dynamics: heldout, perception: heldout, lap: test}
+        - {name: X3a, from: 537.6, to: 629.7, direction: ccw, cap_mps: 0.5, dynamics: train, perception: reserve, lap: dev}
+        - {name: X3b, from: 631.7, to: 705.1, direction: ccw, cap_mps: 0.5, dynamics: heldout, perception: heldout, lap: dev}
+        - {name: X4a, from: 722.4, to: 767.4, direction: ccw, cap_mps: 0.7, dynamics: train, perception: reserve, lap: test}
+        - {name: X4b, from: 769.4, to: 804.2, direction: ccw, cap_mps: 0.7, dynamics: heldout, perception: heldout, lap: test}
+        - {name: X5a, from: 822.8, to: 867.2, direction: cw, cap_mps: 0.7, dynamics: train, perception: reserve, lap: dev}
+        - {name: X5b, from: 869.2, to: 903.6, direction: cw, cap_mps: 0.7, dynamics: heldout, perception: heldout, lap: dev}
+        - {name: X6a, from: 1160.3, to: 1180.4, direction: cw, cap_mps: 1.3, dynamics: train, perception: reserve, lap: dev}
+        - {name: X6b, from: 1182.4, to: 1196.8, direction: cw, cap_mps: 1.3, dynamics: heldout, perception: heldout, lap: dev}
+        - {name: X7a, from: 1398.7, to: 1435.7, direction: ccw, cap_mps: 1.3, dynamics: train, perception: reserve, lap: test}
+        - {name: X7b, from: 1437.7, to: 1466.0, direction: ccw, cap_mps: 1.3, dynamics: heldout, perception: heldout, lap: test}
+        # Everything of this bag outside the segments (903.6 to 1160.3 and 1196.8 to 1398.7
+        # included) is unused.
+  # Whole runs for the lap role (a lap tool reads a run from its start to its end, both parts
+  # and the 2.0 s between them).
+  lap_runs:
+    dev: [L0, X0, X1, X3, X5, X6]
+    test: [K1, K2, X2, X4, X7]
+  known_before_writing:
+    L0_laps_owner_observed: 20
+    camera_counter_laps_L0: 10
+
+# Bags recorded after 2026-11-14. Roles are given by rule, by a tool, before any fit reads them.
+future_sessions:
+  order:
+    - confirm    # frozen candidates and the deployed models are scored on the session's PnP runs
+    - split      # then the tool writes evaluation/prereg/sessions/<date>-split.yaml by the cut rule
+    - fit        # only then may anything be fitted on the train part
+  cut_rule: {single_run_train_share: 0.55, guard_s: 2.0, multi_run_cell_heldout: last_run_of_the_cell}
+  min_run_s: 15.0
+
+dynamics:
+  id: GP2d
+  truth: wheel_seeded_icp   # T2 of v0.3, same flags
+  icp_flags: {rms_max_m: 0.02, inlier_min_share: 0.7}
+  window_start_period_s: 0.25
+  min_start_speed_mps: 0.25
+  horizons_s: [0.5, 1.0, 1.5]
+  speed_bins_mps: [0.25, 0.6, 0.85, 1.25]
+  min_windows_per_stratum: 30
+  bootstrap: {block_s: 5.0, resamples: 2000, seed: 0}
+  base_nominal: dyn-v0.1-2026-11-12
+  train: v0.2 split train segments, the legacy train part, and the dynamics train segments above
+  heldout: the dynamics heldout segments above (K1, K2, X2b, X3b, X4b, X5b, X6b, X7b)
+  reported_only: the v0.2 split heldout segments (read by five candidates before)
+  residual_seeds: [0, 1, 2]
+  residual_output_scale_speed: 0.0
+  pose_check_segments: [G1b, T2b]
+  fast_item: {min_start_speed_mps: 1.15, min_windows_per_direction: 30}
+  validity_cap_mps: 1.5
+  fresh_confirmation_min_driving_s: 120
+  budget_measurement:   # M-B3, on train only, committed before any fit
+    oracles: [perfect_yaw, perfect_speed]
+    unreachable_if_perfect_yaw_ratio_above: 0.95
+  heading_outcome:      # a named outcome, not a deployment rule
+    max_y1_ratio: 0.80
+    max_lateral_ratio: 0.90
+    max_p1_ratio: 1.00
+
+perception:
+  id: GP1c
+  candidate: fused-v1     # geometric-v1 corridor, centre from trackperc-v2 plus refinement
+  net_weights: trackperc-v2-2026-11-14   # frozen, no retraining in v0.4
+  development_sets: [sim, v0.2 train roles, H-run, A-run, 2026-11-12 layout bags, folds F1 and F2]
+  moving_speed_min_mps: 0.2
+  min_labelled_scans: 300
+  cell_speed_bins_mps: [0.2, 0.6, 0.85]
+  min_labelled_per_cell: 40
+  bootstrap: {block_s: 2.0, resamples: 2000, seed: 0}
+  latency_p99_max_ms: 10.0
+  sim_canary_max_lap_time_ratio: 1.03
+
+lap_timing:
+  reference: lapref       # offline, whole run, steering and wheel distance only
+  tolerance_s: 0.3
+  min_share_within_tolerance: 0.95
+  pose_dev_segments: [G1a, G1b, T0, T1, T2a+T2b]
+  camera:
+    hypothesis: "min_lap_time_s 6.0 refuses laps shorter than 6.0 s"
+    max_false_counts: 0
+
+lap_battery_b5:
+  id: B5
+  # Runs only if D3-S0 and D3-S1 of B4 passed. Never run before that, by anyone.
+  seeds: [31, 32]
+  directions: [ccw, cw]
+  laps: 12
+  lap1_cap_mps: 0.5
+  ceiling: dynamics bundle validity v_max_mps (config/pnp/fixtures/dyn-car-2026-11-12)
+  plant: car-like (bundle actuation, dead zone, steering lag, command delay), scan noise on
+  lap_source: start_scan
+  development:
+    seeds: [11, 12, 13]
+    cases:
+      OD: {track: stadium, lane_width_m: 1.0, straight_length_m: 0.0, island_radius_m: 0.5,
+           obstacles: [{at: 0.30, side: outer, protrusion_m: 0.25, length_m: 0.30}]}
+  # An obstacle is a solid box against one wall. `at` is the share of the centreline length from
+  # the start pose in the driving direction of ccw, `protrusion_m` how far it reaches into the
+  # lane, `length_m` its size along the lane.
+  cases:
+    O1: {track: stadium, lane_width_m: 1.0, straight_length_m: 0.0, island_radius_m: 0.45, obstacles: []}
+    O2: {track: stadium, lane_width_m: 1.1, straight_length_m: 0.0, island_radius_m: 0.45,
+         obstacles: [{at: 0.15, side: outer, protrusion_m: 0.25, length_m: 0.30},
+                     {at: 0.60, side: inner, protrusion_m: 0.25, length_m: 0.30}]}
+    O3: {track: stadium, lane_width_m: 1.2, straight_length_m: 1.0, island_radius_m: 0.4,
+         obstacles: [{at: 0.10, side: inner, protrusion_m: 0.30, length_m: 0.40},
+                     {at: 0.45, side: outer, protrusion_m: 0.30, length_m: 0.40},
+                     {at: 0.80, side: outer, protrusion_m: 0.30, length_m: 0.20}]}
+    O4: {track: map, map_dir: car-data/maps/2026-11-13-pnp-lap1,
+         obstacles: [{at: 0.25, side: outer, protrusion_m: 0.20, length_m: 0.30},
+                     {at: 0.70, side: outer, protrusion_m: 0.20, length_m: 0.30}]}
+  # O4 is dropped (12 runs per condition) if the map cannot be loaded, if an obstacle cannot be
+  # drawn into it, or if condition a cannot complete 3 laps on it in either direction, seed 31.
+  conditions:
+    a: {lap_memory: "off", cap: lap1}
+    b: {lap_memory: "off", cap: ceiling}
+    c: {lap_memory: v0}
+    v: {lap_memory: v1, variant: "the one the table of v0.3 section 1.4 allows; omitted if none"}
+  thresholds:
+    lap_time_tolerance_s: 0.3
+    s0b_min_share_within_tolerance: 0.98
+    s0b_max_single_error_s: 1.0
+    max_contacts: 0
+    required_complete_of_16: 15
+    required_complete_of_12: 11
+    s1_reach_max_ratio_to_b: 1.05
+    s1_max_median_r: 0.80
+    s2_max_median_ratio_to_c: 0.95
+    s2_max_brakes_per_lap_late: 0.2
+
+oracle_track:
+  id: M-A2
+  cases: [T, S1, S2, S3, S4]     # development cases of pnp-v0.3.yaml; this is a measurement
+  directions: [ccw, cw]
+  seed: 11
+  laps: 6
+  scored_laps: [3, 4, 5, 6]
+  cap: ceiling
+  conditions: {g: geometric-v1, o: oracle LocalTrack from the ground truth track}
+  no_path_if_median_ratio_at_least: 0.97
+  and_no_pair_below: 0.93
+  matters_if_median_ratio_at_most: 0.95
+
+car:
+  variant_layout:   # GP4-V
+    min_objects: 2
+    min_lane_change_m: 0.15
+  d_observe_runs: {laps: 10, directions: [ccw, cw]}

@@ -19,7 +19,12 @@ PROJECT = REPO / "training" / "racer_pnp_dynamics"
 Runner = Callable[[Sequence[str]], int]
 
 
-def command(bag: Path, candidate: Path, deployed: Path) -> list[str]:
+def command(
+    bag: Path, candidate: Path, deployed: Path, v05: bool = False, runs: Sequence[str] = ()
+) -> list[str]:
+    """The wrapped command. With `v05` it is the v0.5 form (contract 2.1 candidate, P1 and Y1
+    overall and per direction, driving time per direction, share of steps in supported cells,
+    optionally on named runs); without, the v0.3 form."""
     return [
         "uv",
         "run",
@@ -27,7 +32,7 @@ def command(bag: Path, candidate: Path, deployed: Path) -> list[str]:
         str(PROJECT),
         "python",
         "-m",
-        "racer_pnp_dynamics.cli",
+        "racer_pnp_dynamics.cli_v05" if v05 else "racer_pnp_dynamics.cli",
         "confirm",
         "--bag",
         str(bag),
@@ -35,6 +40,7 @@ def command(bag: Path, candidate: Path, deployed: Path) -> list[str]:
         str(candidate),
         "--deployed",
         str(deployed),
+        *[arg for r in runs for arg in ("--run", r)],
     ]
 
 
@@ -42,7 +48,14 @@ def _run(cmd: Sequence[str]) -> int:  # pragma: no cover - runs the real fit pip
     return subprocess.call(list(cmd))
 
 
-def confirm(bag: Path, candidate: Path | None, deployed: Path | None, runner: Runner = _run) -> int:
+def confirm(
+    bag: Path,
+    candidate: Path | None,
+    deployed: Path | None,
+    runner: Runner = _run,
+    v05: bool = False,
+    runs: Sequence[str] = (),
+) -> int:
     """Run the confirmation; returns the exit status of the wrapped command (0 when skipped)."""
     if candidate is None or deployed is None:
         sys.stdout.write(
@@ -53,4 +66,4 @@ def confirm(bag: Path, candidate: Path | None, deployed: Path | None, runner: Ru
     if not Path(bag).exists():
         sys.stdout.write(f"confirm: no such bag {bag}\n")
         return 2
-    return runner(command(bag, candidate, deployed))
+    return runner(command(bag, candidate, deployed, v05, runs))

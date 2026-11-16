@@ -308,3 +308,40 @@ def test_split_v05_refuses_a_bag_with_another_name(tmp_path: Path) -> None:
 def test_a_part_is_a_plain_record() -> None:
     p = Part("S1a", BAG_A, "R0", "pnp", 1.0, 2.0, "ccw", "train", "why")
     assert p.role == "train" and p.kind == "pnp"
+
+
+# -- the confirm wrapper, v0.5 form ------------------------------------------------------------------
+
+
+def test_the_confirm_wrapper_picks_the_v05_module_and_passes_the_named_runs(tmp_path: Path) -> None:
+    from pnp_data import confirm as confirm_mod
+
+    old = confirm_mod.command(tmp_path, Path("c"), Path("d"))
+    new = confirm_mod.command(tmp_path, Path("c"), Path("d"), v05=True, runs=["R0", "R2"])
+    assert "racer_pnp_dynamics.cli" in old and "racer_pnp_dynamics.cli_v05" not in old
+    assert "racer_pnp_dynamics.cli_v05" in new
+    assert new[-4:] == ["--run", "R0", "--run", "R2"] and "--run" not in old
+    seen: list[list[str]] = []
+    code = confirm_mod.confirm(
+        tmp_path, Path("c"), Path("d"), runner=lambda cmd: seen.append(list(cmd)) or 7, v05=True
+    )
+    assert code == 7 and "racer_pnp_dynamics.cli_v05" in seen[0]
+    assert confirm_mod.confirm(tmp_path, None, Path("d"), v05=True) == 0  # nothing to confirm
+
+
+def test_the_confirm_subcommand_takes_v05_and_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pnp_data import confirm as confirm_mod
+
+    seen: list[dict] = []
+
+    def fake(bag, candidate, deployed, **kw):
+        seen.append({"bag": bag, "candidate": candidate, "deployed": deployed, **kw})
+        return 0
+
+    monkeypatch.setattr(confirm_mod, "confirm", fake)
+    args = ["confirm", "--bag", str(tmp_path), "--candidate", "c", "--deployed", "d", "--v05"]
+    assert cli.main([*args, "--run", "R1", "--run", "R2"]) == 0
+    assert seen[0]["v05"] is True and seen[0]["runs"] == ["R1", "R2"]
+    assert cli.main(args[:-1]) == 0 and seen[1]["v05"] is False and seen[1]["runs"] == []

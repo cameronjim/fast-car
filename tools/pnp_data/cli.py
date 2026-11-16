@@ -143,7 +143,7 @@ def cmd_guard(args: argparse.Namespace) -> int:
 
 
 def cmd_confirm(args: argparse.Namespace) -> int:
-    return confirm_mod.confirm(args.bag, args.candidate, args.deployed)
+    return confirm_mod.confirm(args.bag, args.candidate, args.deployed, v05=args.v05, runs=args.run)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -203,6 +203,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bag", type=Path, required=True)
     p.add_argument("--candidate", type=Path, default=None)
     p.add_argument("--deployed", type=Path, default=None)
+    p.add_argument(
+        "--v05",
+        action="store_true",
+        help="the v0.5 form (GP2f-C item 2): contract 2.1 candidate, per direction, supported cells",
+    )
+    p.add_argument("--run", action="append", default=[], help="a named PnP run (with --v05)")
     p.set_defaults(fn=cmd_confirm)
     return parser
 

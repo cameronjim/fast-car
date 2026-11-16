@@ -315,4 +315,321 @@ def session_truth(args) -> int:  # pragma: no cover - real data
     return 0
 
 
-STAGE_COMMANDS = {"mb5": mb5, "mb6": mb6, "session-truth": session_truth}
+class FitContext:  # pragma: no cover - real data
+    """What the fit stages share: the TRAIN segments (the older ones, the 2026-11-14 train segments
+    and the train parts of the 2026-11-15 session) and the SELECTION windows. Built only after the
+    session split file is written and committed (`require_committed_session`); it never builds a
+    held-out part of the session."""
+
+    def __init__(self, args) -> None:
+        self.stage1 = Stage1(args)
+        self.root = self.stage1.root
+        path = session_v05.require_committed_session(self.root)
+        split = session_v05.load_session_split(path)
+        meta = part_meta(path)
+        self.fvehicle = self.stage1.fvehicle
+        self.vehicle = self.stage1.vehicle
+        self.session_train = session_segments(args, split, meta, self.vehicle, "train")
+        self.train = [*self.stage1.train, *self.session_train]
+        self.selection = selection_eval_set(args, self.stage1)
+        LOG.info(
+            "train: %d segments (%d of the session); selection windows %d",
+            len(self.train),
+            len(self.session_train),
+            len(self.selection),
+        )
+
+    def v01(self):
+        return self.stage1.v01()
+
+
+def fit_context(args) -> FitContext:  # pragma: no cover - real data
+    return FitContext(args)
+
+
+def _t5_pkl(args) -> Path:  # pragma: no cover - real data
+    return args.cache / "dyn-v0.5-t5.pkl"
+
+
+def _tl5_pkl(args) -> Path:  # pragma: no cover - real data
+    return args.cache / "dyn-v0.5-tl5.pkl"
+
+
+def t5_fit(args) -> int:  # pragma: no cover - real data
+    """T5 on the full train set (v0.2 split, legacy, 2026-11-14 and the session's train parts); the
+    smoothness weights are chosen on the selection set. Prints selection and train numbers only."""
+    ctx = fit_context(args)
+    c = constants()
+    v01 = ctx.v01().nominal
+    win = table_fit_v05.build_t5_windows(ctx.train, v01, ctx.fvehicle, c)
+    fit = table_fit_v05.fit_t5(win, ctx.selection, v01, ctx.fvehicle, c)
+    base = table_fit_v05.score(ctx.selection, v01, ctx.fvehicle, table_fit_v05.unit_motion(c))
+    mine = table_fit_v05.score(ctx.selection, v01, ctx.fvehicle, fit.groundmotion())
+    _t5_pkl(args).write_bytes(pickle.dumps({"fit": fit, "t5": mine, "v01": base}))
+    LOG.info(
+        "T5: %d windows; lambda alpha %g gamma %g; on a bound %s %s; selection P1 %.4f against %.4f",
+        len(win), fit.lam_alpha, fit.lam_gamma, fit.on_bound_alpha, fit.on_bound_gamma,
+        mine.p1, base.p1,
+    )  # fmt: skip
+    return 0
+
+
+def tl5_fit(args) -> int:  # pragma: no cover - real data
+    """TL5 on the frozen T5: two configurations, seeds 0, 1, 2, chosen by selection P1."""
+    from . import fit_data_v04, learned_gm_v21
+
+    ctx = fit_context(args)
+    c = constants()
+    v01 = ctx.v01().nominal
+    t5 = pickle.loads(_t5_pkl(args).read_bytes())["fit"]
+    train, val = fit_data_v04.fit_validation_split(ctx.train)
+    ref = fit_data_v04.build_fit_windows(train, v01, ctx.fvehicle)
+    ftr = fit_data_v04.build_fit_windows(train, v01, ctx.fvehicle, ref.scales)
+    fva = fit_data_v04.build_fit_windows(val, v01, ctx.fvehicle, ref.scales)
+    cands, ship, table = learned_gm_v21.fit_tl5(ftr, fva, ctx.selection, v01, ctx.fvehicle, c, t5)
+    _tl5_pkl(args).write_bytes(
+        pickle.dumps({"candidates": cands, "shipping": ship, "selection": table})
+    )
+    LOG.info("TL5: %s seed %d; %s", ship.config.name, ship.seed, table)
+    return 0
+
+
+def fit_summary(args) -> int:  # pragma: no cover - real data
+    """fit-summary.md of the frozen candidates (selection and train numbers only)."""
+    from .report_gp2f import render_fit_summary
+    from .vehicle import repo_root
+
+    root = repo_root()
+    c = constants()
+    t5 = pickle.loads(_t5_pkl(args).read_bytes())
+    tl5 = pickle.loads(_tl5_pkl(args).read_bytes()) if _tl5_pkl(args).is_file() else None
+    gs = c.doc["gate_support"]
+    notes = [
+        f"Constants file evaluation/prereg/pnp-v0.5-dynamics.yaml, SHA-256 {c.sha256}.",
+        f"Session split file sha256 {session_v05_sha(root)}.",
+        f"Train windows: {t5['fit'].counts['windows']} of 0.5 s.",
+    ]
+    text = render_fit_summary(
+        t5["fit"], t5["t5"], t5["v01"], tl5, notes,
+        float(gs["max_split_half_difference_alpha"]), float(gs["max_split_half_difference_gamma"]),
+    )  # fmt: skip
+    out = out_dir(root, args.date)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "fit-summary.md").write_text(text, encoding="utf-8")
+    print(text)
+    return 0
+
+
+def session_v05_sha(root: Path) -> str:  # pragma: no cover - real checkout
+    return scoring_v05.sha256_file(root / session_v05.SESSION_RELATIVE)
+
+
+def git(root: Path, *args: str) -> str:  # pragma: no cover - real checkout
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(root), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def check_freeze(root: Path, sha: str) -> truth_v04.FreezeToken:  # pragma: no cover - real checkout
+    """The freeze token of the held-out pass: the SHA must be the HEAD of a clean checkout, and
+    the fit summary must be committed in it (the candidates are frozen in git)."""
+    token = truth_v04.freeze(sha)
+    if git(root, "rev-parse", "HEAD") != sha:
+        raise SystemExit("--freeze-sha is not the HEAD of this checkout")
+    if git(root, "status", "--porcelain", "--untracked-files=no"):
+        raise SystemExit("the checkout has uncommitted changes: freeze first")
+    tracked = set(git(root, "ls-files", "training/pnp_models").splitlines())
+    if not any(p.endswith("/fit-summary.md") and "dyn-v0.5-" in p for p in tracked):
+        raise SystemExit("fit-summary.md of v0.5 is not committed: freeze the candidates first")
+    return token
+
+
+def freeze_eval(args) -> int:  # pragma: no cover - real data
+    """The ONE pass: GP2f-S, GP2f-T, GP2f-L, GP2f-V on the held-out parts of the session, with
+    every metric of every model on identical windows, then the bundles and the pointers. It
+    takes no option that changes a model and refits nothing."""
+    import datetime as dt
+    import shutil
+
+    from . import export_v21, pass_v05, pose_check
+    from .cli_v03 import pose_recordings
+    from .ground_motion_v21 import GroundMotionV21
+    from .pipeline import _json
+    from .pipeline_v02 import v_max_of
+    from .report_gp2f import (
+        readme_v05,
+        render_comparator,
+        render_items,
+        render_metric_tables,
+        render_pass_report,
+        render_strata,
+    )
+
+    ctx = fit_context(args)  # train data and selection windows (the rule input), no held-out
+    root = ctx.root
+    token = check_freeze(root, args.freeze_sha)
+    c = constants()
+    v01 = ctx.v01().nominal
+    t5 = pickle.loads(_t5_pkl(args).read_bytes())["fit"]
+    tl5 = pickle.loads(_tl5_pkl(args).read_bytes())
+    ship = tl5["shipping"]
+    specs, hashes = scoring_v05.frozen_v04_specs(args.cache, v01)
+    models = {"dyn-v0.1": specs["dyn-v0.1"]}
+    models["T5"] = scoring_v05.Spec(v01, ground21=t5.groundmotion())
+    tl5_motion = {}
+    for cand in sorted(tl5["candidates"], key=lambda x: x.seed):
+        if cand.config.name == ship.config.name:
+            gm = GroundMotionV21(c, t5.alpha, t5.gamma, cand.learned, t5.supported)
+            tl5_motion[cand.seed] = gm
+            models[f"TL5 seed {cand.seed}"] = scoring_v05.Spec(v01, ground21=gm)
+    for name in ("N4", "R4", "T4", "TL4"):
+        models[name] = specs[name]
+    LOG.info(
+        "freeze %s; reading the held-out parts of the session for the first time", token.git_sha
+    )
+    path = session_v05.require_committed_session(root)
+    split = session_v05.load_session_split(path)
+    meta = part_meta(path)
+    held_t2 = session_segments(args, split, meta, ctx.vehicle, "heldout", token, truth_v04.T2)
+    held_t2s = session_segments(args, split, meta, ctx.vehicle, "heldout", token, truth_v04.T2S)
+    recs = pose_recordings(args.bags, args.cache)
+    older_held = [s for s in ctx.stage1.older_all if s.split == "heldout" and s.run.has_odom]
+    pose_segs = pose_check.build_pose_segments(older_held, recs)
+    pair_segs = pose_check.build_pose_pair_segments(older_held, recs)
+    p = pass_v05.score_pass(c, held_t2, held_t2s, ctx.fvehicle, models, v01, pose_segs, pair_segs)
+    rule = v_max_of(ctx.train, ctx.vehicle)["v_max_mps"]
+    tl5_name = f"TL5 seed {ship.seed}"
+    sh = t5.split_half or {}
+    result = pass_v05.decide_all(
+        c, p,
+        t5="T5", tl5_seeds={s: f"TL5 seed {s}" for s in tl5_motion}, tl5_shipping=tl5_name,
+        v01="dyn-v0.1", on_bound=[*t5.on_bound_alpha, *t5.on_bound_gamma],
+        split_half_alpha_max=float(np.nanmax(sh["alpha_diff"])) if sh else float("nan"),
+        split_half_gamma_max=float(np.nanmax(sh["gamma_diff"])) if sh else float("nan"),
+        t5_motion=t5.groundmotion(), tl5_motion=tl5_motion[ship.seed], nominal=v01,
+        vehicle=ctx.fvehicle, rule_mps=float(rule),
+        supported_alpha=t5.supported, supported_gamma=t5.supported,
+    )  # fmt: skip
+    names = [n for n in models if n != "dyn-v0.1"]
+    names = ["dyn-v0.1", *names]
+    speeds = [float(s["min_start_speed_mps"]) for s in c.doc["gate_validity"]["fast_items"]]
+    metrics = {n: p.metrics(n, speeds) for n in names}
+    comparator = render_comparator(pass_v05.comparator_rows(p, names))
+    tables = render_metric_tables(metrics, names)
+    strata = render_strata(dict(p.strata.counts), {n: metrics[n].stratum_pos for n in names})
+    reported = ""
+    older_t2 = [s for s in ctx.stage1.older_all if s.split == "heldout" and s.run.has_odom]
+    if older_t2:
+        es_old = eval_set(older_t2)
+        strata_old, errs_old = scoring_v05.score_models(es_old, models, ctx.fvehicle)
+        rows_old = [
+            {"model": n, **scoring_v05.macro_at(errs_old[n][1.0], strata_old),
+             "P1_T2s": float("nan"), "Pp": float("nan"), "Yp": float("nan")}
+            for n in names
+        ]  # fmt: skip
+        reported = (
+            render_comparator(rows_old) + "\nT2s, Pp and Yp are not computed for these segments.\n"
+        )
+    notes = [
+        f"Constants SHA-256 {c.sha256}; session split file SHA-256 {session_v05_sha(root)}.",
+        (
+            f"Windows: {len(p.es)} on identical windows under T2 and T2s ({p.windows_t2_only} only "
+            f"under T2, {p.windows_t2s_only} only under T2s, dropped); direction of a window from "
+            "the measured T2 heading of its 5 s block."
+        ),
+        "Pp and Yp are a re-read of G1b and T2b (the only pose data), labelled as such.",
+        "Frozen v0.4 pickles (SHA-256): "
+        + ", ".join(f"{k} {v[:16]}" for k, v in hashes.items())
+        + ".",
+        f"TL5 shipping: {ship.config.name} seed {ship.seed} (chosen by selection P1).",
+    ]
+    report = render_pass_report(
+        pass_v05.decisions_to_dict(result),
+        comparator, tables, strata, token.git_sha, notes, reported,
+    )  # fmt: skip
+    folder = out_dir(root, args.date)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "pass-report.md").write_text(report, encoding="utf-8")
+    (folder / "pass-result.json").write_text(
+        json.dumps(_json(pass_v05.decisions_to_dict(result)), indent=2, default=str),
+        encoding="utf-8",
+    )
+    # bundles and pointers, whatever the gates said: every v0.5 bundle is do-not-deploy
+    date = args.date or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    created = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data = [
+        f"train role under T2, session split {session_v05_sha(root)}, constants {c.sha256}",
+        "selection: the 2026-11-14 held-out segments, never fitted on",
+    ]
+    sha_cfg = export_v21_config_sha(c, token.git_sha)
+
+    def write(model_id, gm, v_max, gates, summary):
+        bundle = args.models / model_id
+        export_v21.write_bundle_v21(
+            bundle, model_id=model_id, created_utc=created, git_sha=token.git_sha,
+            training_config_sha256=sha_cfg, vehicle=ctx.vehicle, nominal=v01, ground=gm,
+            v_max_mps=v_max, data=data, metrics=_json({"outcome": result["outcome"]}),
+        )  # fmt: skip
+        pointer = root / "training" / "pnp_models" / model_id
+        pointer.mkdir(parents=True, exist_ok=True)
+        shutil.copy(bundle / "manifest.yaml", pointer / "manifest.yaml")
+        (pointer / "README.md").write_text(
+            readme_v05(
+                model_id, summary=summary,
+                sections=[*(render_items(g.to_dict()) for g in gates)],
+                data_lines=data,
+            ),
+            encoding="utf-8",
+        )  # fmt: skip
+        (pointer / "metrics.json").write_text(
+            json.dumps(_json({"outcome": result["outcome"], "v_max_mps": v_max}), indent=2),
+            encoding="utf-8",
+        )
+
+    v_t5 = result["validity_T5"].v_max_mps
+    v_tl5 = result["validity_TL5"].v_max_mps
+    write(
+        f"dyn-v0.5t-{date}", t5.groundmotion(), v_t5,
+        [result["support"], result["table"]],
+        "T5: dyn-v0.1 plus the alpha and gamma tables (step contract 2.1).",
+    )  # fmt: skip
+    write(
+        f"dyn-v0.5tl-{date}", tl5_motion[ship.seed], v_tl5,
+        [result["support"], result["table"], result["learned"]],
+        f"TL5: T5 plus the bounded learned correction, shipping seed {ship.seed}.",
+    )  # fmt: skip
+    print(report)
+    return 0
+
+
+def export_v21_config_sha(c, git_sha: str) -> str:  # pragma: no cover - real checkout
+    from . import export
+
+    return export.config_sha256({"prereg": c.sha256, "git": git_sha})
+
+
+def confirm_cmd(args) -> int:  # pragma: no cover - real data
+    """The fresh confirmation of GP2f-C item 2 on a session bag (the v0.5 form of `confirm`)."""
+    from . import confirm_v05
+
+    if args.bag is None or args.candidate is None or args.deployed is None:
+        raise SystemExit("confirm needs --bag, --candidate and --deployed")
+    result, c = confirm_v05.run_confirmation_v05(
+        args.bag, args.candidate, args.deployed, args.cache, args.run, workers=args.workers
+    )
+    print(confirm_v05.format_confirmation_v05(result, c, args.candidate.name, args.deployed.name))
+    return 0
+
+
+STAGE_COMMANDS = {
+    "confirm": confirm_cmd,
+    "mb5": mb5,
+    "mb6": mb6,
+    "session-truth": session_truth,
+    "t5-fit": t5_fit,
+    "tl5-fit": tl5_fit,
+    "fit-summary": fit_summary,
+    "freeze-eval": freeze_eval,
+}

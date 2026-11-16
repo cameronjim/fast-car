@@ -61,7 +61,10 @@ which is also a launch argument of its own and off (the old behaviour) everywher
 `status_rate_hz` (/gap_follow/status, scan-to-command latency; on by default in every profile).
 `race-2026-11-13` (docs/notes/safety-race-retune-2026-11-12.md) is that profile plus
 `free_path_on_published_steering` (the stopping law measured along the shorter of the target arc
-and the arc of the steering the car is at) at a 1.3 m/s ceiling.
+and the arc of the steering the car is at) at a 1.3 m/s ceiling. `race-2026-11-16`
+(docs/notes/gap-follow-loop-2026-11-16.md) is race-2026-11-13 on the centre line (no outside entry,
+no late apex) with lookahead 0.8 m, stopping margin 0.2 m and a_lat_max 1.2 m/s^2: the fix for the
+2026-11-16 floor runs, where race-2026-11-12 turned in late and safety_node refused forward.
 The old profiles are untouched: `lane-2026-10-25` plus `lane_lookahead_m:=0.8
 outside_entry_offset_m:=0.25` is still the recommended pre-race setup and behaves as before.
 
@@ -212,12 +215,46 @@ it assumes the 2.08 m/s ceiling of the VESC's l_max_erpm 6000: max_speed_mps is 
 speed here is a true speed.
 """
 
+RACE_2026_11_16_PROFILE: dict[str, float | int | bool | str] = {
+    **RACE_2026_11_13_PROFILE,
+    # The fix for the 2026-11-16 floor runs (docs/notes/gap-follow-loop-2026-11-16.md): on the
+    # indoor loop race-2026-11-12 carried speed into the turn and turned in late, and safety_node
+    # refused forward 3 to 4 times a run. The sim reproduces that once the sim car answers a scan as
+    # late as the car does (tests/l5_track_family/test_gap_follow_loop_canary.py). Every value below
+    # was chosen on that sim, not on the floor.
+    # Centre line in and out: the outside entry swung the car toward the outer wall just before
+    # the corner and the late apex held the turn-in back.
+    "outside_entry_offset_m": 0.0,
+    "apex_offset_m": 0.0,
+    # Aim further ahead so the target bends round the corner earlier: the car answers a scan
+    # later than the gym car does (the scan is up to 0.1 s old on arrival and the steering lags
+    # the command, 0.05 to 0.2 s, not pinned), and 0.2 m of lookahead is about 0.2 s at 1 m/s.
+    "lane_lookahead_m": 0.8,
+    # The stopping law finishes 0.30 m short of the wall (limits.min_forward_clearance_m 0.10 plus
+    # this) instead of 0.20 m: the margin that kept it clean with the slower steering assumption.
+    "stopping_margin_m": 0.2,
+    # The car turned at most 1.23 m/s^2 of lateral acceleration on the 2026-11-16 runs (LiDAR scan
+    # matching); 2.0 let it ask for 1.17 m/s at full lock. A conservative choice, not the fix: 2.0
+    # with the rest of this profile was also clean in the sim.
+    "a_lat_max_mps2": 1.2,
+}
+"""Race profile, 2026-11-16: race-2026-11-13 on the centre line, looking further ahead, with a
+larger stopping standoff and a lateral limit the car reaches.
+
+The classical mapless baseline for the indoor loop. In the sim with the car's lag and speed response
+it lapped the 2026-11-13 map and a synthetic copy of it in both directions at 1.0 and 1.3 m/s with no
+safety_node brake, no reverse escape and no wall contact (docs/notes/gap-follow-loop-2026-11-16.md).
+NOT driven on the floor. First run at `max_speed_mps:=1.0`, two people, the RC kill in a hand,
+wheels off the ground first (claude-docs/05-safety.md).
+"""
+
 PROFILES: dict[str, dict[str, float | int | bool | str]] = {
     "none": {},
     "floor-2026-10-06": FLOOR_2026_10_06_PROFILE,
     "lane-2026-10-25": LANE_2026_10_25_PROFILE,
     "race-2026-11-12": RACE_2026_11_12_PROFILE,
     "race-2026-11-13": RACE_2026_11_13_PROFILE,
+    "race-2026-11-16": RACE_2026_11_16_PROFILE,
 }
 
 # Launch arguments forwarded to the node only when set (empty = profile, params file or node
@@ -428,7 +465,9 @@ def generate_launch_description() -> LaunchDescription:
             "Named parameter set: none (node defaults), floor-2026-10-06 (the first working "
             "floor laps, a checkpoint, not a tuned optimum), lane-2026-10-25 (lane-centre "
             "target), race-2026-11-12 (physics speed, racing line; not driven on the floor) or "
-            "race-2026-11-13 (the same with the stopping law on the published steering arc). "
+            "race-2026-11-13 (the same with the stopping law on the published steering arc) or "
+            "race-2026-11-16 (that on the centre line with a longer lookahead and stopping "
+            "standoff, for the indoor loop). "
             "Explicit launch arguments override it; it overrides params_file."
         ),
     )

@@ -105,6 +105,7 @@ def test_profile_argument_defaults_to_none_with_both_choices():
         "lane-2026-10-25",
         "race-2026-11-12",
         "race-2026-11-13",
+        "race-2026-11-16",
     }
     assert set(args["profile"].choices) == names
     assert set(module.PROFILES) == names
@@ -375,3 +376,40 @@ def test_race_2026_11_13_reaches_the_node_with_the_right_types_and_the_argument_
     assert off["free_path_on_published_steering"] is False
     with pytest.raises(ValueError, match="free_path_on_published_steering"):
         _node_parameters(free_path_on_published_steering="maybe")
+
+
+# race-2026-11-16 (docs/notes/gap-follow-loop-2026-11-16.md): typed out again on purpose.
+_RACE_2026_11_16_OVER_RACE_2026_11_13 = {
+    "outside_entry_offset_m": 0.0,
+    "apex_offset_m": 0.0,
+    "lane_lookahead_m": 0.8,
+    "stopping_margin_m": 0.2,
+    "a_lat_max_mps2": 1.2,
+}
+
+
+def test_race_2026_11_16_is_race_2026_11_13_on_the_centre_line_with_the_loop_values():
+    module = _load_launch_module()
+    base = module.RACE_2026_11_13_PROFILE
+    new = module.RACE_2026_11_16_PROFILE
+    assert module.PROFILES["race-2026-11-16"] is new
+    assert new == {**base, **_RACE_2026_11_16_OVER_RACE_2026_11_13}
+    # Inherited: the published-arc stopping law and the 1.3 m/s ceiling.
+    assert new["free_path_on_published_steering"] is True
+    assert new["max_speed_mps"] == 1.3
+    # race-2026-11-12 is referenced by a pre-registration: the new profile leaves it as it was.
+    old = module.RACE_2026_11_12_PROFILE
+    assert old["outside_entry_offset_m"] == 0.25 and old["apex_offset_m"] == 0.1
+    assert old["lane_lookahead_m"] == 0.6 and old["stopping_margin_m"] == 0.1
+    assert old["a_lat_max_mps2"] == 1.5 and old["max_speed_mps"] == 1.0
+    assert "free_path_on_published_steering" not in old
+
+
+def test_race_2026_11_16_reaches_the_node_with_the_right_types_and_arguments_override_it():
+    merged = _merged(_node_parameters(profile="race-2026-11-16"))
+    for name, value in _RACE_2026_11_16_OVER_RACE_2026_11_13.items():
+        assert merged[name] == value, name
+        assert type(merged[name]) is float, name
+    assert merged["free_path_on_published_steering"] is True
+    slow = _merged(_node_parameters(profile="race-2026-11-16", max_speed_mps="1.0"))
+    assert slow["max_speed_mps"] == 1.0 and type(slow["max_speed_mps"]) is float

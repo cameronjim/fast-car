@@ -167,3 +167,59 @@ def render_mb5(
             "",
         ]
     return "\n".join(lines) + "\n"
+
+
+def render_mb6(summary: Mapping, notes: Sequence[str], hashes: Mapping[str, str]) -> str:
+    """M-B6: the frozen v0.4 models on the whole PnP runs of the session. Decides nothing."""
+    names = list(summary["macro"])
+    dirs = list(summary["directions"])
+    lines = [
+        "# M-B6: the frozen v0.4 models on the PnP runs of the 2026-11-15 session, whole",
+        "",
+        (
+            "Pre-registration v0.5 section 4. Printed, deciding nothing. The models were frozen "
+            "before this session existed (freeze commit "
+            "416e68501c424caeb1f6dc80b6a0ee9edc7a288c)."
+        ),
+        "",
+        *[f"- {n}" for n in notes],
+        "",
+        "Pickles scored (SHA-256): " + ", ".join(f"{k} {v[:16]}" for k, v in hashes.items()) + ".",
+        "",
+        f"Windows: {summary['windows']}; by direction (measured heading): "
+        + ", ".join(f"{d} {n}" for d, n in summary["directions"].items())
+        + ".",
+        "",
+        "## Macro RMSE at 1.0 s, identical windows, T2",
+        "",
+        "| model | P1 (m) | A1 (m) | C1 (m) | Y1 (rad) | S1 (m/s) | P1 / dyn-v0.1 | Y1 / dyn-v0.1 |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for n in names:
+        m, r = summary["macro"][n], summary["ratio"][n]
+        lines.append(
+            f"| {n} | {m['P1']:.4f} | {m['A1']:.4f} | {m['C1']:.4f} | {m['Y1']:.4f} | "
+            f"{m['S1']:.4f} | {r['P1']:.4f} | {r['Y1']:.4f} |"
+        )
+    head = "| model | " + " | ".join(f"P1 {d} (m) | Y1 {d} (rad)" for d in dirs) + " |"
+    lines += ["", "## Per direction (macro over that direction's strata)", "", head]
+    lines.append("|---|" + "---|---|" * len(dirs))
+    for n in names:
+        cells = " | ".join(
+            f"{summary['per_direction'][n][d]['P1']:.4f} | "
+            f"{summary['per_direction'][n][d]['Y1']:.4f}"
+            for d in dirs
+        )
+        lines.append(f"| {n} | {cells} |")
+    lines += ["", "## Per run, pooled position RMSE at 1.0 s (m)", ""]
+    lines.append("| run | windows | " + " | ".join(names) + " |")
+    lines.append("|---|---|" + "---|" * len(names))
+    for run, row in summary["per_run"].items():
+        lines.append(
+            f"| {run} | {row['windows']} | " + " | ".join(f"{row[n]:.4f}" for n in names) + " |"
+        )
+    lines += ["", "## Strata (windows)", ""]
+    lines += [f"- {k}: {v}" for k, v in summary["strata"].items()]
+    if summary["merges"]:
+        lines += ["", "Merged strata: " + "; ".join(str(m) for m in summary["merges"]) + "."]
+    return "\n".join(lines) + "\n"

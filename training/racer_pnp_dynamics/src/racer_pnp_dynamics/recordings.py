@@ -41,6 +41,14 @@ CURRENT_UNITS_BAGS = frozenset(
         "2026-11-14T21-37-23_car_teleop",
         "2026-11-14T21-49-21_car_teleop",
         "2026-11-14T22-07-50_car_teleop",
+        # the car session of pre-registration v0.5 (the label "2026-11-15"; bag names are UTC, so
+        # they carry 2026-11-16): the same vehicle_params 0.17.0 file, unchanged on main since
+        # 2026-11-13 (git log of config/vehicle_params.yaml), current units
+        "2026-11-16T02-18-54_car_teleop",
+        "2026-11-16T02-29-27_car_teleop",
+        "2026-11-16T22-38-47_car_teleop",
+        "2026-11-16T22-45-39_car_teleop",
+        "2026-11-16T23-04-09_car_teleop",
     }
 )
 LAST_OLD_UNITS_DATE = "2026-11-11"

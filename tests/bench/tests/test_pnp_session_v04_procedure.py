@@ -35,12 +35,9 @@ PREREG_SHA256 = "78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d6
 TOOLS_NOT_ON_MAIN: dict[str, int] = {}
 # racer_eval modules of other briefs, and topics, that are not on main when this file is written:
 # name -> (brief, marker file). The test fails when the marker exists and the name is still listed.
-RACER_EVAL_NOT_ON_MAIN = {
-    "timing_chain": (42, "evaluation/analysis/src/racer_eval/timing_chain.py"),
-}
-TOPICS_NOT_ON_MAIN = {
-    "/pnp/planner/timing": (42, "ros_ws/src/racer_pnp_msgs/msg/PlannerTiming.msg"),
-}
+# Brief 42 (timing_chain, /pnp/planner/timing) is on this branch, so both lists are empty now.
+RACER_EVAL_NOT_ON_MAIN: dict[str, tuple[int, str]] = {}
+TOPICS_NOT_ON_MAIN: dict[str, tuple[int, str]] = {}
 SESSION_STEPS = list(range(10))
 MINIMUM_SESSION = {1, 2, 9}
 KNOWN_REPORT_COMMANDS = {"timing", "laps", "host-facts", "v04", "variant-form", "check-prereg"}
@@ -562,7 +559,7 @@ def test_tools_of_other_briefs_are_listed_until_they_land():
                     needs = " ".join(s["needs_on_main"])
                     assert f"brief {brief}" in needs and "skip" in needs, (s["id"], sub)
                 else:
-                    assert sub == "session", (s["id"], sub)
+                    assert sub in {"session", "timing_chain"}, (s["id"], sub)
 
 
 def test_steps_that_use_another_briefs_work_say_skip_if_not_on_main():

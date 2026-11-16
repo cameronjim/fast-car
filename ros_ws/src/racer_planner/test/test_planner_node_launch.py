@@ -178,7 +178,18 @@ class TestPlannerNodeNominal(unittest.TestCase):
         self.assertEqual(
             cycles, list(range(cycles[0], cycles[0] + len(cycles))), "a tick is missing"
         )
-        scalars = ["scan_stamp_s", "scan_receipt_s", "track_stamp_s", "track_receipt_s", "odom_stamp_s", "odom_receipt_s", "solve_start_s", "solve_end_s", "gated_stamp_s", "gated_receipt_s"]
+        scalars = [
+            "scan_stamp_s",
+            "scan_receipt_s",
+            "track_stamp_s",
+            "track_receipt_s",
+            "odom_stamp_s",
+            "odom_receipt_s",
+            "solve_start_s",
+            "solve_end_s",
+            "gated_stamp_s",
+            "gated_receipt_s",
+        ]
         for t in self.timing[-100:]:
             for name in scalars:
                 self.assertTrue(math.isfinite(getattr(t, name)), name)

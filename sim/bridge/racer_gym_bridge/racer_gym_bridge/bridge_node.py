@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import json
 import math
 import time
 
@@ -891,6 +892,18 @@ class BridgeNode(Node):
                 ),
             ).value
         )
+        obstacles_json = str(
+            self.declare_parameter(
+                "synthetic_obstacles_json",
+                "",
+                ParameterDescriptor(
+                    description=(
+                        "family tracks and map: JSON list of solid boxes against a wall, "
+                        "[{at, side, protrusion_m, length_m}], see track_obstacles. Empty = none."
+                    )
+                ),
+            ).value
+        )
         if not name:
             return None
         return track_loader.build_synthetic_track(
@@ -906,6 +919,7 @@ class BridgeNode(Node):
             island_radius_m=island_radius,
             map_yaml=map_yaml,
             map_centreline_csv=map_centreline,
+            obstacles=json.loads(obstacles_json) if obstacles_json else None,
         )
 
     def _declare_vehicle_model(self) -> dict | None:

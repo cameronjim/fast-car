@@ -22,7 +22,10 @@
 // A K line builds a TickInput the way the node's on_timer does: the latest distance field with
 // its header stamp, the latest track with its header stamp, the latest wheel speed stamped with
 // its ARRIVAL time (the node stamps odometry with now()), no lap guidance. One CSV row per K:
-// every TickOutput field plus now_s. NaN is written "nan".
+// every TickOutput field plus now_s. NaN is written "nan". The last three columns are brief 42's:
+// final_sequence (0 mean, 1 fallback, 2 all collide, -1 no solver ran this tick),
+// unchecked_final_collided (the mean collided although a clean sample existed: M-C1) and
+// speed_limiter (PlannerTiming enum).
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -128,6 +131,9 @@ std::map<std::string, Param> default_params() {
   d("gate_clear_margin", mp.gate_clear_margin, 0.5, 10.0);
   d("w_trust", mp.w_trust, 0.0, 1e7);
   d("move_margin", mp.move_margin, 0.0, 100.0);
+  // NOT a node parameter: the replay measures M-C1 (brief 42) by running the solver with and
+  // without the final sequence check. 0 is the behaviour of main f5db7f1.
+  i("check_final_sequence", mp.check_final_sequence ? 1 : 0, 0, 1);
   d("speed_floor_margin_mps", mp.speed_floor_margin_mps, 0.0, 0.5);
   d("steer_output_hysteresis_rad", lg.steer_output_hysteresis_rad, 0.0, 0.02);
   d("gap_reset_s", lg.gap_reset_s, 0.0, 0.058);
@@ -256,6 +262,7 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   mp.gate_clear_margin = v("gate_clear_margin");
   mp.w_trust = v("w_trust");
   mp.move_margin = v("move_margin");
+  mp.check_final_sequence = v("check_final_sequence") != 0.0;
   mp.speed_floor_margin_mps = v("speed_floor_margin_mps");
   cfg.budget.halve_over_s = v("solve_halve_over_ms") * 1e-3;
   cfg.budget.restore_under_s = v("solve_restore_under_ms") * 1e-3;
@@ -424,7 +431,8 @@ int main(int argc, char** argv) {
          "collision_fraction,track_age_s,scan_age_s,samples,samples_halved,track_confidence,"
          "freespace_goal_x_m,freespace_goal_y_m,freespace_reach_m,block_reason,recovery_attempts,"
          "elapsed_s,bunched,plan_stale,gap_reset,start_missing,steer_step_rad,steer_allow_rad,"
-         "speed_up_step_mps,speed_allow_mps,slew_violation\n";
+         "speed_up_step_mps,speed_allow_mps,slew_violation,final_sequence,unchecked_final_collided,"
+         "speed_limiter\n";
   // The elapsed-time check (design 14.7): between two consecutive publishes the steering may move
   // by at most f * steering_rate * dt and the speed magnitude grow by at most f * max_accel * dt,
   // dt the real time between the two ticks (not clamped to a tick). One row per tick; the first
@@ -568,7 +576,10 @@ int main(int argc, char** argv) {
           << ',' << (o.plan_stale ? 1 : 0) << ',' << (o.gap_reset ? 1 : 0) << ','
           << static_cast<int>(o.start_missing) << ',' << csv_number(steer_step) << ','
           << csv_number(steer_allow) << ',' << csv_number(speed_up) << ','
-          << csv_number(speed_allow) << ',' << (violation ? 1 : 0) << '\n';
+          << csv_number(speed_allow) << ',' << (violation ? 1 : 0) << ','
+          << (o.has_final_sequence ? static_cast<int>(o.final_sequence) : -1) << ','
+          << (o.unchecked_final_collided ? 1 : 0) << ',' << static_cast<int>(o.speed_limiter)
+          << '\n';
       last_published_speed = o.cmd.speed_mps;
       last_published_steering = o.cmd.steering_rad;
     } else {

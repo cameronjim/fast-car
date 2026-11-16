@@ -49,8 +49,9 @@ def perceiver(path: Path, live: LiveVehicle) -> core.TrackPerceiver:
     )
 
 
-def test_exactly_two_arch_types_are_accepted() -> None:
-    assert bd.ARCH_TYPES == ("circ_conv1d_v0", "circ_conv1d_v0_refine_v1")
+def test_the_plain_and_refine_arch_types_are_accepted() -> None:
+    # `fused-v1` (brief 38) added a third value; its own test file pins the full tuple.
+    assert bd.ARCH_TYPES[:2] == ("circ_conv1d_v0", "circ_conv1d_v0_refine_v1")
 
 
 def test_plain_bundle_does_not_refine(tmp_path: Path, live: LiveVehicle) -> None:

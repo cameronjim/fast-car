@@ -132,6 +132,7 @@ class TrackPerceptionNode(Node):
 
         net = None
         refine_net = False
+        fuse_cfg = None
         model_id = core.GEOMETRIC_MODEL_ID
         payload_sha: str | None = None
         if backend == core.BACKEND_NET:
@@ -145,6 +146,7 @@ class TrackPerceptionNode(Node):
                 raise StartupRefused(f"{type(exc).__name__}: {exc}") from exc
             model_id = bundle.model_id
             refine_net = bundle.refine  # the bundle decides; no launch argument selects it
+            fuse_cfg = bundle.fuse_config
             payload_sha = bundle.weights_sha256
 
         self._perceiver = core.TrackPerceiver(
@@ -157,9 +159,12 @@ class TrackPerceptionNode(Node):
             net=net,
             model_id=model_id,
             refine_net=refine_net,
+            fuse_cfg=fuse_cfg,
         )
         self._backend_code = 0 if backend == core.BACKEND_NET else 1
         self._stats = PerceptionStats(backend, model_id, payload_sha)
+        if fuse_cfg is not None:
+            self._stats.fuse_fallbacks = 0
 
         # Publishers and the subscription are created only now: a refusal above leaves none.
         reliable = lambda depth: QoSProfile(
@@ -181,7 +186,7 @@ class TrackPerceptionNode(Node):
         self.create_timer(1.0, self._on_status_timer)
         self.get_logger().info(
             f"track_perception_node: backend {backend}, model_id {model_id}, "
-            f"scan refinement {refine_net}, "
+            f"scan refinement {refine_net}, fusion {fuse_cfg is not None}, "
             f"payload sha256 {payload_sha}"
         )
 
@@ -206,6 +211,8 @@ class TrackPerceptionNode(Node):
         latency_ms = (time.perf_counter() - t0) * 1000.0
         self._track_pub.publish(msg)
         self._stats.scan_published(track, latency_ms)
+        if self._stats.fuse_fallbacks is not None:
+            self._stats.fuse_fallbacks = self._perceiver.fuse_fallbacks
 
     def _to_msg(self, scan: LaserScan, track: tr.LocalTrackData):  # type: ignore[no-untyped-def]
         msg = self._msg_type()

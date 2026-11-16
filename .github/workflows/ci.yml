@@ -159,6 +159,21 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/ros_build_test.sh"
 
+  safety-package-untouched:
+    name: racer_safety diff guard (only the approved files change, gate library read only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    # Brief 45, owner decision 1 of 2026-11-14: the one approved change to racer_safety is
+    # receipt-time instrumentation in safety_node.cpp. See the script's header for the allowed
+    # files; it needs the base branch's history, hence fetch-depth 0.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Diff of ros_ws/src/racer_safety against the base branch
+        run: .github/scripts/check_safety_untouched.sh "origin/${{ github.base_ref }}"
+
   racer-safety-coverage:
     name: racer_safety gate-logic branch coverage (100% gate, ros-dev)
     runs-on: ubuntu-latest
@@ -403,6 +418,25 @@ jobs:
         run: |
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_pnp_laps_test.sh"
+
+  l5-pnp-oracle:
+    name: L5 obstacle development case OD and the oracle track (geometric and ground truth LocalTrack, parity with the perception node, ros-dev + gym)
+    runs-on: ubuntu-latest
+    # 2026-11-15 (brief 40): the sim's solid obstacle boxes and the round donut, the test-only
+    # oracle track node, its stamp and timing parity with track_perception_node, the guard that the
+    # car's launch cannot start it, and case OD (round donut, one box on the outer wall) lapped three
+    # times with the geometric backend and with the oracle, 0 wall contacts. A copy of the
+    # l5-pnp-laps job with the package swapped (see .github/scripts/l5_pnp_oracle_test.sh).
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/build-ros-dev-image
+
+      - name: colcon build + colcon test the combined L5 oracle workspace
+        run: |
+          docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
+            --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_pnp_oracle_test.sh"
 
   l5-policy:
     name: L5 policy canary (tracker handoff + policy_node + safety_node on a stadium vs the tracker alone, ros-dev + gym + torch)

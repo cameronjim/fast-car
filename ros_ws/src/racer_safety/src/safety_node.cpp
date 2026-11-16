@@ -121,16 +121,32 @@
 // actuation.stop_latency_s)) instead: the decaying bound is not used, and the judged speed is never
 // above what the rule above would judge, so it can only remove a trip. gate_logic.hpp has the
 // reasons and the numbers.
+//
+// CYCLE RECORD (2026-11-14, brief 45, owner decision 1 of owner-decisions-2026-11-14.md).
+// INSTRUMENTATION ONLY. With the parameter publish_cycle_record true (default false, read at
+// construction; with false no publisher exists), the node publishes one racer_msgs/SafetyCycle
+// per gate cycle on /safety/cycle: the cycle stamp (the one /drive carries), whether a command has
+// arrived, the header stamp of the latched /drive_raw, the age the gate was given, how many
+// commands have arrived, and the dt the gate was given. It is published AFTER /drive and
+// /safety/events and after the cycle's state is stored, from values taken before the gate runs, on
+// the nominal and the fault path alike. publish_cycle_record cannot throw (a failure is counted
+// and logged at most once a second), so the record can never brake the car, skip a cycle or reach
+// the fault path. Nothing the record reads or writes is an input of the gate, and no existing
+// line of the gate path changed; test/ab/ proves /drive and /safety/events bit-identical to
+// main's node with the parameter off and on.
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <algorithm>
 #include <atomic>
+#include <builtin_interfaces/msg/time.hpp>
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <nav_msgs/msg/odometry.hpp>
 #include <optional>
+#include <racer_msgs/msg/safety_cycle.hpp>
 #include <racer_msgs/msg/safety_event.hpp>
 #include <rcl_interfaces/msg/floating_point_range.hpp>
 #include <rcl_interfaces/msg/integer_range.hpp>
@@ -188,6 +204,18 @@ class SafetyNode : public rclcpp::Node {
         this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive", command_qos);
     events_pub_ =
         this->create_publisher<racer_msgs::msg::SafetyEvent>("/safety/events", events_qos);
+
+    // Per-cycle receipt record (brief 45, "CYCLE RECORD" at the top of this file). Read once,
+    // here: with false (the default) no publisher exists and the node's graph is main's.
+    rcl_interfaces::msg::ParameterDescriptor cycle_record_descriptor;
+    cycle_record_descriptor.description =
+        "INSTRUMENTATION. When true, publish a racer_msgs/SafetyCycle on /safety/cycle once per "
+        "gate cycle, after /drive and /safety/events, recording which /drive_raw the gate had "
+        "latched and its age. Read at construction. Never changes the gated output.";
+    if (this->declare_parameter<bool>("publish_cycle_record", false, cycle_record_descriptor)) {
+      cycle_pub_ = this->create_publisher<racer_msgs::msg::SafetyCycle>(
+          "/safety/cycle", rclcpp::QoS(rclcpp::KeepLast(10)).best_effort());
+    }
 
     // control_period_s_ MUST be set before build_limits() runs (it feeds
     // SafetyLimits::control_period_s, which the watchdog timeout is computed from) --
@@ -417,6 +445,9 @@ class SafetyNode : public rclcpp::Node {
     // only ever used as the left operand of an elapsed-time subtraction, never as a stamp.
     last_drive_raw_steady_ = steady_clock_.now();
     has_received_command_ = true;
+    // Cycle record only (brief 45): two plain stores, no clock call, no allocation.
+    last_drive_raw_header_stamp_ = msg->header.stamp;
+    ++drive_raw_count_;
   }
 
   // Keeps the latest scan only; it is reduced to an in-path distance on every gate cycle with
@@ -513,6 +544,66 @@ class SafetyNode : public rclcpp::Node {
     drive_pub_->publish(drive_msg);
   }
 
+  // What the cycle record says about this cycle (see "CYCLE RECORD" at the top of this file).
+  struct CycleValues {
+    bool has_command{false};
+    builtin_interfaces::msg::Time drive_raw_stamp;
+    double drive_raw_age_s{0.0};
+    uint32_t drive_raw_count{0};
+    double cycle_dt_s{0.0};
+  };
+
+  // Snapshot for the cycle record, taken before the gate runs and only when the record is on.
+  // The age and the dt are the SAME expressions on_timer hands the gate as input.drive_raw_age_s
+  // and input.dt_s, from the same `steady_now`, so they are the gate's own values; they are
+  // taken here, outside the gate's try block, because the fault path overwrites last_eval_steady_
+  // and may throw before the gate input exists. Nothing here writes node state.
+  CycleValues snapshot_cycle_values(const rclcpp::Time& steady_now) const {
+    CycleValues values;
+    values.has_command = has_received_command_;
+    if (has_received_command_) {
+      values.drive_raw_stamp = last_drive_raw_header_stamp_;
+    }
+    values.drive_raw_age_s = has_received_command_ ? (steady_now - last_drive_raw_steady_).seconds()
+                                                   : std::numeric_limits<double>::infinity();
+    values.drive_raw_count = drive_raw_count_;
+    values.cycle_dt_s =
+        has_evaluated_before_ ? (steady_now - last_eval_steady_).seconds() : control_period_s_;
+    return values;
+  }
+
+  // Publishes the cycle record. Called last in a cycle, after /drive, /safety/events and the
+  // stored state, on the nominal and the fault path alike. A failure is counted and logged at
+  // most once a second and goes no further: this function cannot throw, so it can never reach
+  // the gate's fault path (which would brake) or skip a cycle.
+  void publish_cycle_record(const rclcpp::Time& stamp, const CycleValues& values,
+                            const rclcpp::Time& steady_now) noexcept {
+    try {
+      racer_msgs::msg::SafetyCycle record;
+      record.stamp = stamp;
+      record.has_command = values.has_command;
+      record.drive_raw_stamp = values.drive_raw_stamp;
+      // Infinity (no command yet) is -1.0 on the wire.
+      record.drive_raw_age_s =
+          std::isfinite(values.drive_raw_age_s) ? values.drive_raw_age_s : -1.0;
+      record.drive_raw_count = values.drive_raw_count;
+      record.cycle_dt_s = values.cycle_dt_s;
+      cycle_pub_->publish(record);
+    } catch (...) {
+      try {
+        ++cycle_record_failures_;
+        if (cycle_record_failures_ == 1 || (steady_now - last_cycle_record_log_).seconds() >= 1.0) {
+          last_cycle_record_log_ = steady_now;
+          RCLCPP_ERROR(this->get_logger(),
+                       "safety_node: /safety/cycle publish failed (%llu so far); the gate is "
+                       "unaffected",
+                       static_cast<unsigned long long>(cycle_record_failures_));
+        }
+      } catch (...) {
+      }
+    }
+  }
+
   void on_timer() {
     // Never evaluate or publish against a context that is shutting down (see main()).
     if (!rclcpp::ok()) {
@@ -521,6 +612,11 @@ class SafetyNode : public rclcpp::Node {
     // `now` stamps outgoing messages; `steady_now` measures elapsed time. See CLOCK POLICY.
     const rclcpp::Time now = this->now();
     const rclcpp::Time steady_now = steady_clock_.now();
+    // Cycle record snapshot: only when the record is on, before anything below changes state.
+    CycleValues cycle_values;
+    if (cycle_pub_) {
+      cycle_values = snapshot_cycle_values(steady_now);
+    }
     try {
       // Read the LIVE parameter value every cycle, not a construction-time snapshot: a test
       // (or an operator) flips this at runtime via the standard ROS 2 set_parameters service,
@@ -563,6 +659,9 @@ class SafetyNode : public rclcpp::Node {
       speed_bound_reverse_mps_ = result.speed_bound_reverse_mps;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
+      if (cycle_pub_) {
+        publish_cycle_record(now, cycle_values, steady_now);
+      }
     } catch (const std::exception& e) {
       RCLCPP_ERROR(this->get_logger(), "safety_node: internal fault, commanding zero throttle: %s",
                    e.what());
@@ -601,6 +700,9 @@ class SafetyNode : public rclcpp::Node {
       previous_output_ = safe_output;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
+      if (cycle_pub_) {
+        publish_cycle_record(now, cycle_values, steady_now);
+      }
     }
   }
 
@@ -645,12 +747,21 @@ class SafetyNode : public rclcpp::Node {
   double rear_overhang_m_{0.0};
   bool has_received_command_;
   bool has_evaluated_before_;
+  // Cycle record state (brief 45): the header stamp of the latest /drive_raw and how many have
+  // arrived, written by on_drive_raw and read only by snapshot_cycle_values; the failure count
+  // and the last log time of publish_cycle_record. Nothing here is an input of the gate.
+  builtin_interfaces::msg::Time last_drive_raw_header_stamp_;
+  uint32_t drive_raw_count_{0};
+  uint64_t cycle_record_failures_{0};
+  rclcpp::Time last_cycle_record_log_{0, 0, RCL_STEADY_TIME};
 
   rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_raw_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_pub_;
   rclcpp::Publisher<racer_msgs::msg::SafetyEvent>::SharedPtr events_pub_;
+  // Null unless publish_cycle_record was true at construction.
+  rclcpp::Publisher<racer_msgs::msg::SafetyCycle>::SharedPtr cycle_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

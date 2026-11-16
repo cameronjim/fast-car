@@ -30,7 +30,7 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
       plan_dt_s_(dynamics.dt_s),
       model_roll_(dynamics, geometry, config.tick_s),
       model_ego_(dynamics, geometry, config.tick_s),
-      ego_(geometry.wheelbase_m, dynamics.nominal.understeer_s2_per_m2),
+      ego_(&model_roll_),
       solver_(solver_params(config, dynamics), DynamicsModel(dynamics, geometry, dynamics.dt_s),
               geometry, std::max(config.max_samples, config.mppi.samples)),
       budget_([&] {
@@ -78,6 +78,9 @@ TickOutput Planner::tick(const TickInput& in) {
   p.has_gated = in.has_gated;
   p.gated_stamp_s = in.gated_stamp_s;
   p.gated_steering_rad = in.gated_steering_rad;
+  p.gated_speed_mps = in.gated_speed_mps;
+  p.gated_seq = in.gated_seq;
+  p.gated_receipt_s = in.gated_receipt_s;
   return publish(p);
 }
 
@@ -165,8 +168,8 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   }
   // The dead reckoning takes the signed wheel speed (the car backs up while recovering). While
   // the wheel speed is stale it takes the model's own estimate.
-  // The commands acting now (the delayed ones) are the inputs of a contract 2 learned block; a
-  // contract 1 bundle never reads them.
+  // The commands acting now (the delayed ones) are the inputs of the residual and of a contract 2
+  // learned block; a bundle with neither never reads them.
   const Control acting_now =
       delay_ticks_ > 0 ? sh.ring[static_cast<std::size_t>(sh.ring_head)]
                        : Control{sh.last_published.speed_mps, sh.last_published.steering_rad};
@@ -213,6 +216,7 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   out.track_age_s = age_or_neg(in.track != nullptr, in.track != nullptr ? in.track->stamp_s : 0.0);
   out.scan_age_s = age_or_neg(li.has_scan, in.scan_stamp_s);
   out.samples = solver_.samples();
+  out.plan_time_s = now;
   snap.scan_fresh = li.has_scan && classify_age(now, in.scan_stamp_s, lg.scan_timeout_s,
                                                 lg.scan_hard_timeout_s) == Age::Fresh;
   snap.odom_fresh = odom_fresh;
@@ -300,6 +304,17 @@ SolveReport Planner::solve_impl(const TickInput& in) {
       out.plan_progress_m = so.plan_progress_m;
       out.plan_min_clearance_m = so.plan_min_clearance_m;
       out.collision_fraction = so.collision_fraction;
+      out.has_final_sequence = true;
+      out.final_sequence = so.final_sequence;
+      out.unchecked_final_collided = so.unchecked_final_collided;
+      cost_terms_array(so.final_cost, out.cost_terms.data());
+      out.speed_limiter = so.speed_limiter;
+      if (so.speed_limiter == SpeedLimiter::kCap && confidence_ < 1.0 &&
+          v_cap < speed_cap(lg, li, 1.0) - 1e-9) {
+        // The cap is below what full track confidence would allow: the track's validity, not the
+        // configured or lap cap, holds the speed.
+        out.speed_limiter = SpeedLimiter::kValidity;
+      }
       wanted = Command{so.cmd.speed_cmd, so.cmd.steering_cmd};
       plan_valid_ = true;
       di.all_collide = so.all_collide;
@@ -396,15 +411,19 @@ SolveReport Planner::solve_impl(const TickInput& in) {
 // -- publish side ------------------------------------------------------------------------------
 
 // Model bookkeeping in publish order: the delay ring and the steering estimate follow what was
-// published. A late publish advances the ring by the ticks that passed (the command before it
-// kept acting meanwhile).
+// published, until the gated /drive says what the safety node made of it (apply_gated). A late
+// publish advances the ring by the ticks that passed (the command before it kept acting
+// meanwhile).
 void Planner::advance_model(const Command& published, int steps, const Command& before) {
   std::lock_guard<std::mutex> lock(mu_);
   State est = shared_.est;
+  Pending pend;
   for (int s = 0; s < steps; ++s) {
     const Command& c = (s + 1 < steps) ? before : published;
     const Control sent{c.speed_mps, c.steering_rad};
     Control acting = sent;
+    const State est_before = est;
+    const int slot = shared_.ring_head;
     if (delay_ticks_ > 0) {
       acting = shared_.ring[static_cast<std::size_t>(shared_.ring_head)];
       shared_.ring[static_cast<std::size_t>(shared_.ring_head)] = sent;
@@ -414,10 +433,70 @@ void Planner::advance_model(const Command& published, int steps, const Command& 
     est.delta = next.delta;
     est.v = next.v;  // replaced by the wheel speed at the next solve when fresh
     est.x = est.y = est.yaw = 0.0;
+    pend.slot = slot;
+    pend.est_before = est_before;
   }
   shared_.est = est;
   shared_.last_published = published;
   shared_.starting = starting_;
+  pend.valid = steps > 0;
+  pend.published = published;
+  pend.publish_s = pending_publish_s_;  // set by the caller before this call
+  pending_ = pend;
+  for (std::size_t i = sent_hist_.size() - 1; i > 0; --i) sent_hist_[i] = sent_hist_[i - 1];
+  sent_hist_[0] = published;
+  sent_hist_n_ = std::min(sent_hist_n_ + 1, static_cast<int>(sent_hist_.size()));
+}
+
+namespace {
+bool same_float(const Command& a, const Command& b) {
+  return static_cast<float>(a.speed_mps) == static_cast<float>(b.speed_mps) &&
+         static_cast<float>(a.steering_rad) == static_cast<float>(b.steering_rad);
+}
+}  // namespace
+
+// The previous tick's ring entry takes the gated value when one arrived since that tick's publish
+// (claude-docs/13 17.4.3). A gated message is matched to a tick by value first: one equal to what
+// was published (as the float32 the topic carries) leaves the double as it was, so with /drive
+// equal to /drive_raw the state is bit identical to what it was before this existed; one equal to
+// an older tick's command is that tick's late message and says nothing about this one; any other
+// is the gate's output for the pending tick. No matching message: the published command stands.
+void Planner::apply_gated(const PublishInput& in, double now) {
+  const bool new_msg = in.has_gated && in.gated_seq != last_gated_seq_;
+  if (in.has_gated) last_gated_seq_ = in.gated_seq;
+  if (!pending_.valid) return;
+  const Pending pend = pending_;
+  pending_.valid = false;
+  if (!new_msg || !std::isfinite(in.gated_receipt_s) || !(in.gated_receipt_s >= pend.publish_s) ||
+      !(in.gated_receipt_s <= now) || !std::isfinite(in.gated_speed_mps) ||
+      !std::isfinite(in.gated_steering_rad)) {
+    gated_fallback_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  const Command g{in.gated_speed_mps, in.gated_steering_rad};
+  if (same_float(g, pend.published)) {
+    gated_equal_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  for (int j = 1; j < sent_hist_n_; ++j) {
+    if (same_float(g, sent_hist_[static_cast<std::size_t>(j)])) {
+      gated_fallback_.fetch_add(1, std::memory_order_relaxed);  // an older tick's late message
+      return;
+    }
+  }
+  gated_corrected_.fetch_add(1, std::memory_order_relaxed);
+  std::lock_guard<std::mutex> lock(mu_);
+  if (delay_ticks_ > 0) {
+    shared_.ring[static_cast<std::size_t>(pend.slot)] = Control{g.speed_mps, g.steering_rad};
+  } else {
+    // No ring: the command already acted for one step. Move the estimate by the difference the
+    // gated command makes to that step.
+    const State a = model_pub_.step(pend.est_before,
+                                    Control{pend.published.speed_mps, pend.published.steering_rad});
+    const State b = model_pub_.step(pend.est_before, Control{g.speed_mps, g.steering_rad});
+    shared_.est.delta += b.delta - a.delta;
+    shared_.est.v = std::max(0.0, shared_.est.v + b.v - a.v);
+  }
 }
 
 TickOutput Planner::publish(const PublishInput& in) {
@@ -478,6 +557,7 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
   const bool first = !have_last_publish_;
   const double elapsed = first ? tick : slew_elapsed_s(raw_any, tick);
   const bool gap = !first && lg.gap_reset_s > 0.0 && raw_any > lg.gap_reset_s;
+  apply_gated(in, now);
 
   PlanSnapshot snap;
   {
@@ -638,6 +718,7 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
     steps = std::min(std::max(static_cast<int>(std::lround(raw_real / tick)), 1), kMaxModelSteps);
   }
   const Command before = last_published_;
+  pending_publish_s_ = finite_now ? now : 0.0;
   advance_model(c, steps, before);
   last_published_ = c;
   if (c.speed_mps != 0.0 && finite_now) last_nonzero_s_ = now;

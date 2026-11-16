@@ -21,7 +21,7 @@ from typing import Any
 import jsonschema
 import yaml
 
-from racer_track_perception import preprocess
+from racer_track_perception import fuse, preprocess
 from racer_track_perception import track as tr
 from racer_track_perception.errors import (
     BundleSchemaVersionMismatch,
@@ -41,7 +41,11 @@ ARCH_TYPE = "circ_conv1d_v0"
 # The same network followed by `refine.refine_track` (design 15.5). The bundle says what runs: a
 # loader that does not know the second value refuses it as an IoContractMismatch.
 ARCH_TYPE_REFINE_V1 = "circ_conv1d_v0_refine_v1"
-ARCH_TYPES = (ARCH_TYPE, ARCH_TYPE_REFINE_V1)
+# `fused-v1` (design 16.4): the geometric tracer's corridor with the refined net's centre. The
+# manifest carries the frozen `fuse.FuseConfig` as io.arch.fuse; a loader that does not know this
+# value refuses it as an IoContractMismatch.
+ARCH_TYPE_FUSED_V1 = "circ_conv1d_v0_fused_v1"
+ARCH_TYPES = (ARCH_TYPE, ARCH_TYPE_REFINE_V1, ARCH_TYPE_FUSED_V1)
 MOUNT_TOLERANCE = 1e-6
 WEIGHTS_FILE = "weights.npz"
 SCHEMA_RELATIVE = Path("config") / "pnp" / "bundle.schema.json"
@@ -60,6 +64,16 @@ class Bundle:
     def refine(self) -> bool:
         """True when the bundle declares the scan refinement after the net."""
         return str(self.manifest["io"]["arch"]["type"]) == ARCH_TYPE_REFINE_V1
+
+    @property
+    def fuse_config(self) -> fuse.FuseConfig | None:
+        """The frozen fusion settings when the bundle declares `fused-v1`, else None."""
+        if str(self.manifest["io"]["arch"]["type"]) != ARCH_TYPE_FUSED_V1:
+            return None
+        try:
+            return fuse.FuseConfig.from_dict(self.manifest["io"]["arch"].get("fuse"))
+        except ValueError as exc:
+            raise IoContractMismatch(str(exc)) from exc
 
     @property
     def weights_sha256(self) -> str:
@@ -157,6 +171,11 @@ def _check_io(io: dict[str, Any], vehicle: LiveVehicle) -> None:
         raise IoContractMismatch(
             f"io.arch.type is {arch!r}, this node implements {' and '.join(ARCH_TYPES)}"
         )
+    if arch == ARCH_TYPE_FUSED_V1:
+        try:
+            fuse.FuseConfig.from_dict(io["arch"].get("fuse"))
+        except ValueError as exc:
+            raise IoContractMismatch(str(exc)) from exc
 
 
 def _sha256(path: Path) -> str:

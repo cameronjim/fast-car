@@ -60,6 +60,7 @@ REPO_ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO_ROOT / "tools" / "track_session"))
 
+import pnp_tick_summary as pts
 import reactive_bench_runner as base
 
 TRACKS = (
@@ -102,6 +103,24 @@ _FLOAT_TRACK_KEYS = {
 #: The output the bridge's lockstep gate watches in the PnP stack: one message per scan, stamped
 #: with that scan (track_perception_node), so a starved perception holds sim time back.
 PNP_LOCKSTEP_ACK = "racer_pnp_msgs/msg/LocalTrack@/pnp/local_track"
+#: The oracle track node of measurement M-A2 (test-only code under tests/, run by path).
+ORACLE_DIR = REPO_ROOT / "tests" / "l5_pnp_oracle"
+ORACLE_NODE = ORACLE_DIR / "oracle_track_node.py"
+LAP_NODE_COUNTING = REPO_ROOT / "tests" / "l5_pnp_laps" / "lap_node_counting.py"
+
+
+def write_oracle_ground_truth(synthetic, path: Path) -> None:
+    """The file oracle_track_node reads: the driving-direction midline (the free lane's, bending
+    round obstacles) and the occupancy grid the simulator itself ray casts."""
+    from racer_gym_bridge import track_obstacles
+
+    sys.path.insert(0, str(ORACLE_DIR))
+    import oracle_core
+
+    grid, origin, resolution = track_obstacles.ground_truth_grid(synthetic)
+    oracle_core.write_ground_truth(
+        path, synthetic.centreline_x, synthetic.centreline_y, grid, origin, resolution
+    )
 
 
 def car_parameters(car: str) -> dict:
@@ -141,12 +160,15 @@ def plant_overrides(args: argparse.Namespace) -> dict:
 
 
 def bridge_track_parameters(track: str, track_params: dict, seed: int, reverse: bool) -> dict:
-    unknown = set(track_params) - set(_FLOAT_TRACK_KEYS) - set(_STRING_TRACK_KEYS)
+    unknown = set(track_params) - set(_FLOAT_TRACK_KEYS) - set(_STRING_TRACK_KEYS) - {"obstacles"}
     if unknown:
         raise ValueError(f"unknown track parameter(s) {sorted(unknown)}")
     params: dict = {"seed": seed, "synthetic_track": track, "reverse_direction": reverse}
     for key, value in track_params.items():
-        if key in _STRING_TRACK_KEYS:
+        if key == "obstacles":
+            # Solid boxes against a wall (sim/bridge track_obstacles): the bridge draws them.
+            params["synthetic_obstacles_json"] = json.dumps(value)
+        elif key in _STRING_TRACK_KEYS:
             params[_STRING_TRACK_KEYS[key]] = str(value)
         else:
             params[_FLOAT_TRACK_KEYS[key]] = float(value)
@@ -268,6 +290,16 @@ def crossing_lap_times(crossings: list[float], start_stamp: float | None) -> lis
         return []
     edges = [float(start_stamp), *[float(c) for c in crossings]]
     return [round(b - a, 3) for a, b in pairwise(edges)]
+
+
+def note_guidance_floor(counters: dict, v_ref_mps: list[float]) -> None:
+    """Count one guidance message: it has stations, and the floor was its active bound when the
+    lowest per station bound sits at the D v1 floor (`counters["floor_mps"]`)."""
+    if not len(v_ref_mps):
+        return
+    counters["messages_with_stations"] += 1
+    if min(v_ref_mps) <= counters["floor_mps"] + 1e-4:
+        counters["messages_floor_active"] += 1
 
 
 def lap_results(
@@ -478,7 +510,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         result.update({"profile": args.profile, "overrides": overrides, "gap_follow_params": gap})
     elif args.driver == "pnp":
         perception, planner = pnp_launch.parameters_for(
-            args.perception_bundle, args.dynamics_bundle, args.backend, args.v_max_mps, mounted
+            args.perception_bundle,
+            args.dynamics_bundle,
+            "geometric" if args.backend == "oracle" else args.backend,
+            args.v_max_mps,
+            mounted,
         )
         planner.update(json.loads(args.planner_params_json))
         if args.wall_clock:
@@ -488,6 +524,17 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             ("racer_track_perception", "track_perception_node"),
             ("racer_planner", "mppi_planner_node"),
         ]
+        if args.backend == "oracle":
+            # Measurement M-A2 (tests/l5_pnp_oracle, never part of the car's launch): a ground
+            # truth LocalTrack in place of the perception node, same topic, rate and stamps.
+            if args.no_perception:
+                raise ValueError("--backend oracle with --no-perception makes no sense")
+            ground_truth = work / "ground_truth_track.npz"
+            write_oracle_ground_truth(synthetic, ground_truth)
+            del nodes["track_perception_node"]
+            nodes["oracle_track_node"] = {"ground_truth_track": str(ground_truth)}
+            pnp_nodes = pnp_nodes[1:]
+            stack.append(("oracle_track_node", [sys.executable, str(ORACLE_NODE)]))
         if args.no_perception:
             # The scan-only fault case: the planner starts and no track ever arrives.
             del nodes["track_perception_node"]
@@ -532,6 +579,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         if args.wall_clock:
             stack.append(("wall_clock_node", [sys.executable, str(HERE / "wall_clock_node.py")]))
         for package, name in pnp_nodes:
+            if name == "lap_memory_node" and args.count_innovation:
+                # Test-only entry point that counts the innovation gate's rejections (brief 40).
+                os.environ["LAP_INNOVATION_OUT"] = str(work / "innovation.json")
+                stack.append((name, [sys.executable, str(LAP_NODE_COUNTING)]))
+                continue
             stack.append((name, [base._executable(package, name)]))
         result.update(
             {
@@ -751,10 +803,20 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     lap_events: list[dict] = []
     guidance_log: list[tuple] = []
     lap_status: dict = {}
+    # B4 report item: guidance messages with stations, and those whose lowest per station bound
+    # sits at the D v1 floor (the floor was the active bound). Counted here, not in the node.
+    guidance_floor: dict = {
+        "floor_mps": float(
+            args.lap_bound_floor_mps if args.lap_bound_floor_mps is not None else 0.3
+        ),
+        "messages_with_stations": 0,
+        "messages_floor_active": 0,
+    }
     driving_first: list[float] = []
     first_scan_after_driving: list[float] = []  # by arrival order (kept for the record only)
     scan_stamps: list[float] = []
     planner_status: list[tuple[float, int]] = []
+    planner_ticks: list[pts.Tick] = []
 
     def on_planner_status(msg) -> None:
         planner_states.append(msg.state)
@@ -765,6 +827,17 @@ def run_benchmark(args: argparse.Namespace) -> dict:
 
         def on_planner(m) -> None:
             on_planner_status(m)
+            planner_ticks.append(
+                pts.Tick(
+                    base._stamp_s(m.header.stamp),
+                    int(m.state),
+                    float(m.cmd_speed_mps),
+                    float(m.v_cap_mps),
+                    float(m.track_confidence),
+                    float(m.plan_min_clearance_m),
+                    int(m.block_reason),
+                )
+            )
             if m.state == 1 and not driving_first:
                 driving_first.append(node.get_clock().now().nanoseconds * 1e-9)
 
@@ -788,6 +861,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 )
 
             def on_guidance(m) -> None:
+                note_guidance_floor(guidance_floor, list(m.v_ref_mps))
                 guidance_log.append(
                     (
                         node.get_clock().now().nanoseconds * 1e-9,
@@ -997,12 +1071,25 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 1 for e in recording.events if e[1] == "rate_limit" and e[2] == 0
             )
             result.update(pnp_timing_summary(recording, planner_status))
+            # Brief 40: confidence, cap limiting and planned clearance, no threshold.
+            if args.count_innovation:
+                counts = work / "innovation.json"
+                result["innovation_rejections"] = (
+                    json.loads(counts.read_text()) if counts.exists() else {"error": "no file"}
+                )
+            result["pnp_ticks"] = pts.tick_summary(planner_ticks)
+            result["obstacle_passes"] = pts.obstacle_passes(
+                planner_ticks,
+                recording.odom,
+                [(o.centre_x, o.centre_y, o.length_m) for o in synthetic.obstacles],
+            )
             # The command path: only the planner on /drive_raw, only safety_node on /drive.
             result["publisher_nodes"] = {
                 topic: sorted(i.node_name for i in node.get_publishers_info_by_topic(topic))
                 for topic in ("/drive_raw", "/drive")
             }
             if args.lap_memory != "none":
+                result["guidance_floor"] = dict(guidance_floor)
                 result.update(
                     lap_results(
                         lap_tracker,
@@ -1066,7 +1153,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     return result
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The runner's argument parser (importable, so a battery command can be parsed in a test)."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -1109,7 +1197,19 @@ def main(argv: list[str] | None = None) -> int:
         help="driver pnp: start the planner without track_perception_node (the scan-only fault "
         "case: no track ever arrives)",
     )
-    parser.add_argument("--backend", default="geometric", choices=("net", "geometric"))
+    parser.add_argument(
+        "--backend",
+        default="geometric",
+        choices=("net", "geometric", "oracle"),
+        help="oracle: tests/l5_pnp_oracle (ground truth LocalTrack, measurement M-A2 only)",
+    )
+    parser.add_argument(
+        "--count-innovation",
+        action="store_true",
+        help="pnp with a lap memory: start the lap node through tests/l5_pnp_laps/"
+        "lap_node_counting.py, which counts the innovation gate's rejected crossing candidates per "
+        "lap (reported, no threshold)",
+    )
     parser.add_argument("--v-max-mps", type=float, default=0.6, help="pnp planner speed cap")
     parser.add_argument(
         "--lap-memory",
@@ -1213,7 +1313,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-dir", type=Path, help="keep the generated map, raceline and logs")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--trace-out", type=Path)
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     result = run_benchmark(args)
     text = json.dumps(result, indent=2, sort_keys=True, default=str)
     print(text)

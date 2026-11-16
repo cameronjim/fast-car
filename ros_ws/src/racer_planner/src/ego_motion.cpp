@@ -8,6 +8,9 @@ namespace racer_planner {
 EgoMotion::EgoMotion(double wheelbase_m, double understeer_s2_per_m2)
     : wheelbase_(wheelbase_m), understeer_(understeer_s2_per_m2) {}
 
+EgoMotion::EgoMotion(const DynamicsModel* model)
+    : wheelbase_(0.0), understeer_(0.0), model_(model) {}
+
 void EgoMotion::clear() {
   head_ = 0;
   count_ = 0;
@@ -30,7 +33,9 @@ void EgoMotion::push(double t_s, double v_mps, double delta_rad, double speed_cm
 
 void EgoMotion::advance(Pose2* pose, const Sample& s, double dt) const {
   if (!(dt > 0.0)) return;
-  double w = s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
+  double w = model_ != nullptr
+                 ? model_->yaw_rate_for(s.v, s.delta, s.speed_cmd, s.steering_cmd)
+                 : s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
   double v = s.v;  // the speed the car translates by: the wheel speed, or the ground speed
   if (ground_ != nullptr) {
     v = ground_->ground_speed(s.v, s.delta, s.speed_cmd, s.steering_cmd);

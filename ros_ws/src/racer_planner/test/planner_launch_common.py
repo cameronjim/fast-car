@@ -141,6 +141,9 @@ class Feeder:
         self.scan_on = True
         self.track_on = True
         self.odom_on = True
+        # None: every odometry sample is stamped now. A float: the header stamp is fixed at this
+        # value (a republished old sample); 0.0 is an unset stamp.
+        self.odom_stamp_override: float | None = None
         self.track_valid_count = 16
         self.scan_pub = node.create_publisher(LaserScan, "/scan", best_effort(10))
         self.track_pub = node.create_publisher(LocalTrack, "/pnp/local_track", reliable(5))
@@ -164,6 +167,10 @@ class Feeder:
                 if self.odom_on:
                     odom = Odometry()
                     odom.header.stamp = stamp
+                    if self.odom_stamp_override is not None:
+                        sec = int(self.odom_stamp_override)
+                        odom.header.stamp.sec = sec
+                        odom.header.stamp.nanosec = int((self.odom_stamp_override - sec) * 1e9)
                     odom.twist.twist.linear.x = self.speed
                     self.odom_pub.publish(odom)
             rclpy.spin_once(self.node, timeout_sec=0.005)

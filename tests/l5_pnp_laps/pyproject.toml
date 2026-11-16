@@ -1,0 +1,22 @@
+[project]
+name = "l5-pnp-laps"
+version = "0.1.0"
+description = """
+Lap learning sim battery tooling (tests/l5_pnp_laps): the decision functions of the v0.2 and v0.3
+batteries and the B4 battery tool, tested without ROS. The canary (test_pnp_laps_canary.py) needs
+a sourced ROS workspace and skips here; it runs in the l5-pnp-laps CI job.
+"""
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pyyaml",
+    "pytest",
+    "pytest-cov",
+    "hypothesis>=6.100",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = [".", "../l5_reactive_bench", "../../sim/bridge/racer_gym_bridge", "../../ros_ws/src/racer_laps/src"]

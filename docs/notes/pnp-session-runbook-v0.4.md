@@ -48,7 +48,7 @@ After a run, on the laptop. `<bag>` is the bag directory, `<out>` the session fo
 
 ## Step 0 Build, wheels off the ground, camera counter bench check
 
-- Launch: `dynamics_bundle:=<dyn> backend:=geometric v_max_mps:=0.4 lap_counter:=true require_lap_counter:=true`.
+- Launch: `dynamics_bundle:=/workspace/data/pnp/models/<dyn> backend:=geometric v_max_mps:=0.4 lap_counter:=true require_lap_counter:=true`.
 - First: `uv run --project tools --extra session python tools/pnp_session_report.py check-prereg`.
   It must print that the SHA-256 matches. If it refuses, pull main.
 - Watch: the wheels turn right with the board on the left, left with the board on the right,
@@ -225,7 +225,7 @@ Block P (the cap schedule tool is unchanged), for each direction:
 
 ```sh
 python3 tools/pnp_session/cap_schedule.py --manifest /workspace/data/pnp/models/<dyn>/manifest.yaml --v-max-mps 1.3 --write-params <out>/excitation_params.yaml
-ros2 launch racer_bringup pnp.launch.py dynamics_bundle:=<dyn> backend:=geometric v_max_mps:=1.3 lap_counter:=true require_lap_counter:=true params_file:=<out>/excitation_params.yaml
+ros2 launch racer_bringup pnp.launch.py dynamics_bundle:=/workspace/data/pnp/models/<dyn> backend:=geometric v_max_mps:=1.3 lap_counter:=true require_lap_counter:=true params_file:=<out>/excitation_params.yaml
 python3 tools/pnp_session/cap_schedule.py --manifest /workspace/data/pnp/models/<dyn>/manifest.yaml --v-max-mps 1.3
 ```
 

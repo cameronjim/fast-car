@@ -33,7 +33,7 @@ uv run --project tools --extra session python tools/pnp_session_report.py laps -
 
 | Step | Command (arguments after `pnp.launch.py`) | Pass line | If it fails |
 |---|---|---|---|
-| 0 Build, bench, wheels off | `dynamics_bundle:=<dyn> backend:=geometric v_max_mps:=0.4`, plus `mppi_bench --background-load` | bench p50 under 6 ms and p99 under 12 ms; L6 checklist passed | stay off the floor, fix first |
+| 0 Build, bench, wheels off | `dynamics_bundle:=/workspace/data/pnp/models/<dyn> backend:=geometric v_max_mps:=0.4`, plus `mppi_bench --background-load` | bench p50 under 6 ms and p99 under 12 ms; L6 checklist passed | stay off the floor, fix first |
 | 1 Host facts (read only) | `pnp_session_report.py host-facts --out-dir <out>/host_facts` while the driver runs | none, stored in the log | nothing was set |
 | 1 C v0.2 and lap observe | `v_max_mps:=0.5` then `1.0`, `lap_counter:=true require_lap_counter:=true lap_memory:=true lap_mode:=observe`, 10 laps, ccw ccw cw cw at each cap | v0.2 4.2: watchdog and rate_limit at most 0.2 per minute each, no event in the first 2.0 s of at least 7 of 8 starts, TTC and obstacle brakes 0, no contact; v0.3 1.5 D3-C0: lap count equals the camera counter's and 18 of 20 lap times within 0.3 s | report the counts; real-time scheduling goes to the owner; a D3-C0 fail skips steps 6 and 7 |
 | 2 GP3 | `v_max_mps:=1.0`, observe mode, one launch, 20 laps ccw, nobody touches the car | v0.2 4.3: 20 consecutive laps, no wall contact, no BLOCKED hold over 5 s | the first attempt is the result; write it down |

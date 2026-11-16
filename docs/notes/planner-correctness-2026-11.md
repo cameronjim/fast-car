@@ -49,21 +49,54 @@ the track confidence. Cost: two more evaluations per solve (of 128 to 768).
 
 ## Measurements
 
-The v0.4 pre-registration (PR 186) and addendum 1 (PR 189, yaml SHA-256
-`ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824`) were not on main when this
-was written, so by the brief's rule no number they govern was produced and the data roles of the
-2026-11-14 segments were not read. Table to fill once both are on main:
+The v0.4 pre-registration and addendum 1 are on main (yaml SHA-256 `78510c14...` and
+`ada5a836...`, checked by the tool on every run). Read in the roles the yaml gives: the L0, X0 and
+X1 runs are lap `dev` runs, read without limit; no held-out or test segment was read. Code: this
+branch after merging main (planner built in the ros-dev container, 432 tests, 0 failures).
 
-| Item | Status |
+**Stamp age of `/odom/wheel` at receipt** (recorder receive time minus header stamp, the gate of
+change 2; present `odom_timeout_s` is 0.10 s). p99 plus one period (p50 20 ms) is below the
+timeout on all three, so the gate passes and nothing is loosened.
+
+| Segment | n | age p50 (ms) | age p99 (ms) | age max (ms) | p99 plus period (ms) |
+|---|---|---|---|---|---|
+| L0 | 5741 | 2.9 | 26.2 | 62.6 | 46.2 |
+| X0 | 5090 | 2.6 | 24.8 | 147.9 | 44.8 |
+| X1 | 2915 | 2.5 | 18.5 | 41.0 | 38.5 |
+
+**M-C1** (`pnp_replay.py` with dyn-v0.1-2026-11-12, geometric perception, cap 1.0, whole PnP run
+of each segment; "main" is `--set check_final_sequence=0`, which is main's behaviour). Share of
+solved ticks where the unchecked final sequence collided although a clean sample existed:
+
+| Run | Solved ticks | Main: unchecked collided | Branch: replaced by fallback |
+|---|---|---|---|
+| L0 | 5800 | 0 (0.00 %) | 0 |
+| X0 | 5139 | 8 (0.16 %) | 5 (0.10 %) |
+| X1 | 3033 | 0 (0.00 %) | 0 |
+
+The open loop replay does not feed commands back, so the two columns count different ticks of
+a plan stream that is the same up to the first replaced tick; on the branch every flagged tick was
+replaced (flag count equals fallback count). No tick had all samples colliding. No threshold.
+M-C1 on the L5 canary: not run in this note.
+
+**M-C2, M-C3 (echo part) and M-T2 on L0's bag** (`2026-11-14T21-49-21_car_teleop`, no
+`/pnp/planner/timing` and no `/safety/cycle` in it, so the latch is the echo):
+
+| Item | Result |
 |---|---|
-| Stamp age of `/odom/wheel` at receipt on L0, X0, X1 (p99 plus one period against the present timeout) | not run, waits for PR 186 and 189 |
-| M-C1, share of ticks where the unchecked final sequence collided although a clean sample existed, on L0, X0, X1 | not run, same reason; the tool is `planner_replay_cli --set check_final_sequence=0` (main's behaviour) against the default, columns `final_sequence` and `unchecked_final_collided` |
-| M-C1 on the L5 canary | not run, no L5 before the B4 report |
-| M-C2, M-C3, M-T2 on a 2026-11-14 bag (echo part) | tools built and tested on synthetic streams and the R2 fixture; `python -m racer_eval.timing_chain BAG` refuses until both pre-registration files are on the checkout with the registered SHA-256 |
+| Commands, identified by echo | 5802, 5665 identified (97.6 %), 35 equal to the previous command, 102 unmatched |
+| publish to first echoing cycle (s) | p50 0.0118, p99 0.0209, max 0.0655 |
+| M-C3 distinct commanded speeds | 5681; only the 0.0 m/s command was held for 1 s (wheel 0.0 m/s); no steady wheel speed can be paired with the others |
+| M-T2 replay with the echoed latch | reproduces: rate_limit recorded 2, replayed 2, matched 2, extra 0 (dt detail within 0.002 ms); watchdog recorded 3, replayed 1, matched 1, missed 2 |
+| M-T2 cycles with an ambiguous echo | 47.8 % of cycles (listed in the JSON) |
 
-The stamp age measurement is the gate of change 2 in the brief: if p99 plus one period exceeds
-the present odometry timeout, stop and report instead of loosening. Until it is run the stamp rule
-is built and tested, but the brief's own precondition is open.
+The watchdog misses are the receive-time effect already known from M-T (the gate's own receive
+time is not recorded); `/safety/cycle` removes it at the next session. M-T2 as registered
+"reproduces" because every `rate_limit` ENGAGE is replayed at the same cycle. The limiter replay
+ran `limiter_whatif_cli` built from `racer_session_tools` in the container.
+
+Still open: M-C1 on the L5 canary (no L5 run here) and M-C2 legs that need `/pnp/planner/timing`
+(first bag recorded by this code is the next session).
 
 ## Tools
 

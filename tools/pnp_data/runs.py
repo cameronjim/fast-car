@@ -90,6 +90,13 @@ def read_run_signals(bag: Path) -> RunSignals:
         },
     )
     d, o, s = cols[mcapread.DRIVE_RAW], cols[mcapread.ODOM], cols[mcapread.STATUS]
+    # a topic with no message (a bag with no /drive_raw, or no odometry) is an empty column set
+    if d.shape[1] < 3:
+        d = np.zeros((0, 3))
+    if o.shape[1] < 2:
+        o = np.zeros((0, 2))
+    if s.shape[1] < 1:
+        s = np.zeros((0, 1))
     return RunSignals(d[:, 0], d[:, 1], d[:, 2], o[:, 0], o[:, 1], s[:, 0], t0)
 
 
@@ -139,6 +146,57 @@ def run_rows(
             )
         )
     return rows
+
+
+def run_rows_all(
+    draw_t: ArrayLike,
+    draw_speed: ArrayLike,
+    draw_steer: ArrayLike,
+    odom_t: ArrayLike,
+    odom_v: ArrayLike,
+    status_t: ArrayLike,
+) -> list[RunRow]:
+    """The rows of a bag for the v0.5 dynamics rule (`session_2026_11_15`: every run, whatever
+    drove it). The PnP runs are the status stretches, exactly as `run_rows` finds them. A bag that
+    holds status stretches AND other drivers (gap follow) has non-zero /drive_raw stretches that no
+    status stretch covers; each of those is a run of kind `drive_raw`. In a bag with no status this
+    is exactly `run_rows`. Runs are named R0, R1, ... in time order over both kinds."""
+    dt = np.asarray(draw_t, dtype=np.float64)
+    dv = np.asarray(draw_speed, dtype=np.float64)
+    pnp = run_rows(draw_t, draw_speed, draw_steer, odom_t, odom_v, status_t)
+    if len(np.asarray(status_t)) == 0:
+        return pnp
+    ds = np.asarray(draw_steer, dtype=np.float64)
+    ot = np.asarray(odom_t, dtype=np.float64)
+    ov = np.asarray(odom_v, dtype=np.float64)
+    st_runs = find_runs(dt, dv, np.asarray(status_t, dtype=np.float64))
+    extra: list[RunRow] = []
+    for run in find_runs(dt, dv, None):
+        covered = any(run.t_start <= r.t_end and r.t_start <= run.t_end for r in st_runs)
+        if covered:
+            continue
+        cmd = (dt >= run.t_start) & (dt <= run.t_end) & (dv != 0.0)
+        wheel = (ot >= run.t_start) & (ot <= run.t_end)
+        extra.append(
+            RunRow(
+                run_id="",
+                kind="drive_raw",
+                start_s=float(run.t_start),
+                end_s=float(run.t_end),
+                p99_cmd_mps=float(np.percentile(np.abs(dv[cmd]), 99.0)),
+                direction="ccw" if float(np.mean(ds[cmd])) > 0.0 else "cw",
+                wheel_distance_m=_distance(ot[wheel], ov[wheel]),
+                max_wheel_mps=float(np.max(np.abs(ov[wheel]))) if wheel.any() else 0.0,
+            )
+        )
+    rows = sorted([*pnp, *extra], key=lambda r: r.start_s)
+    return [RunRow(**{**asdict(r), "run_id": f"R{i}"}) for i, r in enumerate(rows)]
+
+
+def rows_of_signals_all(sig: RunSignals) -> list[RunRow]:
+    return run_rows_all(
+        sig.draw_t, sig.draw_speed, sig.draw_steer, sig.odom_t, sig.odom_v, sig.status_t
+    )
 
 
 def rows_of_signals(sig: RunSignals) -> list[RunRow]:

@@ -61,7 +61,7 @@ echo "::endgroup::"
 # both installed by --all-extras; the bag writer in the tests is mcap_ros2's.
 echo "::group::pytest: tools/pnp_data and tools/lapref (gate=line90 on the two packages)"
 if ! (cd tools && uv sync --all-extras --dev &&
-  uv run pytest tests/test_pnp_data.py tests/test_lapref.py tests/test_lapref_compare.py --cov=pnp_data --cov=lapref \
+  uv run pytest tests/test_pnp_data.py tests/test_pnp_data_v05.py tests/test_lapref.py tests/test_lapref_compare.py --cov=pnp_data --cov=lapref \
     --cov-report=term-missing --cov-fail-under=90); then
   FAIL=1
 fi

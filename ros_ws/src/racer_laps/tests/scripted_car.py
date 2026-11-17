@@ -33,6 +33,11 @@ class Car:
             dead_reckoning_seed=False,
             seed_search=False,
             along_search_m=0.0,
+            # The scripted matcher stands in for the start-scan match of gate v2.1 and these scans
+            # are sparse (no displaced scan 0.4 m back): the v3 additions are off here, they have
+            # their own tests (test_gate_v3.py).
+            ring_enabled=False,
+            unique_shift_m=0.0,
         )
         self.mem = LapMemory(
             LapConfig(

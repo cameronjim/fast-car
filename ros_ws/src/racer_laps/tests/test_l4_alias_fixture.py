@@ -98,5 +98,18 @@ def test_the_design_starting_limit_is_too_loose_on_this_input() -> None:
     (the false line shows a violation share of 0.032 to 0.075, the true line 0.000)."""
     if "strong_max_violation" not in inspect.signature(GateConfig).parameters:
         pytest.skip("gate v1 has no violation limit")
-    laps = replay(strong_max_violation=0.04)
+    if "unique_shift_m" in inspect.signature(GateConfig).parameters:
+        # gate v3's uniqueness test rejects the alias by itself: this evidence is about the
+        # violation limit alone, so the v3 additions are off here
+        laps = replay(strong_max_violation=0.04, ring_enabled=False, unique_shift_m=0.0)
+    else:
+        laps = replay(strong_max_violation=0.04)
     assert laps and laps[0].length_m < LOOP_WHEEL_M - 1.0
+
+
+def test_gate_v3_closes_lap_1_at_the_line_even_with_the_design_limit_of_0_04() -> None:
+    """Gate v3 (brief 50): the displaced-scan test rejects the alias on its own, 2 m early."""
+    if "unique_shift_m" not in inspect.signature(GateConfig).parameters:
+        pytest.skip("gate v2.1 has no uniqueness test")
+    laps = replay(strong_max_violation=0.04)
+    assert laps and laps[0].length_m == pytest.approx(LOOP_WHEEL_M, abs=0.45)

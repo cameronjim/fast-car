@@ -79,12 +79,14 @@ The gate is a measurement of lap position, not a safety function.
 from __future__ import annotations
 
 import math
+import time
 from collections import deque
 from dataclasses import dataclass, replace
 from itertools import pairwise
 
 import numpy as np
 
+from racer_laps.ring import Estimate, Fix, Ref, Ring, Visit, is_aliased, make_ref
 from racer_laps.scan_match import (
     DENSE_MAX_POINTS,
     DENSE_VOXEL_M,
@@ -95,7 +97,6 @@ from racer_laps.scan_match import (
     match_scans,
     overlap_share,
     polar_profile,
-    surface_normals,
     thin,
     wrap,
 )
@@ -120,6 +121,13 @@ MAX_EXTRAPOLATION_S = 0.2
 #: The car is standing below this wheel speed (m/s). One number for the gate's standstill rule
 #: and for the replay's and the status's reading of "first motion" (brief 48).
 STANDSTILL_MPS = 0.05
+#: Uniqueness test (gate v3): the scans of this much wheel distance are kept, one at most every
+#: `1 / UNIQUE_BUFFER_MAX` of it (so at most 30 plus one).
+UNIQUE_BUFFER_M = 1.0
+UNIQUE_BUFFER_MAX = 30
+#: The cost of `on_scan` is reported over the last this many scans.
+TIMING_WINDOW = 200
+LINE_SOURCES = ("start_scan", "anchor", "winding")
 
 
 @dataclass(frozen=True)
@@ -186,6 +194,26 @@ class GateConfig:
     seed_grid_dx_m: tuple[float, ...] = (-0.8, -0.4, 0.0, 0.4, 0.8)
     seed_grid_dyaw_rad: tuple[float, ...] = (-0.35, 0.0, 0.35)
     refine_top: int = 2
+    #: Gate v3 (brief 50; section 20 of the design). `ring_enabled` False and `unique_shift_m` 0.0
+    #: give gate v2.1 exactly. See the module docstring of ring.py and `StartScanGate`.
+    ring_enabled: bool = True
+    unique_shift_m: float = 0.4
+    unique_shift_tol_m: float = 0.1
+    unique_same_m: float = 0.2
+    alias_max_share: float = 0.25
+    alias_min_scans: int = 3
+    kf_spacing_m: float = 0.5
+    kf_max: int = 120
+    kf_window_m: float = 0.3
+    kf_retire_visits: int = 2
+    anchor_wait_m: float = 0.4
+    ring_check_m: float = 0.25
+    #: Seed of the first keyframe match of a visit. False (the brief): the predicted along offset
+    #: with zero yaw. True: also the yaw the odometry heading predicts (the keyframe's stored
+    #: heading against the heading now). On a curved ring the zero-yaw seed pulls the along
+    #: offset toward zero (anchor laps 2 percent short in test_gate_v3.py); this is not part of
+    #: the registered design and is off by default.
+    kf_seed_yaw: bool = False
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.wheelbase_m) and self.wheelbase_m > 0.0):
@@ -198,6 +226,18 @@ class GateConfig:
             raise ValueError("strong_max_violation must be in [0, 1], consensus_window_m positive")
         if self.consensus_past_m < 0.0 or self.consensus_wait_s < 0.0:
             raise ValueError("consensus_past_m and consensus_wait_s must not be negative")
+        if self.unique_shift_m < 0.0 or self.unique_shift_tol_m < 0.0 or self.unique_same_m <= 0.0:
+            raise ValueError("unique_shift_m and unique_shift_tol_m must not be negative")
+        if not (0.0 <= self.alias_max_share <= 1.0) or self.alias_min_scans < 1:
+            raise ValueError("alias_max_share must be in [0, 1], alias_min_scans at least 1")
+        if self.ring_enabled and (
+            self.kf_spacing_m <= 0.0
+            or self.kf_max < 2
+            or self.kf_window_m <= 0.0
+            or self.kf_retire_visits < 1
+            or self.anchor_wait_m < 0.0
+        ):
+            raise ValueError("ring: kf_spacing_m and kf_window_m positive, kf_max at least 2")
 
 
 @dataclass(frozen=True)
@@ -212,6 +252,17 @@ class GateCrossing:
     heading_rad: float = math.nan  # heading integrated from odometry over the lap
     n_candidates: int = 0  # STRONG matches the crossing was placed from
     spread_m: float = 0.0  # max minus min of their line estimates, wheel distance
+    line_source: str = "start_scan"  # start_scan, anchor or winding (see StartScanGate)
+
+
+@dataclass(frozen=True)
+class _ScanRec:
+    """A scan of the last metre of wheel distance, kept for the uniqueness test."""
+
+    total_m: float
+    thin: FloatArray
+    dense: FloatArray
+    points: FloatArray
 
 
 @dataclass
@@ -315,10 +366,7 @@ class StartScanGate:
         self._origin_m = 0.0
         self._heading_origin = 0.0
         self._t_lap_start = 0.0
-        self._start_pts: FloatArray = np.zeros((0, 2))
-        self._start_normals: FloatArray = np.zeros((0, 2))
-        self._start_dense: FloatArray = np.zeros((0, 2))
-        self._start_profile: FloatArray = np.zeros(0)
+        self._start: Ref = Ref(np.zeros((0, 2)), np.zeros((0, 2)), np.zeros((0, 2)), np.zeros(0))
         self._source_dense: FloatArray = np.zeros((0, 2))
         self._source_thin: FloatArray = np.zeros((0, 2))
         self._start_dr: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -331,6 +379,20 @@ class StartScanGate:
         self.last_match: MatchResult | None = None
         self.last_arming_state = "idle"
         self._odom_t: float | None = None
+        # gate v3
+        c = cfg
+        self._ring = Ring(c.kf_spacing_m, c.kf_max, c.kf_window_m, c.kf_retire_visits)
+        self._scans: deque[_ScanRec] = deque()
+        self._visit: Visit | None = None
+        self._n_unique = 0  # STRONG start-scan matches this lap that were unique ...
+        self._n_ambiguous = 0  # ... and ambiguous (the alias verdict of this lap)
+        self._w_star_m: float | None = None  # wheel total where the heading reached 2 pi
+        self.line_sources: list[str] = []
+        self.missed_laps: list[int] = []
+        self.ring_disagreements = 0
+        self.ring_disagreement_laps: list[int] = []
+        self.alias_share_last_lap = 0.0
+        self._timings: deque[float] = deque(maxlen=TIMING_WINDOW)
 
     # -- state -----------------------------------------------------------------------------
 
@@ -370,6 +432,40 @@ class StartScanGate:
     def heading_since_closure_rad(self) -> float:
         return (self._hist[-1].heading if self._hist else 0.0) - self._heading_origin
 
+    @property
+    def ring(self) -> Ring:
+        return self._ring
+
+    @property
+    def start_aliased(self) -> bool:
+        """The start scan is aliased on this lap: the uniqueness test called at least
+        `alias_min_scans` of its STRONG matches near the line ambiguous, and more than
+        `alias_max_share` of them."""
+        c = self.cfg
+        if c.unique_shift_m <= 0.0:
+            return False
+        return is_aliased(self._n_unique, self._n_ambiguous, c.alias_min_scans, c.alias_max_share)
+
+    def _pending_estimate_m(self) -> float | None:
+        """Wheel total of an anchor or winding estimate of the line that is waiting for its
+        `anchor_wait_m` (None when there is none)."""
+        c = self.cfg
+        if not (c.ring_enabled and self._started):
+            return None
+        total = self.total_m
+        est = self._ring.anchor_total_m if self._ring.fixed else math.nan
+        if math.isfinite(est) and est - self._origin_m >= c.min_lap_length_m:
+            return est if total < est + c.anchor_wait_m else None
+        w = self._w_star_m
+        if (
+            self.start_aliased
+            and not self._ring.fixes
+            and w is not None
+            and w - self._origin_m >= c.min_lap_length_m
+        ):
+            return w if total < w + c.anchor_wait_m else None
+        return None
+
     def _uncertain_after_m(self) -> float:
         value = self._est.value_m
         if not math.isfinite(value):
@@ -383,7 +479,7 @@ class StartScanGate:
         """No crossing although the estimated lap length (plus its band when trusted, else
         `missed_factor` times it) was driven, and no candidate pending: with one the gate is at
         the line and deciding the closure, not lost."""
-        if self._cands:
+        if self._cands or self._pending_estimate_m() is not None:
             return False
         return self.station_m > self._uncertain_after_m()
 
@@ -445,20 +541,35 @@ class StartScanGate:
         dth = rate * dt
         step = v_mid * dt
         th_mid = last.theta + 0.5 * dth
-        self._hist.append(
-            _Sample(
-                t_s,
-                last.total_m + step,
-                last.heading + dth,
-                last.x + step * math.cos(th_mid),
-                last.y + step * math.sin(th_mid),
-                last.theta + dth,
-            )
+        new = _Sample(
+            t_s,
+            last.total_m + step,
+            last.heading + dth,
+            last.x + step * math.cos(th_mid),
+            last.y + step * math.sin(th_mid),
+            last.theta + dth,
         )
+        self._hist.append(new)
+        self._note_winding(last, new)
         self._speed = v
         self._odom_t = t_s
         while len(self._hist) > 2 and self._hist[0].t < t_s - HISTORY_S:
             self._hist.popleft()
+
+    def _note_winding(self, last: _Sample, new: _Sample) -> None:
+        """Remember the wheel total at which the heading since the last closure first reached
+        2 pi in magnitude (the winding closure's line)."""
+        if not self._started or self._w_star_m is not None:
+            return
+        h1 = abs(new.heading - self._heading_origin)
+        if h1 < TWO_PI:
+            return
+        h0 = abs(last.heading - self._heading_origin)
+        if h0 >= TWO_PI or h1 <= h0:
+            self._w_star_m = new.total_m
+            return
+        w = (TWO_PI - h0) / (h1 - h0)
+        self._w_star_m = last.total_m + w * (new.total_m - last.total_m)
 
     def set_start(self, t_eff_s: float, points: FloatArray) -> bool:
         """Store the start scan (base_link points) and begin lap 1. False, and nothing started,
@@ -466,10 +577,8 @@ class StartScanGate:
         pts = thin(points)
         if pts.shape[0] < 12 or not self._hist:
             return False
-        self._start_pts = pts
-        self._start_normals = surface_normals(pts)
-        self._start_dense = thin(points, DENSE_VOXEL_M, DENSE_MAX_POINTS)
-        self._start_profile = polar_profile(points, (self.cfg.lidar_x_m, self.cfg.lidar_y_m))
+        dense = thin(points, DENSE_VOXEL_M, DENSE_MAX_POINTS)
+        self._start = make_ref(points, pts, dense, (self.cfg.lidar_x_m, self.cfg.lidar_y_m))
         self._started = True
         self._laps = 0
         self._est = LapLengthEstimate()
@@ -485,6 +594,18 @@ class StartScanGate:
         last = self._hist[-1]
         self._start_dr = (last.x, last.y, last.theta)
         self.n_armed_scans = self.n_matched_scans = 0
+        self._scans.clear()
+        self._visit = None
+        self._n_unique = self._n_ambiguous = 0
+        self._w_star_m = None
+        self.line_sources = []
+        self.missed_laps = []
+        self.ring_disagreements = 0
+        self.ring_disagreement_laps = []
+        self.alias_share_last_lap = 0.0
+        self._ring.reset()
+        if self.cfg.ring_enabled:
+            self._ring.add(0.0, 0.0, self._origin_m, self._start)  # keyframe 0: the start scan
         return True
 
     # -- the match -------------------------------------------------------------------------
@@ -550,7 +671,7 @@ class StartScanGate:
                 cand = (seed[0] + dx, seed[1], seed[2] + dyaw)
                 scored.append(
                     (
-                        overlap_share(source, self._start_pts, cand, self.cfg.inlier_dist_m * 1.6),
+                        overlap_share(source, self._start.pts, cand, self.cfg.inlier_dist_m * 1.6),
                         cand,
                     )
                 )
@@ -569,11 +690,12 @@ class StartScanGate:
             and abs(res.yaw_rad) <= c.yaw_max_rad
         )
 
-    def _supported(self, source: FloatArray, res: MatchResult) -> bool:
+    def _supported(self, source: FloatArray, res: MatchResult, ref: Ref | None = None) -> bool:
         """The along-lane offset of `res` is observable (see `along_support`)."""
         if self.cfg.min_along_support <= 0:
             return True
-        n = along_support(source, self._start_pts, self._start_normals, res, self.cfg.inlier_dist_m)
+        ref = self._start if ref is None else ref
+        n = along_support(source, ref.pts, ref.normals, res, self.cfg.inlier_dist_m)
         return n >= self.cfg.min_along_support
 
     def _best_match(self, source: FloatArray, now: _Sample) -> MatchResult | None:
@@ -587,11 +709,11 @@ class StartScanGate:
         for seed in seeds:
             res = match_scans(
                 source,
-                self._start_pts,
+                self._start.pts,
                 seed,
                 inlier_m=self.cfg.inlier_dist_m,
                 score_source=self._source_dense,
-                score_target=self._start_dense,
+                score_target=self._start.dense,
             )
             if res is None:
                 continue
@@ -617,7 +739,7 @@ class StartScanGate:
         shifts = -c.along_search_m + c.along_step_m * np.arange(n)
         cos_y, sin_y = math.cos(res.yaw_rad), math.sin(res.yaw_rad)
         moved = self._source_dense @ np.array([[cos_y, -sin_y], [sin_y, cos_y]]).T
-        target = self._start_dense
+        target = self._start.dense
         t2 = (target * target).sum(axis=1)[None, :]
         shares = np.empty(n)
         for k, dx in enumerate(shifts):
@@ -630,28 +752,38 @@ class StartScanGate:
             return res
         again = match_scans(
             self._source_thin,
-            self._start_pts,
+            self._start.pts,
             (res.x_m + float(shifts[k_best]), res.y_m, res.yaw_rad),
             inlier_m=c.inlier_dist_m,
             score_source=self._source_dense,
-            score_target=self._start_dense,
+            score_target=self._start.dense,
         )
         if again is not None and again.inlier_share > res.inlier_share:
             return again
         return res
 
-    def _freespace(self, res: MatchResult, points: FloatArray) -> float:
-        """Larger free-space violation share of the match, both ways (see scan_match)."""
+    def _freespace(
+        self,
+        res: MatchResult,
+        points: FloatArray,
+        ref: Ref | None = None,
+        dense: FloatArray | None = None,
+    ) -> float:
+        """Larger free-space violation share of the match, both ways (see scan_match). `ref` is
+        the scan matched against (default the start scan), `dense` the dense set of `points`
+        (default the current scan's)."""
         c = self.cfg
+        ref = self._start if ref is None else ref
+        dense = self._source_dense if dense is None else dense
         origin = (c.lidar_x_m, c.lidar_y_m)
         cos_y, sin_y = math.cos(res.yaw_rad), math.sin(res.yaw_rad)
         rot = np.array([[cos_y, -sin_y], [sin_y, cos_y]])
         trans = np.array([res.x_m, res.y_m])
-        cur_in_start = self._source_dense @ rot.T + trans
+        cur_in_start = dense @ rot.T + trans
         a = freespace_violation_share(
-            cur_in_start, self._start_profile, origin, c.freespace_margin_m, c.freespace_max_range_m
+            cur_in_start, ref.profile, origin, c.freespace_margin_m, c.freespace_max_range_m
         )
-        start_in_cur = (self._start_dense - trans) @ rot
+        start_in_cur = (ref.dense - trans) @ rot
         b = freespace_violation_share(
             start_in_cur,
             polar_profile(points, origin),
@@ -663,27 +795,49 @@ class StartScanGate:
 
     def on_scan(self, t_eff_s: float, points: FloatArray) -> GateCrossing | None:
         """One scan (base_link points, body filtered) at its effective time. Returns the lap it
-        closed, if any. Costs one ICP while armed, nothing otherwise."""
+        closed, if any. Gate v2.1 costs one match while armed and nothing otherwise; v3 adds one
+        keyframe match (single seed) and one displaced-scan match per scan at most."""
         if not self._started:
             return None
+        t0 = time.perf_counter()
+        try:
+            return self._on_scan(t_eff_s, points)
+        finally:
+            self._timings.append(1000.0 * (time.perf_counter() - t0))
+
+    def _on_scan(self, t_eff_s: float, points: FloatArray) -> GateCrossing | None:
+        c = self.cfg
         if self.odometry_stale(t_eff_s):
-            # The pose at the scan would be extrapolated from an old sample: the wheel total is
-            # under-read and every candidate line, and the crossing, comes out early (a node that
-            # served the scan before the odometry queued behind it, on a starved host).
+            # The pose at the scan would be extrapolated from an old sample: the wheel total at
+            # the scan is under-read and every candidate line, and the crossing, comes out early
+            # (a node that served the scan before the odometry queued behind it, on a starved
+            # host).
             self.stale_odometry_scans += 1
             self.last_arming_state = "stale_odometry"
             return None
-        if not self.tracking:
+        tracking = self.tracking
+        v3 = c.ring_enabled or c.unique_shift_m > 0.0
+        if tracking or v3:
+            self._source_thin = thin(points)
+            self._source_dense = thin(points, DENSE_VOXEL_M, DENSE_MAX_POINTS)
+        if v3:
+            now = self._at(t_eff_s)
+            if c.unique_shift_m > 0.0:
+                self._remember(now, points)
+            if c.ring_enabled and self._ring.teaching:
+                self._teach(now, points)
+        if not tracking:
             self.last_arming_state = "waiting"
             self._cands = []
+            if c.ring_enabled and self._ring.fixed:
+                self._keyframe_step(t_eff_s, points, self._at(t_eff_s))
             return None
+        self._end_visit()
         armed = self.armed
         self.last_arming_state = "armed" if armed else "tracking"
         if armed:
             self.n_armed_scans += 1
-        source = thin(points)
-        self._source_thin = source
-        self._source_dense = thin(points, DENSE_VOXEL_M, DENSE_MAX_POINTS)
+        source = self._source_thin
         now = self._at(t_eff_s)
         res = self._best_match(source, now)
         if res is not None and self._accept(res):
@@ -696,10 +850,11 @@ class StartScanGate:
         self.last_match = res
         if not armed:
             return None
-        return self._try_close(t_eff_s, now)
+        return self._place_crossing(t_eff_s, now)
 
     def _consider(self, t_eff_s: float, res: MatchResult, source: FloatArray, now: _Sample) -> None:
-        """Keep a STRONG match near the line as one estimate of the line's wheel distance."""
+        """Keep a STRONG match near the line as one estimate of the line's wheel distance, if it
+        is unique (gate v3: a scan taken 0.4 m away does not also fit the start scan there)."""
         c = self.cfg
         if abs(res.x_m) > c.consensus_window_m or res.freespace_violation > c.strong_max_violation:
             return
@@ -720,7 +875,209 @@ class StartScanGate:
             return
         if not self._supported(source, res):
             return
+        if c.unique_shift_m > 0.0:
+            unique = self._is_unique(res, self._start, now.total_m)
+            if unique:
+                self._n_unique += 1
+            else:
+                self._n_ambiguous += 1
+            if self.start_aliased:
+                self._cands = []  # an aliased start scan places nothing on this lap
+                return
+            if not unique:
+                return
         self._cands.append(_Candidate(t_eff_s, line, res))
+
+    # -- gate v3: uniqueness, keyframes, placing the crossing --------------------------------
+
+    def _strong(self, res: MatchResult, source: FloatArray, ref: Ref) -> bool:
+        """STRONG as for the start scan: accepted, along-lane offset observable, free-space
+        violation at most `strong_max_violation` (the violation filled in by the caller)."""
+        return (
+            self._accept(res)
+            and res.freespace_violation <= self.cfg.strong_max_violation
+            and self._supported(source, res, ref)
+        )
+
+    def _remember(self, now: _Sample, points: FloatArray) -> None:
+        """Keep the scan for the uniqueness test: the last `UNIQUE_BUFFER_M` of wheel distance, at
+        most one scan per `UNIQUE_BUFFER_M / UNIQUE_BUFFER_MAX` of it (a car that stands must not
+        push the approach out of the buffer)."""
+        if self._scans and now.total_m - self._scans[-1].total_m < (
+            UNIQUE_BUFFER_M / UNIQUE_BUFFER_MAX
+        ):
+            return
+        self._scans.append(
+            _ScanRec(now.total_m, self._source_thin, self._source_dense, np.array(points))
+        )
+        while self._scans[0].total_m < now.total_m - UNIQUE_BUFFER_M:
+            self._scans.popleft()
+
+    def _displaced(self, total_m: float) -> _ScanRec | None:
+        """The buffered scan nearest `unique_shift_m` of wheel distance before `total_m`, within
+        `unique_shift_tol_m`."""
+        c = self.cfg
+        target = total_m - c.unique_shift_m
+        best: _ScanRec | None = None
+        best_d = math.inf
+        for rec in self._scans:
+            d = abs(rec.total_m - target)
+            if d < best_d:
+                best, best_d = rec, d
+        if best is None or best_d > c.unique_shift_tol_m:
+            return None
+        return best
+
+    def _is_unique(self, res: MatchResult, ref: Ref, total_m: float) -> bool:
+        """The uniqueness test. Match the scan taken `unique_shift_m` earlier against the same
+        reference, seeded with `res`'s pose, one ICP. If that is accepted, STRONG and within
+        `unique_same_m` of `res` along and across, a scan taken 0.4 m away fits the reference at
+        the same pose: `res` is ambiguous. No displaced scan: not unique."""
+        c = self.cfg
+        rec = self._displaced(total_m)
+        if rec is None:
+            return False
+        other = match_scans(
+            rec.thin,
+            ref.pts,
+            (res.x_m, res.y_m, res.yaw_rad),
+            inlier_m=c.inlier_dist_m,
+            score_source=rec.dense,
+            score_target=ref.dense,
+        )
+        if other is None or not self._accept(other):
+            return True
+        other = replace(
+            other, freespace_violation=self._freespace(other, rec.points, ref, rec.dense)
+        )
+        if not self._strong(other, rec.thin, ref):
+            return True
+        same = (
+            abs(other.x_m - res.x_m) < c.unique_same_m
+            and abs(other.y_m - res.y_m) < c.unique_same_m
+        )
+        return not same
+
+    def _teach(self, now: _Sample, points: FloatArray) -> None:
+        """Lap 1 (or a lap that re-teaches): a keyframe every `spacing` of wheel distance, not
+        while standing."""
+        ring = self._ring
+        station = now.total_m - self._origin_m
+        if self._speed < STANDSTILL_MPS or not ring.due(station):
+            return
+        c = self.cfg
+        ref = make_ref(
+            points,
+            self._source_thin,
+            self._source_dense,
+            (c.lidar_x_m, c.lidar_y_m),
+            compact=True,
+        )
+        ring.add(station, now.heading - self._heading_origin, now.total_m, ref)
+
+    def _keyframe_step(self, t_eff_s: float, points: FloatArray, now: _Sample) -> None:
+        """Match the scan to the one live keyframe at the car's station (single seed, no grid, no
+        along refinement) and keep its STRONG, unique matches as estimates of where the car was at
+        the keyframe."""
+        c = self.cfg
+        ring = self._ring
+        station = now.total_m - self._origin_m
+        kf = ring.nearest_live(station)
+        if self._visit is not None and (kf is None or kf is not self._visit.keyframe):
+            self._end_visit()
+        if kf is None:
+            return
+        if self._visit is None:
+            self._visit = Visit(kf)
+        visit = self._visit
+        yaw0 = (now.heading - self._heading_origin) - kf.heading_rad if c.kf_seed_yaw else 0.0
+        seed = (station - kf.station_m, 0.0, yaw0)
+        if visit.last is not None and now.t - visit.last[0] <= 1.0:
+            _t_prev, prev, dr_prev = visit.last
+            rel = _compose(_inverse(dr_prev), (now.x, now.y, now.theta))
+            seed = _compose((prev.x_m, prev.y_m, prev.yaw_rad), rel)
+        ref = kf.ref
+        res = match_scans(
+            self._source_thin,
+            ref.pts,
+            seed,
+            inlier_m=c.inlier_dist_m,
+            score_source=self._source_dense,
+            score_target=ref.dense,
+        )
+        if res is None or not self._accept(res):
+            return
+        res = replace(res, freespace_violation=self._freespace(res, points, ref))
+        visit.last = (t_eff_s, res, (now.x, now.y, now.theta))
+        if abs(res.x_m) > c.consensus_window_m or res.freespace_violation > c.strong_max_violation:
+            return
+        if not self._supported(self._source_thin, res, ref):
+            return
+        if c.unique_shift_m > 0.0 and not self._is_unique(res, ref, now.total_m):
+            visit.n_ambiguous += 1
+            return
+        visit.n_unique += 1
+        visit.estimates.append(Estimate(now.total_m - res.x_m, res.inlier_share, res.rms_m))
+
+    def _end_visit(self) -> None:
+        """The car left a keyframe's window: its verdict, and a fix if it is not aliased and its
+        unique estimates meet the consensus rule (two within `consensus_spread_m`, or one of
+        late-match quality)."""
+        visit = self._visit
+        if visit is None:
+            return
+        self._visit = None
+        c = self.cfg
+        aliased = is_aliased(
+            visit.n_unique, visit.n_ambiguous, c.alias_min_scans, c.alias_max_share
+        )
+        self._ring.note_visit(visit.keyframe, aliased)
+        if aliased or not visit.estimates:
+            return
+        lines = sorted(e.line_m for e in visit.estimates)
+        agree = any(b - a <= c.consensus_spread_m for a, b in pairwise(lines))
+        quality = any(
+            e.inlier_share >= c.quality_min_share and e.rms_m <= c.quality_rms_max_m
+            for e in visit.estimates
+        )
+        if agree or quality:
+            kf = visit.keyframe
+            self._ring.add_fix(Fix(kf.index, kf.station_m, float(np.median(lines))))
+
+    def _place_crossing(self, t_eff_s: float, now: _Sample) -> GateCrossing | None:
+        """Where the crossing is, in this order: the start scan (v2.1); the anchor estimate of
+        the line; the winding of the heading, only with the alias verdict and no fix; else
+        nothing."""
+        c = self.cfg
+        if self.start_aliased:
+            self._cands = []
+        crossing = self._try_close(t_eff_s, now)
+        if crossing is not None or not c.ring_enabled or self._cands:
+            return crossing
+        anchor = self._ring.anchor_total_m if self._ring.fixed else math.nan
+        if math.isfinite(anchor) and anchor - self._origin_m >= c.min_lap_length_m:
+            if now.total_m >= anchor + c.anchor_wait_m:
+                return self._close_at(t_eff_s, anchor, "anchor")
+            return None
+        w = self._w_star_m
+        if (
+            self.start_aliased
+            and not self._ring.fixes
+            and w is not None
+            and w - self._origin_m >= c.min_lap_length_m
+            and now.total_m >= w + c.anchor_wait_m
+        ):
+            return self._close_at(t_eff_s, w, "winding")
+        return None
+
+    def _close_at(self, t_eff_s: float, total_m: float, source: str) -> GateCrossing | None:
+        t_cross = self._time_at_total(total_m)
+        if t_cross is None:
+            return None
+        t_cross = min(t_cross, t_eff_s)
+        if t_cross <= self._t_lap_start:
+            return None
+        return self._finish(t_cross, 0.0, 0.0, 0, 0.0, source)
 
     def _try_close(self, t_eff_s: float, now: _Sample) -> GateCrossing | None:
         c = self.cfg
@@ -777,6 +1134,7 @@ class StartScanGate:
         yaw_rad: float,
         n_candidates: int = 0,
         spread_m: float = 0.0,
+        line_source: str = "start_scan",
     ) -> GateCrossing:
         at = self._at(t_cross)
         length = at.total_m - self._origin_m
@@ -795,7 +1153,9 @@ class StartScanGate:
             heading_rad=at.heading - self._heading_origin,
             n_candidates=n_candidates,
             spread_m=spread_m,
+            line_source=line_source,
         )
+        self._note_crossing(crossing, at.total_m)
         if not missed:
             # judged against the estimate as it stood: adding a deviant lap would itself make the
             # last two disagree and the estimate untrusted
@@ -818,7 +1178,40 @@ class StartScanGate:
         self._t_lap_start = t_cross
         self._uncertain_lap = False
         self._cands = []
+        self._w_star_m = None
+        self._n_unique = self._n_ambiguous = 0
         return crossing
+
+    def _note_crossing(self, crossing: GateCrossing, total_m: float) -> None:
+        """Book a closure: line source, missed flag, the alias share of the lap, the check of a
+        start-scan crossing against the anchor estimate, and the ring (taught on this lap or
+        repeated)."""
+        c = self.cfg
+        self.line_sources.append(crossing.line_source)
+        if crossing.missed:
+            self.missed_laps.append(crossing.lap_index)
+        n = self._n_unique + self._n_ambiguous
+        self.alias_share_last_lap = self._n_ambiguous / n if n else 0.0
+        if not c.ring_enabled:
+            return
+        ring = self._ring
+        self._end_visit()
+        if ring.teaching:
+            ring.finish_teaching(crossing.length_m)
+            return
+        anchor = ring.anchor_total_m
+        if (
+            crossing.line_source == "start_scan"
+            and math.isfinite(anchor)
+            and abs(total_m - anchor) > c.ring_check_m
+        ):
+            self.ring_disagreements += 1
+            self.ring_disagreement_laps.append(crossing.lap_index)
+        ring.end_lap()
+        if ring.teaching and not ring.keyframes:
+            ring.add(
+                0.0, 0.0, total_m, self._start
+            )  # a lap that teaches again starts at keyframe 0
 
     def station_uncertain_at(self, total_m: float) -> bool:
         return total_m - self._origin_m > self._uncertain_after_m()
@@ -847,4 +1240,30 @@ class StartScanGate:
             "armed_scans": self.n_armed_scans,
             "matched_scans": self.n_matched_scans,
             "stale_odometry_scans": self.stale_odometry_scans,
+            **self._v3_status(),
         }
+
+    def _v3_status(self) -> dict[str, object]:
+        """The gate v3 keys of `/pnp/lap/status`."""
+        timings = np.array(self._timings, dtype=float)
+        out: dict[str, object] = {
+            "line_source": self.line_sources[-1] if self.line_sources else "",
+            "lap_line_sources": list(self.line_sources),
+            "phase_observable": self.phase_observable,
+            "missed_gate_laps": list(self.missed_laps),
+            "start_alias_share_last_lap": self.alias_share_last_lap,
+            "ring_disagreements": self.ring_disagreements,
+            "on_scan_ms_mean": float(timings.mean()) if timings.size else math.nan,
+            "on_scan_ms_p99": float(np.percentile(timings, 99)) if timings.size else math.nan,
+        }
+        if self.cfg.ring_enabled:
+            out["ring"] = self._ring.status()
+        return out
+
+    @property
+    def phase_observable(self) -> bool:
+        """False when the last lap closed by winding, or the start scan is aliased on this lap and
+        no keyframe gave a fix: the phase is odometry's alone."""
+        if self.line_sources and self.line_sources[-1] == "winding":
+            return False
+        return not (self.start_aliased and not self._ring.fixes)

@@ -276,10 +276,17 @@ def starved(result: dict) -> bool:
     return gap is not None and float(gap) > STARVED_GAP_S
 
 
+def invalid_truth(result: dict) -> bool:
+    """The truth recording does not cover crossing 0 (brief 48). A stored B4 file has no
+    `truth_valid` and is not invalid."""
+    return result.get("truth_valid") is False
+
+
 def needs_rerun(result: dict) -> bool:
-    """No usable result (the runner died before writing one) or a starved run."""
+    """No usable result (the runner died before writing one), a starved run or a run whose
+    ground truth is invalid."""
     unusable = "error" in result and "gt_lap_times_by_crossing_s" not in result
-    return unusable or starved(result)
+    return unusable or starved(result) or invalid_truth(result)
 
 
 def attempt_path(out: Path, name: str, k: int) -> Path:

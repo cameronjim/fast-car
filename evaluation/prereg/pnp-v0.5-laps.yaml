@@ -1,0 +1,51 @@
+schema: pnp-prereg-laps/1
+written: 2026-11-16
+supersedes: nothing        # v0.3 lap_battery (B4) and its results stand
+lap_battery_b7:
+  seeds: [51, 52, 53]
+  directions: [ccw, cw]
+  laps: 12
+  lap1_cap_mps: 0.5
+  ceiling: dynamics bundle validity v_max_mps (config/pnp/fixtures/dyn-car-2026-11-12)
+  plant: car-like (as pnp-v0.3.yaml lap_battery), scan noise on
+  lap_source: start_scan
+  cases:
+    P1: {track: stadium, lane_width_m: 1.2, straight_length_m: 3.5, island_radius_m: 0.5}
+    P2: {track: rounded_rect, lane_width_m: 1.0, straight_length_m: 3.5, island_width_m: 1.8, island_radius_m: 0.45}
+    P3: {track: stadium, lane_width_m: 1.0, straight_length_m: 4.5, island_radius_m: 0.55}
+    P4: {track: stadium, lane_width_m: 1.1, straight_length_m: 0.0, island_radius_m: 0.40}
+  drop_rule: {condition: a, seed: 51, min_laps: 3, either_direction: true}
+  conditions:
+    a: {lap_memory: off, cap_mps: 0.5}
+    b: {lap_memory: off, cap: ceiling}
+    c: {lap_memory: v0}
+  truth: {crossing_0: first_scan_stamp_at_or_after_driving_receipt, reads_system_laps: false}
+  validity: {max_scan_wait_s: 0.25, max_attempts: 3, invalid_counts_as: failed_to_execute}
+  thresholds:
+    s0_tolerance_s: 0.3
+    s0b_min_share_within_tolerance: 0.98
+    s0b_max_single_error_s: 1.0
+    s1_min_complete: {of_24: 22, of_18: 16}
+    s1_complete_laps: 10
+    s1_reach_ratio: 1.05
+    s1_reach_min_runs: {of_24: 22, of_18: 16}
+    s1_median_r_max: 0.80
+    late_laps: [8, 9, 10]
+d7_c0:
+  mode: observe
+  runs: 2                  # one per direction
+  laps_judged: 10
+  tolerance_s: 0.3
+  laps_2_to_10_min_within: 17   # of 18
+  lap1: crossing_offset_within_tolerance_of_median_offset_of_crossings_2_to_10
+  missed_gate_flags_allowed: 0
+  reference: camera_lap_counter_or_video
+  reference_valid_if: count_equals_floor(wheel_distance / median_reference_lap_distance)
+owner_decisions:
+  date: 2026-11-16
+  source: claude-docs/owner-decisions-2026-11-16.md
+  d7_s0_s1_pass_lets_d_v0_drive: true          # D3-S0 stays FAIL as registered
+  d7_pass_stands_in_for_d3_before_b5_b6: true
+  small_fix_path_before_keyframe_ring: true
+  d7_c0_reference: camera_lap_counter          # resolves `reference` of d7_c0 above
+  d7_c0_reference_backup: phone_video

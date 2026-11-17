@@ -598,6 +598,7 @@ class LapMemoryNode(Node):
         self.get_logger().info(
             f"lap {r.lap_index}: {r.lap_time_s:.2f} s, {r.length_m:.2f} m, cap {r.cap_mps:.2f}, "
             f"{'clean' if r.clean else 'UNCLEAN'}{' (missed gate, not a lap)' if r.missed_gate else ''}"
+            f"{f', launch dwell {r.launch_dwell_s:.2f} s' if r.lap_index == 1 else ''}"
             f", {r.n_candidates} candidates spread {r.spread_m:.2f} m"
             f", brakes {r.safety_brakes} (obstacle {r.obstacle_brakes}, timing {r.timing_brakes}), "
             f"next cap {r.next_cap_mps:.2f}"

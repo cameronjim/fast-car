@@ -18,6 +18,9 @@ equals the ground-truth count and every system lap time is within 0.3 s of the g
 (differences of crossing stamps of the start line, `gt_lap_times_by_crossing_s`), 0 wall contacts.
 Gate v1 closed laps metres early on straights like this one.
 
+Every case also asserts (brief 48) that the ground truth is valid: `truth_valid` is true and the
+first ground-truth odometry stamp precedes `driving_first_s`, so crossing 0 is covered.
+
 Case 2 (half a lap): the car is stopped after a little more than half a lap. A stadium looks the
 same half a lap later, so a gate that only compared scans would close here; the heading condition
 must keep it armed off. The system reports no lap.
@@ -129,6 +132,13 @@ def run_runner(
     assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
     result = json.loads(out.read_text())
     assert "error" not in result, result["error"]
+    # Brief 48: the truth recording covers crossing 0 in every case (it started before the planner
+    # reported DRIVING, which only the two-phase start guarantees).
+    assert result["truth_valid"] is True, result.get("truth_invalid_reason")
+    assert result["truth_first_odom_s"] < result["driving_first_s"], (
+        result["truth_first_odom_s"],
+        result["driving_first_s"],
+    )
     return result
 
 

@@ -45,7 +45,10 @@ from synth import BODY, MOUNT, RANGE_MAX_M, WHEELBASE_M, Stadium, scan_at
 os.environ.setdefault("ROS_DOMAIN_ID", "97")
 
 STADIUM = Stadium()
-SPEED_MPS = 3.0
+#: The car's ceiling is about 1.3 m/s (the dynamics bundle's validity). Gate v3's uniqueness test needs a
+#: scan within 0.1 m of 0.4 m back, so scans less than 0.2 m apart: 2.0 m/s at 10 Hz. The harness
+#: drove 3.0 m/s before; above the envelope a placed stadium is never proven.
+SPEED_MPS = 1.5
 LOOP_S = STADIUM.length_m / SPEED_MPS
 
 

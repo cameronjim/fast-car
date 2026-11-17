@@ -33,6 +33,11 @@ def main(argv: list[str]) -> int:  # pragma: no cover - real data
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--date", default="2026-11-16", help="the date of the output directory")
     parser.add_argument("--freeze-sha", default=None, help="freeze-eval: the freeze commit")
+    parser.add_argument(
+        "--rehearse",
+        action="store_true",
+        help="freeze-eval: dry run on train parts, scratch root, no held-out part is opened",
+    )
     parser.add_argument("--bag", type=Path, default=None, help="confirm: the session bag")
     parser.add_argument("--candidate", type=Path, default=None, help="confirm: contract 2.1 bundle")
     parser.add_argument("--deployed", type=Path, default=None, help="confirm: deployed bundle")

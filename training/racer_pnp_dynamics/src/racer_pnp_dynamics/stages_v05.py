@@ -468,8 +468,20 @@ def freeze_eval(args) -> int:  # pragma: no cover - real data
     )
 
     ctx = fit_context(args)  # train data and selection windows (the rule input), no held-out
-    root = ctx.root
-    token = check_freeze(root, args.freeze_sha)
+    repo = ctx.root
+    rehearse = bool(getattr(args, "rehearse", False))
+    if rehearse:
+        # A dry run of every line of this stage on TRAIN parts in place of the held-out ones (the
+        # numbers mean nothing: the models were fitted there), writing under a scratch root. It
+        # never builds, opens or names a held-out truth, and its output is never committed.
+        root = args.cache / "rehearsal-v05"
+        args.models = root / "models"
+        token = None  # a rehearsal has no freeze token, so it cannot open a held-out part
+        LOG.info("REHEARSAL on train parts, scratch root %s", root)
+    else:
+        root = repo
+        token = check_freeze(root, args.freeze_sha)
+    freeze_sha = token.git_sha if token is not None else "0" * 40
     c = constants()
     v01 = ctx.v01().nominal
     t5 = pickle.loads(_t5_pkl(args).read_bytes())["fit"]
@@ -486,14 +498,18 @@ def freeze_eval(args) -> int:  # pragma: no cover - real data
             models[f"TL5 seed {cand.seed}"] = scoring_v05.Spec(v01, ground21=gm)
     for name in ("N4", "R4", "T4", "TL4"):
         models[name] = specs[name]
-    LOG.info(
-        "freeze %s; reading the held-out parts of the session for the first time", token.git_sha
-    )
-    path = session_v05.require_committed_session(root)
-    split = session_v05.load_session_split(path)
-    meta = part_meta(path)
-    held_t2 = session_segments(args, split, meta, ctx.vehicle, "heldout", token, truth_v04.T2)
-    held_t2s = session_segments(args, split, meta, ctx.vehicle, "heldout", token, truth_v04.T2S)
+    path = session_v05.require_committed_session(repo)
+    if rehearse:
+        held_t2 = held_t2s = ctx.session_train  # train parts: no held-out part is opened
+    else:
+        LOG.info(
+            "freeze %s; reading the held-out parts of the session for the first time",
+            freeze_sha,
+        )
+        split = session_v05.load_session_split(path)
+        meta = part_meta(path)
+        held_t2 = session_segments(args, split, meta, ctx.vehicle, "heldout", token, truth_v04.T2)
+        held_t2s = session_segments(args, split, meta, ctx.vehicle, "heldout", token, truth_v04.T2S)
     recs = pose_recordings(args.bags, args.cache)
     older_held = [s for s in ctx.stage1.older_all if s.split == "heldout" and s.run.has_odom]
     pose_segs = pose_check.build_pose_segments(older_held, recs)
@@ -533,7 +549,7 @@ def freeze_eval(args) -> int:  # pragma: no cover - real data
             render_comparator(rows_old) + "\nT2s, Pp and Yp are not computed for these segments.\n"
         )
     notes = [
-        f"Constants SHA-256 {c.sha256}; session split file SHA-256 {session_v05_sha(root)}.",
+        f"Constants SHA-256 {c.sha256}; session split file SHA-256 {session_v05_sha(repo)}.",
         (
             f"Windows: {len(p.es)} on identical windows under T2 and T2s ({p.windows_t2_only} only "
             f"under T2, {p.windows_t2s_only} only under T2s, dropped); direction of a window from "
@@ -547,7 +563,7 @@ def freeze_eval(args) -> int:  # pragma: no cover - real data
     ]
     report = render_pass_report(
         pass_v05.decisions_to_dict(result),
-        comparator, tables, strata, token.git_sha, notes, reported,
+        comparator, tables, strata, freeze_sha, notes, reported,
     )  # fmt: skip
     folder = out_dir(root, args.date)
     folder.mkdir(parents=True, exist_ok=True)
@@ -560,15 +576,15 @@ def freeze_eval(args) -> int:  # pragma: no cover - real data
     date = args.date or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     created = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data = [
-        f"train role under T2, session split {session_v05_sha(root)}, constants {c.sha256}",
+        f"train role under T2, session split {session_v05_sha(repo)}, constants {c.sha256}",
         "selection: the 2026-11-14 held-out segments, never fitted on",
     ]
-    sha_cfg = export_v21_config_sha(c, token.git_sha)
+    sha_cfg = export_v21_config_sha(c, freeze_sha)
 
     def write(model_id, gm, v_max, gates, summary):
         bundle = args.models / model_id
         export_v21.write_bundle_v21(
-            bundle, model_id=model_id, created_utc=created, git_sha=token.git_sha,
+            bundle, model_id=model_id, created_utc=created, git_sha=freeze_sha,
             training_config_sha256=sha_cfg, vehicle=ctx.vehicle, nominal=v01, ground=gm,
             v_max_mps=v_max, data=data, metrics=_json({"outcome": result["outcome"]}),
         )  # fmt: skip

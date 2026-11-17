@@ -125,7 +125,7 @@ def total_at(history: list[tuple[float, float]], t: float) -> float:
     return s0 + (s1 - s0) * (t - t0) / (t1 - t0) if t1 > t0 else s0
 
 
-def replay_dump(name: str, out: Path) -> tuple[list[dict], list[dict]]:
+def replay_dump(name: str, out: Path, odom_lag_s: float = 0.0) -> tuple[list[dict], list[dict]]:
     """(candidate rows, lap rows) of one run: the dump through the engine, with the gate's
     candidate and match calls observed."""
     import numpy as np
@@ -217,7 +217,9 @@ def replay_dump(name: str, out: Path) -> tuple[list[dict], list[dict]]:
 
     gate._consider = consider  # type: ignore[method-assign]
     events = [(t, 2, i) for i, t in enumerate(scan_t)]
-    events += [(r[0], 0, i) for i, r in enumerate(odom)]
+    # `odom_lag_s`: the wheel odometry reaches the node this much later than it was stamped, as it
+    # does when a busy host makes the node serve a scan before the odometry that is queued behind it
+    events += [(r[0] + odom_lag_s, 0, i) for i, r in enumerate(odom)]
     events += [(r[0], 1, i) for i, r in enumerate(drive)]
     events.sort()
     started = False
@@ -287,7 +289,7 @@ def table_cmd(args: argparse.Namespace) -> None:
     ]
     for name in names:
         try:
-            cands, laps = replay_dump(name, out)
+            cands, laps = replay_dump(name, out, args.odom_lag_s)
         except FileNotFoundError as error:
             lines += ["", f"## {name}", f"not available: {error}"]
             continue
@@ -345,6 +347,12 @@ def main(argv: list[str] | None = None) -> int:
         if name == "table":
             p.add_argument("--src", default="", help="use the racer_laps source in this directory")
             p.add_argument("--out-name", default="lap3_table.md")
+            p.add_argument(
+                "--odom-lag-s",
+                type=float,
+                default=0.0,
+                help="deliver the wheel odometry this long after its stamp (a hypothesis test)",
+            )
         if name == "run":
             p.add_argument("--workers", type=int, default=2)
             p.add_argument("--domain-base", type=int, default=140)

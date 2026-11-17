@@ -68,6 +68,8 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
   slew_.max_acceleration_mps2 = geometry_.max_acceleration_mps2;
   slew_.fraction = cfg_.logic.rate_limit_fraction;
   slew_.speed_floor_mps = cfg_.mppi.speed_floor_mps;
+  start_slew_ = slew_;
+  start_slew_.fraction = std::min(cfg_.logic.start_steer_fraction, slew_.fraction);
   reverse_limit_mps_ = std::max(cfg_.recovery.recover_speed_mps, cfg_.mppi.speed_floor_mps);
 }
 
@@ -678,6 +680,10 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
                            ? std::min(std::max(wanted.steering_rad, geometry_.steering_min_rad),
                                       geometry_.steering_max_rad)
                            : last_published_.steering_rad;
+      // Hold the steering where it is until the ticks have proven on time (see
+      // LogicParams::start_steer_hold_ticks).
+      if (publish_good_ticks_ < lg.start_steer_hold_ticks)
+        c.steering_rad = last_published_.steering_rad;
     }
   }
   if (state == PlannerState::Driving) {
@@ -701,7 +707,8 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
   }
   if (state == PlannerState::Driving || state == PlannerState::Blocked ||
       state == PlannerState::Recovering || state == PlannerState::Starting) {
-    c = slew_limit(c, last_published_, elapsed, slew_);
+    c = slew_limit(c, last_published_, elapsed,
+                   state == PlannerState::Starting ? start_slew_ : slew_);
   }
 
   out.state = state;

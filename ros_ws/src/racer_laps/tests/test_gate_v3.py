@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 from racer_laps.engine import LapResult
-from racer_laps.gate import GateConfig, StartScanGate
+from racer_laps.gate import AMBIGUOUS, UNIQUE, UNKNOWN, GateConfig, StartScanGate
 from racer_laps.scan_match import match_scans, scan_to_points
 from synth import (
     BODY,
@@ -157,6 +157,7 @@ def test_on_a_ring_the_displaced_scan_makes_a_match_ambiguous() -> None:
     res = match_to_start(gate, pts, 0.0)  # the ring: the scan fits the start scan anywhere
     gate._source_dense = gate._scans[-1].dense
     res = _with_violation(gate, res, pts)
+    assert gate._classify(res, gate._start, gate.total_m) == AMBIGUOUS
     assert not gate._is_unique(res, gate._start, gate.total_m)
 
 
@@ -167,6 +168,7 @@ def test_on_a_stadium_straight_with_its_ends_in_view_a_match_is_unique() -> None
     res = match_to_start(gate, pts, 1.2)
     gate._source_dense = gate._scans[-1].dense
     res = _with_violation(gate, res, pts)
+    assert gate._classify(res, gate._start, gate.total_m) == UNIQUE
     assert gate._is_unique(res, gate._start, gate.total_m)
 
 
@@ -176,6 +178,8 @@ def test_with_no_displaced_scan_a_match_is_not_unique() -> None:
     res = _with_violation(gate, res, pts)
     assert gate._displaced(gate.total_m) is None
     assert not gate._is_unique(res, gate._start, gate.total_m)
+    # not ambiguous either: no evidence for the alias verdict (see `StartScanGate._classify`)
+    assert gate._classify(res, gate._start, gate.total_m) == UNKNOWN
 
 
 def test_a_displaced_scan_that_is_accepted_but_not_strong_leaves_the_match_unique(
@@ -184,9 +188,9 @@ def test_a_displaced_scan_that_is_accepted_but_not_strong_leaves_the_match_uniqu
     gate, pts = feed_gate(RING, 1.2, gate_kw={"ring_enabled": False})
     res = match_to_start(gate, pts, 0.0)
     res = _with_violation(gate, res, pts)
-    assert not gate._is_unique(res, gate._start, gate.total_m)  # ambiguous as it stands
+    assert gate._classify(res, gate._start, gate.total_m) == AMBIGUOUS  # as it stands
     monkeypatch.setattr(gate, "_freespace", lambda *a, **k: 0.5)  # the displaced one sees through
-    assert gate._is_unique(res, gate._start, gate.total_m)
+    assert gate._classify(res, gate._start, gate.total_m) == UNIQUE
 
 
 def _with_violation(gate: StartScanGate, res: object, pts: np.ndarray) -> object:

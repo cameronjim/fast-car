@@ -26,7 +26,7 @@ class Car:
     matcher: wheel odometry at 50 Hz, the steering that turns 2 pi per lap length, scans only when
     the test says so."""
 
-    def __init__(self, mp: pytest.MonkeyPatch) -> None:
+    def __init__(self, mp: pytest.MonkeyPatch, **gate_kw: object) -> None:
         cfg = GateConfig(
             wheelbase_m=WHEELBASE_M,
             min_along_support=0,
@@ -36,8 +36,7 @@ class Car:
             # The scripted matcher stands in for the start-scan match of gate v2.1 and these scans
             # are sparse (no displaced scan 0.4 m back): the v3 additions are off here, they have
             # their own tests (test_gate_v3.py).
-            ring_enabled=False,
-            unique_shift_m=0.0,
+            **{"ring_enabled": False, "unique_shift_m": 0.0, **gate_kw},  # type: ignore[arg-type]
         )
         self.mem = LapMemory(
             LapConfig(

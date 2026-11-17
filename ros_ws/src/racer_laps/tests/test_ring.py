@@ -173,15 +173,33 @@ def test_the_anchor_estimate_uses_the_latest_fix_of_the_lap() -> None:
 
 def test_a_lap_without_a_fix_twice_with_live_keyframes_teaches_again() -> None:
     ring = taught(12)
-    ring.end_lap()
+
+    def lap_without_fix() -> None:
+        ring.note_visit(ring.keyframes[3], False)  # visited, no fix, not aliased
+        ring.end_lap()
+
+    lap_without_fix()
     assert ring.fixed and ring.laps_without_fix == 1 and ring.generation == 0
     ring.add_fix(Fix(2, 1.0, 1.0))
     ring.end_lap()  # a fix resets the count
     assert ring.fixed and ring.laps_without_fix == 0
-    ring.end_lap()
-    ring.end_lap()
+    lap_without_fix()
+    lap_without_fix()
     assert ring.teaching and ring.generation == 1 and not ring.keyframes
     assert ring.fixes_last_lap == 0
+
+
+def test_keyframes_that_were_not_visited_do_not_keep_the_ring_alive() -> None:
+    """The last 40 percent of a lap is tracked by the start scan: those keyframes are live but never
+    visited, and a ring whose visited keyframes are all retired is not taught again."""
+    ring = taught(12)
+    for k in ring.keyframes[1:7]:
+        ring.note_visit(k, True)
+        ring.note_visit(k, True)
+    assert all(k.retired for k in ring.keyframes[1:7])
+    for _ in range(4):
+        ring.end_lap()
+    assert ring.fixed and ring.generation == 0 and ring.n_live == 6
 
 
 def test_no_re_teaching_when_only_keyframe_0_is_left_live() -> None:

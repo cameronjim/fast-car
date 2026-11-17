@@ -128,6 +128,10 @@ UNIQUE_BUFFER_MAX = 30
 #: The cost of `on_scan` is reported over the last this many scans.
 TIMING_WINDOW = 200
 LINE_SOURCES = ("start_scan", "anchor", "winding")
+#: The verdicts of the uniqueness test (`StartScanGate._classify`).
+UNIQUE = "unique"
+AMBIGUOUS = "ambiguous"
+UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -876,15 +880,15 @@ class StartScanGate:
         if not self._supported(source, res):
             return
         if c.unique_shift_m > 0.0:
-            unique = self._is_unique(res, self._start, now.total_m)
-            if unique:
+            verdict = self._classify(res, self._start, now.total_m)
+            if verdict == UNIQUE:
                 self._n_unique += 1
-            else:
+            elif verdict == AMBIGUOUS:
                 self._n_ambiguous += 1
             if self.start_aliased:
                 self._cands = []  # an aliased start scan places nothing on this lap
                 return
-            if not unique:
+            if verdict != UNIQUE:
                 return
         self._cands.append(_Candidate(t_eff_s, line, res))
 
@@ -928,15 +932,18 @@ class StartScanGate:
             return None
         return best
 
-    def _is_unique(self, res: MatchResult, ref: Ref, total_m: float) -> bool:
+    def _classify(self, res: MatchResult, ref: Ref, total_m: float) -> str:
         """The uniqueness test. Match the scan taken `unique_shift_m` earlier against the same
         reference, seeded with `res`'s pose, one ICP. If that is accepted, STRONG and within
         `unique_same_m` of `res` along and across, a scan taken 0.4 m away fits the reference at
-        the same pose: `res` is ambiguous. No displaced scan: not unique."""
+        the same pose: `AMBIGUOUS`. Otherwise `UNIQUE`. With no displaced scan (the first 0.4 m,
+        standstill, dropped scans) the match is not unique, and not ambiguous either: `UNKNOWN`
+        (it cannot place a crossing and it is no evidence for the alias verdict; counting it as
+        ambiguous would call a stadium aliased whenever scans drop out)."""
         c = self.cfg
         rec = self._displaced(total_m)
         if rec is None:
-            return False
+            return UNKNOWN
         other = match_scans(
             rec.thin,
             ref.pts,
@@ -946,17 +953,20 @@ class StartScanGate:
             score_target=ref.dense,
         )
         if other is None or not self._accept(other):
-            return True
+            return UNIQUE
         other = replace(
             other, freespace_violation=self._freespace(other, rec.points, ref, rec.dense)
         )
         if not self._strong(other, rec.thin, ref):
-            return True
+            return UNIQUE
         same = (
             abs(other.x_m - res.x_m) < c.unique_same_m
             and abs(other.y_m - res.y_m) < c.unique_same_m
         )
-        return not same
+        return AMBIGUOUS if same else UNIQUE
+
+    def _is_unique(self, res: MatchResult, ref: Ref, total_m: float) -> bool:
+        return self._classify(res, ref, total_m) == UNIQUE
 
     def _teach(self, now: _Sample, points: FloatArray) -> None:
         """Lap 1 (or a lap that re-teaches): a keyframe every `spacing` of wheel distance, not
@@ -1013,9 +1023,12 @@ class StartScanGate:
             return
         if not self._supported(self._source_thin, res, ref):
             return
-        if c.unique_shift_m > 0.0 and not self._is_unique(res, ref, now.total_m):
-            visit.n_ambiguous += 1
-            return
+        if c.unique_shift_m > 0.0:
+            verdict = self._classify(res, ref, now.total_m)
+            if verdict == AMBIGUOUS:
+                visit.n_ambiguous += 1
+            if verdict != UNIQUE:
+                return
         visit.n_unique += 1
         visit.estimates.append(Estimate(now.total_m - res.x_m, res.inlier_share, res.rms_m))
 

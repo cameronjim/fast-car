@@ -77,6 +77,8 @@ class Keyframe:
     ref: Ref
     retired: bool = False
     alias_streak: int = 0
+    visited: bool = False  # matched on the current lap (the tail of a lap is tracked by the
+    # start scan and never visited: it must not keep a useless ring alive)
 
     @property
     def nbytes(self) -> int:
@@ -184,6 +186,7 @@ class Ring:
     def note_visit(self, kf: Keyframe, aliased: bool) -> None:
         """A visit ended. Aliased `retire_visits` times running retires the keyframe (never
         keyframe 0); any visit that was not aliased resets the count."""
+        kf.visited = True
         if not aliased:
             kf.alias_streak = 0
             return
@@ -208,7 +211,9 @@ class Ring:
         self.fixes_last_lap = len(self.fixes)
         self.laps_without_fix = 0 if self.fixes else self.laps_without_fix + 1
         self.fixes = []
-        live_other = any(not k.retired and k.index != 0 for k in self.keyframes)
+        live_other = any(k.visited and not k.retired and k.index != 0 for k in self.keyframes)
+        for k in self.keyframes:
+            k.visited = False
         if self.laps_without_fix >= 2 and live_other:
             self.keyframes = []
             self.fixed = False

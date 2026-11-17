@@ -474,13 +474,42 @@ def test_a_keyframe_whose_matches_are_ambiguous_is_retired_and_gives_no_fix() ->
     assert len(g.ring.fixes) == 1  # an aliased keyframe gives none
 
 
-def test_the_cost_of_a_ring_lap_falls_back_once_the_keyframes_are_retired() -> None:
+def test_the_work_of_a_ring_lap_is_the_start_scan_match_and_the_pair_never_a_keyframe_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cost guard, as a work count and not as milliseconds (a wall-clock bound failed on a slow
+    shared runner at 72 ms against 60): on a ring the start scan is latched aliased on lap 1, so
+    from lap 2 on no keyframe is matched and a scan costs the start-scan match (at most the seeds,
+    the grid and the refinement of gate v2.1) plus the one ICP of the pair centre: ICP calls per
+    scan, counted in this run, never more than that."""
+    calls = {"n": 0}
+    real = gate_module.match_scans
+
+    def counting(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    per_scan: list[int] = []
+    real_on_scan = StartScanGate._on_scan
+
+    def measured(self, t, points):  # type: ignore[no-untyped-def]
+        before = calls["n"]
+        out = real_on_scan(self, t, points)
+        if self.laps_completed >= 2:
+            per_scan.append(calls["n"] - before)
+        return out
+
+    monkeypatch.setattr(gate_module, "match_scans", counting)
+    monkeypatch.setattr(StartScanGate, "_on_scan", measured)
     mem, _ = run(RING, 5.2, RING_SPEED)
     gate = mem.gate
-    assert gate is not None
-    # the last 200 scans are laps 4 and 5: keyframe 0 is all that is matched
-    assert gate.status()["on_scan_ms_p99"] < 60.0
-    assert gate.status()["on_scan_ms_mean"] < 30.0
+    assert gate is not None and gate.start_aliased
+    assert not any(k.visited for k in gate.ring.keyframes)  # no keyframe was ever matched
+    assert len(per_scan) > 200
+    # v2.1's start-scan path: at most 3 seeds and 2 grid candidates plus 1 refinement, then the
+    # pair centre's one ICP; the uniqueness test's ICP only when a candidate is considered
+    assert max(per_scan) <= 8, max(per_scan)
+    assert sum(per_scan) / len(per_scan) <= 4.0
 
 
 # -- the order: the start scan wins over the anchor --------------------------------------------------

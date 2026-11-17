@@ -557,25 +557,70 @@ def test_require_lap_counter_with_the_counter_off_refuses_when_none_is_in_the_gr
     assert m._make_actions(_context(lap_counter="false", require_lap_counter="true"))
 
 
-def test_require_lap_counter_with_the_counter_on_checks_five_seconds_after_start(
+def _gated(m, monkeypatch):
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    return m._make_actions(_context(lap_counter="true", require_lap_counter="true"))
+
+
+def test_require_lap_counter_does_not_start_the_planner_up_front(monkeypatch) -> None:
+    m = _module()
+    actions = _gated(m, monkeypatch)
+    nodes = [a for a in actions if hasattr(a, "node_package")]
+    assert [n.node_executable for n in nodes] == ["track_perception_node"]
+    # no timer that races the counter's startup any more
+    _execute, _include, _log, timer = _types()
+    assert not [a for a in actions if isinstance(a, timer)]
+
+
+def test_the_gate_starts_the_planner_only_once_the_counter_is_in_the_graph(monkeypatch) -> None:
+    m = _module()
+    from launch.actions import OpaqueFunction, TimerAction
+
+    _execute, _include, log, _timer = _types()
+    actions = _gated(m, monkeypatch)
+    gate = [a for a in actions if isinstance(a, OpaqueFunction)][-1]
+    probes: list[bool] = [False, False, True]
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: probes.pop(0))
+    for _ in range(2):  # counter still coming up: retry on a timer, planner not started
+        out = gate.execute(LaunchContext())
+        assert len(out) == 1 and isinstance(out[0], TimerAction)
+        assert not any(isinstance(x, EmitEvent) for x in out)
+        gate = out[0].actions[0]
+    out = gate.execute(LaunchContext())  # counter up: the planner is released
+    planners = [x for x in out if hasattr(x, "node_package")]
+    assert [n.node_executable for n in planners] == ["mppi_planner_node"]
+    assert any(isinstance(x, log) for x in out)
+
+
+def test_the_gate_refuses_and_never_starts_the_planner_if_the_counter_never_comes(
     monkeypatch,
 ) -> None:
     m = _module()
+    from launch.actions import OpaqueFunction
+
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    now = [100.0]
+    planner = m.nodes_for({}, {}, "")[1]
+    gate = m.require_counter_gate(planner, wait_s=10.0, clock=lambda: now[0])
+    gate.execute(LaunchContext())  # first call: start of the wait
+    now[0] += 10.0
+    out = gate.execute(LaunchContext())
+    assert any(isinstance(x, EmitEvent) and isinstance(x.event, Shutdown) for x in out)
+    assert planner not in out
+    assert not [x for x in out if hasattr(x, "node_package")]
+    assert isinstance(gate, OpaqueFunction)
+
+
+def test_require_lap_counter_off_keeps_both_nodes_and_no_gate(monkeypatch) -> None:
+    m = _module()
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
     monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
-    _execute, _include, log, timer = _types()
-    actions = m._make_actions(_context(lap_counter="true", require_lap_counter="true"))
-    timers = [a for a in actions if isinstance(a, timer)]
-    assert len(timers) == 1 and float(timers[0].period) == m.LAP_COUNTER_WAIT_S
-    # absent after the wait: one error and a shutdown; present: nothing
-    out = m.require_counter_check(LaunchContext())
-    assert any(isinstance(x, EmitEvent) and isinstance(x.event, Shutdown) for x in out)
-    assert any(isinstance(x, log) for x in out)
-    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
-    assert m.require_counter_check(LaunchContext()) == []
-    # without require there is no timer
+    from launch.actions import OpaqueFunction
+
     plain = m._make_actions(_context(lap_counter="true", require_lap_counter="false"))
-    assert not [a for a in plain if isinstance(a, timer)]
+    assert len([a for a in plain if hasattr(a, "node_package")]) == 2
+    assert not [a for a in plain if isinstance(a, OpaqueFunction)]
 
 
 @pytest.mark.parametrize(

@@ -169,3 +169,136 @@ def test_the_parser_and_the_procedure_commands_agree(tmp_path):
         cs.build_parser().parse_args(cmd[2:])
     assert cs.build_parser().parse_args(["--manifest", "m", "--v-max-mps", "1.3"]).v_max_mps == 1.3
     assert cs.build_parser().parse_args(["--manifest", "m", "--v-max-mps", "1.3"]).v_max_mps == 1.3
+
+
+class _FakeRclpy:
+    """Just enough rclpy for run_schedule. `sigint_after` spin_once calls rclpy's own SIGINT
+    handler shuts the context down (and the spin raises if `raise_in_spin`)."""
+
+    class RCLError(RuntimeError):
+        pass
+
+    def __init__(self, sigint_after=None, raise_in_spin=False):
+        self._ok = False
+        self.calls = 0
+        self.shutdowns = 0
+        self.sigint_after = sigint_after
+        self.raise_in_spin = raise_in_spin
+        self.published = []
+
+    def init(self):
+        self._ok = True
+
+    def ok(self):
+        return self._ok
+
+    def shutdown(self):
+        if not self._ok:
+            raise self.RCLError("failed to shutdown: rcl_shutdown already called")
+        self._ok = False
+        self.shutdowns += 1
+
+    def spin_once(self, node, timeout_sec=0.0):
+        import time
+
+        time.sleep(0.001)
+        self.calls += 1
+        if self.sigint_after is not None and self.calls >= self.sigint_after:
+            self._ok = False  # rclpy's SIGINT handler
+            if self.raise_in_spin:
+                raise RuntimeError("Unable to convert call argument to Python object")
+
+    def create_node(self, name):
+        rclpy = self
+
+        class Time:
+            nanoseconds = 0
+
+            def __init__(self):
+                import time
+
+                self.nanoseconds = int(time.monotonic() * 1e9)
+
+            def to_msg(self):
+                return None
+
+        class Clock:
+            def now(self):
+                return Time()
+
+        class Pub:
+            def publish(self, msg):
+                rclpy.published.append(msg)
+
+        class Node:
+            def get_clock(self):
+                return Clock()
+
+            def get_name(self):
+                return name
+
+            def create_publisher(self, *a, **k):
+                return Pub()
+
+            def get_publishers_info_by_topic(self, topic):
+                return []
+
+            def get_logger(self):
+                import logging
+
+                return logging.getLogger("fake")
+
+            def destroy_node(self):
+                pass
+
+        return Node()
+
+
+def _install_fake_rclpy(monkeypatch, fake):
+    import sys
+    import types
+
+    class Header:
+        stamp = None
+
+    class LapGuidance:
+        def __init__(self):
+            self.header = Header()
+
+    qos = types.ModuleType("rclpy.qos")
+    qos.HistoryPolicy = types.SimpleNamespace(KEEP_LAST=1)
+    qos.ReliabilityPolicy = types.SimpleNamespace(RELIABLE=1)
+    qos.QoSProfile = lambda **k: k
+    msgs = types.ModuleType("racer_pnp_msgs.msg")
+    msgs.LapGuidance = LapGuidance
+    pkg = types.ModuleType("racer_pnp_msgs")
+    fake.qos = qos
+    for name, mod in (
+        ("rclpy", fake),
+        ("rclpy.qos", qos),
+        ("racer_pnp_msgs", pkg),
+        ("racer_pnp_msgs.msg", msgs),
+    ):
+        monkeypatch.setitem(sys.modules, name, mod)
+    monkeypatch.setattr(cs, "DISCOVERY_WAIT_S", 0.0)
+
+
+@pytest.mark.parametrize(("sigint_after", "raise_in_spin"), [(None, False), (5, False), (5, True)])
+def test_run_schedule_exits_cleanly_at_the_end_and_after_a_sigint(
+    monkeypatch, sigint_after, raise_in_spin
+):
+    fake = _FakeRclpy(sigint_after, raise_in_spin)
+    _install_fake_rclpy(monkeypatch, fake)
+    sched = cs.CapSchedule(cs.Excitation((0.5,), 0.05, 1))
+    assert cs.run_schedule(sched, publish_hz=1000.0) == 0
+    assert fake.published
+    # the context is shut down exactly once, by us or by rclpy's own handler
+    assert fake.shutdowns == (1 if sigint_after is None else 0) and not fake.ok()
+
+
+def test_main_returns_zero_on_a_keyboard_interrupt(tmp_path, monkeypatch):
+    def interrupted(_sched):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cs, "run_schedule", interrupted)
+    assert cs.main(["--manifest", str(manifest(tmp_path)), "--v-max-mps", "1.3"]) == 0

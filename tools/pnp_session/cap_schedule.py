@@ -190,10 +190,18 @@ def run_schedule(
             if cap != last:
                 node.get_logger().info(f"t {t:5.1f} s cap {cap} m/s")
                 last = cap
-            rclpy.spin_once(node, timeout_sec=1.0 / publish_hz)
+            try:
+                rclpy.spin_once(node, timeout_sec=1.0 / publish_hz)
+            except RuntimeError:
+                # the spin_guard pattern (racer_tools, PR 175): a SIGINT shutdown race is a clean
+                # exit, a RuntimeError with the context still up is a real error
+                if rclpy.ok():
+                    raise
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # rclpy's own SIGINT handler may have shut the context down already
+        if rclpy.ok():
+            rclpy.shutdown()
     return 0
 
 
@@ -220,7 +228,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"excitation: caps {list(exc.caps_mps)} m/s, {exc.hold_s} s each, "
             f"{exc.cycles} cycles, {schedule.duration_s:.0f} s"
         )
-        return run_schedule(schedule)
+        try:
+            return run_schedule(schedule)
+        except KeyboardInterrupt:
+            return 0
     except CapRefused as err:
         print(f"REFUSED: {err}", file=sys.stderr)
         return EXIT_REFUSED

@@ -158,6 +158,8 @@ def drive_stadium(
     wobble_m: float = 0.0,
     wobble_period_m: float = 3.1,
     steer_scale: float = 1.0,
+    launch_yaw_rad: float = 0.0,
+    launch_decay_m: float = 1.0,
 ) -> Iterator[Tick]:
     """Events (odom, drive, scan) of a car driving the centre line from arc length `start_s`, in
     time order. The speed is `speed_mps` and rises by `speed_step_per_lap_mps` at every lap
@@ -165,7 +167,10 @@ def drive_stadium(
     wheel diameter or slip error). `wobble_m` makes the car weave about the centre line (a
     sinusoid of that amplitude over `wobble_period_m` of path, with the heading that goes with it)
     as a real run does. `steer_scale` multiplies the steering the gate reads (a heading gain
-    error: 1.03 makes the gate's heading integrate 3 percent too much). Scan payload is (x, y, yaw, scan_stamp); the caller casts the
+    error: 1.03 makes the gate's heading integrate 3 percent too much). `launch_yaw_rad`: the car
+    starts turned that much against the track tangent and the offset decays over `launch_decay_m`
+    of travel (the attitude change of a standing start; the steering follows the yaw rate that
+    goes with it, so the gate's heading integrates the yaw, not the position angle). Scan payload is (x, y, yaw, scan_stamp); the caller casts the
     scan itself with `scan_at` so tests can tamper with it."""
     del seed
     dt = 1.0 / odom_hz
@@ -176,7 +181,10 @@ def drive_stadium(
     while travelled <= total_m:
         s = start_s + travelled
         x, y, yaw, k = stadium.pose_at(s, clockwise)
-        steer = math.atan(WHEELBASE_M * k) * steer_scale
+        sign = -1.0 if clockwise else 1.0
+        lyaw = sign * launch_yaw_rad * math.exp(-travelled / launch_decay_m)
+        k_yaw = k - lyaw / launch_decay_m  # d(yaw)/ds = k + off'(s), off' = -off / decay
+        steer = math.atan(WHEELBASE_M * k_yaw) * steer_scale
         if wobble_m:
             w = 2.0 * math.pi / wobble_period_m
             off = wobble_m * math.sin(w * s)
@@ -186,6 +194,7 @@ def drive_stadium(
         v = min(
             speed_max_mps, speed_mps + speed_step_per_lap_mps * int(travelled // stadium.length_m)
         )
+        yaw += lyaw
         yield Tick(t0 + t, "drive", (steer,))
         yield Tick(t0 + t, "odom", (v * odom_scale,))
         if t >= next_scan - 1e-9:

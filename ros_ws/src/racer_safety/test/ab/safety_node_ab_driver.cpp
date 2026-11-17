@@ -20,6 +20,10 @@
 // /safety/events and (when it exists) /safety/cycle are captured in order with no DDS in the
 // loop. Without it the node keeps its real publishers; that build measures the cycle's duration.
 //
+// With --scenario NAME (AB_CAPTURE only) the driver runs one of brief 49's rate credit scripts
+// instead of the 2400 cycle script: an explicit event list of /drive_raw publishes and gate
+// cycles at chosen times (see run_scenario).
+//
 // The same driver source is compiled against the frozen copy of main's safety_node.cpp
 // (test/ab/reference/) and against the branch's src/safety_node.cpp. AB_HAVE_CYCLE is defined for
 // a source that has the publish_cycle_record parameter.
@@ -352,6 +356,7 @@ struct Options {
   bool cycle_record{false};
   bool throw_record{false};
   int timing_cycles{0};
+  std::string scenario;
 };
 
 Options parse_args(int argc, char** argv) {
@@ -364,6 +369,8 @@ Options parse_args(int argc, char** argv) {
       options.cycle_record = true;
     } else if (arg == "--throw-record") {
       options.throw_record = true;
+    } else if (arg == "--scenario" && i + 1 < argc) {
+      options.scenario = argv[++i];
     } else if (arg == "--timing" && i + 1 < argc) {
       options.timing_cycles = std::atoi(argv[++i]);
     } else {
@@ -549,6 +556,252 @@ int run_trace(const Options& options) {
   return out.good() ? 0 : 1;
 }
 
+// ---- Brief 49: the rate credit through the node ------------------------------------------------
+//
+// One scripted event list per scenario, played on the manual clock: a /drive_raw publish arrives
+// at its time, a gate cycle runs at its time, in time order, a publish first when they coincide.
+// Every cycle's /drive and /safety/events are recorded as in run_trace, with the node's two
+// credits ("C" lines), and the scenario's own expectations come out as CHECK lines that
+// check_safety_node_ab.py requires to PASS.
+//
+//   credit_ramp      cycle gaps 20, 20, 52, 8, 20 ms repeated, a planner that publishes every
+//                    20 ms on its own clock and moves 0.45 of the steering and speed limits per
+//                    publish. The late (52 ms) and the catch-up (8 ms) cycles must not clip it:
+//                    no rate_limit event, and /drive is /drive_raw at every cycle.
+//   credit_fault     the same kind of command stream after idle cycles that fill the credit, then
+//                    an injected internal fault, then a catch-up cycle 1 ms later. The fault
+//                    path sets both credits to 0, so that cycle is limited to rate * 1 ms.
+//   credit_nofault   the same without the fault: the catch-up cycle passes the full step.
+constexpr int64_t kMs = 1'000'000;
+
+struct SceneEvent {
+  int64_t time_ns;
+  bool publish;  // a /drive_raw message arrives; otherwise a gate cycle runs
+  double steering_rad;
+  double speed_mps;
+  bool inject_fault;  // cycles only
+};
+
+// A triangle of `half` steps up from 0 and `half` steps down again, repeated.
+double triangle(long m, long half, double step) {
+  const long p = m % (2 * half);
+  return static_cast<double>(p <= half ? p : 2 * half - p) * step;
+}
+
+// The planner's stream: idle at 0 for `idle` publishes, then 0.45 of the limits per publish. The
+// limits come from the vehicle_params binding, like everything the node uses.
+std::pair<double, double> planner_command(long publish_index, long idle) {
+  const double steering_step =
+      0.45 * VEHICLE_PARAMS.steering.max_rate_rad_per_s * (kCyclePeriodNs / 1e9);
+  const double speed_step =
+      0.45 * VEHICLE_PARAMS.actuation.max_acceleration_mps2 * (kCyclePeriodNs / 1e9);
+  const long m = publish_index - idle;
+  if (m <= 0) {
+    return {0.0, 0.0};
+  }
+  return {triangle(m, 12, steering_step), triangle(m, 40, speed_step)};
+}
+
+std::vector<SceneEvent> ramp_events() {
+  std::vector<SceneEvent> events;
+  const int64_t base = kStartNs;
+  const long idle = 6;
+  const int64_t gaps_ms[] = {20, 20, 52, 8, 20};
+  int64_t t = base + 20 * kMs;
+  for (int cycle = 0; cycle < 500; ++cycle) {
+    events.push_back({t, false, 0.0, 0.0, false});
+    t += gaps_ms[cycle % 5] * kMs;
+  }
+  // Publishes every 20 ms from the base, up to the last cycle.
+  const int64_t last = events.back().time_ns;
+  for (long n = 0; base + n * kCyclePeriodNs <= last; ++n) {
+    const auto command = planner_command(n, idle);
+    events.push_back({base + n * kCyclePeriodNs, true, command.first, command.second, false});
+  }
+  return events;
+}
+
+// Cycles at 20 ms from the base for `idle_cycles`, then the fault cycle (when `fault`), then a
+// catch-up cycle 1 ms after it with a step of 0.45 of each limit published just before.
+std::vector<SceneEvent> fault_events(bool fault, int* fault_cycle, int* catch_up_cycle) {
+  std::vector<SceneEvent> events;
+  const int64_t base = kStartNs;
+  const int idle_cycles = 10;
+  int64_t t = base;
+  int cycle = 0;
+  events.push_back({base, true, 0.0, 0.0, false});
+  for (; cycle < idle_cycles; ++cycle) {
+    t += kCyclePeriodNs;
+    events.push_back({t - 5 * kMs, true, 0.0, 0.0, false});  // the planner holds still
+    events.push_back({t, false, 0.0, 0.0, false});
+  }
+  t += kCyclePeriodNs;
+  *fault_cycle = cycle;
+  events.push_back({t - 5 * kMs, true, 0.0, 0.0, false});
+  events.push_back({t, false, 0.0, 0.0, fault});
+  ++cycle;
+  const auto step = planner_command(1, 0);  // 0.45 of the limits, one publish
+  events.push_back({t + kMs / 2, true, step.first, step.second, false});
+  t += kMs;
+  *catch_up_cycle = cycle;
+  events.push_back({t, false, 0.0, 0.0, false});
+  return events;
+}
+
+int run_scenario(const Options& options) {
+  make_overrides(options);
+  auto node = std::make_shared<SafetyNode>();
+  rcl_clock_t* handle = node->steady_clock_.get_clock_handle();
+  if (rcl_enable_ros_time_override(handle) != RCL_RET_OK) {
+    throw std::runtime_error("ab driver: cannot enable the manual clock");
+  }
+  const ManualClock clock{handle};
+  clock.set(kStartNs);
+
+  int fault_cycle = -1;
+  int catch_up_cycle = -1;
+  std::vector<SceneEvent> events;
+  if (options.scenario == "credit_ramp") {
+    events = ramp_events();
+  } else if (options.scenario == "credit_fault") {
+    events = fault_events(true, &fault_cycle, &catch_up_cycle);
+  } else if (options.scenario == "credit_nofault") {
+    events = fault_events(false, &fault_cycle, &catch_up_cycle);
+  } else {
+    std::fprintf(stderr, "ab driver: unknown scenario %s\n", options.scenario.c_str());
+    return 2;
+  }
+  std::stable_sort(events.begin(), events.end(), [](const SceneEvent& a, const SceneEvent& b) {
+    if (a.time_ns != b.time_ns) {
+      return a.time_ns < b.time_ns;
+    }
+    return a.publish && !b.publish;
+  });
+
+  auto& drive_log = rclcpp::CapturePublisher<AckermannDriveStamped>::log();
+  auto& event_log = rclcpp::CapturePublisher<SafetyEvent>::log();
+  std::ostringstream trace;
+  std::pair<float, float> latest{0.0F, 0.0F};
+  bool have_command = false;
+  size_t event_seen = 0;
+  int cycle = 0;
+  int rate_limit_events = 0;
+  int mismatches = 0;
+  int short_dts = 0;
+  int64_t previous_cycle_ns = -1;
+  double steering_credit_after_fault = -1.0;
+  double speed_credit_after_fault = -1.0;
+  double catch_up_steering_move = 0.0;
+  double catch_up_speed_move = 0.0;
+  std::pair<float, float> before_catch_up{0.0F, 0.0F};
+  long publishes = 0;
+
+  for (const SceneEvent& e : events) {
+    clock.set(e.time_ns);
+    if (e.publish) {
+      auto message = std::make_shared<AckermannDriveStamped>();
+      message->header.stamp = command_stamp(static_cast<int>(publishes++));
+      message->drive.speed = static_cast<float>(e.speed_mps);
+      message->drive.steering_angle = static_cast<float>(e.steering_rad);
+      node->on_drive_raw(message);
+      latest = {message->drive.steering_angle, message->drive.speed};
+      have_command = true;
+      continue;
+    }
+    node->set_parameter(rclcpp::Parameter("inject_fault", e.inject_fault));
+    const size_t drives_before = drive_log.size();
+    node->on_timer();
+    if (drive_log.size() != drives_before + 1) {
+      std::printf("FAIL cycle %d published %zu /drive messages\n", cycle,
+                  drive_log.size() - drives_before);
+      return 1;
+    }
+    const AckermannDriveStamped& drive = drive_log.back();
+    trace << "D " << cycle << ' ' << std::hex << float_bits(drive.drive.speed) << ' '
+          << float_bits(drive.drive.steering_angle) << std::dec << '\n';
+    for (; event_seen < event_log.size(); ++event_seen) {
+      trace << event_line(cycle, event_log[event_seen]) << '\n';
+      if (event_log[event_seen].source == "rate_limit" && event_log[event_seen].phase == 0) {
+        ++rate_limit_events;
+      }
+    }
+    trace << "C " << cycle << ' ' << std::hex << double_bits(node->steering_rate_credit_s_) << ' '
+          << double_bits(node->speed_rate_credit_s_) << std::dec << '\n';
+    if (options.scenario == "credit_ramp") {
+      // Once the command stream exists, /drive is the latest /drive_raw at every cycle.
+      if (have_command &&
+          (drive.drive.steering_angle != latest.first || drive.drive.speed != latest.second)) {
+        ++mismatches;
+        trace << "MISMATCH " << cycle << '\n';
+      }
+      if (previous_cycle_ns >= 0 && e.time_ns - previous_cycle_ns < 9 * kMs) {
+        ++short_dts;
+      }
+    }
+    if (cycle == fault_cycle) {
+      steering_credit_after_fault = node->steering_rate_credit_s_;
+      speed_credit_after_fault = node->speed_rate_credit_s_;
+      before_catch_up = {drive.drive.steering_angle, drive.drive.speed};
+    }
+    if (cycle == catch_up_cycle) {
+      catch_up_steering_move = static_cast<double>(drive.drive.steering_angle) -
+                               static_cast<double>(before_catch_up.first);
+      catch_up_speed_move =
+          static_cast<double>(drive.drive.speed) - static_cast<double>(before_catch_up.second);
+    }
+    previous_cycle_ns = e.time_ns;
+    ++cycle;
+  }
+
+  trace << "CYCLES " << cycle << '\n';
+  trace << "RATE_LIMIT_EVENTS " << rate_limit_events << '\n';
+  if (options.scenario == "credit_ramp") {
+    trace << "SHORT_DT_CYCLES " << short_dts << '\n';
+    trace << "CHECK /drive equals /drive_raw at every cycle: "
+          << (mismatches == 0 ? "PASS" : "FAIL") << '\n';
+    trace << "CHECK no rate_limit event: " << (rate_limit_events == 0 ? "PASS" : "FAIL") << '\n';
+    trace << "CHECK the script has catch-up cycles under 9 ms: "
+          << (short_dts >= 50 ? "PASS" : "FAIL") << '\n';
+  } else {
+    const double rate_1ms_steering = VEHICLE_PARAMS.steering.max_rate_rad_per_s * 0.001;
+    const double rate_1ms_speed = VEHICLE_PARAMS.actuation.max_acceleration_mps2 * 0.001;
+    const auto step = planner_command(1, 0);
+    trace << "CREDIT_AFTER_FAULT " << steering_credit_after_fault << ' ' << speed_credit_after_fault
+          << '\n';
+    trace << "CATCH_UP_MOVE " << catch_up_steering_move << ' ' << catch_up_speed_move << '\n';
+    if (options.scenario == "credit_fault") {
+      trace << "CHECK both credits are 0 after the fault cycle: "
+            << (steering_credit_after_fault == 0.0 && speed_credit_after_fault == 0.0 ? "PASS"
+                                                                                      : "FAIL")
+            << '\n';
+      trace << "CHECK the cycle after the fault is limited to rate * dt: "
+            << (std::fabs(catch_up_steering_move - rate_1ms_steering) < 1e-6 &&
+                        std::fabs(catch_up_speed_move - rate_1ms_speed) < 1e-5
+                    ? "PASS"
+                    : "FAIL")
+            << '\n';
+      trace << "CHECK the clip is reported once: " << (rate_limit_events == 1 ? "PASS" : "FAIL")
+            << '\n';
+    } else {
+      trace << "CHECK the credit is full before the catch-up cycle: "
+            << (steering_credit_after_fault > 0.0 && speed_credit_after_fault > 0.0 ? "PASS"
+                                                                                    : "FAIL")
+            << '\n';
+      trace << "CHECK the catch-up cycle passes the whole step: "
+            << (std::fabs(catch_up_steering_move - step.first) < 1e-6 &&
+                        std::fabs(catch_up_speed_move - step.second) < 1e-5
+                    ? "PASS"
+                    : "FAIL")
+            << '\n';
+      trace << "CHECK no rate_limit event: " << (rate_limit_events == 0 ? "PASS" : "FAIL") << '\n';
+    }
+  }
+
+  std::ofstream out(options.out);
+  out << trace.str();
+  return out.good() ? 0 : 1;
+}
+
 #else  // timing build: real publishers, real subscribers on the same topics
 
 int run_timing(const Options& options) {
@@ -648,7 +901,7 @@ int main(int argc, char** argv) {
   int status = 0;
   try {
 #ifdef AB_CAPTURE
-    status = run_trace(options);
+    status = options.scenario.empty() ? run_trace(options) : run_scenario(options);
 #else
     status = run_timing(options);
 #endif

@@ -709,6 +709,21 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
       state == PlannerState::Recovering || state == PlannerState::Starting) {
     c = slew_limit(c, last_published_, elapsed,
                    state == PlannerState::Starting ? start_slew_ : slew_);
+    // Never ask for more than the gate can follow in one cycle above what it last OUTPUT. The
+    // slew above is relative to the last command, and the gate's output can be far below it: a
+    // /drive_raw that reached safety_node late although it was published on time trips the
+    // watchdog (output 0) while this planner's gap stayed under gap_reset_s, and the next command
+    // then asked for the full speed from a standstill, which the gate clipped (found 2026-11-17 in
+    // the canary's stall cases, see test_planner_resume_safety.cpp). In a normal ramp the gated
+    // speed is one or two commands behind, a step or two below what is asked, so this does not
+    // bind there. 0.95 of max_acceleration * tick, under what the gate allows in a cycle.
+    if (finite_now && in.has_gated && std::isfinite(in.gated_speed_mps) &&
+        !is_stale(now, in.gated_stamp_s, lg.gated_timeout_s)) {
+      // A gate output in reverse counts as 0: growth forward is counted from zero.
+      const double follow_mps = std::max(in.gated_speed_mps, 0.0) +
+                                0.95 * slew_.max_acceleration_mps2 * slew_elapsed_s(tick, tick);
+      if (c.speed_mps > follow_mps) c.speed_mps = follow_mps;
+    }
   }
 
   out.state = state;

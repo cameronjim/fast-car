@@ -10,7 +10,7 @@ test: the head of `feat/pnp-lap-source-camera`, stacked on `feat/pnp-lap-keyfram
 `6e99c4d`, merged again before the end: no new commits there). The source rule's constants are the
 yaml's and were not tuned.
 
-Result: E1 to E6 hold (E1 with one failing test of D v1 that fails identically on PR 210's head, see
+Result: E1 to E7 hold (E1 with one failing test of D v1 that fails identically on PR 210's head, see
 below). The design is built as written; two things it implies are in "For the owner".
 
 ## E1: existing tests and goldens, unchanged
@@ -119,6 +119,39 @@ two ways of cutting the same loop.
   without it; its exit is logged and does not stop the launch.
 - On a live graph (`test_node_external_ros`): the shadow node has no publisher on `/pnp/lap/guidance`
   or `/pnp/lap_shadow/guidance`.
+
+## E7: the reference_suspect diagnostic changes nothing (brief 51b)
+
+`reference_suspect` (status keys `reference_suspect`, `reference_suspect_lap`, one WARN line, the
+`lap-src --drive` header, two runbook sentences) is set when the reference rests on exactly one
+confirmed lap and a later lap fails only `length`. It reads the verdict and feeds nothing.
+
+| check | result |
+|---|---|
+| existing tests and goldens | `racer_laps` 586 passed, 3 skipped (the D v1 property test of E1 deselected, unchanged); the new gate, property, node and `lap-src` tests pass; ruff clean |
+| the L2 property | for any event sequence, verdicts, reasons, caps and the reference length are identical with the flag logic present and with it stubbed out |
+| E1 to E6 numbers | unchanged: E2, E3 and the L4 replays are the same code path and the same goldens |
+| seed 11 development runs, 16 runs again | D9-S0 PASS, D9-S1 PASS (6 of 6, ratios 0.990 to 1.019, median r 0.483), D9-S2 PASS; doubtful laps and reasons identical in all 4 f runs (laps 4, 6, 7, 8, length and heading), 0 rejected beyond the one duplicate, 0 contacts, the flag false in every c and f run |
+
+The sim is not bit-reproducible run to run on this host: lap times differ by up to 0.36 s between two
+runs of the same case, also in condition b where no lap logic is involved, and `safety_brakes` moved
+in 2 of 16 runs (b_P4_cw 0 to 4, c_P1_ccw 1 to 4: timing events, not obstacle brakes). Compared run for
+run: lap count, caps per lap, clean flags, doubtful laps with reasons, rejected events, contacts
+identical in 14 of 16; the two that differ are those timing and snapshot effects (b_P4_cw has no lap
+logic in play; c_P1_ccw: 12 system events in the status snapshot against 13 before, the last lap
+closing after the snapshot).
+
+### Heading per lap with the real gain table (E2 bag `22-38-47`, the car's vehicle_params table)
+
+Single laps read 0.927 to 0.971 turns (mean 0.938; 20 laps, lengths 5.14 to 5.50 m), not the 1.085 to
+1.105 of gain 1.0: the car's table under-reads. On `02-18-54` the single laps read 0.922 to 0.951, the
+merged ones 1.857 to 1.870 (two laps) and 3.737 (four); lap 1 (launch, 7.20 m) 1.293.
+
+The registered window is 2 pi plus or minus 1.2 rad, 0.809 to 1.191 turns. With 0.938 turns per true
+lap that passes a lap 1 of 0.86 to 1.27 lap lengths (worst case of the 20 laps, 0.927 turns: 0.87 to
+1.28; best case 0.971: 0.83 to 1.23). So on the car a split first lap below about 0.86 of a lap is
+caught by the heading, one of 0.86 to 1.0 passes, and the upper edge is a lap of about 1.27 lap
+lengths, not 1.1. Nothing changed: the numbers say where the registered edge sits.
 
 ## Other evidence
 

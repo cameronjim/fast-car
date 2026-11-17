@@ -156,7 +156,7 @@ if(BUILD_TESTING)
       message(FATAL_ERROR "racer_planner gate tests need ${RACER_SAFETY_DIR}/${f} (racer_safety sibling package)")
     endif()
   endforeach()
-  foreach(t test_gate_divergence test_gate_closed_loop)
+  foreach(t test_gate_divergence test_gate_closed_loop test_planner_start_safety)
     ament_add_gtest(${t} test/${t}.cpp
       "${RACER_SAFETY_DIR}/src/forward_sector.cpp"
       "${RACER_SAFETY_DIR}/src/gate_logic.cpp"

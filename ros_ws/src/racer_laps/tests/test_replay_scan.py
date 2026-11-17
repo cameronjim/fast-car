@@ -162,3 +162,29 @@ def test_cli_map_pose_with_a_window(
     code = replay.main(["--bag", str(tmp_path), "--from-s", "0", "--to-s", "3"])
     assert code == 1  # no TF in the synthetic recording
     assert "no usable map -> base_link transform" in capsys.readouterr().out
+
+
+def test_the_replay_prints_the_line_source_the_ring_and_the_cost_over_all_scans() -> None:
+    result = replay.run_replay_start_scan(messages(3.3), VEHICLE)
+    assert result.scan_times_s and len(result.scan_times_s) > len(result.match_times_s)
+    assert len(result.scan_times_s) == result.n_scans - 1  # every scan after the start scan
+    report = replay.format_scan_report(result)
+    assert "start_scan" in report and "on_scan cost over all" in report
+    assert "line sources ['start_scan', 'start_scan', 'start_scan']" in report
+    assert "ring {" in report and "phase observable True" in report
+
+
+def test_the_v21_option_is_the_gate_without_the_ring_and_the_uniqueness_test(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    cfg = replay.default_start_scan_config(VEHICLE, v21=True)
+    assert cfg.gate is not None and not cfg.gate.ring_enabled and cfg.gate.unique_shift_m == 0.0
+    on = replay.default_start_scan_config(VEHICLE)
+    assert on.gate is not None and on.gate.ring_enabled and on.gate.unique_shift_m > 0.0
+    result = replay.run_replay_start_scan(messages(2.4), VEHICLE, cfg)
+    assert "ring" not in result.status and "line sources" not in replay.format_scan_report(result)
+    msgs = messages(2.4)
+    monkeypatch.setattr(replay, "read_messages", lambda path: iter(msgs))
+    monkeypatch.setattr(replay, "load_live_vehicle", lambda: VEHICLE)
+    assert replay.main(["--bag", str(tmp_path), "--lap-source", "start_scan", "--v21"]) == 0
+    assert "line sources" not in capsys.readouterr().out

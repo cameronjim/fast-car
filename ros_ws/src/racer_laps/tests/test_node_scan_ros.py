@@ -50,7 +50,16 @@ LOOP_S = STADIUM.length_m / SPEED_MPS
 
 
 class Harness:
-    def __init__(self, tmp_path: Path, extra: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        extra: tuple[str, ...] = (),
+        stadium: Stadium | None = None,
+        speed_mps: float = SPEED_MPS,
+    ) -> None:
+        self.stadium = STADIUM if stadium is None else stadium
+        self.speed_mps = speed_mps
+        self.loop_s = self.stadium.length_m / speed_mps
         self.out_dir = tmp_path / "laps"
         self.proc = subprocess.Popen(
             [
@@ -96,7 +105,7 @@ class Harness:
         self.node.create_subscription(
             String, "/pnp/lap/status", lambda m: self.statuses.append(json.loads(m.data)), rel
         )
-        self.walls = STADIUM.walls()
+        self.walls = self.stadium.walls()
         self.rng = np.random.default_rng(7)
 
     def spin(self, seconds: float) -> None:
@@ -160,11 +169,11 @@ class Harness:
         next_scan = 0.0
         while True:
             t = time.monotonic() - t0
-            if t > loops * LOOP_S:
+            if t > loops * self.loop_s:
                 break
-            x, y, yaw, k = STADIUM.pose_at(start_s + SPEED_MPS * t)
+            x, y, yaw, k = self.stadium.pose_at(start_s + self.speed_mps * t)
             if odom:
-                self.publish_odom(SPEED_MPS)
+                self.publish_odom(self.speed_mps)
                 self.publish_drive(math.atan(WHEELBASE_M * k))
             if planner:
                 self.driving()
@@ -413,3 +422,69 @@ def test_the_launch_keys_stay_null_when_the_car_is_never_seen_to_move(harness: H
     status = harness.statuses[-1]
     assert status["lap1_start_stamp_s"] is not None
     assert status["first_motion_stamp_s"] is None and status["launch_dwell_s"] is None
+
+
+V3_KEYS = (
+    "line_source",
+    "lap_line_sources",
+    "phase_observable",
+    "missed_gate_laps",
+    "ring",
+    "start_alias_share_last_lap",
+    "ring_disagreements",
+    "on_scan_ms_mean",
+    "on_scan_ms_p99",
+    "stale_odometry_scans",
+)
+
+
+def test_the_v3_status_keys_are_empty_before_the_start_scan(harness: Harness) -> None:
+    harness.spin(1.5)
+    status = harness.statuses[-1]
+    assert all(k in status for k in V3_KEYS), status
+    assert status["lap_line_sources"] == [] and status["line_source"] == ""
+    assert status["ring"]["keyframes"] == 0 and status["missed_gate_laps"] == []
+    assert status["on_scan_ms_mean"] is None and status["on_scan_ms_p99"] is None
+
+
+def test_the_v3_status_keys_after_laps(harness: Harness) -> None:
+    harness.drive_loops(2.3)
+    harness.spin(1.3)
+    status = harness.statuses[-1]
+    assert status["lap_line_sources"] == ["start_scan"] * len(harness.events)
+    assert status["line_source"] == "start_scan" and status["phase_observable"] is True
+    assert status["ring"]["keyframes"] > 5 and status["ring"]["generation"] == 0
+    assert status["missed_gate_laps"] == [] and status["ring_disagreements"] == 0
+    assert isinstance(status["on_scan_ms_mean"], float) and status["on_scan_ms_p99"] > 0.0
+    assert status["stale_odometry_scans"] >= 0
+
+
+def test_ring_enabled_false_is_gate_v21_with_no_ring_block(tmp_path: Path) -> None:
+    h = Harness(tmp_path, extra=("ring_enabled:=false",))
+    h.wait_for_node()
+    try:
+        h.drive_loops(2.3)
+        h.spin(0.5)
+        assert [e.lap_index for e in h.events] == [1, 2]
+        status = h.statuses[-1]
+        assert "ring" not in status and status["lap_line_sources"] == ["start_scan"] * 2
+    finally:
+        h.close()
+
+
+def test_a_winding_lap_still_has_frame_id_start_scan(tmp_path: Path) -> None:
+    """A ring (a stadium with no straight): every lap closes by winding, the LapEvent says
+    start_scan as for every closure of this gate and the status says it was winding."""
+    ring = Stadium(straight_m=0.0, lane_m=1.1, island_r_m=0.4)
+    h = Harness(tmp_path, stadium=ring, speed_mps=1.5)
+    h.wait_for_node()
+    try:
+        h.drive_loops(3.3)
+        h.spin(0.5)
+        assert [e.lap_index for e in h.events] == [1, 2, 3]
+        assert all(e.header.frame_id == "start_scan" for e in h.events)
+        status = h.statuses[-1]
+        assert status["lap_line_sources"] == ["winding"] * 3
+        assert status["phase_observable"] is False
+    finally:
+        h.close()

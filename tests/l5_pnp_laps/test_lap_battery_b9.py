@@ -843,7 +843,11 @@ def test_pending_work_writes_each_accepted_result_once(tmp_path: Path) -> None:
     assert accepted[bat.META]["accepted_attempt"] == 1
     # a starved first attempt is rerun, at most three attempts in all
     job2 = ("c_P1_cw_11", "c", "P1", "cw", 11)
-    starved = {**result(), "drive_raw": {"max_gap_s": 0.1}, bat.META: {"starved": True, "invalid_truth": False}}
+    starved = {
+        **result(),
+        "drive_raw": {"max_gap_s": 0.1},
+        bat.META: {"starved": True, "invalid_truth": False},
+    }
     bat.b4t.write_once(bat.b4t.attempt_path(tmp_path, job2[0], 1), json.dumps(starved))
     assert bat.pending_work(tmp_path, [job2]) == [(job2, 2)]
     for k in (2, 3):

@@ -44,12 +44,12 @@ def cut(bag: Path, events: int, out: Path) -> dict[str, int]:
     out.parent.mkdir(parents=True, exist_ok=True)
     w.save(out)
     return {
-        "odom": int(len(w.odom_arrival)),
-        "drive": int(len(w.drive_arrival)),
-        "planner": int(len(w.planner_arrival)),
-        "safety": int(len(w.safety_arrival)),
-        "events": int(len(w.event_arrival)),
-        "status": int(len(w.status_arrival)),
+        "odom": len(w.odom_arrival),
+        "drive": len(w.drive_arrival),
+        "planner": len(w.planner_arrival),
+        "safety": len(w.safety_arrival),
+        "events": len(w.event_arrival),
+        "status": len(w.status_arrival),
         "bytes": int(np.int64(out.stat().st_size)),
     }
 

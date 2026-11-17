@@ -114,7 +114,7 @@ def test_nothing_happens_until_armed_and_the_start_is_the_first_sample_at_or_aft
     assert s.on_truth_odom(0.0, *pose(0.0)) == []  # not armed: nothing, not started
     assert not s.started and s.truth_start_t is None
     s.arm(0.55)
-    for k in range(0, 40):
+    for k in range(40):
         s.on_truth_odom(k / HZ, *pose(k / HZ))
     assert s.started
     assert s.truth_start_t == pytest.approx(0.56, abs=1e-9)  # the first sample at or after 0.55

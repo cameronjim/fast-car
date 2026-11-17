@@ -286,6 +286,8 @@ def _lap_count_and_time_stats(runs: list[RunSummary], tol: float) -> dict[str, A
         total_laps += r.laps
         for k, (s, g) in enumerate(zip(r.system_lap_times_s, r.gt_lap_times_s), start=1):
             e = abs(s - g)
+            if math.isnan(e):  # NaN compares False both ways: never within, always outside
+                e = math.inf
             errs.append((f"{_label(r)} lap {k}: system {s:.2f} vs truth {g:.2f}", e))
             within += e <= tol
     outside = [(t, e) for t, e in errs if e > tol]

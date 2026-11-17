@@ -836,6 +836,18 @@ def test_dev_runs_take_development_cases_on_development_seeds_without_a_freeze_f
     assert (out / "dev_report.md").exists()
 
 
+def test_dev_runs_can_stop_after_fewer_laps_and_battery_runs_cannot(harness) -> None:
+    go, out = harness
+    fake = FakeRunner(laps={"a_P4_ccw_11": 4, "a_P4_cw_11": 4})
+    argv = ["dev-run", "--out", str(out / "d"), "--cases", "P4", "--seeds", "11"]
+    argv += ["--conditions", "a", "--laps", "4", "--workers", "1"]
+    assert go(fake, *argv) == 0
+    assert [parse(c).stop_after_laps for c in fake.calls] == [4, 4]
+    battery = FakeRunner()
+    go(battery, "run", "--out", str(out / "b"), "--workers", "1")
+    assert {parse(c).stop_after_laps for c in battery.calls} == {13}
+
+
 @pytest.mark.parametrize(
     ("cases", "seeds"),
     [("R1", "11"), ("P4", "61"), ("Q1", "62"), ("P4", "51"), ("OD", "31"), ("P1", "11")],

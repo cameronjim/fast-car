@@ -41,6 +41,69 @@ def roll(
     return t
 
 
+# -- configuration and small paths -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"unique_shift_m": -0.1},
+        {"unique_shift_tol_m": -0.1},
+        {"unique_same_m": 0.0},
+        {"alias_max_share": 1.1},
+        {"alias_max_share": -0.1},
+        {"alias_min_scans": 0},
+        {"kf_spacing_m": 0.0},
+        {"kf_max": 1},
+        {"kf_window_m": 0.0},
+        {"kf_retire_visits": 0},
+        {"anchor_wait_m": -0.1},
+    ],
+)
+def test_bad_v3_settings_are_refused(kw: dict) -> None:
+    with pytest.raises(ValueError):
+        GateConfig(wheelbase_m=WHEELBASE_M, **kw)
+    # with the ring off the ring's own numbers are not looked at
+    if "kf_max" in kw or "kf_spacing_m" in kw or "kf_window_m" in kw:
+        assert GateConfig(wheelbase_m=WHEELBASE_M, ring_enabled=False, **kw)
+
+
+def test_the_ring_reports_its_size_in_bytes() -> None:
+    g = straight_gate()
+    roll(g, 0.0, 2.0)
+    kf = g.ring.keyframes[-1]
+    assert kf.nbytes == g.ring.keyframes[-1].ref.pts.nbytes + kf.ref.normals.nbytes + (
+        kf.ref.dense.nbytes + kf.ref.profile.nbytes
+    )
+    assert g.ring.nbytes >= kf.nbytes > 0
+
+
+def test_no_pending_estimate_without_the_ring_and_a_winding_line_found_in_one_step() -> None:
+    off = straight_gate(ring_enabled=False)
+    assert off._pending_estimate_m() is None
+    g = straight_gate()
+    last = gate_module._Sample(1.0, 1.0, 6.0, 0.0, 0.0, 0.0)
+    new = gate_module._Sample(1.02, 1.02, 6.4, 0.0, 0.0, 0.0)
+    g._note_winding(last, new)
+    assert g._w_star_m is not None and 1.0 < g._w_star_m < 1.02
+    again = gate_module._Sample(1.04, 1.04, 6.5, 0.0, 0.0, 0.0)
+    g._note_winding(new, again)  # decided once per lap
+    assert g._w_star_m < 1.02
+    past = straight_gate()
+    past._note_winding(
+        gate_module._Sample(1.0, 1.0, 7.0, 0.0, 0.0, 0.0),
+        gate_module._Sample(1.02, 1.02, 7.2, 0.0, 0.0, 0.0),
+    )
+    assert past._w_star_m == 1.02  # already past 2 pi at the first sample seen
+
+
+def test_an_estimate_before_the_history_or_before_the_lap_start_places_nothing() -> None:
+    g = straight_gate()
+    roll(g, 0.0, 1.0)
+    assert g._close_at(1.0, -5.0, "anchor") is None  # before the odometry history
+    assert g._close_at(1.0, 0.0, "anchor") is None  # at the lap start: not after it
+
+
 # -- teaching --------------------------------------------------------------------------------------
 
 

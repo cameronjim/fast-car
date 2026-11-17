@@ -322,6 +322,7 @@ def run_attempt(
         result_path,
         Path(args.bundle),
         Path(args.data_root),
+        laps=getattr(args, "laps", None) if mode == "development" else None,
         freeze_path=Path(args.freeze_path),
     )
     started = time.monotonic()
@@ -762,6 +763,9 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--cases", default="P4,OD,ND")
             p.add_argument("--seeds", default="11,12,13")
             p.add_argument("--conditions", default="ac")
+            p.add_argument(
+                "--laps", type=int, help="development only: stop after this many laps (default 13)"
+            )
     args = parser.parse_args(argv)
     cmds = {
         "check-freeze": check_freeze_cmd,

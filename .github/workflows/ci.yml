@@ -163,9 +163,11 @@ jobs:
     name: racer_safety diff guard (only the approved files change, gate library read only)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
-    # Brief 45, owner decision 1 of 2026-11-14: the one approved change to racer_safety is
-    # receipt-time instrumentation in safety_node.cpp. See the script's header for the allowed
-    # files; it needs the base branch's history, hence fetch-depth 0.
+    # Owner decision 1 of 2026-11-14 (brief 45, receipt-time instrumentation in safety_node.cpp)
+    # and owner decision 7 of 2026-11-17 (brief 49, the rate limiter's rate credit in gate_logic,
+    # safety_node.cpp and safety_replay_cli.cpp) are the approved changes to racer_safety;
+    # forward_sector.* and gate_logic_formatting.* stay read only. See the script's header for the
+    # allowed files; it needs the base branch's history, hence fetch-depth 0.
     steps:
       - uses: actions/checkout@v7
         with:

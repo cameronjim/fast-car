@@ -42,14 +42,95 @@ bool is_finite_command(const DriveCommand& cmd) {
 // Garbage/negative timing is the least-permissive (safest) input: no time is treated as
 // having elapsed, so no rate-limited change is allowed this cycle, rather than guessing a
 // nominal period or letting NaN/Inf propagate into a rate-limit bound.
-double safe_dt(double dt_s) {
+bool is_garbage_dt(double dt_s) {
   if (!std::isfinite(dt_s)) {
-    return 0.0;
+    return true;
   }
   if (dt_s < 0.0) {
+    return true;
+  }
+  return false;
+}
+
+double safe_dt(double dt_s) {
+  if (is_garbage_dt(dt_s)) {
     return 0.0;
   }
   return dt_s;
+}
+
+// ---- RATE CREDIT (gate_logic.hpp "RATE CREDIT"). Plain `if`s, no std::min/max, like the rest.
+// ----
+
+// The nominal period T the credit is measured against: a value that is not finite or not above 0
+// counts as 0, which turns the credit off (allowance = dt, the old rule).
+double sanitised_period_s(double period_s) {
+  if (!std::isfinite(period_s)) {
+    return 0.0;
+  }
+  if (!(period_s > 0.0)) {
+    return 0.0;
+  }
+  return period_s;
+}
+
+// A credit that came in: non-finite or negative counts as 0, above T counts as T.
+double sanitised_credit_s(double credit_s, double period_s) {
+  if (!std::isfinite(credit_s)) {
+    return 0.0;
+  }
+  if (credit_s < 0.0) {
+    return 0.0;
+  }
+  if (credit_s > period_s) {
+    return period_s;
+  }
+  return credit_s;
+}
+
+// min(c + dt, max(dt, T)): what a cycle may use. Never below dt (G1), never above max(dt, T) (G2),
+// for a credit already in [0, T] and a dt that is not garbage.
+double allowance_s(double credit_s, double dt_s, double period_s) {
+  double cap_s = dt_s;
+  if (period_s > cap_s) {
+    cap_s = period_s;
+  }
+  double allowance = credit_s + dt_s;
+  if (allowance > cap_s) {
+    allowance = cap_s;
+  }
+  return allowance;
+}
+
+// The time a cycle used for a change `granted` (a magnitude) against `limit` (the largest change
+// the allowance permitted, rate * allowance): allowance * granted / limit, which is granted / rate.
+// Written as a fraction of the limit so it can never exceed the allowance: the limiter returns a
+// change that is at most `limit`, a quotient of two such doubles is at most 1 and a product with
+// that is at most the allowance. A limit that is not above 0 (a rate of 0, or no allowance) grants
+// nothing and uses nothing: no division by 0.
+double time_used_s(double granted, double limit, double allowance_s) {
+  if (limit > 0.0) {
+    return allowance_s * (granted / limit);
+  }
+  return 0.0;
+}
+
+// c_out = min(T, c + dt - used): unused time carries, never more than T.
+double carried_credit_s(double credit_s, double dt_s, double used_s, double period_s) {
+  double carried = credit_s + dt_s - used_s;
+  if (carried > period_s) {
+    carried = period_s;
+  }
+  return carried;
+}
+
+// The credit going out of a cycle on which the limiter did not run (the output does not move):
+// min(T, c + dt), and 0 for a garbage dt_s, like every other path.
+double idle_credit_s(double credit_s, double dt_s, double period_s, bool dt_garbage) {
+  if (dt_garbage) {
+    return 0.0;
+  }
+  return carried_credit_s(credit_s, dt_s, 0.0, period_s);
 }
 
 // How long an engagement lasted, defensively: a non-finite or backwards interval (a clock
@@ -169,14 +250,23 @@ DriveCommand SafetyGateLogic::clamp_to_bounds(const DriveCommand& cmd) const {
 }
 
 DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
-                                         const DriveCommand& previous_output, double dt_s) const {
+                                         const DriveCommand& previous_output,
+                                         double steering_allowance_s, double speed_allowance_s,
+                                         double& steering_used_s, double& speed_used_s) const {
   DriveCommand out = cmd;
 
   const double steer_delta = cmd.steering_angle_rad - previous_output.steering_angle_rad;
-  const double steer_delta_min = limits_.steering_rate_min_rad_per_s * dt_s;
-  const double steer_delta_max = limits_.steering_rate_max_rad_per_s * dt_s;
+  const double steer_delta_min = limits_.steering_rate_min_rad_per_s * steering_allowance_s;
+  const double steer_delta_max = limits_.steering_rate_max_rad_per_s * steering_allowance_s;
   const double clamped_steer_delta = clamp_value(steer_delta, steer_delta_min, steer_delta_max);
   out.steering_angle_rad = previous_output.steering_angle_rad + clamped_steer_delta;
+  // The time the steering change used, against the limit of the direction it moved (the upward
+  // limit when it did not move).
+  double steer_limit = steer_delta_max;
+  if (clamped_steer_delta < 0.0) {
+    steer_limit = -steer_delta_min;
+  }
+  steering_used_s = time_used_s(std::fabs(clamped_steer_delta), steer_limit, steering_allowance_s);
 
   // Speed: only growth of the speed's MAGNITUDE (accelerating away from zero, forward or
   // reverse) is rate-limited; a change toward zero (braking, either direction) never is
@@ -195,14 +285,17 @@ DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
     }
   }
   const double speed_delta = cmd.speed_mps - base_mps;
-  const double max_speed_delta = limits_.max_acceleration_mps2 * dt_s;
+  const double max_speed_delta = limits_.max_acceleration_mps2 * speed_allowance_s;
+  double growth_mps = 0.0;  // the growth of the magnitude the limiter granted
   if (speed_delta > 0.0) {
     if (base_mps >= 0.0) {
       // Forward growth from base_mps.
       if (speed_delta > max_speed_delta) {
         out.speed_mps = base_mps + max_speed_delta;
+        growth_mps = max_speed_delta;
       } else {
         out.speed_mps = base_mps + speed_delta;
+        growth_mps = speed_delta;
       }
     }
     // base_mps < 0 here means braking in reverse toward the request: never limited.
@@ -211,12 +304,15 @@ DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
       // Reverse growth from base_mps.
       if (-speed_delta > max_speed_delta) {
         out.speed_mps = base_mps - max_speed_delta;
+        growth_mps = max_speed_delta;
       } else {
         out.speed_mps = base_mps + speed_delta;
+        growth_mps = -speed_delta;
       }
     }
     // base_mps > 0 here means braking forward toward the request: never limited.
   }
+  speed_used_s = time_used_s(growth_mps, max_speed_delta, speed_allowance_s);
   return out;
 }
 
@@ -513,6 +609,14 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   // The speed bounds ("SPEED FOR THE TTC") advance on every path, short-circuits included: they
   // follow what was actually commanded, whatever this cycle decides.
   const double dt_s = safe_dt(input.dt_s);
+  // The rate credits ("RATE CREDIT" in gate_logic.hpp). Until the limiter runs, the credits go out
+  // as they would on a path that does not move the output: min(T, c + dt), and 0 for a garbage dt.
+  const bool dt_garbage = is_garbage_dt(input.dt_s);
+  const double period_s = sanitised_period_s(limits_.control_period_s);
+  const double steering_credit_s = sanitised_credit_s(input.steering_rate_credit_s, period_s);
+  const double speed_credit_s = sanitised_credit_s(input.speed_rate_credit_s, period_s);
+  result.steering_rate_credit_s = idle_credit_s(steering_credit_s, dt_s, period_s, dt_garbage);
+  result.speed_rate_credit_s = idle_credit_s(speed_credit_s, dt_s, period_s, dt_garbage);
   result.speed_bound_forward_mps =
       next_speed_bound_mps(input.speed_bound_forward_mps, previous_output.speed_mps, dt_s);
   result.speed_bound_reverse_mps =
@@ -603,8 +707,26 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   // cycle, not what was requested), applied to whatever the obstacle gate left, then
   // re-clamp to absolute bounds defensively. Braking to zero is a decrease and is never
   // rate-limited, so a latched brake reaches the output on the cycle it engages.
-  DriveCommand rate_limited = rate_limit(target, previous_output, dt_s);
+  // The allowance of each channel is its credit plus this cycle's dt, capped at one nominal period
+  // (gate_logic.hpp "RATE CREDIT"); a garbage dt allows nothing, whatever the credit.
+  double steering_allowance_s = 0.0;
+  double speed_allowance_s = 0.0;
+  if (!dt_garbage) {
+    steering_allowance_s = allowance_s(steering_credit_s, dt_s, period_s);
+    speed_allowance_s = allowance_s(speed_credit_s, dt_s, period_s);
+  }
+  double steering_used_s = 0.0;
+  double speed_used_s = 0.0;
+  DriveCommand rate_limited = rate_limit(target, previous_output, steering_allowance_s,
+                                         speed_allowance_s, steering_used_s, speed_used_s);
   rate_limited = clamp_to_bounds(rate_limited);
+  // Charged for what the limiter granted, even if the bounds clamp or the steering hold below move
+  // the output less. A garbage dt left both credits at 0 above.
+  if (!dt_garbage) {
+    result.steering_rate_credit_s =
+        carried_credit_s(steering_credit_s, dt_s, steering_used_s, period_s);
+    result.speed_rate_credit_s = carried_credit_s(speed_credit_s, dt_s, speed_used_s, period_s);
+  }
 
   // 3d. Steering hold while parked on the obstacle latch (gate_logic.hpp, "STEERING HOLD WHILE
   // PARKED ON THE OBSTACLE LATCH"). Runs on the final speed, so "held at zero" means what the

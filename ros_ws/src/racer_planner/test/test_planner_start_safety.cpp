@@ -70,12 +70,16 @@ int rate_limit_activations(int stall_at, int stall_cycles, double catch_up_dt_s,
   const racer_safety::SafetyGateLogic safety(safety_limits(true));
   racer_safety::DriveCommand prev_out;
   prev_out.steering_angle_rad = 0.30;
+  GateCredits credits;  // threaded as safety_node does
   int clips = 0;
   double moved = 0.0;
   Command previous_cmd;
   double t = 1000.0;
   const auto run_gate = [&](const Command& cmd, double age_s, double dt_s) {
-    const racer_safety::GateResult gr = safety.evaluate(gate_input(cmd, age_s, dt_s), prev_out);
+    racer_safety::GateInput gi = gate_input(cmd, age_s, dt_s);
+    credits.apply(gi);
+    const racer_safety::GateResult gr = safety.evaluate(gi, prev_out);
+    credits.take(gr);
     for (const auto& a : gr.activations) {
       if (a.source != racer_safety::GateSource::kRateLimit) continue;
       const double eps = std::numeric_limits<double>::epsilon();

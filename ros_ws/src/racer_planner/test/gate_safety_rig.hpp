@@ -10,6 +10,23 @@
 
 namespace racer_planner::test {
 
+// The rate credits safety_node threads from one gate cycle to the next (racer_safety gate_logic.hpp
+// "RATE CREDIT"), both 0 at startup: apply() puts them into the next cycle's input, take() reads
+// them from the cycle's result. A test that drives the real gate for more than one cycle keeps one
+// of these next to its previous output, exactly as the node does.
+struct GateCredits {
+  double steering_s = 0.0;
+  double speed_s = 0.0;
+  void apply(racer_safety::GateInput& input) const {
+    input.steering_rate_credit_s = steering_s;
+    input.speed_rate_credit_s = speed_s;
+  }
+  void take(const racer_safety::GateResult& result) {
+    steering_s = result.steering_rate_credit_s;
+    speed_s = result.speed_rate_credit_s;
+  }
+};
+
 // What safety_node builds, from the same binding fields.
 struct SafetyRig {
   racer_safety::PathGeometry path;

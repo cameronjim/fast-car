@@ -114,6 +114,7 @@ if(BUILD_TESTING)
     test/test_body_distance.cpp
     test/test_ttc_speed.cpp
     test/test_measured_speed.cpp
+    test/test_rate_credit.cpp
   )
   target_link_libraries(test_racer_safety_core racer_safety_core)
 

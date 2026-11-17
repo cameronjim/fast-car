@@ -91,12 +91,17 @@ def test_schema_2_0_0_forbids_the_additive_residual_and_1_x_forbids_ground_motio
 
 def test_1_x_bundles_validate_as_before():
     root = repo_root() / "config" / "pnp"
+    checked = 0
     for path in sorted((root / "fixtures").glob("dyn-*/manifest.yaml")) + [
         root / "examples" / "dyn-example" / "manifest.yaml"
     ]:
         manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if manifest["bundle_schema_version"].startswith("2."):
+            continue  # contract 2 fixtures (brief 43) are checked by the 2.0.0 tests
+        checked += 1
         assert manifest["bundle_schema_version"].startswith("1.")
         export.validate_manifest(manifest)
+    assert checked >= 1
 
 
 def test_the_contract_1_writer_still_writes_schema_1_1_0():
@@ -120,8 +125,10 @@ def test_the_first_readme_line_is_the_contract_2_warning():
     )
 
 
-def test_todays_planner_refuses_a_contract_2_bundle(tmp_path, toy_vehicle):
-    """The C++ loader on main (planner_replay_cli) must answer BundleSchemaVersionMismatch. Runs
+def test_the_planner_no_longer_refuses_schema_2_0_0_as_a_version_mismatch(tmp_path, toy_vehicle):
+    """Since brief 43 the C++ loader (planner_replay_cli) accepts major 2 for kind dynamics, so a
+    contract 2 bundle is no longer answered with BundleSchemaVersionMismatch (the toy bundle is
+    still refused, later and for another reason: its vehicle_params). Runs
     where the binary exists (a native one, $PLANNER_REPLAY_CLI, or the Linux one in docker through
     $PLANNER_REPLAY_DOCKER_CLI); a missing binary is a skip unless PNP_REPLAY_REQUIRE_CLI is set."""
     from pnp_replay import planner_stream
@@ -140,5 +147,6 @@ def test_todays_planner_refuses_a_contract_2_bundle(tmp_path, toy_vehicle):
     with tempfile.TemporaryDirectory(dir=shared or tmp_path) as work:
         bundle = Path(work) / "b"
         _write(bundle, toy_vehicle)
-        with pytest.raises(planner_stream.ReplayError, match="BundleSchemaVersionMismatch"):
+        with pytest.raises(planner_stream.ReplayError) as info:
             planner_stream.describe_cli(cli, bundle, 1.3, {})
+        assert "BundleSchemaVersionMismatch" not in str(info.value)

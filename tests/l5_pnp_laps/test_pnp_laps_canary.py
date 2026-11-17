@@ -88,6 +88,7 @@ def run_runner(
     duration_s: float,
     v_max_mps: float | None = None,
     track_params: dict | None = None,
+    extra_flags: list[str] | None = None,
 ) -> dict:
     out = tmp_path / "result.json"
     command = [
@@ -125,6 +126,7 @@ def run_runner(
         str(tmp_path / "work"),
         "--out",
         str(out),
+        *(extra_flags or []),
     ]
     proc = subprocess.run(
         command, env=dict(os.environ), capture_output=True, text=True, timeout=900, check=False
@@ -262,3 +264,96 @@ def test_the_ring_p4_closes_every_lap_by_winding_and_the_count_rule_holds(tmp_pa
     assert result["lap_status"]["phase_observable"] is False
     assert result["wall_contacts"] == 0
     assert result["truth_valid"] is True
+
+
+P1_STADIUM = {"lane_width_m": 1.2, "straight_length_m": 3.5, "island_radius_m": 0.5}
+TRUTH_LAPS = 4
+TRUTH_JUDGED = 3
+TRUTH_TOLERANCE_S = 0.3
+
+
+def run_truth(tmp_path: Path, domain: int, faults: dict) -> dict:
+    return run_runner(
+        tmp_path,
+        domain=domain,
+        mode="v0",
+        laps=TRUTH_LAPS,
+        duration_s=400.0,
+        track_params=P1_STADIUM,
+        extra_flags=[
+            "--lap-source",
+            "truth",
+            "--lap-truth-faults-json",
+            json.dumps(faults),
+        ],
+    )
+
+
+def test_the_truth_oracle_gives_confirmed_laps_at_the_truth_crossings_and_the_cap_rises(
+    tmp_path, capsys
+):
+    """Brief 51 (D9-S0 on the development case P1, ccw, seed 11, condition c, 4 truth laps): the lap
+    memory takes its laps from the oracle; the judged laps are confirmed, the crossings are within
+    0.3 s of the registered truth, the cap rose, no contact, one publisher each on /drive_raw and
+    /drive."""
+    result = run_truth(tmp_path, domain=87, faults={})
+    status = result["lap_status"]
+    system = result["system_lap_events"]
+    truth = result["gt_lap_crossings_registered_s"]
+    with capsys.disabled():
+        print(
+            f"\nl5_pnp_laps P1 truth oracle: truth crossings {truth} system "
+            f"{[round(e['t_cross_s'], 2) for e in system]} caps {[e['cap_mps'] for e in system]} "
+            f"doubtful {status.get('doubtful_laps')} rejected {status.get('rejected_events')} "
+            f"contacts {result['wall_contacts']}"
+        )
+    assert len(truth) >= TRUTH_LAPS, result.get("stopped_because")
+    assert all(e["frame_id"] == "truth" for e in system)
+    assert status["lap_source"] == "truth" and status["source_ready"] is True
+    assert len(system) >= TRUTH_JUDGED
+    for k in range(TRUTH_JUDGED):
+        assert abs(system[k]["t_cross_s"] - truth[k]) <= TRUTH_TOLERANCE_S, k
+    assert status["confirmed_laps"] >= TRUTH_JUDGED
+    assert not [d for d in status["doubtful_laps"] if d["lap"] <= TRUTH_JUDGED]
+    assert sum(status["rejected_events"].values()) == 0
+    # the oracle published one event per truth crossing, within 0.3 s of it
+    published = [e for e in result["oracle_events"] if e["kind"] == "true"]
+    for k in range(TRUTH_JUDGED):
+        assert abs(published[k]["crossing_time_s"] - truth[k]) <= TRUTH_TOLERANCE_S, k
+    caps = [e["cap_mps"] for e in system]
+    assert caps[0] == pytest.approx(LAP1_CAP_MPS) and max(caps) > caps[0], caps
+    assert result["wall_contacts"] == 0
+    assert result["publisher_nodes"] == {
+        "/drive_raw": ["mppi_planner_node"],
+        "/drive": ["safety_node"],
+    }
+
+
+def test_a_dropped_truth_crossing_makes_the_merged_lap_doubtful_and_the_cap_does_not_rise(
+    tmp_path, capsys
+):
+    """Brief 51: the fault plan cut to one dropped crossing (truth crossing 2). The event that
+    comes next is the merged lap: doubtful, and the cap of the lap after it is not above the cap
+    of that lap."""
+    result = run_truth(tmp_path, domain=88, faults={"drop_truth_crossings": [2]})
+    status = result["lap_status"]
+    system = result["system_lap_events"]
+    with capsys.disabled():
+        print(
+            f"\nl5_pnp_laps P1 truth oracle, crossing 2 dropped: system laps "
+            f"{[round(e['lap_time_s'], 2) for e in system]} caps {[e['cap_mps'] for e in system]} "
+            f"doubtful {status.get('doubtful_laps')} contacts {result['wall_contacts']}"
+        )
+    assert len(system) >= 2, system
+    doubtful = status["doubtful_laps"]
+    assert [d["lap"] for d in doubtful] == [2]
+    assert {"length", "heading"} <= set(doubtful[0]["reasons"])
+    assert status["missed_gate_laps"] == [2]
+    assert system[1]["lap_time_s"] > 1.7 * system[0]["lap_time_s"]  # the merged lap
+    # the cap handed out after the doubtful lap closed is not above the cap it was driven at: the
+    # standing guidance cap half a second after its crossing, from the series of change points
+    series = result["guidance_cap_series"]
+    after = [c for t, c in series if t <= system[1]["t_cross_s"] + 0.5]
+    assert after, series
+    assert after[-1] <= system[1]["cap_mps"] + 1e-6, (after[-1], system[1]["cap_mps"])
+    assert result["wall_contacts"] == 0

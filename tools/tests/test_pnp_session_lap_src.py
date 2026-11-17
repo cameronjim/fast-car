@@ -62,6 +62,7 @@ class Scenario:
     node_confirmed: int | None = None
     node_doubtful: list[dict[str, Any]] = field(default_factory=list)
     node_rejected: int = 0
+    node_suspect_lap: int | None = None
     odometry: bool = True
     first_status_state: str = "running"
     steering_steps: bool = True
@@ -164,6 +165,8 @@ class Scenario:
                     "confirmed_laps": confirmed,
                     "doubtful_laps": self.node_doubtful,
                     "rejected_events": {"latency": self.node_rejected, "malformed": 0},
+                    "reference_suspect": self.node_suspect_lap is not None,
+                    "reference_suspect_lap": self.node_suspect_lap,
                     "missed_gate_laps": [d["lap"] for d in self.node_doubtful],
                 }
                 add(t, f"{self.node_prefix}/status", SimpleNamespace(data=json.dumps(status)))
@@ -807,3 +810,22 @@ def test_offline_through_the_command_line_is_labelled_a_regression(tmp_path: Pat
     cut.write_bytes(raw[: int(len(raw) * 0.9)])
     _report, text, _code = lap_src.run([cut], offline=True, odom=odom_model())
     assert "NOTE: cut.mcap: stopped at byte" in text
+
+
+def test_the_drive_table_shows_the_reference_suspect_flag_and_its_lap() -> None:
+    bag = Scenario(node_prefix="/pnp/lap", node_suspect_lap=3).bag()
+    table = lap_src.drive_table(bag)
+    assert table["reference_suspect"] is True and table["reference_suspect_lap"] == 3
+    text = lap_src.markdown_drive(table)
+    assert "reference_suspect True (lap 3)" in text.splitlines()[0]
+    clean = lap_src.drive_table(Scenario(node_prefix="/pnp/lap").bag())
+    assert clean["reference_suspect"] is False and clean["reference_suspect_lap"] is None
+    assert "reference_suspect False" in lap_src.markdown_drive(clean).splitlines()[0]
+    # a status from before the flag existed: not known, not False
+    bag = Scenario(node_prefix="/pnp/lap").bag()
+    del bag.nodes["/pnp/lap"].statuses[-1][1]["reference_suspect"]
+    assert lap_src.drive_table(bag)["reference_suspect"] is None
+    assert (
+        "reference_suspect unknown"
+        in lap_src.markdown_drive(lap_src.drive_table(bag)).splitlines()[0]
+    )

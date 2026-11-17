@@ -19,7 +19,7 @@ import math
 from dataclasses import dataclass
 
 import pytest
-from external_support import DT, LAP_M, EngineRig, Rig
+from external_support import DT, LAP_M, EngineRig, Rig, steering_for
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -152,3 +152,46 @@ def test_a_confirmed_lap_is_never_a_merged_or_split_lap(fractions: list[float]) 
             # no reference yet: the heading window (1.2 rad of 2 pi) is the only bound
             assert abs(ratio - 1.0) <= 1.2 / (2.0 * math.pi) + 1e-6
         reference_exists = True
+
+
+@SETTINGS
+@given(
+    plan=st.lists(actions, min_size=1, max_size=9),
+    speed=st.floats(0.5, 2.0),
+    lengths=st.lists(st.floats(0.5, 2.2), min_size=1, max_size=6),
+)
+def test_the_suspect_flag_changes_no_verdict_cap_or_reference(
+    plan: list[Action], speed: float, lengths: list[float]
+) -> None:
+    """Brief 51b: the same events with the flag logic present and stubbed out give identical
+    verdicts, reasons, caps and reference length."""
+    from racer_laps.external_gate import ExternalLapGate
+
+    def run_events(stub: bool) -> list[object]:
+        original = ExternalLapGate._note_suspect
+        if stub:
+            ExternalLapGate._note_suspect = lambda self, reasons, length: None  # type: ignore[method-assign]
+        try:
+            out: list[object] = []
+            rig = EngineRig(speed=speed)
+            for arrival, number, cross in build_events(plan, speed):
+                rig.drive_until(arrival)
+                r = rig.mem.on_lap_source_event(arrival, number, cross)
+                if r is not None:
+                    out.append(
+                        (r.missed_gate, r.clean, r.stored, r.cap_mps, r.next_cap_mps, r.length_m)
+                    )
+            rig2 = Rig()
+            t = 0.0
+            for i, length in enumerate(lengths):
+                rig2.gate.on_steering(steering_for(length * LAP_M))
+                t += length * LAP_M
+                rig2.event(t, i + 1)
+            g = rig2.gate
+            out.append((g.doubtful, g.l_ref_m, g.confirmed, g.laps_completed))
+            return out
+        finally:
+            ExternalLapGate._note_suspect = original  # type: ignore[method-assign]
+
+    a, b = run_events(False), run_events(True)
+    assert repr(a) == repr(b)

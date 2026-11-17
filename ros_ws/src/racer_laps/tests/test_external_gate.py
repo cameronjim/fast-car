@@ -686,3 +686,90 @@ def test_parse_status() -> None:
         '{"state":"running","similarity":1.0,"laps":"0"}',
     ):
         assert parse_status_json(bad) is None, bad
+
+
+# -- reference_suspect (brief 51b): a split first lap as the one-lap reference -----------------------------
+
+
+def run_laps(lengths: list[float], steer_for_first: float | None = None) -> Rig:
+    """Laps of the given lengths at 1 m/s, steering re-set per lap to its own length (heading one
+    turn each) unless `steer_for_first` fixes the steering length for every lap."""
+    rig = Rig()
+    t = 0.0
+    for i, length in enumerate(lengths):
+        rig.gate.on_steering(steering_for(steer_for_first or length))
+        t += length
+        rig.event(t, i + 1)
+    return rig
+
+
+SUSPECT_CASES = [
+    # name, lap lengths, flag, lap that showed it
+    ("0.85 L then L", [0.85 * LAP_M, LAP_M], True, 2),
+    ("L then L", [LAP_M, LAP_M], False, None),
+    ("L, L, L", [LAP_M] * 3, False, None),
+    ("0.85 L, L, L: set once, at lap 2", [0.85 * LAP_M, LAP_M, LAP_M], True, 2),
+    ("a reference of two confirmed laps", [LAP_M, LAP_M, 1.3 * LAP_M], False, None),
+    ("band edge exactly (abs band 0.5)", [4.0, 4.5], False, None),
+    ("band edge epsilon over", [4.0, 4.5 + EPS], True, 2),
+    ("band edge epsilon under, other side", [4.5, 4.0], False, None),
+    ("other side epsilon over", [4.5, 4.0 - EPS], True, 2),
+    ("rel band edge (8 m, 0.64)", [8.0, 8.64], False, None),
+    ("rel band epsilon over", [8.0, 8.64 + EPS], True, 2),
+]
+
+
+@pytest.mark.parametrize(("name", "lengths", "flag", "lap"), SUSPECT_CASES)
+def test_reference_suspect_table(
+    name: str, lengths: list[float], flag: bool, lap: int | None
+) -> None:
+    rig = run_laps(lengths)
+    s = rig.gate.status()
+    assert s["reference_suspect"] is flag, name
+    assert s["reference_suspect_lap"] == lap, name
+    assert rig.gate.reference_suspect is flag
+
+
+def test_a_lap_failing_length_and_heading_does_not_set_it() -> None:
+    """Lap 2 of 2 L with the steering of one L: heading 4 pi, so it fails length and heading."""
+    rig = Rig(lap_m=0.85 * LAP_M)
+    assert not rig.event(0.85 * LAP_M, 1).missed  # type: ignore[union-attr]
+    rig.gate.on_steering(steering_for(LAP_M))
+    c = rig.event(0.85 * LAP_M + 2 * LAP_M, 2)
+    assert c is not None and set(reasons_of(rig)) == {"length", "heading"}
+    assert rig.gate.reference_suspect is False
+
+
+def test_a_lap_failing_length_and_another_reason_does_not_set_it() -> None:
+    rig = Rig(lap_m=0.85 * LAP_M)
+    rig.event(0.85 * LAP_M, 1)
+    c = rig.event(0.85 * LAP_M + LAP_M, 5)  # length miss and a skipped number
+    assert c is not None and set(reasons_of(rig)) == {"length", "sequence"}
+    assert rig.gate.reference_suspect is False
+
+
+def test_the_flag_never_changes_a_verdict_a_reason_or_the_reference() -> None:
+    rig = run_laps([0.85 * LAP_M, LAP_M, LAP_M])
+    assert rig.gate.reference_suspect
+    assert [d["reasons"] for d in rig.gate.doubtful] == [["length"], ["length"]]
+    assert rig.gate.l_ref_m == pytest.approx(0.85 * LAP_M, abs=1e-6)  # still the one lap
+    assert rig.gate.confirmed == 1 and rig.gate.laps_completed == 3
+
+
+def test_the_flag_clears_on_a_new_start() -> None:
+    rig = run_laps([0.85 * LAP_M, LAP_M])
+    assert rig.gate.reference_suspect
+    fresh = Rig()  # a relaunch is a new gate: no flag, no lap
+    assert fresh.gate.status()["reference_suspect"] is False
+    assert fresh.gate.status()["reference_suspect_lap"] is None
+    # and set_start clears it on the same object
+    rig.gate._started = False
+    rig.gate.set_start(rig.gate._hist[-1].t)
+    assert (
+        rig.gate.reference_suspect is False and rig.gate.status()["reference_suspect_lap"] is None
+    )
+
+
+def test_status_has_the_keys_before_the_start() -> None:
+    s = Rig(start=False).gate.status()
+    assert s["reference_suspect"] is False and s["reference_suspect_lap"] is None

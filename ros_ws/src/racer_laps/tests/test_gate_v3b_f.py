@@ -43,6 +43,8 @@ def test_f_two_agreeing_unique_matches_do_not_place_the_line_and_ambiguous_ones_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     car = Car(monkeypatch, ring_enabled=True, unique_shift_m=0.4)
+    # the scripted matcher answers the start-scan match only: no pair centre here
+    monkeypatch.setattr(car.gate, "_update_pair", lambda now: None, raising=False)
     flags = iter([True, True, False, False, False])
     monkeypatch.setattr(
         car.gate,
@@ -57,14 +59,11 @@ def test_f_two_agreeing_unique_matches_do_not_place_the_line_and_ambiguous_ones_
     assert car.scan(result(-0.1)) is None
     car.move_to(length + 0.31)
     assert car.scan(None) is None  # two unique matches are not proof: the closure is held
-    for x in (0.35, 0.4, 0.45):
+    closures = []
+    for x in (0.35, 0.4, 0.45, 0.5, 0.6):
         car.move_to(length + x)
         closed = car.scan(result(x))
-        assert closed is None or closed.line_source == "winding"
+        if closed is not None:
+            closures.append(closed)
     assert car.gate.start_aliased
-    car.move_to(length + 0.6)
-    closed = car.scan(None)
-    if closed is None:
-        car.move_to(length + 0.9)
-        closed = car.scan(None)
-    assert closed is not None and closed.line_source == "winding"
+    assert [c.line_source for c in closures] == ["winding"]

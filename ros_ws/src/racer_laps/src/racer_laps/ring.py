@@ -5,8 +5,9 @@ A keyframe is a scan taught on lap 1 at a known station (wheel distance since th
 laps the gate matches each scan to the one keyframe at the car's station; a keyframe whose matches
 are unique gives a fix (the wheel total at which the car was at it), and the latest fix of a lap
 places the line by wheel distance (`anchor_total_m`). A keyframe that looks like its neighbours
-(aliased) gives no fix and is retired after `retire_visits` visits running. This module holds the
-bookkeeping only; the matching is the gate's.
+(aliased: counted over its life, latched) gives no fix and is retired. A fix needs a proven
+keyframe (enough unique matches). This module holds the bookkeeping only; the matching is the
+gate's.
 """
 
 from __future__ import annotations
@@ -75,8 +76,11 @@ class Keyframe:
     heading_rad: float
     total_m: float  # wheel total when taught
     ref: Ref
-    retired: bool = False
-    alias_streak: int = 0
+    retired: bool = False  # aliased: retired for good (until a re-teach)
+    #: Unique and ambiguous STRONG matches over the life of this keyframe (not per visit): its
+    #: verdict belongs to the place.
+    n_unique: int = 0
+    n_ambiguous: int = 0
     visited: bool = False  # matched on the current lap (the tail of a lap is tracked by the
     # start scan and never visited: it must not keep a useless ring alive)
 
@@ -98,21 +102,18 @@ class Visit:
     """The scans matched to one keyframe in a row."""
 
     keyframe: Keyframe
-    n_unique: int = 0
-    n_ambiguous: int = 0
     estimates: list[Estimate] = field(default_factory=list)
     #: previous accepted match: (time, result, dead-reckoned pose at that scan)
     last: tuple[float, MatchResult, tuple[float, float, float]] | None = None
 
 
 class Ring:
-    def __init__(self, spacing_m: float, kf_max: int, window_m: float, retire_visits: int) -> None:
-        if spacing_m <= 0.0 or kf_max < 2 or window_m <= 0.0 or retire_visits < 1:
-            raise ValueError("ring: spacing and window positive, kf_max >= 2, retire_visits >= 1")
+    def __init__(self, spacing_m: float, kf_max: int, window_m: float) -> None:
+        if spacing_m <= 0.0 or kf_max < 2 or window_m <= 0.0:
+            raise ValueError("ring: spacing and window positive, kf_max >= 2")
         self._base_spacing_m = spacing_m
         self.kf_max = kf_max
         self.window_m = window_m
-        self.retire_visits = retire_visits
         self.spacing_m = spacing_m
         self.keyframes: list[Keyframe] = []
         self.length_m = math.nan  # L_ring: lap 1's wheel length (the teaching lap's)
@@ -183,16 +184,9 @@ class Ring:
             return None
         return best
 
-    def note_visit(self, kf: Keyframe, aliased: bool) -> None:
-        """A visit ended. Aliased `retire_visits` times running retires the keyframe (never
-        keyframe 0); any visit that was not aliased resets the count."""
+    def note_visit(self, kf: Keyframe) -> None:
+        """A visit ended: the keyframe was matched on this lap."""
         kf.visited = True
-        if not aliased:
-            kf.alias_streak = 0
-            return
-        kf.alias_streak += 1
-        if kf.alias_streak >= self.retire_visits and kf.index != 0:
-            kf.retired = True
 
     def add_fix(self, fix: Fix) -> None:
         self.fixes.append(fix)

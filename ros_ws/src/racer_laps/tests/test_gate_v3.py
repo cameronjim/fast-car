@@ -107,6 +107,7 @@ def feed_gate(
     speed: float = 0.5,
     gate_kw: dict | None = None,
     start_s: float = 0.0,
+    clockwise: bool = False,
 ) -> tuple[StartScanGate, np.ndarray]:
     """A gate that was started at the first scan and driven `travel_m` of the stadium; returns it
     and the last scan's points."""
@@ -119,7 +120,7 @@ def feed_gate(
     walls = stadium.walls()
     last = np.zeros((0, 2))
     n = 0
-    for tick in drive_stadium(stadium, 5.0, speed, start_s=start_s, t0=0.0):
+    for tick in drive_stadium(stadium, 5.0, speed, start_s=start_s, t0=0.0, clockwise=clockwise):
         if tick.kind == "drive":
             gate.on_steering(tick.payload[0])
         elif tick.kind == "odom":
@@ -222,43 +223,20 @@ def test_the_scan_buffer_keeps_one_metre_and_survives_standing_still() -> None:
 BOX_RING = Stadium(straight_m=0.0, lane_m=1.2, island_r_m=0.55, box=(0.5, 0.20, 0.30))
 
 
-def test_a_ring_with_one_box_winds_lap_1_then_closes_by_the_anchor() -> None:
-    """The box is what tells places apart: lap 1 winds, from lap 2 the keyframes that see the box
-    give fixes and the anchor places the line. Seeded with the odometry's yaw prediction
-    (`kf_seed_yaw`, see GateConfig): the registered zero-yaw seed does worse here, see the next
-    test."""
-    mem, laps = run(BOX_RING, 6.2, RING_SPEED, {"kf_seed_yaw": True})
+def test_a_ring_with_one_box_is_still_wound_every_lap_the_box_is_not_used_by_the_gate() -> None:
+    """Brief 50b: an aliased start scan winds every lap; anchors do not place the line and
+    keyframes are not matched. The box (the only place that is not like its neighbours) is not used."""
+    mem, laps = run(BOX_RING, 4.4, RING_SPEED)
     truth = BOX_RING.length_m
-    assert len(laps) == 6
-    assert laps[0].line_source == "winding"
-    assert [r.line_source for r in laps[1:]] == ["anchor"] * 5
-    for r in laps[1:]:
-        assert r.length_m == pytest.approx(truth, rel=0.005), r
+    assert len(laps) == 4
+    assert [r.line_source for r in laps] == ["winding"] * 4
+    for r in laps:
+        assert r.length_m == pytest.approx(truth, rel=0.02), r
         assert not r.missed_gate
     status = mem.status()
-    assert status["phase_observable"] is True
-    assert status["ring"]["fixes_last_lap"] >= 1  # type: ignore[index]
-    assert status["ring_disagreements"] == 0
+    assert status["start_verdict"] == "aliased" and status["phase_observable"] is False
+    assert status["ring"]["fixes_last_lap"] == 0  # type: ignore[index]
     assert status["missed_gate_laps"] == []
-
-
-def test_the_registered_zero_yaw_seed_on_the_box_ring_places_anchors_about_2_percent_short() -> (
-    None
-):
-    """The registered keyframe seed has zero yaw. On a curved ring the ICP then pulls the along
-    offset toward zero (a displacement d is read as about d / 3), so the fixes, and the anchor
-    laps, are early by 0.1 to 0.2 m and later laps lose the keyframes (the station is shifted) and
-    fall back to winding. Every lap is still within 3 percent; this is the number to know."""
-    mem, laps = run(BOX_RING, 6.2, RING_SPEED)
-    truth = BOX_RING.length_m
-    assert len(laps) == 6
-    assert [r.line_source for r in laps[:2]] == ["winding", "anchor"]
-    assert laps[1].length_m == pytest.approx(truth, rel=0.03)
-    assert laps[1].length_m < truth * 0.99  # early, not on the truth
-    for r in laps:
-        assert r.length_m == pytest.approx(truth, rel=0.03), r
-        assert not r.missed_gate
-    assert mem.status()["missed_gate_laps"] == []
 
 
 def test_with_the_ring_off_the_same_lap_is_lost_and_nothing_is_invented() -> None:

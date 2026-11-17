@@ -29,17 +29,21 @@ SLOW = settings(
 
 @SLOW
 @given(
-    gain=st.floats(min_value=0.97, max_value=1.03),
+    gain=st.floats(min_value=0.95, max_value=1.05),
     speed=st.floats(min_value=0.4, max_value=2.0),
+    launch_yaw=st.floats(min_value=-0.4, max_value=0.4),
 )
-def test_a_ring_has_n_crossings_each_within_4_percent_of_a_lap(gain: float, speed: float) -> None:
+def test_a_ring_has_n_crossings_each_within_4_percent_of_a_lap(
+    gain: float, speed: float, launch_yaw: float
+) -> None:
+    """Brief 50b: any steering gain error within 5 percent, any speed 0.4 to 2.0 m/s, any start
+    attitude within 0.4 rad: N crossings for N true laps, each lap within 4 percent."""
     n = 4
     truth_lap_s = RING.length_m / speed
-    _mem, laps = run(RING, n + 0.45, speed, steer_scale=gain)
+    _mem, laps = run(RING, n + 0.45, speed, steer_scale=gain, launch_yaw_rad=launch_yaw)
     assert len(laps) == n, [(r.lap_index, round(r.lap_time_s, 2)) for r in laps]
     for k, r in enumerate(laps, start=1):
         assert abs(r.lap_time_s / truth_lap_s - 1.0) <= 0.04, (k, r.lap_time_s, truth_lap_s)
-        # the crossing is within half a lap of the truth's (and in the order of the truth's)
         assert abs(r.t_cross_s - k * truth_lap_s) <= 0.5 * truth_lap_s
 
 

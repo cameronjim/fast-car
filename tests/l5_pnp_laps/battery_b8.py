@@ -677,25 +677,17 @@ def report_text(out: Path) -> str:
     return "\n".join(lines)
 
 
-def dev_report_text(out: Path) -> str:
-    """A5: the development runs against the count rule and the class tolerance (aliased class for
-    P4, OD and ND). Labelled development: never evidence."""
-    const = b8.load_constants()
-    runs = b8.load_runs(out, const, mode="development")
-    docs = {p.stem: json.loads(p.read_text()) for p in sorted(out.glob("*_*_*_*.json"))}
+def _dev_rows(runs, docs, const) -> tuple[list[str], dict]:  # type: ignore[no-untyped-def]
+    """Table rows of development runs and their totals."""
     lines = [
-        "# Development runs of brief 50 (A5): DEVELOPMENT, never evidence",
-        "",
-        f"constants file sha256: {const.yaml_sha256}",
-        "",
         (
-            "| run | laps truth | laps system | count rule | judged laps outside tolerance | "
-            "largest judged error s | sources | missed |"
+            "| run | stopped | contacts | laps truth | laps system | count rule | judged laps "
+            "outside | largest judged error s | sources | missed | verdicts | lap 1 d_beta | "
+            "pair share lap 1 |"
         ),
-        "|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
-    total = outside = 0
-    count_bad = 0
+    total = outside = count_bad = 0
     for r in runs:
         ok, detail = b8.count_rule(r, const)
         errs = b8.judged_errors(r, const)
@@ -705,27 +697,91 @@ def dev_report_text(out: Path) -> str:
         count_bad += not ok
         doc = docs.get(f"{r.condition}_{r.case}_{r.direction}_{r.seed}", {})
         st = doc.get("lap_status") or {}
-        srcs = {
-            s: list(st.get("lap_line_sources") or []).count(s)
-            for s in set(st.get("lap_line_sources") or [])
-        }
+        sources = list(st.get("lap_line_sources") or [])
+        srcs = {s: sources.count(s) for s in sorted(set(sources))}
+        verdicts = sorted(set(st.get("lap_start_verdicts") or []))
+        shares = st.get("lap_pair_shares") or []
+        d_beta = st.get("lap1_d_beta_rad")
         largest = max((e for _, e, _, _ in errs), default=float("nan"))
         lines.append(
-            f"| {r.condition}_{r.case}_{r.direction}_{r.seed} | {r.laps} | "
-            f"{len(r.system_lap_times_s)} | {'ok' if ok else 'FAIL ' + detail} | {out_laps} | "
-            f"{largest:.2f} | {srcs} | {st.get('missed_gate_laps')} |"
+            f"| {r.condition}_{r.case}_{r.direction}_{r.seed} | {doc.get('stopped_because')} | "
+            f"{doc.get('wall_contacts')} | {r.laps} | {len(r.system_lap_times_s)} | "
+            f"{'ok' if ok else 'FAIL ' + detail} | {out_laps} | {largest:.2f} | {srcs} | "
+            f"{st.get('missed_gate_laps')} | {verdicts} | "
+            f"{'-' if d_beta is None else format(d_beta, '+.2f')} | "
+            f"{'-' if not shares else format(shares[0], '.2f')} |"
         )
-    share = outside / total if total else float("nan")
-    errored = [r for r in runs if r.error]
-    verdict = count_bad == 0 and share <= 0.02 and not errored and len(runs) > 0
+    return lines, {"total": total, "outside": outside, "count_bad": count_bad}
+
+
+def dev_dropped_cases(runs, const) -> dict[str, str]:  # type: ignore[no-untyped-def]
+    """Owner decision 14 (brief 50b): A5 applies B8's drop rule to the development cases. A case is
+    dropped when its condition a run of the first development seed has fewer than `min_laps` truth
+    laps in either direction; the reason says which run. Probe cases are not judged at all."""
+    need = int(const.drop_rule["min_laps"])
+    first_seed = min((r.seed for r in runs), default=0)
+    dropped: dict[str, str] = {}
+    for r in runs:
+        if r.case in b8.PROBE_CASES or r.condition != "a" or r.seed != first_seed:
+            continue
+        if r.laps < need:
+            dropped.setdefault(
+                r.case, f"{r.condition}_{r.case}_{r.direction}_{r.seed}: {r.laps} laps"
+            )
+    return dropped
+
+
+def dev_report_text(out: Path) -> str:
+    """A5: the development runs against the count rule and the class tolerance (aliased class for
+    P4, OD and ND), with B8's drop rule applied to the development cases (owner decision 14:
+    stalled condition a runs drop their case, A5 judges the rest). The probe case RD is reported
+    and decides nothing. Labelled development: never evidence."""
+    const = b8.load_constants()
+    runs = b8.load_runs(out, const, mode="development")
+    docs = {p.stem: json.loads(p.read_text()) for p in sorted(out.glob("*_*_*_*.json"))}
+    probe = [r for r in runs if r.case in b8.PROBE_CASES]
+    judged_all = [r for r in runs if r.case not in b8.PROBE_CASES]
+    dropped = dev_dropped_cases(judged_all, const)
+    judged = [r for r in judged_all if r.case not in dropped]
+    lines = [
+        "# Development runs of briefs 50 and 50b (A5): DEVELOPMENT, never evidence",
+        "",
+        f"constants file sha256: {const.yaml_sha256}",
+        f"drop rule (owner decision 14): dropped {dropped or 'none'}",
+        "",
+    ]
+    rows, tot = _dev_rows(judged, docs, const)
+    lines += rows
+    share = tot["outside"] / tot["total"] if tot["total"] else float("nan")
+    errored = [r for r in judged if r.error]
+    verdict = tot["count_bad"] == 0 and share <= 0.02 and not errored and len(judged) > 0
     lines += [
         "",
         (
-            f"runs {len(runs)}, count rule broken in {count_bad}, {outside} of {total} judged "
-            f"laps outside the class tolerance ({share:.4f}), runs with an error {len(errored)}"
+            f"A5 runs {len(judged)}, count rule broken in {tot['count_bad']}, {tot['outside']} of "
+            f"{tot['total']} judged laps outside the class tolerance ({share:.4f}), runs with an "
+            f"error {len(errored)}"
         ),
         f"A5: {'PASS' if verdict else 'FAIL'}",
     ]
+    if dropped:
+        drows, _ = _dev_rows([r for r in judged_all if r.case in dropped], docs, const)
+        lines += ["", "Dropped by the rule (reported, not judged):", ""] + drows
+    if probe:
+        prows, ptot = _dev_rows(probe, docs, const)
+        stalls = [r for r in probe if len(r.gt_lap_times_s) < const.laps_driven]
+        lines += [
+            "",
+            "Stall probe RD (report only, decides nothing by rule):",
+            "",
+            *prows,
+            "",
+            (
+                f"RD runs {len(probe)}, stalled or short {len(stalls)}, count rule broken in "
+                f"{ptot['count_bad']}, {ptot['outside']} of {ptot['total']} judged laps outside "
+                "the class tolerance"
+            ),
+        ]
     return "\n".join(lines)
 
 

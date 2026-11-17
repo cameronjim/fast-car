@@ -59,6 +59,17 @@ PLACED = "placed"
 EXTERNAL_DEVELOPMENT = (("P4", V05_LAPS_YAML, ("lap_battery_b7", "cases")),
                         ("OD", V04_YAML, ("lap_battery_b5", "development", "cases")))  # fmt: skip
 
+#: Brief 50b: the stall probe RD, a ring with one box deliberately close to R3 and not R3. A
+#: development case (seeds 11 to 13), reported and never judged.
+RD_CASE = {
+    "track": "stadium",
+    "lane_width_m": 1.2,
+    "straight_length_m": 0.0,
+    "island_radius_m": 0.50,
+    "obstacles": [{"at": 0.35, "side": "outer", "protrusion_m": 0.20, "length_m": 0.30}],
+}
+PROBE_CASES = ("RD",)
+
 PreregError = b4.PreregError
 MissingPairError = b4.MissingPairError
 RunFileError = b4.RunFileError
@@ -102,6 +113,7 @@ class Constants:
         """ND of the ring yaml, P4 and OD: the cases development may run (seeds 11 to 13)."""
         cases = dict(self.raw["development"]["cases"])
         cases.update(self.external_cases)
+        cases["RD"] = dict(RD_CASE)
         return cases
 
     @property

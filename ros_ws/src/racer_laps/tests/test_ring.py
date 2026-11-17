@@ -14,13 +14,8 @@ EMPTY = Ref(np.zeros((0, 2)), np.zeros((0, 2)), np.zeros((0, 2)), np.zeros(0))
 
 
 def make_ring(**kw: float) -> Ring:
-    opts = {"spacing_m": 0.5, "kf_max": 120, "window_m": 0.3, "retire_visits": 2, **kw}
-    return Ring(
-        float(opts["spacing_m"]),
-        int(opts["kf_max"]),
-        float(opts["window_m"]),
-        int(opts["retire_visits"]),
-    )
+    opts = {"spacing_m": 0.5, "kf_max": 120, "window_m": 0.3, **kw}
+    return Ring(float(opts["spacing_m"]), int(opts["kf_max"]), float(opts["window_m"]))
 
 
 def taught(n: int = 12, **kw: float) -> Ring:
@@ -125,41 +120,21 @@ def test_a_retired_keyframe_is_never_selected_again() -> None:
     ring = taught(12)
     k4 = ring.nearest_live(2.0)
     assert k4 is not None
-    ring.note_visit(k4, True)
-    ring.note_visit(k4, True)
-    assert k4.retired and ring.n_retired == 1 and ring.n_live == 11
+    k4.retired = True  # aliased: the gate retires it for good
+    assert ring.n_retired == 1 and ring.n_live == 11
     assert ring.nearest_live(2.0) is None  # the neighbours are 0.5 m away, outside the window
     nxt = ring.nearest_live(2.2)
     assert nxt is not None and nxt.station_m == pytest.approx(2.5)
 
 
-def test_aliased_twice_running_retires_a_fix_in_between_resets_the_count() -> None:
+def test_the_counts_of_a_keyframe_belong_to_the_keyframe_not_to_a_visit_or_a_lap() -> None:
     ring = taught(12)
     k = ring.keyframes[3]
-    ring.note_visit(k, True)
-    ring.note_visit(k, False)  # a visit with a fix (or without alias evidence)
-    ring.note_visit(k, True)
-    assert not k.retired
-    ring.note_visit(k, True)
-    assert k.retired
-
-
-def test_keyframe_0_is_never_retired() -> None:
-    ring = taught(12)
-    k0 = ring.keyframes[0]
-    for _ in range(5):
-        ring.note_visit(k0, True)
-    assert not k0.retired
-
-
-def test_retire_visits_is_configurable() -> None:
-    ring = taught(12, retire_visits=3)
-    k = ring.keyframes[2]
-    ring.note_visit(k, True)
-    ring.note_visit(k, True)
-    assert not k.retired
-    ring.note_visit(k, True)
-    assert k.retired
+    assert (k.n_unique, k.n_ambiguous) == (0, 0)
+    k.n_unique += 4
+    ring.note_visit(k)
+    ring.end_lap()  # a lap ends: the place keeps what it learned
+    assert (k.n_unique, k.n_ambiguous) == (4, 0) and not k.retired
 
 
 def test_the_anchor_estimate_uses_the_latest_fix_of_the_lap() -> None:
@@ -175,7 +150,7 @@ def test_a_lap_without_a_fix_twice_with_live_keyframes_teaches_again() -> None:
     ring = taught(12)
 
     def lap_without_fix() -> None:
-        ring.note_visit(ring.keyframes[3], False)  # visited, no fix, not aliased
+        ring.note_visit(ring.keyframes[3])  # visited, no fix
         ring.end_lap()
 
     lap_without_fix()
@@ -194,8 +169,8 @@ def test_keyframes_that_were_not_visited_do_not_keep_the_ring_alive() -> None:
     visited, and a ring whose visited keyframes are all retired is not taught again."""
     ring = taught(12)
     for k in ring.keyframes[1:7]:
-        ring.note_visit(k, True)
-        ring.note_visit(k, True)
+        k.retired = True  # aliased
+        ring.note_visit(k)
     assert all(k.retired for k in ring.keyframes[1:7])
     for _ in range(4):
         ring.end_lap()
@@ -237,7 +212,7 @@ def test_status_counts() -> None:
 
 
 def test_bad_ring_settings_are_refused() -> None:
-    for kw in ({"spacing_m": 0.0}, {"kf_max": 1}, {"window_m": 0.0}, {"retire_visits": 0}):
+    for kw in ({"spacing_m": 0.0}, {"kf_max": 1}, {"window_m": 0.0}):
         with pytest.raises(ValueError):
             make_ring(**kw)
 

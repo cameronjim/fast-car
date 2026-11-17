@@ -536,8 +536,18 @@ def write_event_trace(args, work: Path, trace: dict, t_first: float) -> None:
     out_dir = Path(directory)
     out_dir.mkdir(parents=True, exist_ok=True)
     case = work.parent.name if work.parent.name else "case"
-    payload = {"case": case, "t_first_s": t_first, **trace}
-    with gzip.open(out_dir / f"{case}.json.gz", "wt") as handle:
+    stalls = (
+        "stalls"
+        if "debug_stall_profile" in str(getattr(args, "planner_params_json", ""))
+        else "nostalls"
+    )
+    label = (
+        f"{args.track}-{'cw' if args.reverse else 'ccw'}-v{args.v_max_mps}-{stalls}"
+        f"-{getattr(args, 'car', '')}-{getattr(args, 'backend', '')}"
+    )
+    payload = {"case": case, "label": label, "t_first_s": t_first, **trace}
+    stamp = time.strftime("%H%M%S")
+    with gzip.open(out_dir / f"{label}-{case}-{stamp}.json.gz", "wt") as handle:
         json.dump(payload, handle, separators=(",", ":"))
 
 

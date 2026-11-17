@@ -229,6 +229,12 @@ def make_raceline(args, synthetic, map_yaml: Path, work: Path) -> tuple[Path, di
 #: The simulated LiDAR's sweep (bridge scan_time: scan_divider / step rate at 10 Hz). The lap node
 #: stamps a scan at its stamp plus half the sweep; the simulator's scans are instantaneous.
 SIM_SCAN_SWEEP_S = 0.1
+#: Ground truth validity (pre-registration pnp-v0.5-laps.yaml, lap_battery_b7.validity): a scan
+#: stamped within this long after the first DRIVING report must exist, or crossing 0 is not defined.
+MAX_SCAN_WAIT_S = 0.25
+#: The nodes started before the startup reset of a pnp run (the rest follow the reset): the
+#: simulator and the safety node, which only publish what the bridge feeds them.
+PHASE_ONE_NODES = ("bridge_node", "safety_node")
 
 
 def rescore_from_start_scan(
@@ -292,6 +298,100 @@ def crossing_lap_times(crossings: list[float], start_stamp: float | None) -> lis
     return [round(b - a, 3) for a, b in pairwise(edges)]
 
 
+def registered_truth(
+    odom: list[tuple],
+    scan_stamps: list[float],
+    driving_receipt_s: float | None,
+    centreline,
+    startup_reset_done_s: float | None = None,
+    max_scan_wait_s: float = MAX_SCAN_WAIT_S,
+) -> dict:
+    """The ground truth of a lap battery run, by the registered rule (pre-registration
+    pnp-v0.5-laps section 2): crossing 0 is the stamp of the first /scan stamped at or after the
+    receipt of the planner's first DRIVING report, the start line is the ground-truth pose at that
+    stamp, crossings come from `bench_metrics.LapTracker` started at that sample, and lap k is
+    crossing k minus crossing k-1 (lap 1 is the launch lap, from crossing 0). Nothing here reads
+    the system's LapEvents: the system is the thing under test.
+
+    `odom` is the recorded ground-truth odometry (stamp, x, y, yaw, v), `centreline` is the
+    (xs, ys) of the loop the tracker counts progress on. The result says whether the truth is
+    VALID. It is not when the recording does not cover crossing 0 (`truth_starts_after_crossing_0`:
+    the first odometry stamp is later, so the line would be the pose at a later instant), when no
+    scan is stamped within `max_scan_wait_s` after the report (`no_scan_at_start`) or when a
+    startup reset completed after the report (`reset_after_driving`, `startup_reset_done_s` on
+    the report's clock). An invalid run is rerun, never scored."""
+    import bench_metrics as bm
+
+    xs, ys = centreline
+    crossing0 = first_scan_at_or_after(scan_stamps, driving_receipt_s)
+    first_odom = float(odom[0][0]) if odom else None
+    reason = ""
+    if crossing0 is None or crossing0 > driving_receipt_s + max_scan_wait_s:
+        reason = "no_scan_at_start"
+    elif first_odom is None or first_odom > crossing0:
+        reason = "truth_starts_after_crossing_0"
+    elif startup_reset_done_s is not None and startup_reset_done_s > driving_receipt_s:
+        reason = "reset_after_driving"
+    crossings: list[float] = []
+    if crossing0 is not None:
+        tracker = bm.LapTracker(xs, ys)
+        previous = None
+        for sample in odom:
+            t, x, y = sample[0], sample[1], sample[2]
+            if t < crossing0:
+                continue
+            if previous is not None and bm.is_teleport(previous, (x, y)):
+                tracker.reset()
+            tracker.update(x, y, t)
+            previous = (x, y)
+        crossings = list(getattr(tracker, "_crossings", []))
+    return {
+        "truth_valid": reason == "",
+        "truth_invalid_reason": reason,
+        "truth_first_odom_s": first_odom,
+        "crossing0_s": crossing0,
+        "crossings_s": crossings,
+        "lap_times_s": crossing_lap_times(crossings, crossing0),
+    }
+
+
+def run_startup(
+    stack: list[tuple[str, list[str]]],
+    two_phase: bool,
+    spawn,
+    ready,
+    spin,
+    reset,
+    after_reset,
+    wait_timeout_polls: int,
+) -> None:
+    """The runner's startup order. `spawn(name, command)` starts a node, `ready()` says the
+    reset service is there (and what the caller also needs before the reset), `spin()` serves
+    the runner's own callbacks for one poll, `reset()` performs the startup reset and returns when
+    it completed, `after_reset()` clears the recording.
+
+    `two_phase` (driver pnp): only `PHASE_ONE_NODES` start first; the rest (perception, planner,
+    lap node) start after the reset and the clearing of the recording, so the startup reset can
+    no longer land on a car the planner has already set moving (brief 48: it did in 4 of 90 B4
+    runs, 2.3 s after the planner reported DRIVING, and the ground truth began there). The wait is
+    a spinning one: the blocking `wait_for_service` served no callback while it waited. Otherwise
+    every node starts at once, as before."""
+    first = [item for item in stack if item[0] in PHASE_ONE_NODES] if two_phase else list(stack)
+    later = [item for item in stack if item not in first]
+    for name, command in first:
+        spawn(name, command)
+    for _ in range(wait_timeout_polls):
+        if ready():
+            break
+        spin()
+    else:
+        raise RuntimeError("/sim/reset not available")
+    reset()
+    after_reset()
+    for name, command in later:
+        spawn(name, command)
+
+
 def note_guidance_floor(counters: dict, v_ref_mps: list[float]) -> None:
     """Count one guidance message: it has stations, and the floor was its active bound when the
     lowest per station bound sits at the D v1 floor (`counters["floor_mps"]`)."""
@@ -311,6 +411,7 @@ def lap_results(
     driving_first_s: float | None,
     lap1_start_s: float | None = None,
     rescored: tuple | None = None,
+    truth: dict | None = None,
 ) -> dict:
     """Ground truth against the system for a run with the lap memory: the ground-truth crossing
     stamps, lap times, the system's LapEvents, the interventions per ground-truth lap by source
@@ -320,12 +421,20 @@ def lap_results(
     Lap 1 is counted from the system's own start line: the stamp of the first /scan after the
     planner first reported DRIVING (`lap1_start_s`; the report instant itself, `driving_first_s`,
     when no scan was seen). The simulator's lap tracker counts from the first odometry sample, and
-    from a standstill a few centimetres of start line are a few tenths of a second."""
+    from a standstill a few centimetres of start line are a few tenths of a second.
+
+    `truth` is `registered_truth`'s result (brief 48): when given it IS the ground truth of the
+    result, with its validity, and `rescored` (the numbers `rescore_from_start_scan` takes from the
+    system's own first LapEvent) is only reported as `gt_lap_times_rescored_s`."""
     crossings = list(getattr(lap_tracker, "_crossings", []))
     gt_times = list(lap_tracker.lap_times_s)
     start_s = lap1_start_s if lap1_start_s is not None else driving_first_s
     first_odom_times = list(gt_times)
-    if rescored is not None:
+    if truth is not None:
+        gt_times = truth["lap_times_s"]
+        crossings = truth["crossings_s"]
+        start_s = truth["crossing0_s"]
+    elif rescored is not None:
         # truth counted from the pose of the system's start scan (see rescore_from_start_scan)
         gt_times, crossings, start_s = rescored
     elif gt_times and crossings and start_s is not None:
@@ -347,13 +456,16 @@ def lap_results(
         entry["max_stations"] = max(entry["max_stations"], n_arrays)
         entry["last_cap_mps"] = cap
     by_crossing_start = lap1_start_s if lap1_start_s is not None else driving_first_s
-    return {
+    if truth is not None:
+        by_crossing_start = truth["crossing0_s"]
+    by_crossing = crossing_lap_times(crossings, by_crossing_start)
+    out: dict = {
         "gt_lap_crossings_s": [round(c, 3) for c in crossings],
         "gt_lap_times_s": [round(t, 3) for t in gt_times],
-        "gt_lap_times_by_crossing_s": crossing_lap_times(crossings, by_crossing_start),
+        "gt_lap_times_by_crossing_s": by_crossing,
         "gt_lap1_start_s": start_s,
         "gt_lap_times_from_first_odom_s": [round(t, 3) for t in first_odom_times],
-        "gt_rescored_from_start_scan": rescored is not None,
+        "gt_rescored_from_start_scan": rescored is not None and truth is None,
         "driving_first_s": driving_first_s,
         "system_lap_events": lap_events,
         "system_laps": len(lap_events),
@@ -362,6 +474,22 @@ def lap_results(
         "guidance_caps_by_lap": {str(k): v for k, v in sorted(caps.items())},
         "lap_status": dict(lap_status),
     }
+    if truth is not None:
+        out.update(
+            {
+                # the registered truth (brief 48), under the names the decisions read
+                "gt_lap_times_registered_s": list(by_crossing),
+                "gt_lap_crossings_registered_s": [round(c, 3) for c in crossings],
+                "truth_valid": bool(truth["truth_valid"]),
+                "truth_invalid_reason": str(truth["truth_invalid_reason"]),
+                "truth_first_odom_s": truth["truth_first_odom_s"],
+                # what rescore_from_start_scan made of the system's first LapEvent: reported only
+                "gt_lap_times_rescored_s": (
+                    [round(t, 3) for t in rescored[0]] if rescored is not None else []
+                ),
+            }
+        )
+    return out
 
 
 def _count_by_source(events: list[tuple]) -> dict:
@@ -675,7 +803,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     base._write_params_file(params_file, nodes)
 
     processes: list[tuple[str, subprocess.Popen]] = []
-    for name, command in stack:
+
+    def spawn(name: str, command: list[str]) -> None:
         log = (work / f"{name}.log").open("w")
         if name == "localization":
             cmd = command
@@ -915,22 +1044,32 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         initial_pose_pub.publish(msg)
 
     stopped_because = "duration"
-    try:
-        deadline = time.monotonic() + base.STARTUP_TIMEOUT_S
-        while not (recording.odom and (recording.drive_raw or localised)):
-            rclpy.spin_once(node, timeout_sec=0.05)
-            if time.monotonic() > deadline or (why := died()):
-                raise RuntimeError(why or f"stack not up after {base.STARTUP_TIMEOUT_S} s")
-        if not reset_client.wait_for_service(timeout_sec=30.0):
-            raise RuntimeError("/sim/reset not available")
+    # Brief 48: a pnp run starts the bridge and safety_node, resets the simulator, clears the
+    # recording and only then starts the perception, the planner and the lap node, so the startup
+    # reset can never land on a car that is already moving (the truth recording would begin after
+    # crossing 0). Other drivers start every node at once, as before.
+    two_phase = args.driver == "pnp"
+    reset_done: list[float] = []  # the report's clock (node time) when the startup reset returned
+    stall_from = [-math.inf]  # odometry before this stamp starts neither the duration nor the stall
 
-        def request_reset():
-            return reset_client.call_async(Trigger.Request())
+    def request_reset():
+        return reset_client.call_async(Trigger.Request())
 
+    def stack_ready() -> bool:
+        if not reset_client.service_is_ready():
+            return False
+        if two_phase:
+            return bool(recording.odom)
+        return bool(recording.odom and (recording.drive_raw or localised))
+
+    def startup_reset() -> None:
         future = request_reset()
         rclpy.spin_until_future_complete(node, future, timeout_sec=30.0)
         if future.result() is None:
             raise RuntimeError("/sim/reset did not complete")
+        reset_done.append(node.get_clock().now().nanoseconds * 1e-9)
+
+    def after_startup_reset() -> None:
         if localised:
             # AMCL starts from the true pose, as an operator's click in Foxglove would, and
             # tracker_node cannot move until map -> odom exists, so the car waits here.
@@ -947,9 +1086,44 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 raise RuntimeError("AMCL published no map -> odom within 60 s of /initialpose")
             for _ in range(20):
                 rclpy.spin_once(node, timeout_sec=0.05)
-        recording.clear()
-        loc_errors.clear()
-        loc_series.clear()
+
+    try:
+        # a spinning wait for the bridge's odometry and the reset service (the blocking
+        # wait_for_service of the earlier runner served no callback while it waited)
+        polls = round(base.STARTUP_TIMEOUT_S / 0.05)
+
+        def spin_poll() -> None:
+            rclpy.spin_once(node, timeout_sec=0.05)
+            if why := died():
+                raise RuntimeError(why)
+
+        # clear the recording once the stack is reset, before the rest of a two-phase stack runs
+        def clear_recording() -> None:
+            after_startup_reset()
+            recording.clear()
+            loc_errors.clear()
+            loc_series.clear()
+
+        run_startup(
+            stack,
+            two_phase,
+            spawn,
+            stack_ready,
+            spin_poll,
+            startup_reset,
+            clear_recording,
+            polls,
+        )
+        if two_phase:
+            # the rest of the stack is starting: wait until the planner talks (the single phase
+            # start waited for this before the reset) and count the duration and the stall from
+            # there. The recording keeps everything since the clearing, so crossing 0 is covered.
+            deadline = time.monotonic() + base.STARTUP_TIMEOUT_S
+            while not recording.drive_raw:
+                rclpy.spin_once(node, timeout_sec=0.05)
+                if time.monotonic() > deadline or (why := died()):
+                    raise RuntimeError(why or f"stack not up after {base.STARTUP_TIMEOUT_S} s")
+            stall_from[0] = recording.odom[-1][0]
         pending_reset = None
         initial_pose_until = 0.0
         consumed = 0
@@ -980,7 +1154,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 sample = recording.odom[consumed]
                 consumed += 1
                 t, x, y, yaw, v = sample
-                if start_stamp is None:
+                if start_stamp is None and t >= stall_from[0]:
                     start_stamp = t
                 if previous is not None and bm.is_teleport(previous[1:3], (x, y)):
                     lap_tracker.reset()
@@ -1006,7 +1180,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                             pending_reset = request_reset()
                 if t >= cooldown_until:
                     lap_tracker.update(x, y, t)
-                if abs(v) > 0.05 or last_motion is None:
+                if abs(v) > 0.05 or (last_motion is None and t >= stall_from[0]):
                     last_motion = t
                 previous = sample
             if start_stamp is not None and previous is not None:
@@ -1090,6 +1264,14 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             }
             if args.lap_memory != "none":
                 result["guidance_floor"] = dict(guidance_floor)
+                driving_receipt = driving_first[0] if driving_first else None
+                truth = registered_truth(
+                    recording.odom,
+                    scan_stamps,
+                    driving_receipt,
+                    (lap_tracker._xs, lap_tracker._ys),
+                    reset_done[0] if reset_done else None,
+                )
                 result.update(
                     lap_results(
                         lap_tracker,
@@ -1097,15 +1279,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                         lap_events,
                         guidance_log,
                         lap_status,
-                        driving_first[0] if driving_first else None,
-                        first_scan_at_or_after(
-                            scan_stamps, driving_first[0] if driving_first else None
-                        ),
+                        driving_receipt,
+                        first_scan_at_or_after(scan_stamps, driving_receipt),
                         rescore_from_start_scan(
                             recording.odom, lap_tracker._xs, lap_tracker._ys, lap_events
                         ),
+                        truth,
                     )
                 )
+                result["startup_reset_done_s"] = reset_done[0] if reset_done else None
         t_first = recording.odom[0][0] if recording.odom else 0.0
         if os.environ.get("RUNNER_TRACE_NPZ"):
             # Diagnostics only: the command stream and the events, for timing analysis offline.

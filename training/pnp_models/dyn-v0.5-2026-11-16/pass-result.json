@@ -1,0 +1,1036 @@
+{
+  "support": {
+    "gate": "GP2f-S the tables may be trusted",
+    "passed": false,
+    "items": [
+      {
+        "name": "1 supported nodes within 0.005 of a bound (alpha and gamma)",
+        "value": 0.0,
+        "comparison": "<=",
+        "threshold": 0.0,
+        "passed": true,
+        "note": "none"
+      },
+      {
+        "name": "2a split half: largest alpha difference at a supported node",
+        "value": 0.031651207034726236,
+        "comparison": "<=",
+        "threshold": 0.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "2b split half: largest gamma difference at a supported node",
+        "value": 0.06626053876733809,
+        "comparison": "<=",
+        "threshold": 0.08,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3 share of held-out rollout steps in the cell of a supported node",
+        "value": 0.9084824387011265,
+        "comparison": ">=",
+        "threshold": 0.95,
+        "passed": false,
+        "note": ""
+      }
+    ]
+  },
+  "table": {
+    "gate": "GP2f-T T5 is a candidate",
+    "passed": false,
+    "items": [
+      {
+        "name": "0 GP2f-S passed",
+        "value": 0.0,
+        "comparison": ">=",
+        "threshold": 1.0,
+        "passed": false,
+        "note": ""
+      },
+      {
+        "name": "1a P1 ratio T5 / dyn-v0.1",
+        "value": 0.7428381487824903,
+        "comparison": "<=",
+        "threshold": 0.9,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "1b upper end of the bootstrap interval of the P1 ratio",
+        "value": 0.8276176047267221,
+        "comparison": "<",
+        "threshold": 0.95,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "2a A1 ratio",
+        "value": 0.6622646053021433,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "2b C1 ratio",
+        "value": 0.8442923863202313,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3a Y1 ratio",
+        "value": 0.8305308284243551,
+        "comparison": "<=",
+        "threshold": 0.9,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3b S1(T5) minus S1(dyn-v0.1)",
+        "value": 0.0,
+        "comparison": "<=",
+        "threshold": 1e-06,
+        "passed": true,
+        "note": "absolute m/s"
+      },
+      {
+        "name": "4 stratum ccw:0.25-0.6 position RMSE ratio",
+        "value": 0.7757098792878959,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 stratum ccw:0.6-0.85 position RMSE ratio",
+        "value": 0.810500946852157,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 stratum ccw:0.85+ position RMSE ratio",
+        "value": 0.6915411967088184,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 stratum cw:0.25-0.6 position RMSE ratio",
+        "value": 0.721242733004797,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 stratum cw:0.6-0.85 position RMSE ratio",
+        "value": 0.9652435389101764,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 stratum cw:0.85-1.25 position RMSE ratio",
+        "value": 0.7430527041776416,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 stratum cw:1.25+ position RMSE ratio",
+        "value": 0.6232620573375709,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "5 ccw P1 ratio",
+        "value": 0.7568846883217444,
+        "comparison": "<=",
+        "threshold": 0.95,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "5 ccw Y1 ratio",
+        "value": 0.8186886549821074,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "5 cw P1 ratio",
+        "value": 0.7365848396201008,
+        "comparison": "<=",
+        "threshold": 0.95,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "5 cw Y1 ratio",
+        "value": 0.8377981749326094,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "6 ccw absolute yaw rate bias (rad/s)",
+        "value": 0.020648279659076042,
+        "comparison": "<=",
+        "threshold": 0.03,
+        "passed": true,
+        "note": "at most 0.03 rad/s or 0.5 of the dyn-v0.1 bias -0.0485 rad/s"
+      },
+      {
+        "name": "6 cw absolute yaw rate bias (rad/s)",
+        "value": 0.008955998616470576,
+        "comparison": "<=",
+        "threshold": 0.03,
+        "passed": true,
+        "note": "at most 0.03 rad/s or 0.5 of the dyn-v0.1 bias -0.0279 rad/s"
+      },
+      {
+        "name": "7 near-limit left position RMSE ratio",
+        "value": 0.0,
+        "comparison": "n/a",
+        "threshold": 30.0,
+        "passed": true,
+        "note": "cannot be applied: 0 windows, at least 30 needed"
+      },
+      {
+        "name": "7 near-limit right position RMSE ratio (164 windows)",
+        "value": 0.6893694694414247,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "8 transition position RMSE ratio (226 windows)",
+        "value": 0.7190657908611146,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "9 P1 ratio under T2s",
+        "value": 0.7353985477993547,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "10a Pp ratio on G1b and T2b",
+        "value": 0.6798166833612211,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "10b Yp ratio on G1b and T2b",
+        "value": 0.7771416850778781,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      }
+    ]
+  },
+  "learned": {
+    "gate": "GP2f-L TL5 replaces T5 (not evaluated: GP2f-T failed)",
+    "passed": false,
+    "items": [],
+    "evaluated": false
+  },
+  "outcome": "the one-speed contract stays",
+  "validity_T5": {
+    "v_max_mps": 1.3,
+    "rule_mps": 1.4,
+    "exceeds_base": false,
+    "applied": false,
+    "items": [
+      {
+        "name": "1 the bundle's model passed its gate",
+        "value": 0.0,
+        "comparison": ">=",
+        "threshold": 1.0,
+        "passed": false,
+        "note": ""
+      },
+      {
+        "name": "2 ccw: windows with start speed >= 1.15 m/s",
+        "value": 29.0,
+        "comparison": ">=",
+        "threshold": 30.0,
+        "passed": false,
+        "note": "the fast item cannot be applied"
+      },
+      {
+        "name": "2 cw start speed >= 1.15 m/s: P1 ratio to dyn-v0.1 (96 windows)",
+        "value": 0.6403221424148083,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3 ccw: windows with start speed >= 1.3 m/s",
+        "value": 7.0,
+        "comparison": ">=",
+        "threshold": 30.0,
+        "passed": false,
+        "note": "the fast item cannot be applied"
+      },
+      {
+        "name": "3 cw start speed >= 1.3 m/s: P1 ratio to dyn-v0.1 (57 windows)",
+        "value": 0.6159982209915409,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 a top supported speed exists",
+        "value": 1.3,
+        "comparison": ">=",
+        "threshold": 0.0,
+        "passed": true,
+        "note": "highest speed node with a supported turning node on each side in both tables"
+      }
+    ],
+    "note": "the bundle's model failed its gate: validity held at 1.3"
+  },
+  "validity_TL5": {
+    "v_max_mps": 1.3,
+    "rule_mps": 1.4,
+    "exceeds_base": false,
+    "applied": false,
+    "items": [
+      {
+        "name": "1 the bundle's model passed its gate",
+        "value": 0.0,
+        "comparison": ">=",
+        "threshold": 1.0,
+        "passed": false,
+        "note": ""
+      },
+      {
+        "name": "2 ccw: windows with start speed >= 1.15 m/s",
+        "value": 29.0,
+        "comparison": ">=",
+        "threshold": 30.0,
+        "passed": false,
+        "note": "the fast item cannot be applied"
+      },
+      {
+        "name": "2 cw start speed >= 1.15 m/s: P1 ratio to dyn-v0.1 (96 windows)",
+        "value": 0.6091520536390926,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "3 ccw: windows with start speed >= 1.3 m/s",
+        "value": 7.0,
+        "comparison": ">=",
+        "threshold": 30.0,
+        "passed": false,
+        "note": "the fast item cannot be applied"
+      },
+      {
+        "name": "3 cw start speed >= 1.3 m/s: P1 ratio to dyn-v0.1 (57 windows)",
+        "value": 0.6125192020468311,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "4 a top supported speed exists",
+        "value": 1.3,
+        "comparison": ">=",
+        "threshold": 0.0,
+        "passed": true,
+        "note": "highest speed node with a supported turning node on each side in both tables"
+      }
+    ],
+    "note": "the bundle's model failed its gate: validity held at 1.3"
+  },
+  "top_supported_speed": 1.3,
+  "step_share_in_supported": 0.9084824387011265,
+  "bootstrap_T5_over_v01": {
+    "ratio": 0.7428381487824903,
+    "lo": 0.6816364928865655,
+    "hi": 0.8276176047267221,
+    "resamples": 2000,
+    "blocks": 67,
+    "seed": 0,
+    "empty_stratum_share": 0.0
+  },
+  "bootstrap_TL5_over_T5": {
+    "ratio": 0.8772681084683316,
+    "lo": 0.8452978028114453,
+    "hi": 0.9087231598095884,
+    "resamples": 2000,
+    "blocks": 67,
+    "seed": 0,
+    "empty_stratum_share": 0.0
+  },
+  "metrics": {
+    "dyn-v0.1": {
+      "macro": {
+        "P1": 0.12163976859724733,
+        "A1": 0.0927083220482623,
+        "C1": 0.07783096550804795,
+        "Y1": 0.11148067113566054,
+        "S1": 0.09727826802149818
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.06468811682411311,
+        "ccw:0.6-0.85": 0.0983070802013022,
+        "ccw:0.85+": 0.09930023357696012,
+        "cw:0.25-0.6": 0.07391459134962201,
+        "cw:0.6-0.85": 0.11232135548037653,
+        "cw:0.85-1.25": 0.17625604765545685,
+        "cw:1.25+": 0.22669095509290046
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.08743181020079181,
+          "Y1": 0.09892417806236226
+        },
+        "cw": {
+          "P1": 0.14729573739458898,
+          "Y1": 0.12089804094063428
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.0485191135630536,
+        "cw": -0.027867605647210303
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.1493471679263585
+        ]
+      },
+      "transition": [
+        226,
+        0.18377868887587084
+      ],
+      "p1_alt": 0.12190872399698767,
+      "pp": 0.0982416934134908,
+      "yp": 0.025668317434183553,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.18156777173647073
+          ],
+          "cw": [
+            96,
+            0.22208799224137363
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.17702279867069734
+          ],
+          "cw": [
+            57,
+            0.2306590662936782
+          ]
+        }
+      }
+    },
+    "T5": {
+      "macro": {
+        "P1": 0.0903586605231097,
+        "A1": 0.061397440309516424,
+        "C1": 0.06571209159839742,
+        "Y1": 0.09258813415160325,
+        "S1": 0.09727826802149818
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.050179211292994096,
+        "ccw:0.6-0.85": 0.07967798158542637,
+        "ccw:0.85+": 0.06867020236127619,
+        "cw:0.25-0.6": 0.05331036187393411,
+        "cw:0.6-0.85": 0.10841746265906659,
+        "cw:0.85-1.25": 0.1309675328380505,
+        "cw:1.25+": 0.14128787105102003
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.06617579841323222,
+          "Y1": 0.08098810228308585
+        },
+        "cw": {
+          "P1": 0.1084958071055178,
+          "Y1": 0.1012881580529913
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.020648279659076042,
+        "cw": 0.008955998616470576
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.10295537791597312
+        ]
+      },
+      "transition": [
+        226,
+        0.1321489682599468
+      ],
+      "p1_alt": 0.08965149859145707,
+      "pp": 0.06678634218414924,
+      "yp": 0.019947919463915283,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.13395109744461714
+          ],
+          "cw": [
+            96,
+            0.14220785899659968
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.09888925440415654
+          ],
+          "cw": [
+            57,
+            0.14208557449247566
+          ]
+        }
+      }
+    },
+    "TL5 seed 0": {
+      "macro": {
+        "P1": 0.07926877120084055,
+        "A1": 0.053675523761583556,
+        "C1": 0.057616208836567935,
+        "Y1": 0.07708004784629756,
+        "S1": 0.09727826802149818
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.043443033962232896,
+        "ccw:0.6-0.85": 0.06746582731109643,
+        "ccw:0.85+": 0.06316360752575768,
+        "cw:0.25-0.6": 0.047281706997799995,
+        "cw:0.6-0.85": 0.08501394327783182,
+        "cw:0.85-1.25": 0.10881556152408918,
+        "cw:1.25+": 0.1396977178070759
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.058024156266362335,
+          "Y1": 0.0690029565884242
+        },
+        "cw": {
+          "P1": 0.09520223240169923,
+          "Y1": 0.08313786628970257
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.02632312215383529,
+        "cw": 0.0054140452348517745
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.09488442795278286
+        ]
+      },
+      "transition": [
+        226,
+        0.11277183365160184
+      ],
+      "p1_alt": 0.07879893688865602,
+      "pp": 0.06364552002015414,
+      "yp": 0.019602707478005174,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.1116357671001467
+          ],
+          "cw": [
+            96,
+            0.1352853565624156
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.08312476375938233
+          ],
+          "cw": [
+            57,
+            0.14128310723107088
+          ]
+        }
+      }
+    },
+    "TL5 seed 1": {
+      "macro": {
+        "P1": 0.07910769052392518,
+        "A1": 0.05416863278643185,
+        "C1": 0.05701815060027974,
+        "Y1": 0.07666066466570513,
+        "S1": 0.09727826802149818
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.04389972936976507,
+        "ccw:0.6-0.85": 0.06681185265082046,
+        "ccw:0.85+": 0.06326779648219016,
+        "cw:0.25-0.6": 0.046567278644243745,
+        "cw:0.6-0.85": 0.08527013762865121,
+        "cw:0.85-1.25": 0.1095751008601723,
+        "cw:1.25+": 0.13836193803163324
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.0579931261675919,
+          "Y1": 0.06870172490436065
+        },
+        "cw": {
+          "P1": 0.09494361379117514,
+          "Y1": 0.08262986948671351
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.024484845240090928,
+        "cw": 0.006796368322638001
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.09434512293873978
+        ]
+      },
+      "transition": [
+        226,
+        0.11250418256699074
+      ],
+      "p1_alt": 0.07857552373243608,
+      "pp": 0.0648695285868286,
+      "yp": 0.020431979017585623,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.11170468130887888
+          ],
+          "cw": [
+            96,
+            0.1345401475111796
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.08102795153070329
+          ],
+          "cw": [
+            57,
+            0.13952632225822964
+          ]
+        }
+      }
+    },
+    "TL5 seed 2": {
+      "macro": {
+        "P1": 0.07888738103580062,
+        "A1": 0.053734957893815494,
+        "C1": 0.05704015831643746,
+        "Y1": 0.07576429048152157,
+        "S1": 0.09727826802149818
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.04309855928269686,
+        "ccw:0.6-0.85": 0.06665119113702778,
+        "ccw:0.85+": 0.06383232954854556,
+        "cw:0.25-0.6": 0.046570648387278334,
+        "cw:0.6-0.85": 0.08370862095955998,
+        "cw:0.85-1.25": 0.10913117536658251,
+        "cw:1.25+": 0.1392191425689133
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.05786069332275673,
+          "Y1": 0.06692495488243289
+        },
+        "cw": {
+          "P1": 0.09465739682058352,
+          "Y1": 0.08239379218083809
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.022594178531240374,
+        "cw": 0.0051991396140197875
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.0944360969978313
+        ]
+      },
+      "transition": [
+        226,
+        0.1128596299924108
+      ],
+      "p1_alt": 0.07845177928906481,
+      "pp": 0.06395455210913019,
+      "yp": 0.019934776896137978,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.11298880307716788
+          ],
+          "cw": [
+            96,
+            0.1350416692683031
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.08492605249014702
+          ],
+          "cw": [
+            57,
+            0.14057385210527226
+          ]
+        }
+      }
+    },
+    "N4": {
+      "macro": {
+        "P1": 0.11078819994714573,
+        "A1": 0.08092573256584366,
+        "C1": 0.07452869300677326,
+        "Y1": 0.09423160164572054,
+        "S1": 0.07762564678359014
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.06876135650366114,
+        "ccw:0.6-0.85": 0.08644260719799818,
+        "ccw:0.85+": 0.08530537122692648,
+        "cw:0.25-0.6": 0.07668791753770776,
+        "cw:0.6-0.85": 0.1155015745832594,
+        "cw:0.85-1.25": 0.14102627145533525,
+        "cw:1.25+": 0.20179230112513194
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.0801697783095286,
+          "Y1": 0.08161231377874541
+        },
+        "cw": {
+          "P1": 0.1337520161753586,
+          "Y1": 0.10369606754595191
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.018534979319444457,
+        "cw": 0.010869924146702502
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.13368021373656305
+        ]
+      },
+      "transition": [
+        226,
+        0.14910569557559736
+      ],
+      "p1_alt": 0.11102890820486357,
+      "pp": 0.08804690603509246,
+      "yp": 0.023751981420776253,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.13835605438130852
+          ],
+          "cw": [
+            96,
+            0.19188292397338155
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.12372762355670466
+          ],
+          "cw": [
+            57,
+            0.20772234516170363
+          ]
+        }
+      }
+    },
+    "R4": {
+      "macro": {
+        "P1": 0.11992308059234472,
+        "A1": 0.0927472585928614,
+        "C1": 0.07489997728049784,
+        "Y1": 0.08442289986149655,
+        "S1": 0.09727826802149818
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.06088667580733189,
+        "ccw:0.6-0.85": 0.09654589593054572,
+        "ccw:0.85+": 0.09332401914442522,
+        "cw:0.25-0.6": 0.0726474647196581,
+        "cw:0.6-0.85": 0.11047200350183438,
+        "cw:0.85-1.25": 0.17601964727556468,
+        "cw:1.25+": 0.22956585776705307
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.08358553029410094,
+          "Y1": 0.06269390074116692
+        },
+        "cw": {
+          "P1": 0.14717624331602758,
+          "Y1": 0.10071964920174378
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.0038507266233162997,
+        "cw": 0.0026405930918208358
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.15118908448635404
+        ]
+      },
+      "transition": [
+        226,
+        0.18189638476029663
+      ],
+      "p1_alt": 0.12029593708251425,
+      "pp": 0.0782966942206221,
+      "yp": 0.018154027887450477,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.17590896934035397
+          ],
+          "cw": [
+            96,
+            0.22396584790353094
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.16615166235013096
+          ],
+          "cw": [
+            57,
+            0.23418515821760838
+          ]
+        }
+      }
+    },
+    "T4": {
+      "macro": {
+        "P1": 0.09348032113640016,
+        "A1": 0.0637335419758042,
+        "C1": 0.068019984841349,
+        "Y1": 0.11148067113566054,
+        "S1": 0.09727826802149818
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.05451332214350933,
+        "ccw:0.6-0.85": 0.07924521634613645,
+        "ccw:0.85+": 0.07414182985261522,
+        "cw:0.25-0.6": 0.0604242123005722,
+        "cw:0.6-0.85": 0.113163888510195,
+        "cw:0.85-1.25": 0.1324422079433736,
+        "cw:1.25+": 0.14043157085839933
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.06930012278075366,
+          "Y1": 0.09892417806236226
+        },
+        "cw": {
+          "P1": 0.11161546990313503,
+          "Y1": 0.12089804094063428
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.0485191135630536,
+        "cw": -0.027867605647210303
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.10744330984693948
+        ]
+      },
+      "transition": [
+        226,
+        0.1339641748835233
+      ],
+      "p1_alt": 0.09280228139381706,
+      "pp": 0.07952366211011175,
+      "yp": 0.025668317434183553,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.13914159318482483
+          ],
+          "cw": [
+            96,
+            0.1422016423721421
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.12540651114489101
+          ],
+          "cw": [
+            57,
+            0.14123166077234584
+          ]
+        }
+      }
+    },
+    "TL4": {
+      "macro": {
+        "P1": 0.08024289216760368,
+        "A1": 0.05345596646698952,
+        "C1": 0.05917984385444971,
+        "Y1": 0.08348964026512376,
+        "S1": 0.09727826802149818
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.04713619418880732,
+        "ccw:0.6-0.85": 0.06717808977142155,
+        "ccw:0.85+": 0.06416675828036604,
+        "cw:0.25-0.6": 0.04946739650878473,
+        "cw:0.6-0.85": 0.08470138576184723,
+        "cw:0.85-1.25": 0.11006855301739364,
+        "cw:1.25+": 0.1389818676446052
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.05949368074686497,
+          "Y1": 0.07411728845479938
+        },
+        "cw": {
+          "P1": 0.0958048007331577,
+          "Y1": 0.09051890412286706
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.03012821931349256,
+        "cw": 0.006355989171576342
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          164,
+          0.09598697416998762
+        ]
+      },
+      "transition": [
+        226,
+        0.11347783752579496
+      ],
+      "p1_alt": 0.0797771152772585,
+      "pp": 0.06616138600107033,
+      "yp": 0.02080978867140192,
+      "fast": {
+        "1.15": {
+          "ccw": [
+            29,
+            0.11145909436839728
+          ],
+          "cw": [
+            96,
+            0.13491218954496445
+          ]
+        },
+        "1.3": {
+          "ccw": [
+            7,
+            0.07390028019042143
+          ],
+          "cw": [
+            57,
+            0.1406662603709679
+          ]
+        }
+      }
+    }
+  }
+}

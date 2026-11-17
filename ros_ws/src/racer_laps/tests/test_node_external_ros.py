@@ -384,3 +384,20 @@ def test_clean_shutdown_on_sigint(tmp_path: Path) -> None:
     h.wait_for_node()
     h.close()
     assert h.returncode == 0
+
+
+def test_the_shadow_node_has_no_publisher_on_the_guidance_topics(tmp_path: Path) -> None:
+    """E6: the shadow lap node (observe, /pnp/lap_shadow) cannot reach the planner."""
+    h = Harness(
+        tmp_path,
+        extra=("lap_source:=camera", "lap_mode:=observe", "output_prefix:=/pnp/lap_shadow"),
+    )
+    h.wait_for_node()
+    try:
+        h.spin(1.0)
+        assert h.node.get_publishers_info_by_topic("/pnp/lap/guidance") == []
+        assert h.node.get_publishers_info_by_topic("/pnp/lap_shadow/guidance") == []
+        assert h.node.get_publishers_info_by_topic("/pnp/lap_shadow/event")
+        assert h.node.get_publishers_info_by_topic("/pnp/lap_shadow/status")
+    finally:
+        h.close()

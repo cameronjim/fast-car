@@ -55,6 +55,16 @@ struct LogicParams {
   double start_timeout_s = 5.0;
   double start_stop_hold_s = 1.0;
   bool require_gated_for_start = true;
+  // The steering pre-turn of STARTING (the car is at rest, nothing is urgent). safety_node limits
+  // against its own wall clock dt, and while the other nodes of the stack are still coming up its
+  // cycle can stall and then run a catch up cycle with a dt of a few ms, so a pre-turn at the full
+  // output rate is clipped (a rate_limit engagement on every start under load). The steering holds
+  // where the gated /drive left it until this many consecutive ticks arrived on time, then slews
+  // at this share of the vehicle's steering rate limit, small enough that a 3 tick bunch seen over
+  // an 8 ms catch up cycle stays inside the limit. The 25 tick warm start gate leaves STARTING
+  // after the pre-turn has had its time; what is left of it runs at the Driving rate.
+  int start_steer_hold_ticks = 5;
+  double start_steer_fraction = 0.1;
   // Fewer usable scan points than this make the scan unusable (NO_SCAN, speed 0): an empty distance
   // field must never read as free space. A scan of the 720 beam lidar in a lane has hundreds.
   int min_scan_points = 10;

@@ -116,3 +116,85 @@ TEST(StartAgainstSafety, ALateAndACatchUpSafetyCycleNeverClipThePreTurn) {
     }
   }
 }
+
+namespace {
+
+// A /drive_raw delivery delay (found 2026-11-17 in the L5 canary: rate_limit at a nominal dt of
+// 20 ms, 0.3 s after the first odometry). safety_node's cycles run on time, but for `delayed`
+// cycles from tick `at` the newest command it has is still the one of tick at-1; then the late
+// messages arrive together and it sees the newest. Seen from the gate that is a command older than
+// 24 ms followed by a jump of delayed + 1 pre-turn steps, which the gate clips when it is more than
+// rate * T. `cfg` picks the planner's pre-turn.
+int delivery_clips(const PlannerConfig& cfg, int at, int delayed) {
+  Rig r(cfg);
+  r.gated_steering = 0.30;
+  const racer_safety::SafetyGateLogic safety(safety_limits(true));
+  racer_safety::DriveCommand prev_out;
+  prev_out.steering_angle_rad = 0.30;
+  GateCredits credits;
+  int clips = 0;
+  Command visible;  // before the first tick: what the gate already outputs
+  visible.steering_rad = 0.30;
+  double t = 1000.0;
+  for (int i = 0; i < kTicks; ++i, t += kTickS) {
+    const TickOutput out = r.tick(t);
+    if (out.state != PlannerState::Starting) break;
+    if (i < at || i >= at + delayed) visible = out.cmd;
+    racer_safety::GateInput gi = gate_input(visible, 0.0, kTickS);
+    credits.apply(gi);
+    const racer_safety::GateResult gr = safety.evaluate(gi, prev_out);
+    credits.take(gr);
+    for (const auto& a : gr.activations) {
+      if (a.source == racer_safety::GateSource::kRateLimit) ++clips;
+    }
+    prev_out = gr.output;
+  }
+  return clips;
+}
+
+}  // namespace
+
+TEST(StartAgainstSafety, TheOldFullRatePreTurnIsClippedByADelayedDelivery) {
+  // The reproduction: the pre-turn as it was (no hold, the full 0.45 share) against the same
+  // delays. Without it the test below would pass for the wrong reason.
+  PlannerConfig cfg = small_config(0.5);
+  cfg.logic.start_steer_hold_ticks = 0;
+  cfg.logic.start_steer_fraction = cfg.logic.rate_limit_fraction;
+  for (const int delayed : {2, 3, 4}) {
+    int total = 0;
+    for (int at = 0; at < 20; ++at) total += delivery_clips(cfg, at, delayed);
+    EXPECT_GT(total, 0) << "delay " << delayed << " cycles";
+  }
+}
+
+TEST(StartAgainstSafety, ThePreTurnStaysInsideSafetyThroughADelayedDelivery) {
+  const PlannerConfig cfg = small_config(0.5);
+  for (const int delayed : {2, 3, 4}) {
+    for (int at = 0; at < 20; ++at) {
+      EXPECT_EQ(delivery_clips(cfg, at, delayed), 0)
+          << "delay " << delayed << " cycles from tick " << at;
+    }
+  }
+}
+
+TEST(StartAgainstSafety, TheSteeringHoldsTheGatedValueUntilTheTicksAreOnTime) {
+  const PlannerConfig cfg = small_config(0.5);
+  Rig r(cfg);
+  r.gated_steering = 0.30;
+  double t = 1000.0;
+  for (int i = 0; i < cfg.logic.start_steer_hold_ticks; ++i, t += 0.02) {
+    const TickOutput out = r.tick(t);
+    EXPECT_EQ(out.cmd.steering_rad, 0.30) << "tick " << i;
+  }
+  // then it moves, at no more than the pre-turn share of the vehicle's rate limit
+  const double step = cfg.logic.start_steer_fraction * r.g.steering_max_rate_rad_per_s * 0.02;
+  double prev = 0.30;
+  bool moved = false;
+  for (int i = 0; i < 15; ++i, t += 0.02) {
+    const TickOutput out = r.tick(t);
+    EXPECT_LE(std::fabs(out.cmd.steering_rad - prev), step + 1e-9) << "tick " << i;
+    moved = moved || out.cmd.steering_rad != prev;
+    prev = out.cmd.steering_rad;
+  }
+  EXPECT_TRUE(moved);
+}

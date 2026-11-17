@@ -32,6 +32,7 @@ Numpy and the standard library only.
 
 from __future__ import annotations
 
+import json
 import math
 from collections import deque
 from dataclasses import dataclass
@@ -534,3 +535,46 @@ class ExternalLapGate:
             "event_latency_s_last": self.latency_last,
             "event_latency_s_max": self.latency_max,
         }
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def parse_event_json(data: str) -> tuple[int, float] | None:
+    """`(lap, crossing_time_s)` of a source event (the camera's `/lap/event` JSON), or None when it
+    does not parse or lacks a field. A NaN crossing time parses: the gate rejects it."""
+    try:
+        d = json.loads(data)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    lap, cross = _number(d.get("lap")), _number(d.get("crossing_time_s"))
+    if lap is None or cross is None or not math.isfinite(lap) or lap != int(lap):
+        return None
+    return int(lap), cross
+
+
+def parse_status_json(data: str) -> tuple[str, int, float | None] | None:
+    """`(state, laps, similarity)` of a source status (the camera's `/lap/status` JSON; similarity
+    is null while it has no reference), or None when it does not parse or lacks a field."""
+    try:
+        d = json.loads(data)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(d, dict) or not {"state", "laps", "similarity"} <= d.keys():
+        return None
+    laps, sim = _number(d["laps"]), d["similarity"]
+    if not isinstance(d["state"], str) or laps is None or not math.isfinite(laps):
+        return None
+    if laps != int(laps):
+        return None
+    if sim is None:
+        return d["state"], int(laps), None
+    similarity = _number(sim)
+    if similarity is None:
+        return None
+    return d["state"], int(laps), similarity

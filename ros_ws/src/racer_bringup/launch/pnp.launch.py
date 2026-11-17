@@ -31,8 +31,10 @@ Refusals (a launch that does not start is the safe outcome):
 * `lap_memory:=true` with `v_lap1_mps` above `v_max_mps`; `lap_mode:=v1` with
   `lap_source:=map_pose` (D v1 is indexed by station).
 * `require_lap_counter:=true` (evaluation runs) refuses when no `lap_counter_node` is in the graph
-  within 5 s (checked at once with `lap_counter:=false`, five seconds after start otherwise, when
-  the launch shuts down).
+  (checked for 5 s before anything starts with `lap_counter:=false`). With `lap_counter:=true` the
+  planner is NOT started until the counter is in the graph (it takes about 4 s to come up on the
+  Jetson); the wait is bounded (30 s) and ends in a refusal and a shutdown, with the planner never
+  having been started.
 * If any driving node or `lap_memory_node` exits for any reason the whole launch shuts down, so a
   node that refuses its bundle leaves nothing running; safety_node's watchdog then brakes on the
   silent /drive_raw.
@@ -94,6 +96,11 @@ RECORDER_REFUSAL = "refusing to drive: no rosbag recorder in the graph (every ru
 LAP_COUNTER_NODE = "lap_counter_node"
 LAP_COUNTER_WAIT_S = 5.0
 LAP_COUNTER_PROBE_S = 1.0
+# require_lap_counter with the counter started here: the planner is not started until the counter
+# is in the graph; the wait is bounded and ends in a refusal (the counter takes ~4 s on the Jetson).
+LAP_COUNTER_GATE_S = 30.0
+LAP_COUNTER_GATE_PERIOD_S = 1.0
+LAP_COUNTER_GATE_PROBE_S = 0.5
 LAP_COUNTER_REFUSAL = (
     "refusing to drive: require_lap_counter is true and no lap_counter_node is in the graph"
 )
@@ -397,14 +404,33 @@ def lap_counter_reset_action() -> ExecuteProcess:
     )
 
 
-def require_counter_check(context: LaunchContext):
-    """After the counter had its five seconds: shut the launch down if it is not in the graph."""
-    if lap_counter_in_graph(0.5):
-        return []
-    return [
-        LogInfo(msg=f"[pnp.launch.py] ERROR: {LAP_COUNTER_REFUSAL}"),
-        EmitEvent(event=Shutdown(reason=LAP_COUNTER_REFUSAL)),
-    ]
+def require_counter_gate(planner: Node, wait_s: float = LAP_COUNTER_GATE_S, clock=time.monotonic):
+    """The action that starts `planner` only once `lap_counter_node` is in the graph.
+
+    Polls (a short probe, then a one second timer) for up to `wait_s`; if the counter never
+    appears it logs the refusal and shuts the launch down. The planner, the only publisher of
+    /drive_raw, is never started before the requirement is met."""
+    state: dict[str, float] = {}
+
+    def gate(context: LaunchContext):
+        started = state.setdefault("t0", clock())
+        if lap_counter_in_graph(LAP_COUNTER_GATE_PROBE_S):
+            return [
+                LogInfo(
+                    msg="[pnp.launch.py] lap_counter_node is in the graph: starting the planner"
+                ),
+                planner,
+            ]
+        if clock() - started >= wait_s:
+            return [
+                LogInfo(msg=f"[pnp.launch.py] ERROR: {LAP_COUNTER_REFUSAL} within {wait_s:g} s"),
+                EmitEvent(event=Shutdown(reason=LAP_COUNTER_REFUSAL)),
+            ]
+        return [
+            TimerAction(period=LAP_COUNTER_GATE_PERIOD_S, actions=[OpaqueFunction(function=gate)])
+        ]
+
+    return OpaqueFunction(function=gate)
 
 
 def _make_actions(context: LaunchContext) -> list:
@@ -463,7 +489,10 @@ def _make_actions(context: LaunchContext) -> list:
         )
         for node, name in ((perception, "track_perception_node"), (planner, "mppi_planner_node"))
     ]
-    actions = [perception, planner, *stop_all, *[LogInfo(msg=f"[pnp.launch.py] {m}") for m in log]]
+    # require_lap_counter with the counter started here: the planner waits for it (gate below)
+    gated = require_counter and lap_counter
+    driver = [perception] if gated else [perception, planner]
+    actions = [*driver, *stop_all, *[LogInfo(msg=f"[pnp.launch.py] {m}") for m in log]]
     if deskew_node is not None:
         actions += [
             deskew_node,
@@ -521,13 +550,8 @@ def _make_actions(context: LaunchContext) -> list:
         else:
             actions += lap_counter_actions(require_counter)
         actions.append(lap_counter_reset_action())
-        if require_counter:
-            actions.append(
-                TimerAction(
-                    period=LAP_COUNTER_WAIT_S,
-                    actions=[OpaqueFunction(function=require_counter_check)],
-                )
-            )
+        if gated:
+            actions.append(require_counter_gate(planner))
     return actions
 
 
@@ -632,8 +656,8 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="false",
                 choices=["true", "false"],
                 description=(
-                    "Refuse to drive when no lap_counter_node is in the graph within 5 s "
-                    "(evaluation runs)."
+                    "Refuse to drive when no lap_counter_node is in the graph: the planner starts only "
+                    "once it is there, waiting up to 30 s (evaluation runs)."
                 ),
             ),
             DeclareLaunchArgument(

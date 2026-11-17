@@ -91,3 +91,26 @@ def test_main_prints_the_table_and_the_rules(capsys):
     out = capsys.readouterr().out
     assert "planned 552 s, budget 600 s" in out
     assert "A safety brake is not a contact." in out
+
+
+def test_the_printed_launch_gets_the_bundle_directory_not_the_bare_name():
+    for dyn in ("dyn-v0.1-2026-11-12", "/workspace/data/pnp/models/dyn-v0.1-2026-11-12/"):
+        tool, launch, tool2 = plan()[0].launch_line(dyn, "/o")
+        bundle = "/workspace/data/pnp/models/dyn-v0.1-2026-11-12"
+        assert f"dynamics_bundle:={bundle} " in launch
+        assert (
+            f"--manifest {bundle}/manifest.yaml " in tool
+            and f"--manifest {bundle}/manifest.yaml " in tool2
+        )
+
+
+def test_the_placeholder_is_a_directory_placeholder():
+    launch = plan()[0].launch_line()[1]
+    assert "dynamics_bundle:=/workspace/data/pnp/models/<dyn> " in launch
+
+
+def test_the_runbooks_print_the_bundle_directory():
+    notes = Path(__file__).resolve().parents[2] / "docs" / "notes"
+    for name in ("pnp-session-runbook-v0.3.md", "pnp-session-runbook-v0.4.md"):
+        text = (notes / name).read_text()
+        assert "dynamics_bundle:=<dyn>" not in text, name

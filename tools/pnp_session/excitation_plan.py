@@ -26,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PLAN_YAML = "evaluation/prereg/pnp-v0.5-dynamics.yaml"
 GAP_FOLLOW_LAUNCH = "ros_ws/src/racer_control/launch/gap_follow.launch.py"
 EXIT_REFUSED = 2
+MODELS_IN_CONTAINER = "/workspace/data/pnp/models"
 DIRECTIONS = ("cw", "ccw")
 
 RULES = (
@@ -63,14 +64,22 @@ class Run:
         return ["ros2 launch racer_control gap_follow.launch.py " + " ".join(self.args)]
 
 
+def bundle_dir(dyn: str) -> str:
+    """The bundle DIRECTORY the planner needs: a bare name lives under the container's models
+    folder (the racer app forms the argument the same way), a path is kept as given."""
+    dyn = dyn.rstrip("/") or dyn
+    return dyn if "/" in dyn and not dyn.startswith("<") else f"{MODELS_IN_CONTAINER}/{dyn}"
+
+
 def pnp_lines(dyn: str, out: str, v_max_mps: float) -> list[str]:
-    manifest = f"/workspace/data/pnp/models/{dyn}/manifest.yaml"
+    bundle = bundle_dir(dyn)
+    manifest = f"{bundle}/manifest.yaml"
     tool = (
         f"python3 tools/pnp_session/cap_schedule.py --manifest {manifest} --v-max-mps {v_max_mps:g}"
     )
     params = f"{out}/excitation_params.yaml"
     launch = (
-        f"ros2 launch racer_bringup pnp.launch.py dynamics_bundle:={dyn} backend:=geometric "
+        f"ros2 launch racer_bringup pnp.launch.py dynamics_bundle:={bundle} backend:=geometric "
         f"v_max_mps:={v_max_mps:g} lap_counter:=true require_lap_counter:=true "
         f"params_file:={params}"
     )
@@ -217,7 +226,11 @@ def render(
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="excitation_plan", description=__doc__.split("\n")[0])
     ap.add_argument("--yaml", help="the v0.5 dynamics yaml (default: the frozen one)")
-    ap.add_argument("--dyn", default="<dyn>", help="dynamics bundle name for block P")
+    ap.add_argument(
+        "--dyn",
+        default="<dyn>",
+        help="dynamics bundle name (under the models folder) or directory, for block P",
+    )
     ap.add_argument("--out", default="<out>", help="session folder for block P")
     args = ap.parse_args(argv)
     try:

@@ -677,15 +677,19 @@ def report_text(out: Path) -> str:
     return "\n".join(lines)
 
 
+def _g(x) -> str:  # type: ignore[no-untyped-def]
+    return "-" if x is None else format(float(x), ".3f")
+
+
 def _dev_rows(runs, docs, const) -> tuple[list[str], dict]:  # type: ignore[no-untyped-def]
     """Table rows of development runs and their totals."""
     lines = [
         (
             "| run | stopped | contacts | laps truth | laps system | count rule | judged laps "
             "outside | largest judged error s | sources | missed | verdicts | lap 1 d_beta | "
-            "pair share lap 1 |"
+            "pair share lap 1 | gap unique min / median | gap ambiguous max |"
         ),
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     total = outside = count_bad = 0
     for r in runs:
@@ -709,9 +713,31 @@ def _dev_rows(runs, docs, const) -> tuple[list[str], dict]:  # type: ignore[no-u
             f"{'ok' if ok else 'FAIL ' + detail} | {out_laps} | {largest:.2f} | {srcs} | "
             f"{st.get('missed_gate_laps')} | {verdicts} | "
             f"{'-' if d_beta is None else format(d_beta, '+.2f')} | "
-            f"{'-' if not shares else format(shares[0], '.2f')} |"
+            f"{'-' if not shares else format(shares[0], '.2f')} | "
+            f"{_g(st.get('unique_gap_min'))} / {_g(st.get('unique_gap_median'))} | "
+            f"{_g(st.get('ambiguous_gap_max'))} |"
         )
     return lines, {"total": total, "outside": outside, "count_bad": count_bad}
+
+
+def rd_clean(probe, docs, const) -> bool:  # type: ignore[no-untyped-def]
+    """C1 of brief 50c: 12 of 12 RD runs clean: the count rule holds, no judged lap outside the
+    class tolerance, no lap flagged missed gate, one line source per run."""
+    if len(probe) != 12:
+        return False
+    for r in probe:
+        doc = docs.get(f"{r.condition}_{r.case}_{r.direction}_{r.seed}", {})
+        st = doc.get("lap_status") or {}
+        errs = b8.judged_errors(r, const)
+        if (
+            not b8.count_rule(r, const)[0]
+            or any(e > tol for _, e, tol, _ in errs)
+            or (st.get("missed_gate_laps") or [])
+            or len(set(st.get("lap_line_sources") or [])) != 1
+            or r.error
+        ):
+            return False
+    return True
 
 
 def dev_dropped_cases(runs, const) -> dict[str, str]:  # type: ignore[no-untyped-def]
@@ -781,6 +807,7 @@ def dev_report_text(out: Path) -> str:
                 f"{ptot['count_bad']}, {ptot['outside']} of {ptot['total']} judged laps outside "
                 "the class tolerance"
             ),
+            f"C1: {'PASS' if rd_clean(probe, docs, const) else 'FAIL'}",
         ]
     return "\n".join(lines)
 

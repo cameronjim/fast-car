@@ -45,10 +45,10 @@ from synth import BODY, MOUNT, RANGE_MAX_M, WHEELBASE_M, Stadium, scan_at
 os.environ.setdefault("ROS_DOMAIN_ID", "97")
 
 STADIUM = Stadium()
-#: The car's ceiling is about 1.3 m/s (the dynamics bundle's validity). Gate v3's uniqueness test needs a
-#: scan within 0.1 m of 0.4 m back, so scans less than 0.2 m apart: 2.0 m/s at 10 Hz. The harness
-#: drove 3.0 m/s before; above the envelope a placed stadium is never proven.
-SPEED_MPS = 1.5
+#: 3.0 m/s is above the car's ceiling (about 1.3 m/s) and above 2.0 m/s, where scans of a 10 Hz
+#: LiDAR are more than 0.2 m apart: the harness found that v3's uniqueness test then had no displaced
+#: scan and closed no lap (brief 50c fixed the gate; it was wrongly slowed to 1.5 m/s once).
+SPEED_MPS = 3.0
 LOOP_S = STADIUM.length_m / SPEED_MPS
 
 

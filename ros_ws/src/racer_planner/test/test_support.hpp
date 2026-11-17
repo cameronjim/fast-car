@@ -34,10 +34,16 @@ inline VehicleGeometry binding_geometry() {
 
 inline std::string fixture_dir() { return std::string(RACER_PLANNER_FIXTURE_DIR) + "/dyn_fixture"; }
 
+// The synthetic step contract 2 fixture (make_fixture.py --contract 2): learned block on, table
+// with a node on each bound, 10^4 random step cases in step_v2_random.csv, and a sidecar.
+inline std::string fixture_v2_dir() {
+  return std::string(RACER_PLANNER_FIXTURE_DIR) + "/dyn_fixture_v2";
+}
+
 // The vehicle numbers the committed fixture's golden rollouts were generated with, read from its
 // sidecar so the fixture tests do not move when an unrelated vehicle_params field does.
-inline VehicleGeometry fixture_geometry() {
-  const YAML::Node n = YAML::LoadFile(fixture_dir() + "/vehicle_geometry.yaml");
+inline VehicleGeometry fixture_geometry(const std::string& dir = fixture_dir()) {
+  const YAML::Node n = YAML::LoadFile(dir + "/vehicle_geometry.yaml");
   VehicleGeometry g;
   g.wheelbase_m = n["wheelbase_m"].as<double>();
   g.width_m = n["width_m"].as<double>();
@@ -80,12 +86,12 @@ inline void write_text(const std::string& path, const std::string& text) {
 // A scratch copy of the fixture bundle that a test can damage.
 class BundleCopy {
  public:
-  BundleCopy() {
+  explicit BundleCopy(const std::string& src = fixture_dir()) {
     static int counter = 0;
     dir_ = fs::temp_directory_path() /
            ("racer_planner_bundle_" + std::to_string(::getpid()) + "_" + std::to_string(counter++));
     fs::remove_all(dir_);
-    fs::copy(fixture_dir(), dir_, fs::copy_options::recursive);
+    fs::copy(src, dir_, fs::copy_options::recursive);
   }
   ~BundleCopy() {
     std::error_code ec;

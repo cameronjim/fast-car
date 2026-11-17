@@ -115,7 +115,11 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   int hint = ctx.hint0;
   double j_clear = 0.0, j_bound = 0.0, j_lat = 0.0, j_du = 0.0, j_sr = 0.0;
   double j_gate = 0.0, j_trust = 0.0;
-  double path_m = 0.0;  // distance travelled by the scored steps so far
+  // The meaning of every speed here is listed in dynamics_model.hpp (one meaning per quantity).
+  // For a contract 1 bundle alpha is 1 and both distances below are the same number.
+  double path_m = 0.0;  // GROUND distance travelled by the scored steps so far (obstacles, gate)
+  double lap_path_m = 0.0;  // WHEEL distance of the same steps (the lap station counts this)
+  double alpha_step = 1.0;  // ground distance per wheel distance of the last step
   double s_end = ctx.s_start;
   double min_clear = 1e9;
   bool collided = false;
@@ -145,10 +149,15 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
       const double b = std::max(0.0, 1.0 - d_k / ctx.gate_clear_ref_m);
       j_gate += a * a + b * b;
     }
-    if (!collided) path_m += v_before * dt;
+    const bool moving = !collided;
     const double yaw_before = s.yaw;
     double yaw_rate = 0.0;
-    s = model_.step_trig(s, ut, cs, sn, &yaw_rate);
+    s = model_.step_trig(s, ut, cs, sn, &yaw_rate, &alpha_step);
+    const double v_ground_before = alpha_step * v_before;  // the speed the step moved the car by
+    if (moving) {
+      path_m += v_ground_before * dt;
+      lap_path_m += v_before * dt;
+    }
     rotate_cs(s.yaw, s.yaw - yaw_before, &cs, &sn);
     if (poses != nullptr) poses[t + 1] = Pose2{s.x, s.y, s.yaw};
     if (collided) {
@@ -174,13 +183,13 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
       if (poses == nullptr) break;
       continue;
     }
-    const double d_soft = p_.d_soft_base_m + p_.t_headway_s * s.v;
+    const double d_soft = p_.d_soft_base_m + p_.t_headway_s * (alpha_step * s.v);
     if (clearance < d_soft) {
       const double e = d_soft - clearance;
       j_clear += e * e * dt;
     }
     if (ctx.use_lap) {
-      const double over = s.v - in.lap->v_bound_at(ctx.lap_s_now + path_m);
+      const double over = s.v - in.lap->v_bound_at(ctx.lap_s_now + lap_path_m);
       if (over > 0.0) j_trust += over * over * dt;
     }
     if (project) {
@@ -189,7 +198,7 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
       if (excess > 0.0) j_bound += excess * excess * dt * since_projection;
       since_projection = 0;
     }
-    const double lat = std::fabs(v_before * yaw_rate);
+    const double lat = std::fabs(v_ground_before * yaw_rate);
     if (lat > p_.a_lat_max_mps2) {
       const double e = lat - p_.a_lat_max_mps2;
       j_lat += e * e * dt;
@@ -215,7 +224,7 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
     // The cost-to-go replaces the progress term: seconds of the best lap gained, in metres at the
     // cap in force.
     o.lap_trust = p_.w_trust * j_trust;
-    const double q_end = in.lap->q_at(ctx.lap_s_now + path_m);
+    const double q_end = in.lap->q_at(ctx.lap_s_now + lap_path_m);
     o.lap_terminal = -p_.w_progress * std::max(0.0, in.v_cap_mps) * (ctx.lap_q_now - q_end);
     o.progress = 0.0;
   }
@@ -229,7 +238,8 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   if (!collided) {
     const double sight = (ctx.use_track ? c * (in.track->s_valid_end() - s_end) : 0.0) +
                          (ctx.use_free ? (1.0 - c) * phi_end : 0.0);
-    const double need = s.v * s.v / (2.0 * stop_decel_mps2_) - sight;
+    const double v_ground_end = alpha_step * s.v;  // the stopping distance is on the ground
+    const double need = v_ground_end * v_ground_end / (2.0 * stop_decel_mps2_) - sight;
     if (need > 0.0) terminal = p_.w_term * need * need;
   }
   o.terminal = terminal;

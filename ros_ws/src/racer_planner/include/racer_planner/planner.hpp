@@ -244,6 +244,7 @@ class Planner {
 
   // -- solve side only ----------------------------------------------------------------------
   DynamicsModel model_roll_;  // the delay roll-forward
+  DynamicsModel model_ego_;   // ground motion of the dead reckoning (contract 2 only)
   EgoMotion ego_;
   MppiSolver solver_;
   SampleBudget budget_;

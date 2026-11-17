@@ -22,9 +22,17 @@ class EgoMotion {
   // this object and is used from the thread that calls relative_pose (it has scratch space).
   explicit EgoMotion(const DynamicsModel* model);
 
+  // Step contract 2 (brief 43): translate by the ground speed alpha * v and turn by the model's
+  // yaw rate (1 + rho) * v * tan(delta) / ..., both from `model`, instead of by the wheel speed.
+  // The model must outlive this object and is used from the thread that calls relative_pose and
+  // push (the learned block has scratch space). Not called for a contract 1 bundle: the dead
+  // reckoning of main is then untouched. distance_between stays in wheel distance.
+  void set_ground_model(const DynamicsModel* model) { ground_ = model; }
+
   // Samples are held (zero order) until the next one. Non finite values and times that do not
-  // advance are ignored. speed_cmd and steering_cmd are the commands acting at t (the residual's
-  // inputs; ignored by a model without one and by the nominal constructor).
+  // advance are ignored. speed_cmd and steering_cmd are the commands acting at t_s: the inputs of
+  // the residual (ignored by a model without one and by the nominal constructor) and of the
+  // contract 2 learned block (ignored without a ground model).
   void push(double t_s, double v_mps, double delta_rad, double speed_cmd = 0.0,
             double steering_cmd = 0.0);
   void clear();
@@ -57,7 +65,8 @@ class EgoMotion {
 
   double wheelbase_;
   double understeer_;
-  const DynamicsModel* model_ = nullptr;
+  const DynamicsModel* model_ = nullptr;   // yaw rate source (brief 42)
+  const DynamicsModel* ground_ = nullptr;  // contract 2 ground motion (brief 43)
   std::array<Sample, kCapacity> buf_{};
   std::size_t head_ = 0;  // index of the oldest sample
   std::size_t count_ = 0;

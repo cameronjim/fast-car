@@ -33,16 +33,21 @@ void EgoMotion::push(double t_s, double v_mps, double delta_rad, double speed_cm
 
 void EgoMotion::advance(Pose2* pose, const Sample& s, double dt) const {
   if (!(dt > 0.0)) return;
-  const double w = model_ != nullptr
-                       ? model_->yaw_rate_for(s.v, s.delta, s.speed_cmd, s.steering_cmd)
-                       : s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
+  double w = model_ != nullptr
+                 ? model_->yaw_rate_for(s.v, s.delta, s.speed_cmd, s.steering_cmd)
+                 : s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
+  double v = s.v;  // the speed the car translates by: the wheel speed, or the ground speed
+  if (ground_ != nullptr) {
+    v = ground_->ground_speed(s.v, s.delta, s.speed_cmd, s.steering_cmd);
+    w = ground_->ground_yaw_rate(s.v, s.delta, s.speed_cmd, s.steering_cmd);
+  }
   const double th = pose->yaw;
   if (std::fabs(w) > 1e-9) {
-    pose->x += s.v * (std::sin(th + w * dt) - std::sin(th)) / w;
-    pose->y += s.v * (std::cos(th) - std::cos(th + w * dt)) / w;
+    pose->x += v * (std::sin(th + w * dt) - std::sin(th)) / w;
+    pose->y += v * (std::cos(th) - std::cos(th + w * dt)) / w;
   } else {
-    pose->x += s.v * dt * std::cos(th);
-    pose->y += s.v * dt * std::sin(th);
+    pose->x += v * dt * std::cos(th);
+    pose->y += v * dt * std::sin(th);
   }
   pose->yaw = th + w * dt;
 }

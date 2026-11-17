@@ -74,6 +74,11 @@ struct Rig {
     set_points(points);
   }
 
+  // A planner with the given dynamics as they are (a step contract 2 model, for instance).
+  Rig(PlannerConfig cfg, const DynamicsParams& dynamics) : planner(cfg, dynamics, g) {
+    set_points(points);
+  }
+
   void set_points(const std::vector<PointXY>& pts) {
     points = pts;
     field.build(points.data(), points.size());

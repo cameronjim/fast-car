@@ -52,7 +52,7 @@ def run_one(name: str, out: Path, domain: int) -> None:
     import lap_battery_b4 as b4
 
     const = b4.load_constants()
-    case, direction, seed = RUNS[name]
+    case, direction, seed = RUNS[name.split("__")[0]]  # `<run>__r2` repeats a run
     work = out / "work" / name
     work.mkdir(parents=True, exist_ok=True)
     result_path = out / f"{name}.json"
@@ -75,9 +75,12 @@ def run_one(name: str, out: Path, domain: int) -> None:
     with (work / "runner.log").open("w") as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env, check=False)
     got = json.loads(result_path.read_text()) if result_path.exists() else {}
+    system = [e["lap_time_s"] for e in got.get("system_lap_events", [])]
+    truth = got.get("gt_lap_times_registered_s", [])
+    diffs = [round(a - b, 2) for a, b in zip(system, truth, strict=False)]
     print(
-        f"{name}: {len(got.get('system_lap_events', []))} system laps, truth_valid "
-        f"{got.get('truth_valid')}, error {got.get('error', '')[:80]!r}",
+        f"{name}: {len(system)} system laps, truth_valid {got.get('truth_valid')}, "
+        f"system - truth per lap {diffs}, error {got.get('error', '')[:80]!r}",
         flush=True,
     )
 
@@ -86,7 +89,7 @@ def run_cmd(args: argparse.Namespace) -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     names = args.runs.split(",") if args.runs else list(RUNS)
-    todo = [n for n in names if not (out / f"{n}.json").exists()]
+    todo = [n for n in names if not (out / f"{n}.json").exists()]  # names may carry a `__r2`
     domains = list(range(args.domain_base, args.domain_base + args.workers))
     lock = threading.Lock()
 
@@ -135,10 +138,9 @@ def replay_dump(name: str, out: Path) -> tuple[list[dict], list[dict]]:
 
     result = json.loads((out / f"{name}.json").read_text())
     dump_dir = out / "dumps"
-    candidates = sorted(dump_dir.glob(f"*{name}*.npz"))
-    if not candidates:
+    if not (dump_dir / f"{name}.npz").exists():
         raise FileNotFoundError(f"no dump for {name} in {dump_dir}")
-    z = np.load(candidates[-1])
+    z = np.load(dump_dir / f"{name}.npz")
     lap_params = result["lap_params"]
     left = float(lap_params["yaw_gain_override"])
     right = float(lap_params["yaw_gain_override_right"])

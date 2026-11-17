@@ -68,6 +68,7 @@ struct Rig {
   bool has_track = true;
   bool gated = true;
   double gated_steering = 0.0;
+  double gated_speed = 1.0;  // a gate that passes everything, unless a test sets what it outputs
 
   explicit Rig(PlannerConfig cfg = small_config(0.5), double floor_mps = 0.23)
       : planner(cfg, dynamics_with_floor(floor_mps), g) {
@@ -99,7 +100,7 @@ struct Rig {
     in.track = has_track ? &track : nullptr;
     in.has_gated = gated;
     in.gated_stamp_s = now;
-    in.gated_speed_mps = 1.0;  // a gate that passes everything
+    in.gated_speed_mps = gated_speed;
     in.gated_steering_rad = gated_steering;
     return in;
   }

@@ -88,7 +88,13 @@ class Car:
         self.t += 1e-6
         return self.mem.on_scan(self.t, PTS)
 
-    def lap(self, length_m: float, delay_m: float = 0.41, skip_scans: bool = False):  # type: ignore[no-untyped-def]
+    def lap(
+        self,
+        length_m: float,
+        delay_m: float = 0.41,
+        skip_scans: bool = False,
+        scan_at_line: bool = False,
+    ):  # type: ignore[no-untyped-def]
         """Drive one lap whose crossing is `length_m` after the last one, with two agreeing
         candidates just before the line, and close it with the scan `delay_m` after the line (the
         `past` rule needs 0.3 m). With `skip_scans` the line passes unseen. Returns the LapResult
@@ -100,6 +106,9 @@ class Car:
             assert self.scan(result(-0.2)) is None
             self.move_to(line - 0.1)
             assert self.scan(result(-0.1)) is None
+            if scan_at_line:  # a third scan, on the line: the only one the innovation gate takes
+                self.move_to(line)  # when the crossing is further than the band from L
+                assert self.scan(result(0.0)) is None
         self.move_to(line + delay_m)
         closed = self.scan(None)
         if closed is not None:
@@ -107,18 +116,22 @@ class Car:
         return closed
 
 
-def three_laps_decided_past_the_band(mp: pytest.MonkeyPatch, before: int) -> tuple[Car, list]:
+def three_laps_decided_past_the_band(
+    mp: pytest.MonkeyPatch, before: int
+) -> tuple[Car, list[LapResult], int]:
     """`before` ordinary laps of 5.2 m, then three laps of 5.33 m whose closure is decided at
-    station 5.74 m: 0.41 m after the line, 0.04 m above the length estimate plus the band."""
+    station 5.74 m: 0.41 m after the line, 0.04 m above the length estimate plus the band.
+    Returns the car, the three results and the index of the first tick of the three laps."""
     car = Car(mp)
     for _ in range(before):
         assert car.lap(LAP_M) is not None
+    first_tick = len(car.caps)
     laps = []
     for _ in range(3):
         closed = car.lap(5.33)
         assert closed is not None
         laps.append(closed)
-    return car, laps
+    return car, laps, first_tick
 
 
 def test_a_crossing_decided_past_the_band_is_not_a_missed_gate(
@@ -139,13 +152,13 @@ def test_a_crossing_decided_past_the_band_is_not_a_missed_gate(
 def test_three_laps_decided_past_the_band_keep_the_d_v0_cap_at_the_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    car, laps = three_laps_decided_past_the_band(monkeypatch, before=5)
+    car, laps, first_tick = three_laps_decided_past_the_band(monkeypatch, before=5)
     assert car.mem.schedule.cap_mps == pytest.approx(CEILING)
     assert [r.missed_gate for r in laps] == [False] * 3 and all(r.clean for r in laps)
     assert [r.next_cap_mps for r in laps] == [pytest.approx(CEILING)] * 3
     # the guidance cap never fell to the lap-1 cap while the closure was decided
-    ceiling_ticks = car.caps[-3 * 270 :]  # the three laps at 50 ticks per 1 m... generous
-    assert min(ceiling_ticks) == pytest.approx(CEILING)
+    assert len(car.caps) - first_tick > 700  # three laps of about 265 ticks
+    assert min(car.caps[first_tick:]) == pytest.approx(CEILING)
 
 
 def test_the_live_flag_is_up_with_no_candidate_and_down_while_one_is_pending(
@@ -201,14 +214,15 @@ def test_a_truly_missed_crossing_with_a_trusted_length_still_closes_at_the_next_
 def test_missed_equals_the_crossing_length_above_the_estimate_plus_the_band(
     length: float, delay: float
 ) -> None:
-    """For any decision delay from 0.3 to 0.6 m after the line (the `past` rule)."""
+    """For any decision delay from 0.3 to 0.6 m after the line (the `past` rule), for crossings
+    inside the innovation band and for those beyond it (accepted once the station is uncertain)."""
     # the boundary itself is within the odometry quantisation (0.02 m): not decided by a property
     if abs(length - (LAP_M + BAND_M)) < 0.04:
         return
     with pytest.MonkeyPatch.context() as mp:
         car = Car(mp)
         assert car.lap(LAP_M) is not None and car.lap(LAP_M) is not None
-        closed = car.lap(length, delay_m=delay)
+        closed = car.lap(length, delay_m=delay, scan_at_line=True)
         assert closed is not None, (length, delay)
         assert closed.missed_gate == (length > LAP_M + BAND_M), (length, delay)
 

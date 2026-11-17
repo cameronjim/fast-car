@@ -61,6 +61,17 @@ Missed gate. If the wheel distance since the last closure exceeds the estimated 
 band (trusted) or `missed_factor` times it (not yet trusted) without a crossing, the station is
 uncertain: the gate never invents a lap, stays armed, and the next real crossing closes a lap that
 is flagged `missed` (the caller marks it unclean and does not store it, its length is not a lap).
+A crossing is `missed` by its own wheel length only: a closure is decided up to 0.3 m or 0.5 s
+after the line, and on a short loop that is more than the band after the estimated length, which
+is no reason to call the lap missed. While a candidate is pending the gate is at the line and
+deciding, so the live "station uncertain" state (the cap and guidance fallback) is down. While
+the station is uncertain (no candidate pending past the estimated length plus the band) the
+innovation gate is off, so a crossing that passed unseen does not leave the gate waiting for a
+candidate a lap away from where the line was expected.
+
+Standstill. A car that parks just past the line with a candidate on every scan never lets the
+wait rule run (it counts from the latest candidate): below `STANDSTILL_MPS` it counts from the
+earliest live candidate at or past the line.
 
 The gate is a measurement of lap position, not a safety function.
 """
@@ -106,6 +117,9 @@ BAND_ABS_M = 0.5
 BAND_REL = 0.08
 #: How far a scan time may run ahead of the last odometry sample and still be extrapolated.
 MAX_EXTRAPOLATION_S = 0.2
+#: The car is standing below this wheel speed (m/s). One number for the gate's standstill rule
+#: and for the replay's and the status's reading of "first motion" (brief 48).
+STANDSTILL_MPS = 0.05
 
 
 @dataclass(frozen=True)
@@ -366,7 +380,10 @@ class StartScanGate:
     @property
     def station_uncertain(self) -> bool:
         """No crossing although the estimated lap length (plus its band when trusted, else
-        `missed_factor` times it) was driven."""
+        `missed_factor` times it) was driven, and no candidate pending: with one the gate is at
+        the line and deciding the closure, not lost."""
+        if self._cands:
+            return False
         return self.station_m > self._uncertain_after_m()
 
     def _need_m(self) -> float:
@@ -683,9 +700,14 @@ class StartScanGate:
         line = now.total_m - res.x_m
         if line - self._origin_m < c.min_lap_length_m:
             return
-        # innovation gate: with a trusted length an alias metres early is metres of innovation
-        if self._est.trusted and abs(line - (self._origin_m + self._est.value_m)) > (
-            self._est.band_m()
+        # innovation gate: with a trusted length an alias metres early is metres of innovation.
+        # Off while the station is uncertain (latched): a crossing that passed unseen leaves the
+        # next real one a lap away from where the line was expected, and the gate would never
+        # close again; the untrusted rule (at least `min_lap_length_m` from the last line) holds.
+        if (
+            self._est.trusted
+            and not self._uncertain_lap
+            and abs(line - (self._origin_m + self._est.value_m)) > self._est.band_m()
         ):
             return
         if not self._supported(source, res):
@@ -707,9 +729,14 @@ class StartScanGate:
         if not (agree or quality):
             return None
         past = now.total_m >= median + c.consensus_past_m
-        wait = t_eff_s - self._cands[-1].t_eff_s >= c.consensus_wait_s and any(
-            k.match.x_m >= 0.0 for k in self._cands
-        )
+        # The wait counts from the latest candidate; standing, from the earliest one at or past
+        # the line (a car parked just past it gets a candidate on every scan, so "after the last
+        # one" never comes).
+        at_line = [k.t_eff_s for k in self._cands if k.match.x_m >= 0.0]
+        wait_from = self._cands[-1].t_eff_s
+        if self._speed < STANDSTILL_MPS and at_line:
+            wait_from = min(at_line)
+        wait = t_eff_s - wait_from >= c.consensus_wait_s and bool(at_line)
         if not (past or wait):
             return None
         t_cross = self._time_at_total(median)
@@ -745,7 +772,9 @@ class StartScanGate:
     ) -> GateCrossing:
         at = self._at(t_cross)
         length = at.total_m - self._origin_m
-        missed = self._uncertain_lap or self.station_uncertain_at(at.total_m)
+        # By the wheel length AT the crossing, nothing else: not by where the live station was
+        # when the closure was decided (up to 0.3 m or 0.5 s later).
+        missed = self.station_uncertain_at(at.total_m)
         self._laps += 1
         crossing = GateCrossing(
             lap_index=self._laps,
@@ -787,10 +816,11 @@ class StartScanGate:
         return total_m - self._origin_m > self._uncertain_after_m()
 
     def poll_uncertain(self) -> bool:
-        """Latch the missed-gate condition (call from the node's tick) and return it."""
+        """Latch the uncertain-station condition (call from the node's tick) and return it. The
+        latch holds until the next closure, but reads False while a candidate is pending."""
         if self.station_uncertain:
             self._uncertain_lap = True
-        return self._uncertain_lap
+        return self._uncertain_lap and not self._cands
 
     def status(self) -> dict[str, object]:
         return {

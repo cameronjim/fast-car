@@ -195,20 +195,82 @@ def test_the_planner_is_not_started_before_the_reset_even_with_a_slow_reset_serv
         reset=lambda: log.append("reset"),
         after_reset=lambda: log.append("clear"),
         wait_timeout_polls=100,
+        lap_ready=lambda: True,
     )
     spawned = [e for e in log if e.startswith("spawn")]
     assert spawned == [
         "spawn bridge_node",
         "spawn safety_node",
         "spawn track_perception_node",
-        "spawn mppi_planner_node",
         "spawn lap_memory_node",
+        "spawn mppi_planner_node",
     ]
     i_reset, i_clear = log.index("reset"), log.index("clear")
     assert log.index("spawn safety_node") < log.index("poll") < i_reset < i_clear
     assert i_clear < log.index("spawn track_perception_node")
     assert log.count("poll") == 25 and log.count("spin") >= 24  # it spun while it waited
     assert log.index("spawn mppi_planner_node") > i_reset
+
+
+def test_the_planner_waits_for_the_lap_node_to_answer() -> None:
+    """A lap node still importing when the planner reports DRIVING starts lap 1 seconds late and
+    its lines are not the truth's (a development run of brief 48: lap 1 began 2.7 s into the
+    motion): the planner is the last node to start, and only once the lap node's status arrived."""
+    log: list[str] = []
+    answered = {"polls": 0}
+
+    def lap_ready() -> bool:
+        answered["polls"] += 1
+        log.append("lap?")
+        return answered["polls"] > 40
+
+    runner.run_startup(
+        stack(),
+        two_phase=True,
+        spawn=lambda name, _c: log.append(f"spawn {name}"),
+        ready=lambda: True,
+        spin=lambda: log.append("spin"),
+        reset=lambda: log.append("reset"),
+        after_reset=lambda: log.append("clear"),
+        wait_timeout_polls=100,
+        lap_ready=lap_ready,
+    )
+    assert log.index("spawn lap_memory_node") < log.index("lap?")
+    assert log.count("lap?") == 41
+    assert log.index("lap?") < log.index("spawn mppi_planner_node")
+    assert log.index("spawn mppi_planner_node") == len(log) - 1  # the planner is the last node
+    # without a lap node (a run with `--lap-memory none`) nothing waits
+    plain = [item for item in stack() if item[0] != "lap_memory_node"]
+    out: list[str] = []
+    runner.run_startup(
+        plain,
+        two_phase=True,
+        spawn=lambda name, _c: out.append(name),
+        ready=lambda: True,
+        spin=lambda: None,
+        reset=lambda: None,
+        after_reset=lambda: None,
+        wait_timeout_polls=3,
+        lap_ready=lambda: False,
+    )
+    assert out[-1] == "mppi_planner_node"
+
+
+def test_a_lap_node_that_never_answers_is_an_error_and_the_planner_never_starts() -> None:
+    log: list[str] = []
+    with pytest.raises(RuntimeError, match="lap_memory_node did not answer"):
+        runner.run_startup(
+            stack(),
+            two_phase=True,
+            spawn=lambda name, _c: log.append(name),
+            ready=lambda: True,
+            spin=lambda: None,
+            reset=lambda: None,
+            after_reset=lambda: None,
+            wait_timeout_polls=5,
+            lap_ready=lambda: False,
+        )
+    assert "mppi_planner_node" not in log and "lap_memory_node" in log
 
 
 def test_a_reset_service_that_never_appears_is_an_error_and_starts_nothing_else() -> None:

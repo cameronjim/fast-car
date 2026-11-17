@@ -235,6 +235,12 @@ MAX_SCAN_WAIT_S = 0.25
 #: The nodes started before the startup reset of a pnp run (the rest follow the reset): the
 #: simulator and the safety node, which only publish what the bridge feeds them.
 PHASE_ONE_NODES = ("bridge_node", "safety_node")
+#: Started last of all, once the lap node answers: a lap node still importing its modules when the
+#: planner reports DRIVING starts lap 1 seconds late (its start scan is the first one after ITS first
+#: DRIVING report), and its lines are then not the ground truth's. The planner is the one node whose
+#: DRIVING report starts the clock of both.
+PLANNER_NODE = "mppi_planner_node"
+LAP_NODE = "lap_memory_node"
 
 
 def rescore_from_start_scan(
@@ -364,18 +370,22 @@ def run_startup(
     reset,
     after_reset,
     wait_timeout_polls: int,
+    lap_ready=None,
 ) -> None:
     """The runner's startup order. `spawn(name, command)` starts a node, `ready()` says the
     reset service is there (and what the caller also needs before the reset), `spin()` serves
     the runner's own callbacks for one poll, `reset()` performs the startup reset and returns when
-    it completed, `after_reset()` clears the recording.
+    it completed, `after_reset()` clears the recording, `lap_ready()` says the lap node answers
+    (its status arrived).
 
-    `two_phase` (driver pnp): only `PHASE_ONE_NODES` start first; the rest (perception, planner,
-    lap node) start after the reset and the clearing of the recording, so the startup reset can
-    no longer land on a car the planner has already set moving (brief 48: it did in 4 of 90 B4
-    runs, 2.3 s after the planner reported DRIVING, and the ground truth began there). The wait is
-    a spinning one: the blocking `wait_for_service` served no callback while it waited. Otherwise
-    every node starts at once, as before."""
+    `two_phase` (driver pnp): only `PHASE_ONE_NODES` start first; the rest start after the reset
+    and the clearing of the recording, so the startup reset can no longer land on a car the
+    planner has already set moving (brief 48: it did in 4 of 90 B4 runs, 2.3 s after the planner
+    reported DRIVING, and the ground truth began there). The wait is a spinning one: the blocking
+    `wait_for_service` served no callback while it waited. Of the rest, the perception and the lap
+    node start first and the planner only once the lap node answers (`lap_ready`, when the stack
+    has a lap node and the caller gives one), so the lap node never starts lap 1 after the
+    planner's first DRIVING report. Otherwise every node starts at once, as before."""
     first = [item for item in stack if item[0] in PHASE_ONE_NODES] if two_phase else list(stack)
     later = [item for item in stack if item not in first]
     for name, command in first:
@@ -388,7 +398,18 @@ def run_startup(
         raise RuntimeError("/sim/reset not available")
     reset()
     after_reset()
-    for name, command in later:
+    planner = [item for item in later if item[0] == PLANNER_NODE]
+    others = [item for item in later if item[0] != PLANNER_NODE]
+    for name, command in others:
+        spawn(name, command)
+    if planner and lap_ready is not None and any(item[0] == LAP_NODE for item in others):
+        for _ in range(wait_timeout_polls):
+            if lap_ready():
+                break
+            spin()
+        else:
+            raise RuntimeError("lap_memory_node did not answer before the planner was due")
+    for name, command in planner:
         spawn(name, command)
 
 
@@ -1113,6 +1134,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             startup_reset,
             clear_recording,
             polls,
+            lap_ready=lambda: bool(lap_status),
         )
         if two_phase:
             # the rest of the stack is starting: wait until the planner talks (the single phase

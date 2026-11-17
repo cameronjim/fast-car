@@ -209,15 +209,20 @@ class GateConfig:
     kf_spacing_m: float = 0.5
     kf_max: int = 120
     kf_window_m: float = 0.3
-    kf_retire_visits: int = 2
     anchor_wait_m: float = 0.4
     ring_check_m: float = 0.25
-    #: Seed of the first keyframe match of a visit. False (the brief): the predicted along offset
-    #: with zero yaw. True: also the yaw the odometry heading predicts (the keyframe's stored
-    #: heading against the heading now). On a curved ring the zero-yaw seed pulls the along
-    #: offset toward zero (anchor laps 2 percent short in test_gate_v3.py); this is not part of
-    #: the registered design and is off by default.
-    kf_seed_yaw: bool = False
+    #: Brief 50b (design 20.5). Winding counts the car's position round the track: a turn rate from
+    #: the centre of the car's turn (the fixed point of the match between a scan and the one
+    #: `unique_shift_m` back), the steering rate when that is not valid and for the first
+    #: `launch_steer_m` of wheel distance after the start scan.
+    pair_min_yaw_rad: float = 0.1
+    pair_max_age_s: float = 0.5
+    launch_steer_m: float = 2.0
+    #: Start-scan matches (with a valid centre) needed for the attitude correction of lap 1.
+    attitude_min_scans: int = 5
+    #: Unique matches that prove a reference (a start scan or a keyframe): a crossing or a fix needs
+    #: a proven reference.
+    proof_min_unique: int = 6
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.wheelbase_m) and self.wheelbase_m > 0.0):
@@ -238,10 +243,17 @@ class GateConfig:
             self.kf_spacing_m <= 0.0
             or self.kf_max < 2
             or self.kf_window_m <= 0.0
-            or self.kf_retire_visits < 1
             or self.anchor_wait_m < 0.0
         ):
             raise ValueError("ring: kf_spacing_m and kf_window_m positive, kf_max at least 2")
+        if (
+            self.pair_min_yaw_rad <= 0.0
+            or self.pair_max_age_s <= 0.0
+            or self.launch_steer_m < 0.0
+            or self.attitude_min_scans < 1
+            or self.proof_min_unique < 1
+        ):
+            raise ValueError("pair and proof settings must be positive")
 
 
 @dataclass(frozen=True)
@@ -267,6 +279,9 @@ class _ScanRec:
     thin: FloatArray
     dense: FloatArray
     points: FloatArray
+    x: float = 0.0  # dead-reckoned pose of the car at the scan (odometry frame)
+    y: float = 0.0
+    theta: float = 0.0
 
 
 @dataclass
@@ -277,6 +292,7 @@ class _Sample:
     x: float  # dead-reckoned pose in the odometry frame
     y: float
     theta: float
+    psi: float = 0.0  # winding angle: the car's position round the track centre, unwrapped
 
 
 @dataclass(frozen=True)
@@ -385,12 +401,26 @@ class StartScanGate:
         self._odom_t: float | None = None
         # gate v3
         c = cfg
-        self._ring = Ring(c.kf_spacing_m, c.kf_max, c.kf_window_m, c.kf_retire_visits)
+        self._ring = Ring(c.kf_spacing_m, c.kf_max, c.kf_window_m)
         self._scans: deque[_ScanRec] = deque()
         self._visit: Visit | None = None
         self._n_unique = 0  # STRONG start-scan matches this lap that were unique ...
         self._n_ambiguous = 0  # ... and ambiguous (the alias verdict of this lap)
-        self._w_star_m: float | None = None  # wheel total where the heading reached 2 pi
+        self._life_unique = 0  # the same, over the life of the start scan (the verdict)
+        self._life_ambiguous = 0
+        self._latched = False  # the start scan is aliased: for good, until set_start
+        self._w_star_m: float | None = None  # wheel total where the winding angle reached 2 pi
+        self._psi_origin = 0.0
+        self._start_total_m = 0.0
+        self._pair: tuple[float, float, float] | None = None  # centre x, y (base_link), scan time
+        self._att_c: list[float] = []  # bearing of the pair centre in the car frame, lap 1
+        self._att_s: list[float] = []  # bearing of the same centre in the start frame
+        self._d_beta = 0.0
+        self._psi_pair_m = 0.0  # wheel distance wound on the pair rate this lap, and in all
+        self._psi_all_m = 0.0
+        self.lap_verdicts: list[str] = []
+        self.lap_pair_shares: list[float] = []
+        self.lap1_d_beta = 0.0
         self.line_sources: list[str] = []
         self.missed_laps: list[int] = []
         self.ring_disagreements = 0
@@ -442,13 +472,22 @@ class StartScanGate:
 
     @property
     def start_aliased(self) -> bool:
-        """The start scan is aliased on this lap: the uniqueness test called at least
-        `alias_min_scans` of its STRONG matches near the line ambiguous, and more than
-        `alias_max_share` of them."""
-        c = self.cfg
-        if c.unique_shift_m <= 0.0:
-            return False
-        return is_aliased(self._n_unique, self._n_ambiguous, c.alias_min_scans, c.alias_max_share)
+        """The start scan is aliased: over its life at least `alias_min_scans` of its STRONG
+        matches near the line were called ambiguous by the uniqueness test and more than
+        `alias_max_share` of all of them. Latched: aliased until `set_start`."""
+        return self._latched
+
+    @property
+    def start_proven(self) -> bool:
+        """Its STRONG matches near the line were unique `proof_min_unique` times and it is not
+        aliased. Without the uniqueness test every reference is proven."""
+        if self.cfg.unique_shift_m <= 0.0:
+            return True
+        return not self._latched and self._life_unique >= self.cfg.proof_min_unique
+
+    @property
+    def start_verdict(self) -> str:
+        return "aliased" if self._latched else ("proven" if self.start_proven else "unproven")
 
     def _pending_estimate_m(self) -> float | None:
         """Wheel total of an anchor or winding estimate of the line that is waiting for its
@@ -457,17 +496,14 @@ class StartScanGate:
         if not (c.ring_enabled and self._started):
             return None
         total = self.total_m
+        if self._latched:
+            w = self._w_star_m
+            if w is not None and w - self._origin_m >= c.min_lap_length_m:
+                return w if total < w + c.anchor_wait_m else None
+            return None
         est = self._ring.anchor_total_m if self._ring.fixed else math.nan
         if math.isfinite(est) and est - self._origin_m >= c.min_lap_length_m:
             return est if total < est + c.anchor_wait_m else None
-        w = self._w_star_m
-        if (
-            self.start_aliased
-            and not self._ring.fixes
-            and w is not None
-            and w - self._origin_m >= c.min_lap_length_m
-        ):
-            return w if total < w + c.anchor_wait_m else None
         return None
 
     def _uncertain_after_m(self) -> float:
@@ -545,6 +581,18 @@ class StartScanGate:
         dth = rate * dt
         step = v_mid * dt
         th_mid = last.theta + 0.5 * dth
+        dpsi = dth
+        pair = self._pair
+        if (
+            self.cfg.ring_enabled
+            and self._started
+            and pair is not None
+            and t_s - pair[2] <= self.cfg.pair_max_age_s
+            and last.total_m - self._start_total_m > self.cfg.launch_steer_m
+        ):
+            dpsi = v_mid * pair[1] / (pair[0] * pair[0] + pair[1] * pair[1]) * dt
+            self._psi_pair_m += step
+        self._psi_all_m += step
         new = _Sample(
             t_s,
             last.total_m + step,
@@ -552,6 +600,7 @@ class StartScanGate:
             last.x + step * math.cos(th_mid),
             last.y + step * math.sin(th_mid),
             last.theta + dth,
+            last.psi + dpsi,
         )
         self._hist.append(new)
         self._note_winding(last, new)
@@ -561,18 +610,20 @@ class StartScanGate:
             self._hist.popleft()
 
     def _note_winding(self, last: _Sample, new: _Sample) -> None:
-        """Remember the wheel total at which the heading since the last closure first reached
-        2 pi in magnitude (the winding closure's line)."""
+        """Remember the wheel total at which the winding angle since the last closure (on lap 1
+        corrected by the change of the track centre's bearing) first reached 2 pi in magnitude:
+        where the winding closure puts the line."""
         if not self._started or self._w_star_m is not None:
             return
-        h1 = abs(new.heading - self._heading_origin)
-        if h1 < TWO_PI:
+        shift = self._d_beta if self._laps == 0 else 0.0
+        p1 = abs(new.psi - self._psi_origin + shift)
+        if p1 < TWO_PI:
             return
-        h0 = abs(last.heading - self._heading_origin)
-        if h0 >= TWO_PI or h1 <= h0:
+        p0 = abs(last.psi - self._psi_origin + shift)
+        if p0 >= TWO_PI or p1 <= p0:
             self._w_star_m = new.total_m
             return
-        w = (TWO_PI - h0) / (h1 - h0)
+        w = (TWO_PI - p0) / (p1 - p0)
         self._w_star_m = last.total_m + w * (new.total_m - last.total_m)
 
     def set_start(self, t_eff_s: float, points: FloatArray) -> bool:
@@ -601,7 +652,17 @@ class StartScanGate:
         self._scans.clear()
         self._visit = None
         self._n_unique = self._n_ambiguous = 0
+        self._life_unique = self._life_ambiguous = 0
+        self._latched = False
         self._w_star_m = None
+        self._psi_origin = self._hist[-1].psi
+        self._start_total_m = self._hist[-1].total_m
+        self._pair = None
+        self._att_c, self._att_s = [], []
+        self._d_beta = 0.0
+        self._psi_pair_m = self._psi_all_m = 0.0
+        self.lap_verdicts, self.lap_pair_shares = [], []
+        self.lap1_d_beta = 0.0
         self.line_sources = []
         self.missed_laps = []
         self.ring_disagreements = 0
@@ -630,6 +691,7 @@ class StartScanGate:
                 last.x + step * math.cos(last.theta),
                 last.y + step * math.sin(last.theta),
                 last.theta,
+                last.psi,
             )
         if t_s <= h[0].t:
             return h[0]
@@ -644,6 +706,7 @@ class StartScanGate:
                     prev.x + w * (cur.x - prev.x),
                     prev.y + w * (cur.y - prev.y),
                     prev.theta + w * wrap(cur.theta - prev.theta),
+                    prev.psi + w * (cur.psi - prev.psi),
                 )
             prev = cur
         return h[-1]
@@ -828,12 +891,14 @@ class StartScanGate:
             now = self._at(t_eff_s)
             if c.unique_shift_m > 0.0:
                 self._remember(now, points)
-            if c.ring_enabled and self._ring.teaching:
+            if c.ring_enabled and c.unique_shift_m > 0.0 and (self._laps == 0 or self._latched):
+                self._update_pair(now)
+            if c.ring_enabled and self._ring.teaching and not self._latched:
                 self._teach(now, points)
         if not tracking:
             self.last_arming_state = "waiting"
             self._cands = []
-            if c.ring_enabled and self._ring.fixed:
+            if c.ring_enabled and self._ring.fixed and not self._latched:
                 self._keyframe_step(t_eff_s, points, self._at(t_eff_s))
             return None
         self._end_visit()
@@ -845,6 +910,7 @@ class StartScanGate:
         now = self._at(t_eff_s)
         res = self._best_match(source, now)
         if res is not None and self._accept(res):
+            self._note_attitude(res, now)
             if armed:
                 self.n_matched_scans += 1
                 res = replace(res, freespace_violation=self._freespace(res, points))
@@ -883,10 +949,19 @@ class StartScanGate:
             verdict = self._classify(res, self._start, now.total_m)
             if verdict == UNIQUE:
                 self._n_unique += 1
+                self._life_unique += 1
             elif verdict == AMBIGUOUS:
                 self._n_ambiguous += 1
-            if self.start_aliased:
-                self._cands = []  # an aliased start scan places nothing on this lap
+                self._life_ambiguous += 1
+                if is_aliased(
+                    self._life_unique,
+                    self._life_ambiguous,
+                    c.alias_min_scans,
+                    c.alias_max_share,
+                ):
+                    self._latched = True
+            if self._latched:
+                self._cands = []  # an aliased start scan places nothing, ever
                 return
             if verdict != UNIQUE:
                 return
@@ -912,7 +987,15 @@ class StartScanGate:
         ):
             return
         self._scans.append(
-            _ScanRec(now.total_m, self._source_thin, self._source_dense, np.array(points))
+            _ScanRec(
+                now.total_m,
+                self._source_thin,
+                self._source_dense,
+                np.array(points),
+                now.x,
+                now.y,
+                now.theta,
+            )
         )
         while self._scans[0].total_m < now.total_m - UNIQUE_BUFFER_M:
             self._scans.popleft()
@@ -1000,7 +1083,8 @@ class StartScanGate:
         if self._visit is None:
             self._visit = Visit(kf)
         visit = self._visit
-        yaw0 = (now.heading - self._heading_origin) - kf.heading_rad if c.kf_seed_yaw else 0.0
+        # the first match of a visit: the along offset and the yaw the odometry predicts
+        yaw0 = (now.heading - self._heading_origin) - kf.heading_rad
         seed = (station - kf.station_m, 0.0, yaw0)
         if visit.last is not None and now.t - visit.last[0] <= 1.0:
             _t_prev, prev, dr_prev = visit.last
@@ -1026,26 +1110,29 @@ class StartScanGate:
         if c.unique_shift_m > 0.0:
             verdict = self._classify(res, ref, now.total_m)
             if verdict == AMBIGUOUS:
-                visit.n_ambiguous += 1
+                kf.n_ambiguous += 1
+                if is_aliased(kf.n_unique, kf.n_ambiguous, c.alias_min_scans, c.alias_max_share):
+                    kf.retired = True  # aliased: for good (until a re-teach)
+                    self._visit = None
+                    return
             if verdict != UNIQUE:
                 return
-        visit.n_unique += 1
+        kf.n_unique += 1
         visit.estimates.append(Estimate(now.total_m - res.x_m, res.inlier_share, res.rms_m))
 
     def _end_visit(self) -> None:
-        """The car left a keyframe's window: its verdict, and a fix if it is not aliased and its
-        unique estimates meet the consensus rule (two within `consensus_spread_m`, or one of
-        late-match quality)."""
+        """The car left a keyframe's window: a fix if the keyframe is proven (`proof_min_unique`
+        unique matches over its life, not aliased) and its unique estimates of this visit meet the
+        consensus rule (two within `consensus_spread_m`, or one of late-match quality)."""
         visit = self._visit
         if visit is None:
             return
         self._visit = None
         c = self.cfg
-        aliased = is_aliased(
-            visit.n_unique, visit.n_ambiguous, c.alias_min_scans, c.alias_max_share
-        )
-        self._ring.note_visit(visit.keyframe, aliased)
-        if aliased or not visit.estimates:
+        kf = visit.keyframe
+        self._ring.note_visit(kf)
+        proven = c.unique_shift_m <= 0.0 or (not kf.retired and kf.n_unique >= c.proof_min_unique)
+        if not proven or not visit.estimates:
             return
         lines = sorted(e.line_m for e in visit.estimates)
         agree = any(b - a <= c.consensus_spread_m for a, b in pairwise(lines))
@@ -1054,33 +1141,82 @@ class StartScanGate:
             for e in visit.estimates
         )
         if agree or quality:
-            kf = visit.keyframe
             self._ring.add_fix(Fix(kf.index, kf.station_m, float(np.median(lines))))
 
-    def _place_crossing(self, t_eff_s: float, now: _Sample) -> GateCrossing | None:
-        """Where the crossing is, in this order: the start scan (v2.1); the anchor estimate of
-        the line; the winding of the heading, only with the alias verdict and no fix; else
-        nothing."""
+    def _update_pair(self, now: _Sample) -> None:
+        """The centre of the car's turn: match the scan to the one `unique_shift_m` of wheel
+        distance back (one ICP, seeded with the dead-reckoned relative pose) and take the fixed
+        point of the transform, c = (I - R(yaw))^-1 t, in base_link. On a ring every alignment the
+        ICP can return is a rotation about the track centre, so c is that centre whatever the seed
+        was. Not valid under `pair_min_yaw_rad` of yaw (a straight)."""
         c = self.cfg
-        if self.start_aliased:
+        rec = self._displaced(now.total_m)
+        if rec is None:
+            return
+        seed = _compose(_inverse((rec.x, rec.y, rec.theta)), (now.x, now.y, now.theta))
+        res = match_scans(
+            self._source_thin,
+            rec.thin,
+            seed,
+            inlier_m=c.inlier_dist_m,
+            score_source=self._source_dense,
+            score_target=rec.dense,
+        )
+        if res is None or not self._accept(res) or abs(res.yaw_rad) < c.pair_min_yaw_rad:
+            return
+        cos_y, sin_y = math.cos(res.yaw_rad), math.sin(res.yaw_rad)
+        a11, a12, a21, a22 = 1.0 - cos_y, sin_y, -sin_y, 1.0 - cos_y
+        det = a11 * a22 - a12 * a21
+        if abs(det) < 1e-9:
+            return
+        cx = (a22 * res.x_m - a12 * res.y_m) / det
+        cy = (-a21 * res.x_m + a11 * res.y_m) / det
+        if cx * cx + cy * cy < 1e-6:
+            return
+        self._pair = (cx, cy, now.t)
+
+    def _note_attitude(self, res: MatchResult, now: _Sample) -> None:
+        """Lap 1, a tracked start-scan match with a centre from this very scan: the centre in the
+        start frame is M c (the same point for every alignment of a ring), its bearing against the
+        bearing of c in the car frame is the change of the car's attitude from the start to steady
+        driving."""
+        pair = self._pair
+        if self._laps != 0 or not self.cfg.ring_enabled or pair is None or pair[2] != now.t:
+            return
+        cos_y, sin_y = math.cos(res.yaw_rad), math.sin(res.yaw_rad)
+        mx = cos_y * pair[0] - sin_y * pair[1] + res.x_m
+        my = sin_y * pair[0] + cos_y * pair[1] + res.y_m
+        self._att_s.append(math.atan2(my, mx))
+        self._att_c.append(math.atan2(pair[1], pair[0]))
+        if len(self._att_s) >= self.cfg.attitude_min_scans:
+            self._d_beta = wrap(float(np.median(self._att_c)) - float(np.median(self._att_s)))
+
+    def _place_crossing(self, t_eff_s: float, now: _Sample) -> GateCrossing | None:
+        """One source per track. A start scan that is not aliased: the start scan (v2.1, with a
+        proven reference), else the anchor estimate of the line (a line passage lost to stale
+        odometry or a blocked view). An aliased start scan: winding on every lap, nothing else."""
+        c = self.cfg
+        if self._latched:
             self._cands = []
+            w = self._w_star_m
+            if (
+                c.ring_enabled
+                and w is not None
+                and w - self._origin_m >= c.min_lap_length_m
+                and now.total_m >= w + c.anchor_wait_m
+            ):
+                return self._close_at(t_eff_s, w, "winding")
+            return None
         crossing = self._try_close(t_eff_s, now)
         if crossing is not None or not c.ring_enabled or self._cands:
             return crossing
         anchor = self._ring.anchor_total_m if self._ring.fixed else math.nan
-        if math.isfinite(anchor) and anchor - self._origin_m >= c.min_lap_length_m:
-            if now.total_m >= anchor + c.anchor_wait_m:
-                return self._close_at(t_eff_s, anchor, "anchor")
-            return None
-        w = self._w_star_m
         if (
-            self.start_aliased
-            and not self._ring.fixes
-            and w is not None
-            and w - self._origin_m >= c.min_lap_length_m
-            and now.total_m >= w + c.anchor_wait_m
+            math.isfinite(anchor)
+            and anchor - self._origin_m >= c.min_lap_length_m
+            and now.total_m >= anchor + c.anchor_wait_m
         ):
-            return self._close_at(t_eff_s, w, "winding")
+            return self._close_at(t_eff_s, anchor, "anchor")
         return None
 
     def _close_at(self, t_eff_s: float, total_m: float, source: str) -> GateCrossing | None:
@@ -1094,7 +1230,13 @@ class StartScanGate:
 
     def _try_close(self, t_eff_s: float, now: _Sample) -> GateCrossing | None:
         c = self.cfg
-        self._cands = [k for k in self._cands if t_eff_s - k.t_eff_s <= c.candidate_ttl_s]
+        # An unproven start scan holds its candidates (they do not expire) until it is proven
+        # (close by the v2.1 rule), aliased (dropped) or `candidate_ttl_s` has passed since the
+        # last one with the reference still unproven (scarce scans are not evidence of aliasing:
+        # v2.1's case, v2.1's answer).
+        unproven = not self.start_proven
+        if not unproven:
+            self._cands = [k for k in self._cands if t_eff_s - k.t_eff_s <= c.candidate_ttl_s]
         if not self._cands:
             return None
         lines = sorted(k.line_m for k in self._cands)
@@ -1117,6 +1259,8 @@ class StartScanGate:
         wait = t_eff_s - wait_from >= c.consensus_wait_s and bool(at_line)
         if not (past or wait):
             return None
+        if unproven and t_eff_s - self._cands[-1].t_eff_s < c.candidate_ttl_s:
+            return None  # held: not proven yet
         t_cross = self._time_at_total(median)
         if t_cross is None:
             return None
@@ -1193,6 +1337,8 @@ class StartScanGate:
         self._cands = []
         self._w_star_m = None
         self._n_unique = self._n_ambiguous = 0
+        self._psi_origin = at.psi
+        self._psi_pair_m = self._psi_all_m = 0.0
         return crossing
 
     def _note_crossing(self, crossing: GateCrossing, total_m: float) -> None:
@@ -1205,6 +1351,12 @@ class StartScanGate:
             self.missed_laps.append(crossing.lap_index)
         n = self._n_unique + self._n_ambiguous
         self.alias_share_last_lap = self._n_ambiguous / n if n else 0.0
+        self.lap_verdicts.append(self.start_verdict)
+        self.lap_pair_shares.append(
+            self._psi_pair_m / self._psi_all_m if self._psi_all_m > 0.0 else 0.0
+        )
+        if crossing.lap_index == 1:
+            self.lap1_d_beta = self._d_beta
         if not c.ring_enabled:
             return
         ring = self._ring
@@ -1271,12 +1423,16 @@ class StartScanGate:
         }
         if self.cfg.ring_enabled:
             out["ring"] = self._ring.status()
+            out["start_verdict"] = self.start_verdict
+            out["lap_start_verdicts"] = list(self.lap_verdicts)
+            out["lap_pair_shares"] = list(self.lap_pair_shares)
+            out["lap1_d_beta_rad"] = self.lap1_d_beta
         return out
 
     @property
     def phase_observable(self) -> bool:
-        """False when the last lap closed by winding, or the start scan is aliased on this lap and
-        no keyframe gave a fix: the phase is odometry's alone."""
+        """False when the start scan is aliased (or the last lap closed by winding): the phase is
+        the winding's alone."""
         if self.line_sources and self.line_sources[-1] == "winding":
             return False
-        return not (self.start_aliased and not self._ring.fixes)
+        return not self.start_aliased

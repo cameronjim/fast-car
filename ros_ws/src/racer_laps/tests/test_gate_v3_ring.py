@@ -56,7 +56,11 @@ def roll(
         {"kf_spacing_m": 0.0},
         {"kf_max": 1},
         {"kf_window_m": 0.0},
-        {"kf_retire_visits": 0},
+        {"pair_min_yaw_rad": 0.0},
+        {"pair_max_age_s": 0.0},
+        {"launch_steer_m": -1.0},
+        {"attitude_min_scans": 0},
+        {"proof_min_unique": 0},
         {"anchor_wait_m": -0.1},
     ],
 )
@@ -82,19 +86,44 @@ def test_no_pending_estimate_without_the_ring_and_a_winding_line_found_in_one_st
     off = straight_gate(ring_enabled=False)
     assert off._pending_estimate_m() is None
     g = straight_gate()
-    last = gate_module._Sample(1.0, 1.0, 6.0, 0.0, 0.0, 0.0)
-    new = gate_module._Sample(1.02, 1.02, 6.4, 0.0, 0.0, 0.0)
+    sample = gate_module._Sample
+    last = sample(1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 6.0)
+    new = sample(1.02, 1.02, 0.0, 0.0, 0.0, 0.0, 6.4)
     g._note_winding(last, new)
     assert g._w_star_m is not None and 1.0 < g._w_star_m < 1.02
-    again = gate_module._Sample(1.04, 1.04, 6.5, 0.0, 0.0, 0.0)
+    again = sample(1.04, 1.04, 0.0, 0.0, 0.0, 0.0, 6.5)
     g._note_winding(new, again)  # decided once per lap
     assert g._w_star_m < 1.02
     past = straight_gate()
     past._note_winding(
-        gate_module._Sample(1.0, 1.0, 7.0, 0.0, 0.0, 0.0),
-        gate_module._Sample(1.02, 1.02, 7.2, 0.0, 0.0, 0.0),
+        sample(1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 7.0), sample(1.02, 1.02, 0.0, 0.0, 0.0, 0.0, 7.2)
     )
     assert past._w_star_m == 1.02  # already past 2 pi at the first sample seen
+
+
+def test_the_winding_of_lap_1_is_shifted_by_the_attitude_correction_and_later_laps_are_not() -> (
+    None
+):
+    sample = gate_module._Sample
+    g = straight_gate()
+    g._d_beta = 0.23  # ccw: the line is where psi + 0.23 reaches 2 pi
+    g._note_winding(
+        sample(1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 6.0), sample(1.02, 1.02, 0.0, 0.0, 0.0, 0.0, 6.1)
+    )
+    assert g._w_star_m is not None and 1.0 < g._w_star_m < 1.02  # 6.0 + 0.23 < 2 pi < 6.1 + 0.23
+    cw = straight_gate()
+    cw._d_beta = -0.23
+    cw._note_winding(
+        sample(1.0, 1.0, 0.0, 0.0, 0.0, 0.0, -6.0), sample(1.02, 1.02, 0.0, 0.0, 0.0, 0.0, -6.1)
+    )
+    assert cw._w_star_m is not None and 1.0 < cw._w_star_m < 1.02
+    later = straight_gate()
+    later._d_beta = 0.23
+    later._laps = 1  # not lap 1: attitude at two steady crossings is the same
+    later._note_winding(
+        sample(1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 6.0), sample(1.02, 1.02, 0.0, 0.0, 0.0, 0.0, 6.1)
+    )
+    assert later._w_star_m is None
 
 
 def test_an_estimate_before_the_history_or_before_the_lap_start_places_nothing() -> None:
@@ -198,6 +227,27 @@ def test_a_scan_is_matched_to_one_keyframe_with_the_predicted_pose_as_the_first_
     assert len(matcher.seeds) == n_first + 1  # one match per scan
 
 
+def test_the_first_match_of_a_visit_is_seeded_with_the_yaw_the_odometry_predicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    g = straight_gate()
+    g.on_steering(0.1)  # a curve: the heading grows with the station
+    t = roll(g, 0.0, 3.1)
+    g.ring.finish_teaching(g.station_m)
+    g._origin_m = g.total_m
+    g._heading_origin = g._hist[-1].heading
+    g._laps = 1
+    matcher = Scripted([])
+    monkeypatch.setattr(gate_module, "match_scans", matcher)
+    monkeypatch.setattr(gate_module, "freespace_violation_share", lambda *a, **k: 0.0)
+    roll(g, t, 0.3, scan_hz=50.0)
+    seed = matcher.seeds[0]
+    kf = g.ring.keyframes[0]  # the first scans of lap 2 are at station ~0.02, keyframe 0
+    yaw_expected = (g._hist[-1].heading - g._heading_origin) - kf.heading_rad
+    assert abs(seed[2]) > 0.0 and abs(seed[2]) < 0.1  # the predicted yaw, not zero
+    assert abs(yaw_expected) > 0.0
+
+
 def test_the_second_scan_of_a_visit_is_seeded_by_the_previous_match_advanced_by_odometry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -259,58 +309,120 @@ def test_no_keyframe_is_matched_while_the_start_scan_is_tracked(
 # -- the alias verdict inside the gate -------------------------------------------------------------
 
 
-def run_flagged(mp: pytest.MonkeyPatch, flags: list[bool]):  # type: ignore[no-untyped-def]
-    """One lap of 5.2 m with a match every 0.05 m from 0.6 m before the line, each called unique
-    or ambiguous in turn, then the closing scan 0.41 m after the line. Returns (closure, gate)."""
+def run_flagged(mp: pytest.MonkeyPatch, flags: list[bool], step: float = 0.05):  # type: ignore[no-untyped-def]
+    """One lap of 5.2 m with a match every `step` from 0.6 m before the line, each called unique
+    or ambiguous in turn (the uniqueness test is scripted, the ring is off), then the closing scan
+    0.41 m after the line. Returns (closure or None, gate)."""
     car = Car(mp, unique_shift_m=0.4)
     it = iter(flags)
     mp.setattr(car.gate, "_classify", lambda *a, **k: UNIQUE if next(it) else AMBIGUOUS)
     length = 5.2
     car.steer_for(length)
     for i, _flag in enumerate(flags):
-        x = -0.6 + 0.05 * i
+        x = -0.6 + step * i
         car.move_to(length + x)
-        assert car.scan(result(x)) is None
+        car.scan(result(x))
     car.move_to(length + 0.41)
     return car.scan(None), car.gate
 
 
 @pytest.mark.parametrize(
-    ("n_ambiguous", "n_unique", "closes"),
+    ("n_unique", "n_ambiguous", "verdict", "closes"),
     [
-        (2, 10, True),  # two ambiguous matches are not enough to call a place aliased
-        (3, 9, True),  # share exactly 0.25 is not above it
-        (3, 8, False),  # 3 / 11 is above 0.25
-        (4, 4, False),
-        (3, 0, False),  # nothing but ambiguous matches
+        (5, 0, "unproven", False),  # five unique matches are not proof: the closure is held
+        (6, 0, "proven", True),
+        (10, 2, "proven", True),  # two ambiguous matches are not enough to call a place aliased
+        (9, 3, "proven", True),  # share exactly 0.25 is not above it
+        (8, 3, "aliased", False),  # 3 / 11 is above 0.25
+        (4, 4, "aliased", False),
+        (0, 3, "aliased", False),  # nothing but ambiguous matches
+        (2, 3, "aliased", False),
     ],
 )
-def test_the_verdict_decides_whether_a_place_may_place_the_line(
-    monkeypatch: pytest.MonkeyPatch, n_ambiguous: int, n_unique: int, closes: bool
+def test_the_verdict_states_decide_whether_a_place_may_place_the_line(
+    monkeypatch: pytest.MonkeyPatch, n_unique: int, n_ambiguous: int, verdict: str, closes: bool
 ) -> None:
-    # ambiguous matches first: the verdict flips as soon as it is reached, unique ones come later
-    flags = [False] * n_ambiguous + [True] * n_unique
+    # unique matches first: the verdict latches as soon as it is reached
+    flags = [True] * n_unique + [False] * n_ambiguous
     closed, gate = run_flagged(monkeypatch, flags)
+    assert gate.start_verdict == verdict
     assert (closed is not None) is closes
-    assert gate.start_aliased is (not closes)
     if closes:
         assert closed.line_source == "start_scan"  # type: ignore[attr-defined]
+    assert gate.start_aliased is (verdict == "aliased")
+    assert gate.start_proven is (verdict == "proven")
 
 
-def test_an_aliased_place_places_nothing_although_it_has_unique_matches(
+def test_an_aliased_start_scan_stays_aliased_after_20_unique_matches_and_set_start_clears_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    flags = [True, True, False, False, False, True, True, True]
-    closed, gate = run_flagged(monkeypatch, flags)
-    assert closed is None and gate.start_aliased
-    assert gate._cands == []  # the unique candidates are dropped with the verdict
-    assert gate._n_unique >= 2 and gate._n_ambiguous >= 3
+    closed, gate = run_flagged(monkeypatch, [False] * 3 + [True] * 20, step=0.02)
+    assert gate.start_aliased and closed is None
+    assert gate._life_unique == 20 and gate._cands == []
+    assert gate.set_start(gate._hist[-1].t, PTS)
+    assert gate.start_verdict == "unproven" and not gate.start_aliased
+
+
+def test_a_placed_track_is_proven_before_the_line_so_the_crossing_does_not_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """12 unique matches before the line (what a stadium gives): proven long before v2.1 would
+    close, so the crossing is v2.1's, at the same place."""
+    closed, gate = run_flagged(monkeypatch, [True] * 12)
+    assert gate.start_verdict == "proven" and closed is not None
+    assert closed.length_m == pytest.approx(5.2, abs=0.04)  # type: ignore[attr-defined]
+
+
+def test_a_held_closure_is_released_as_v21_when_the_ttl_passes_with_the_reference_unproven(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scarce scans are not evidence of aliasing: two agreeing unique candidates, no more scans,
+    `candidate_ttl_s` later the closure is v2.1's."""
+    car = Car(monkeypatch, unique_shift_m=0.4)
+    monkeypatch.setattr(car.gate, "_classify", lambda *a, **k: UNIQUE)
+    length = 5.2
+    car.steer_for(length)
+    car.move_to(length - 0.2)
+    car.scan(result(-0.2))
+    car.move_to(length - 0.1)
+    car.scan(result(-0.1))
+    car.move_to(length + 0.41)
+    assert car.scan(None) is None  # held
+    assert not car.gate.station_uncertain  # a held closure is a pending candidate
+    car.move_to(length + 0.41 + 1.6)  # more than candidate_ttl_s (1.5 s at 1 m/s) later
+    closed = car.scan(None)
+    assert closed is not None and closed.line_source == "start_scan"
+    assert closed.length_m == pytest.approx(length, abs=0.1)
+
+
+def test_a_held_closure_is_dropped_when_the_reference_turns_out_aliased(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed, gate = run_flagged(monkeypatch, [True, True, False, False, False])
+    assert closed is None and gate.start_aliased and gate._cands == []
+
+
+def test_an_aliased_start_scan_never_yields_start_scan_or_anchor_and_matches_no_keyframe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mem, laps = run(RING, 3.3, RING_SPEED)
+    assert mem.gate is not None and mem.gate.start_aliased
+    assert {r.line_source for r in laps} == {"winding"}
+    assert not any(k.visited for k in mem.gate.ring.keyframes)  # no keyframe was matched
+    assert mem.status()["ring"]["fixes_last_lap"] == 0  # type: ignore[index]
+
+
+def test_a_start_scan_that_is_not_aliased_never_yields_winding() -> None:
+    mem, laps = run(STADIUM, 3.3, 1.0)
+    assert mem.gate is not None and mem.gate.start_proven
+    assert {r.line_source for r in laps} == {"start_scan"}
+    assert mem.status()["lap_start_verdicts"] == ["proven"] * len(laps)  # type: ignore[comparison-overlap]
 
 
 def test_the_share_of_ambiguous_matches_is_reported_per_lap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    closed, gate = run_flagged(monkeypatch, [False, False] + [True] * 10)
+    closed, gate = run_flagged(monkeypatch, [True] * 10 + [False] * 2)
     assert closed is not None
     assert gate.alias_share_last_lap == pytest.approx(2 / 12)
     assert gate.status()["start_alias_share_last_lap"] == pytest.approx(2 / 12)
@@ -334,16 +446,32 @@ def test_with_no_displaced_scan_the_match_is_not_unique_and_places_nothing(
 # -- keyframe fixes and retiring inside the gate -----------------------------------------------------
 
 
-def test_on_a_ring_every_keyframe_retires_within_two_laps_and_nothing_is_taught_again() -> None:
-    mem, laps = run(RING, 4.5, RING_SPEED)
-    assert len(laps) == 4
-    status = mem.status()
-    ring = status["ring"]
-    assert isinstance(ring, dict)
-    # every keyframe the car visits (the first 60 percent of the lap: the start scan is tracked
-    # after that) is retired, and the ring is not taught again although keyframe 0 is live
-    assert ring["retired"] >= 6 and ring["generation"] == 0 and ring["fixes_last_lap"] == 0
-    assert all(k.retired for k in mem.gate.ring.keyframes if k.visited or k.index in range(1, 8))
+def test_a_keyframe_whose_matches_are_ambiguous_is_retired_and_gives_no_fix() -> None:
+    """Keyframes of a ring: the stadium's matches are unique, a ring's are not. A latched aliased
+    keyframe is retired for good; a fix needs a proven one."""
+    g = straight_gate(unique_shift_m=0.4)
+    roll(g, 0.0, 3.0)
+    g.ring.finish_teaching(g.station_m)
+    kf = g.ring.keyframes[2]
+    kf.n_unique, kf.n_ambiguous = 2, 0
+    g._visit = gate_module.Visit(kf)
+    g._visit.estimates.append(gate_module.Estimate(10.0, 0.9, 0.02))
+    g._visit.estimates.append(gate_module.Estimate(10.01, 0.9, 0.02))
+    g._end_visit()
+    assert g.ring.fixes == []  # two unique matches over its life: not proven
+    kf.n_unique = 6
+    g._visit = gate_module.Visit(kf)
+    g._visit.estimates.append(gate_module.Estimate(10.0, 0.9, 0.02))
+    g._visit.estimates.append(gate_module.Estimate(10.01, 0.9, 0.02))
+    g._end_visit()
+    assert len(g.ring.fixes) == 1  # proven and two agreeing estimates: a fix
+    aliased = g.ring.keyframes[3]
+    aliased.retired = True
+    g._visit = gate_module.Visit(aliased)
+    g._visit.estimates.append(gate_module.Estimate(10.0, 0.9, 0.02))
+    g._visit.estimates.append(gate_module.Estimate(10.01, 0.9, 0.02))
+    g._end_visit()
+    assert len(g.ring.fixes) == 1  # an aliased keyframe gives none
 
 
 def test_the_cost_of_a_ring_lap_falls_back_once_the_keyframes_are_retired() -> None:

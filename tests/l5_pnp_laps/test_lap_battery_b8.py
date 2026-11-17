@@ -131,7 +131,7 @@ def test_thresholds_are_the_preregistered_numbers() -> None:
     assert CONST.laps_driven == 13 and CONST.laps == 13 and CONST.lap1_cap_mps == 0.5
     assert set(CONST.battery_cases) == set(CASES) and set(CONST.conditions) == {"a", "b", "c"}
     assert CONST.development_seeds == (11, 12, 13)
-    assert set(CONST.development_cases) == {"ND", "P4", "OD"}
+    assert set(CONST.development_cases) == {"ND", "P4", "OD", "RD"}
     assert CONST.count_rule == {"window_end": "truth_crossing_12_plus_share_of_truth_lap_12",
                                 "share": 0.5, "required": 12}  # fmt: skip
     assert CONST.validity["recording_must_cover_count_window"] is True
@@ -557,7 +557,7 @@ def test_the_seeds_of_the_other_registered_attempts_never_run(
         build(ok, case=case, seed=seed)
 
 
-@pytest.mark.parametrize("case", ["P4", "OD", "ND"])
+@pytest.mark.parametrize("case", ["P4", "OD", "ND", "RD"])
 @pytest.mark.parametrize("seed", [11, 12, 13])
 def test_a_development_case_on_a_development_seed_needs_no_freeze_file(
     tmp_path: Path, case: str, seed: int
@@ -928,3 +928,34 @@ def test_condition_b_laps_are_judged_against_the_same_tolerances() -> None:
     runs = replace(runs, "b", ("Q1", "ccw", 61), system=[LAP_S + 0.5] + [LAP_S] * 12)
     info = b8.condition_b_laps(runs, CONST)
     assert info["runs"] == 36 and info["laps"] == 36 * 12 and info["within"] == 36 * 12 - 1
+
+
+def test_the_stall_probe_rd_is_a_ring_with_one_box_close_to_r3_and_not_r3() -> None:
+    rd, r3 = CONST.development_cases["RD"], CONST.battery_cases["R3"]
+    assert rd != r3 and CONST.class_of("RD") == "aliased"
+    assert rd["lane_width_m"] == r3["lane_width_m"] == 1.2
+    assert rd["obstacles"][0]["at"] == 0.35 and rd["obstacles"][0]["protrusion_m"] == 0.20
+    assert "RD" not in CONST.battery_cases
+
+
+def test_a5_applies_the_drop_rule_to_development_cases_and_the_probe_is_not_judged(
+    harness,
+) -> None:
+    """Owner decision 14: a development case whose condition a run of the first seed cannot
+    complete 3 laps in either direction is dropped and A5 judges the rest; RD is only reported."""
+    go, out = harness
+    fake = FakeRunner(laps={"a_OD_cw_11": 1, "a_RD_ccw_11": 2, "c_RD_cw_11": 1})
+    argv = ["--cases", "P4,OD,RD", "--seeds", "11", "--workers", "1"]
+    assert go(fake, "dev-run", "--out", str(out), *argv) == 0
+    text = bb.dev_report_text(out)
+    assert "dropped {'OD': " in text and "a_OD_cw_11: 1 laps" in text
+    assert "A5: PASS" in text  # the dropped OD runs and the stalled RD runs do not count
+    assert "Stall probe RD" in text and "RD runs 4, stalled or short 2" in text
+    assert "Dropped by the rule" in text
+
+
+def test_a_stalled_judged_case_that_is_not_dropped_still_fails_a5(harness) -> None:
+    go, out = harness
+    fake = FakeRunner(laps={"c_P4_cw_11": 5})  # condition c stalls: not dropped by the rule
+    assert go(fake, "dev-run", "--out", str(out), "--cases", "P4", "--seeds", "11") == 0
+    assert "A5: FAIL" in bb.dev_report_text(out)

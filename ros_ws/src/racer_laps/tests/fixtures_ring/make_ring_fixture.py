@@ -1,36 +1,33 @@
-"""Cut the ring fixture of brief 50 from a lap node input dump (RUNNER_LAP_DUMP_DIR) of the
-simulator: development case P4 (stadium with no straight: lane 1.1 m, island radius 0.40 m, a ring),
-counter-clockwise, seed 11, condition a (D off at 0.5 m/s), `a_P4_ccw_11`, 4 truth laps.
+"""Cut a ring fixture (briefs 50 and 50b) from a lap node input dump (RUNNER_LAP_DUMP_DIR) of the
+simulator, development data: `a_P4_ccw_11` and `a_P4_cw_11` (stadium with no straight: lane 1.1 m,
+island radius 0.40 m, a ring; condition a, D off at 0.5 m/s, 4 truth laps), `c_ND_ccw_11` and
+`c_ND_cw_11` (near ring ND: straight 0.3 m, lane 1.0 m, island radius 0.5 m; condition c, D v0, 13
+truth laps).
 
-    python make_ring_fixture.py <dump.npz> <result.json> <out.npz> [<golden.json>]
+    python make_ring_fixture.py <dump.npz> <result.json> <out.npz> <laps>
 
-The fixture is the lap node's inputs from the start scan to a little over three truth laps: scans
+The fixture is the lap node's inputs from the start scan to a little over `laps` truth laps: scans
 (ranges quantised to 1 mm in uint16, 0 where there was no return), wheel odometry and gated steering,
-the start time of the lap and the yaw gains the run's lap node was given. With a fourth argument
-the golden of `test_l4_ring_fixture.py` is written: what gate v3 made of the fixture when it was
-cut (lap times, line sources), to be compared with a tolerance of 0.02 s and never refreshed to get
-a test green.
+the start time of the lap, the yaw gains the run's lap node was given and the truth lap times.
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 
 import numpy as np
 
-TAIL_S = 3.0  # kept after truth crossing 3: the system is a second late and decides 0.4 m on
-LAPS = 3
+TAIL_S = 3.0  # kept after the last truth crossing: the system is late and decides 0.4 m on
 
 
-def cut(dump: str, result: str, out: str) -> None:
+def cut(dump: str, result: str, out: str, laps: int) -> None:
     z = np.load(dump)
     with open(result) as f:
         doc = json.load(f)
     first = doc["system_lap_events"][0]
     start = first["t_cross_s"] - first["lap_time_s"]
-    end = float(doc["gt_lap_crossings_registered_s"][LAPS - 1]) + TAIL_S
+    end = float(doc["gt_lap_crossings_registered_s"][laps - 1]) + TAIL_S
     scan_t, scan_r = z["scan_t"], z["scan_r"]
     keep = (scan_t >= start - 0.5) & (scan_t <= end)
     ranges = np.nan_to_num(scan_r[keep].astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
@@ -49,31 +46,13 @@ def cut(dump: str, result: str, out: str) -> None:
         yaw_gains=np.array(
             [float(params["yaw_gain_override"]), float(params["yaw_gain_override_right"])]
         ),
-        truth_lap_s=np.array(doc["gt_lap_times_registered_s"][:LAPS]),
+        truth_lap_s=np.array(doc["gt_lap_times_registered_s"][:laps]),
     )
 
 
 def main(argv: list[str]) -> None:
-    dump, result, out = argv[:3]
-    cut(dump, result, out)
-    if len(argv) > 3:
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from test_l4_ring_fixture import replay
-
-        laps = replay()
-        Path(argv[3]).write_text(
-            json.dumps(
-                {
-                    "tolerance_s": 0.02,
-                    "n_laps": len(laps),
-                    "lap_times_s": [round(r.lap_time_s, 3) for r in laps],
-                    "lengths_m": [round(r.length_m, 3) for r in laps],
-                    "line_sources": [r.line_source for r in laps],
-                },
-                indent=1,
-            )
-            + "\n"
-        )
+    dump, result, out, laps = argv[:4]
+    cut(dump, result, out, int(laps))
 
 
 if __name__ == "__main__":

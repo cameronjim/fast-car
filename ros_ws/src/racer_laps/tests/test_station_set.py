@@ -204,6 +204,24 @@ def test_zone_creation_bound_and_expiry_after_two_laps() -> None:
     assert s.zones == ()
 
 
+def test_the_two_ends_of_a_zone_are_inside_it_whatever_the_float_rounding() -> None:
+    """The zone is [centre - length, centre]: both ends belong to it. The distance back to the
+    event of the end `centre - length` is `length` up to rounding (1.0000000000000002 for some
+    centres), which left that one station outside the zone and at v_safe + explore: the Hypothesis
+    example of test_guidance_property (seed 4) on main as well as on PR 210. Scanned over centres,
+    including ones near the lap end, where the station wraps."""
+    bad = []
+    for centre in np.arange(0.01, 3.0, 0.00137):
+        s = stored_long_lap()
+        z = s.add_zone(centre_m=float(centre), speed_mps=0.6, created_lap=1, reason="brake")
+        assert z is not None
+        edges = np.array([z.centre_m - z.length_m, z.centre_m])
+        b = s.v_bound(edges, 2, 0.5)
+        if not np.all(b <= 0.5 + 1e-9):
+            bad.append(round(float(centre), 5))
+    assert bad == []
+
+
 def test_in_a_zone_the_bound_never_exceeds_the_speed_driven_there_minus_0_1_and_has_no_step() -> (
     None
 ):

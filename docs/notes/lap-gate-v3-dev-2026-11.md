@@ -1,17 +1,116 @@
-# Lap gate v3: development acceptance (brief 50, PR A), 2026-11-17
+# Lap gate v3: development acceptance (brief 50 and its revision 50b, PR A), 2026-11-17
 
 Pre-registration: `docs/notes/preregistration-pnp-v0.5-laps-ring.md`, constants
 `evaluation/prereg/pnp-v0.5-laps-ring.yaml` (SHA-256
-`74b1dccd0d30910a7e96a45af65a00de62446902380bfb2bae76512d0498dc36`), committed alone as commit 1.
-Everything below is development: no R or Q case, no seed 61 to 63, nothing under `v0.5-b7/` was run
-or opened. Development runs are in `car-data/pnp/battery/v0.5-ring-dev/` (A5) and
-`v0.5-ring-dev-dumps/` (the fixture and a replay of ND). Code under test: gate v3 at the head of
-`feat/pnp-lap-keyframe-ring`, constants of the brief's table untouched.
+`74b1dccd0d30910a7e96a45af65a00de62446902380bfb2bae76512d0498dc36`), committed alone as commit 1 and
+not edited since. Owner decisions given (items 11 and 14 of `owner-decisions-2026-11-16.md`) are in
+`preregistration-pnp-v0.5-laps-ring-appendix-2026-11-17.md`. Everything below is development: no R or
+Q case, no seed 61 to 63, nothing under `v0.5-b7/` was run or opened.
 
-Result: A1, A2, A3, A4, A6 hold. **A5 fails** with the design built as written. By the stop rule of
-the pre-registration (7b) there is no freeze and no B8 run until the launcher decides.
+**Two rounds.** Round 1 (brief 50 as written, gate at `a90f38a`): A1 to A4 and A6 held, A5 failed;
+its numbers are kept below under "Round 1". Round 2 (brief 50b, design 20.5, this PR's head): the
+winding counts position, the alias verdict belongs to the place, one source per track. All six checks
+rerun on the revised gate; **A1 to A6 hold.** Development runs of round 2 are in
+`car-data/pnp/battery/v0.5-ring-dev-50b/` (with the lap node's dumps); round 1's in
+`v0.5-ring-dev/` and `v0.5-ring-dev-dumps/`.
 
-## A1: the synthetic ring on gate v2.1 (premise)
+## Round 2 (brief 50b)
+
+### Red first
+
+Three F tests (`tests/test_gate_v3b_f.py`) were committed red on PR 210's head (`6e99c4d`) before
+the fix: a ring whose car starts turned 0.23 rad against the tangent closes lap 1 3.3 percent late
+(12.33 s of 11.94 s; clockwise the same); with the steering gain 3 percent high or low every later
+lap is 3.1 and 3.3 percent off; two agreeing unique matches before the line closed by `start_scan`.
+Green on the revised gate.
+
+### Item 4: the prototype table, reproduced by the built gate (stop rule: it must be)
+
+Lap time minus truth, every lap by `winding` (`tests/test_l4_ring_fixture.py`, four fixtures cut by
+`fixtures_ring/make_ring_fixture.py` from the dumps, 0.4 to 1.6 MB):
+
+| dump | laps | prototype | built gate | lap 1 d_beta |
+|---|---|---|---|---|
+| a_P4_ccw_11 | 4 | +0.12 +0.09 -0.02 +0.21 | +0.12 +0.08 -0.03 +0.21 | +0.230 |
+| a_P4_cw_11 | 4 | +0.08 +0.01 -0.08 +0.08 | +0.07 +0.01 -0.08 +0.09 | -0.231 |
+| c_ND_ccw_11 | 13 | +0.19, then -0.06 to +0.10 | +0.20, then -0.06 to +0.10 | +0.167 |
+| c_ND_cw_11 | 13 | +0.16, then -0.08 to +0.09 | +0.17, then -0.08 to +0.10 | -0.180 |
+
+The built gate reproduces the table to 0.03 s (the brief allows 0.10 s). The attitude correction has
+the sign and size the design predicts (0.23 rad on the P4 ring).
+
+### A1 to A6
+
+| | result | numbers |
+|---|---|---|
+| A1 | PASS (as recorded) | F1 red on main, lap 1 at 10.95 s of 11.94 s, 91.7 percent of a lap |
+| A2 | PASS | racer_laps 472 passed, 2 skipped, coverage 90.6 percent (gate 90); l5_pnp_laps 411 passed (`lap_battery_b8` 98, `battery_b8` 94 percent); tools 90 passed in the files touched; registered_truth 14 passed. Nothing weakened; rewritten tests listed in the PR comment |
+| A3 | PASS | 13 of 13 dumps identical to v2.1 (0.000 s), all `start_scan`, alias share 0.000 |
+| A4 | PASS | 20 and 20 laps, 0.000 s from v2.1, 0 missed, all `start_scan`, alias share 0.000 |
+| A5 | PASS | 16 runs judged, count rule holds in all 16, 0 of 192 judged laps outside the class tolerance (limit 2 percent), largest error 0.25 s |
+| A6 | PASS | mean 5.41 ms, p99 16.51 ms over 22,803 scans (v2.1 measured the same way 3.14 and 14.97; the machine was not idle: other jobs ran) |
+
+A3 and A4 show that a placed track is proven before v2.1 would close: its crossings did not move.
+A6 is higher than round 1 (4.76 and 14.93) because lap 1 now computes a pair ICP on every scan.
+
+### A5, owner decision 14 (B8's drop rule applies to the development cases)
+
+Condition a, seed 11, either direction, fewer than 3 truth laps drops the case: **OD is dropped**
+(`a_OD_cw_11` 2 laps, stalled; the other three OD runs stalled too: a ccw 12 laps, c ccw 0, c cw 2).
+A5 judges the 16 P4 and ND runs:
+
+| run | count rule | laps outside | largest error s | sources | verdicts | lap 1 d_beta | pair share lap 1 |
+|---|---|---|---|---|---|---|---|
+| a_ND_ccw_11 | ok | none | 0.19 | winding 12 | aliased | +0.17 | 0.72 |
+| a_ND_cw_11 | ok | none | 0.17 | winding 13 | aliased | -0.18 | 0.72 |
+| a_P4_ccw_11, 12, 13 | ok | none | 0.20, 0.25, 0.19 | winding 12 | aliased | +0.23 | 0.67 |
+| a_P4_cw_11, 12, 13 | ok | none | 0.14, 0.13, 0.15 | winding 12 or 13 | aliased | -0.23 | 0.66 |
+| c_ND_ccw_11 | ok | none | 0.15 | winding 12 | aliased | +0.17 | 0.72 |
+| c_ND_cw_11 | ok | none | 0.11 | winding 13 | aliased | -0.18 | 0.72 |
+| c_P4_ccw_11, 12, 13 | ok | none | 0.09, 0.09, 0.18 | winding 13 | aliased | +0.23 | 0.67 |
+| c_P4_cw_11, 12, 13 | ok | none | 0.12, 0.10, 0.06 | winding 13 | aliased | -0.23 | 0.66 |
+
+The pair share is the share of lap 1's wheel distance wound on the pair rate (the first 2 m are on
+the steering rate); every later lap is wound entirely on it. The start scan is latched aliased on
+every run before the first closure. Several first attempts were starved by other load on the host
+(another builder's jobs and a stray process); they were rerun alone, every attempt kept.
+
+### RD stall probe (report only, decides nothing by rule)
+
+Case RD: ring, lane 1.2 m, island radius 0.50 m, one box 0.20 m into the lane at 0.35, seeds 11 to
+13, conditions a and c, both directions, 13 truth laps.
+
+- **No RD run stalled**: all 12 reached 13 truth laps, 0 contacts. The planner does not stall on a
+  box this size.
+- **The gate does not hold on RD in condition c.** Of the 12 runs, 10 are clean (winding, largest
+  error 0.06 to 0.29 s). `c_RD_ccw_11` and `c_RD_ccw_12` are not: the start scan is called proven
+  (the box, close to the start, makes its matches unique), laps close by `start_scan` and `anchor`
+  with errors up to 1.67 and 1.32 s, 3 and 4 laps flagged missed gate, 13 crossings by truth crossing
+  12 plus half a lap (the count rule broken). `a_RD_ccw_11` is mixed too (one `start_scan` lap, then
+  latched aliased, 11 winding laps, all within tolerance).
+
+R3 has the same geometry class (a 0.20 m box in a 1.2 m lane) and is a B8 case. If R3's box sits
+where the start scan sees it, the same failure is a risk for D8-S0. I did not look into it further
+(report only). It is for the launcher and the owner before any freeze.
+
+## What the build found in round 2
+
+- The pair centre is the fixed point of the match of a scan to the one 0.4 m back; on the P4 ring it
+  is (0.00, 0.95) within 0.05 m from any seed along the valley, clockwise (0.00, -0.95). A straight
+  gives none (the match yaw is under 0.1 rad) and the steering rate is used.
+- The attitude correction `d_beta` is +0.23 rad ccw and -0.23 cw on P4, +0.17 and -0.18 on ND.
+  The sign, as written in the brief, gives the prototype table.
+- `kf_seed_yaw` is no longer a flag: the seed always takes the odometry's yaw. `kf_retire_visits`
+  is gone; an aliased keyframe (3 ambiguous, over a quarter, over its life) is retired.
+- The brief's constants table lists `kf_seed_yaw | true`; its text says no flag stays behind. I
+  followed the text.
+- A stadium whose start scan is latched aliased (a violation limit of 0.04 on the T2 alias input, which
+  is not the registered 0.02) now closes by winding, and winding on a stadium with straights is not the
+  line. The rewritten fixture test says so; the registered limit does not do it.
+
+## Round 1 (brief 50 as written, the gate of `a90f38a`; A5 failed)
+
+### A1: the synthetic ring on gate v2.1 (premise)
 
 F1 (`tests/test_gate_v3_f.py`, island 0.40 m, lane 1.1 m, 0.5 m/s, exact odometry, 5.97 m round,
 11.94 s per lap): on main (71ae56d) lap 1 closes at 10.95 s, 91.7 percent of a lap (the brief:
@@ -23,7 +122,7 @@ lost. The second F test (every scan within 0.6 m of the line of lap 3 has odomet
 was red on main as well: lap 3 lost, the next closure flagged missed; on v3 it closes by `anchor`
 within 0.05 s of the clean run's crossing.
 
-## A2: existing tests and goldens
+### A2: existing tests and goldens
 
 | suite | result |
 |---|---|
@@ -49,12 +148,12 @@ Changed expectations (setup, not thresholds), listed with the reason in the PR c
   same two flags: v3's uniqueness test rejects the 2 m alias by itself, so with 0.04 it no longer
   closes early. A companion test asserts that v3 closes lap 1 at the line even with 0.04.
 
-## A3: the 13 dumps of `v0.5-lap3-dev`
+### A3: the 13 dumps of `v0.5-lap3-dev`
 
 Every lap time is identical to v2.1's (largest difference 0.000 s), every `line_source` is
 `start_scan`, start alias share 0.000 in every lap, 5 laps each: PASS (13 of 13, N1 ccw and N2 cw).
 
-## A4: the two car bags, full replay
+### A4: the two car bags, full replay
 
 | bag | laps v3 | laps v2.1 | largest lap difference | missed | sources | alias share |
 |---|---|---|---|---|---|---|
@@ -63,7 +162,7 @@ Every lap time is identical to v2.1's (largest difference 0.000 s), every `line_
 
 PASS.
 
-## A5: development sim runs (conditions a and c, both directions)
+### A5: development sim runs (conditions a and c, both directions)
 
 P4 seeds 11 to 13 (12 runs), OD and ND seed 11 (8 runs), 13 truth laps each, B7 command, aliased
 class tolerance (the larger of 0.3 s and 4 percent of the lap). Starved attempts were rerun alone
@@ -123,7 +222,7 @@ errors as they are; `kf_spacing_m` 0.25 with `kf_window_m` 0.15 brings the ancho
 0.35 s except laps 1 and 3 (lap 1 +0.48, lap 3 -0.77). Lap 1 of the ccw P4 runs does not depend on
 any of them.
 
-## A6: cost over the replays of A3 and A4 (development machine idle)
+### A6: cost over the replays of A3 and A4 (development machine idle)
 
 All 22 803 scans after the start scan of the 13 dumps and the two bags:
 
@@ -137,7 +236,7 @@ Limits: mean at most 12 ms, p99 at most 25 ms: PASS. Armed scans of the car bags
 about 8.3 kB in float32, 120 of them 1.0 MB (a test). The Orin Nano is not measured: item (v) of
 D8-C0 is.
 
-## `pnp_session lap-c0` on the two 2026-11-16 bags (`--replay`, REGRESSION, NOT A GATE)
+### `pnp_session lap-c0` on the two 2026-11-16 bags (`--replay`, REGRESSION, NOT A GATE)
 
 Not the registered procedure (not observe mode, not one per direction): a regression record that
 decides nothing. The reference validity rule, applied to the camera counter, says what the notes
@@ -149,7 +248,7 @@ missed, laps 2 to 20 within 0.14 s of the camera's, and the crossing instants si
 0.28 to 0.42 s before the camera's (the offset lap 1 is judged against). Recorded events (without
 `--replay`) are not in these bags: the lap node did not run, so the items read INSUFFICIENT.
 
-## What the build found that the brief did not say
+### What the build found that the brief did not say
 
 - **No displaced scan is "unknown", not "ambiguous".** Counting a match with no scan 0.4 m back as
   ambiguous made a stadium aliased as soon as scans dropped out (a property test with 75 percent of
@@ -174,7 +273,7 @@ missed, laps 2 to 20 within 0.14 s of the camera's, and the crossing instants si
   "line - truth m" before the line is the table's own artefact (`total_at` asked for a truth
   crossing in the future), as the brief says.
 
-## Not done
+### Not done (round 1)
 
 Nothing after A6: no freeze file, no B8 case, no seed 61 to 63. PR 207 (the B7 result) was still
 open when this branch was cut from `origin/main` (71ae56d); the two PRs touch no common file.

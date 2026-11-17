@@ -204,6 +204,12 @@ class GateConfig:
     unique_shift_m: float = 0.4
     unique_shift_tol_m: float = 0.1
     unique_same_m: float = 0.2
+    #: Brief 50c: a match is unique only if the displaced scan, at the same pose, is worse by at
+    #: least this much free-space violation than the match itself. The brief's 0.035 (between the
+    #: largest gap of an alias on the box ring, 0.031, and the smallest of a real place, 0.040)
+    #: latched a stadium with a 5 m straight aliased (gaps 0.029 to 0.039: gate v2's long straight
+    #: tests failed): 0.0325 holds both that stadium and the box ring.
+    unique_gap: float = 0.0325
     alias_max_share: float = 0.25
     alias_min_scans: int = 3
     kf_spacing_m: float = 0.5
@@ -221,8 +227,10 @@ class GateConfig:
     #: Start-scan matches (with a valid centre) needed for the attitude correction of lap 1.
     attitude_min_scans: int = 5
     #: Unique matches that prove a reference (a start scan or a keyframe): a crossing or a fix needs
-    #: a proven reference.
-    proof_min_unique: int = 6
+    #: a proven reference. 50b's 6 is 4 here: at 3 m/s (the L3 harness, above the car's ceiling) a
+    #: stadium approach gives 3 to 4 matches, the closure waited 1.5 s and lap 1 was placed 0.8 s late;
+    #: the 28 RD, ND and P4 dumps are as clean with 4 (brief 50c: tunable).
+    proof_min_unique: int = 4
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.wheelbase_m) and self.wheelbase_m > 0.0):
@@ -235,7 +243,12 @@ class GateConfig:
             raise ValueError("strong_max_violation must be in [0, 1], consensus_window_m positive")
         if self.consensus_past_m < 0.0 or self.consensus_wait_s < 0.0:
             raise ValueError("consensus_past_m and consensus_wait_s must not be negative")
-        if self.unique_shift_m < 0.0 or self.unique_shift_tol_m < 0.0 or self.unique_same_m <= 0.0:
+        if (
+            self.unique_shift_m < 0.0
+            or self.unique_shift_tol_m < 0.0
+            or self.unique_same_m <= 0.0
+            or self.unique_gap < 0.0
+        ):
             raise ValueError("unique_shift_m and unique_shift_tol_m must not be negative")
         if not (0.0 <= self.alias_max_share <= 1.0) or self.alias_min_scans < 1:
             raise ValueError("alias_max_share must be in [0, 1], alias_min_scans at least 1")
@@ -419,6 +432,8 @@ class StartScanGate:
         self._psi_pair_m = 0.0  # wheel distance wound on the pair rate this lap, and in all
         self._psi_all_m = 0.0
         self.lap_verdicts: list[str] = []
+        self.gaps_unique: list[float] = []  # start-scan matches: displaced minus own violation
+        self.gaps_ambiguous: list[float] = []
         self.lap_pair_shares: list[float] = []
         self.lap1_d_beta = 0.0
         self.line_sources: list[str] = []
@@ -662,6 +677,7 @@ class StartScanGate:
         self._d_beta = 0.0
         self._psi_pair_m = self._psi_all_m = 0.0
         self.lap_verdicts, self.lap_pair_shares = [], []
+        self.gaps_unique, self.gaps_ambiguous = [], []
         self.lap1_d_beta = 0.0
         self.line_sources = []
         self.missed_laps = []
@@ -969,15 +985,6 @@ class StartScanGate:
 
     # -- gate v3: uniqueness, keyframes, placing the crossing --------------------------------
 
-    def _strong(self, res: MatchResult, source: FloatArray, ref: Ref) -> bool:
-        """STRONG as for the start scan: accepted, along-lane offset observable, free-space
-        violation at most `strong_max_violation` (the violation filled in by the caller)."""
-        return (
-            self._accept(res)
-            and res.freespace_violation <= self.cfg.strong_max_violation
-            and self._supported(source, res, ref)
-        )
-
     def _remember(self, now: _Sample, points: FloatArray) -> None:
         """Keep the scan for the uniqueness test: the last `UNIQUE_BUFFER_M` of wheel distance, at
         most one scan per `UNIQUE_BUFFER_M / UNIQUE_BUFFER_MAX` of it (a car that stands must not
@@ -1001,28 +1008,35 @@ class StartScanGate:
             self._scans.popleft()
 
     def _displaced(self, total_m: float) -> _ScanRec | None:
-        """The buffered scan nearest `unique_shift_m` of wheel distance before `total_m`, within
-        `unique_shift_tol_m`."""
+        """The buffered scan whose wheel distance behind `total_m` is nearest `unique_shift_m`,
+        among those more than `unique_shift_m - unique_shift_tol_m` behind. Up to 2.0 m/s at 10 Hz
+        that is the scan within `unique_shift_tol_m` of `unique_shift_m` back; above it the nearest
+        scan further back (a larger displacement makes a real place more distinct and leaves a ring
+        ambiguous) instead of none. None under that much travel."""
         c = self.cfg
-        target = total_m - c.unique_shift_m
+        near = c.unique_shift_m - c.unique_shift_tol_m + 1e-9  # more than 0.3 m, not 0.3 m
         best: _ScanRec | None = None
         best_d = math.inf
         for rec in self._scans:
-            d = abs(rec.total_m - target)
+            behind = total_m - rec.total_m
+            if behind < near:
+                continue
+            d = abs(behind - c.unique_shift_m)
             if d < best_d:
                 best, best_d = rec, d
-        if best is None or best_d > c.unique_shift_tol_m:
-            return None
         return best
 
     def _classify(self, res: MatchResult, ref: Ref, total_m: float) -> str:
-        """The uniqueness test. Match the scan taken `unique_shift_m` earlier against the same
-        reference, seeded with `res`'s pose, one ICP. If that is accepted, STRONG and within
-        `unique_same_m` of `res` along and across, a scan taken 0.4 m away fits the reference at
-        the same pose: `AMBIGUOUS`. Otherwise `UNIQUE`. With no displaced scan (the first 0.4 m,
-        standstill, dropped scans) the match is not unique, and not ambiguous either: `UNKNOWN`
-        (it cannot place a crossing and it is no evidence for the alias verdict; counting it as
-        ambiguous would call a stadium aliased whenever scans drop out)."""
+        """The uniqueness test. Match the displaced scan (about `unique_shift_m` of wheel distance
+        earlier) against the same reference, seeded with `res`'s pose, one ICP.
+
+        Not accepted: `UNIQUE`. Accepted but more than `unique_same_m` from `res` along or across:
+        `UNIQUE`. Accepted at the same pose: its free-space violation against `res`'s own; at
+        least `unique_gap` above it `UNIQUE`, below it `AMBIGUOUS`, whether the displaced scan
+        passes STRONG or not (a near miss of the limit is not proof: brief 50c). With no displaced
+        scan (the first 0.3 m, standstill, dropped scans) the match is not unique and not
+        ambiguous either: `UNKNOWN` (no evidence for the alias verdict; counting it as ambiguous
+        would call a stadium aliased whenever scans drop out)."""
         c = self.cfg
         rec = self._displaced(total_m)
         if rec is None:
@@ -1037,16 +1051,18 @@ class StartScanGate:
         )
         if other is None or not self._accept(other):
             return UNIQUE
-        other = replace(
-            other, freespace_violation=self._freespace(other, rec.points, ref, rec.dense)
-        )
-        if not self._strong(other, rec.thin, ref):
-            return UNIQUE
         same = (
             abs(other.x_m - res.x_m) < c.unique_same_m
             and abs(other.y_m - res.y_m) < c.unique_same_m
         )
-        return AMBIGUOUS if same else UNIQUE
+        if not same:
+            return UNIQUE
+        violation = self._freespace(other, rec.points, ref, rec.dense)
+        gap = violation - res.freespace_violation
+        unique = gap >= c.unique_gap - 1e-12
+        if ref is self._start:  # reported: the lane between the two is what `unique_gap` stands in
+            (self.gaps_unique if unique else self.gaps_ambiguous).append(gap)
+        return UNIQUE if unique else AMBIGUOUS
 
     def _is_unique(self, res: MatchResult, ref: Ref, total_m: float) -> bool:
         return self._classify(res, ref, total_m) == UNIQUE
@@ -1427,6 +1443,10 @@ class StartScanGate:
             out["lap_start_verdicts"] = list(self.lap_verdicts)
             out["lap_pair_shares"] = list(self.lap_pair_shares)
             out["lap1_d_beta_rad"] = self.lap1_d_beta
+            gu, ga = self.gaps_unique, self.gaps_ambiguous
+            out["unique_gap_min"] = min(gu) if gu else math.nan
+            out["unique_gap_median"] = float(np.median(gu)) if gu else math.nan
+            out["ambiguous_gap_max"] = max(ga) if ga else math.nan
         return out
 
     @property

@@ -10,9 +10,53 @@ Q case, no seed 61 to 63, nothing under `v0.5-b7/` was run or opened.
 **Two rounds.** Round 1 (brief 50 as written, gate at `a90f38a`): A1 to A4 and A6 held, A5 failed;
 its numbers are kept below under "Round 1". Round 2 (brief 50b, design 20.5, this PR's head): the
 winding counts position, the alias verdict belongs to the place, one source per track. All six checks
-rerun on the revised gate; **A1 to A6 hold.** Development runs of round 2 are in
+rerun on the revised gate; **A1 to A6 hold** (round 3 below reruns them with C1 and C2). Development runs of round 2 are in
 `car-data/pnp/battery/v0.5-ring-dev-50b/` (with the lap node's dumps); round 1's in
 `v0.5-ring-dev/` and `v0.5-ring-dev-dumps/`.
+
+## Round 3 (brief 50c: the box ring RD), the head of this PR
+
+Round 2 left RD (a ring with one box the start scan sees) failing in two condition c runs. Root cause
+(50c): the uniqueness test booked a near miss of STRONG as proof. Now a match is unique only if the
+displaced scan, at the same pose, is worse than the match itself by at least `unique_gap` of
+free-space violation (`gate._classify`); the displaced scan is the buffered one nearest 0.4 m back among
+those more than 0.3 m back (above 2.0 m/s the nearest further back instead of none).
+
+**Tuned constants (listed, under 50c's rule):** `unique_gap` 0.0325 (brief 0.035): at 0.035 a stadium
+with a 5 m straight (gaps 0.029 to 0.039, gate v2's long straight tests) latched aliased and wound; 0.0325
+keeps that stadium, the box ring (alias gaps up to 0.031) and the placed tracks (0.040 and more).
+`proof_min_unique` 4 (50b: 6): at 3.0 m/s a stadium approach gives 3 to 4 matches, lap 1 waited 1.5 s
+and was placed 0.8 s late; all 28 RD, ND and P4 dumps are as clean with 4. The displaced scan must be
+*more than* 0.3 m back (not 0.3): the brief's table has 0.30 m spacing giving 0.6 m back; at exactly 0.3
+the nearer scan would have been taken, whose smaller displacement shows a smaller gap.
+The L3 harness is back at 3.0 m/s (and passes there).
+
+**Red first** (`3514a27`, on the head before the fix): the near-miss classification (unique, should be
+ambiguous), the RD ccw dump (`start_scan` on lap 1) and a stadium at 3.0 m/s (2 of 3 laps) were red.
+
+| | result | numbers |
+|---|---|---|
+| A1 | PASS (as recorded) | F1 red on main, 91.7 percent of a lap |
+| A2 | PASS | racer_laps 507 passed, 2 skipped, coverage 90.65 percent; L3 node tests 26 passed in ros-dev at 3.0 m/s; stadium, alias and car fixtures unchanged |
+| A3 | PASS | 13 of 13 dumps identical to v2.1 (0.000 s); smallest unique gap per dump 0.040 to 0.064, no ambiguous match |
+| A4 | PASS | 20 and 20 laps, 0.000 s from v2.1, 0 missed; the displaced scan does not fit at all (no gap) |
+| A5 | PASS | live, 16 P4 and ND runs (OD dropped by the rule), count rule in all, 0 of 192 laps outside, largest error 0.20 s |
+| A6 | PASS | mean 5.56 ms, p99 17.14 ms over 22,803 scans (v2.1 3.24 and 15.46; host not idle) |
+| C1 | PASS | 12 fresh RD runs: 13 laps each, count rule holds, 0 of 144 outside, none missed, one source (winding) per run, largest error 0.21 s |
+| C2 | PASS | the 12 recorded RD dumps: all winding, none outside, none missed, largest errors 0.06 to 0.30 s |
+
+Violation gaps (reported, no rule): the lane between a real place and an alias is thin. Placed tracks
+A3: smallest unique gap 0.040 to 0.064 per dump; below 0.045 in `c_N1_ccw_21__r2` (0.041), `c_N1_ccw_22` and its `__r3` and `__r4` (0.043) and `c_N1_ccw_23` (0.040); no ambiguous match in any. RD: largest ambiguous gap 0.031
+(`c_RD_ccw_11`), above the brief's 0.030 mark. ND (a near ring that is latched aliased in every run):
+unique gaps from 0.033 and ambiguous up to 0.031, so ND sits on `unique_gap` itself; the verdict
+needs a quarter of matches ambiguous, which it has (latched in every run). The stadium with a 5 m
+straight sits at 0.029 to 0.039 and is the reason for 0.0325.
+
+Other: the ring cost guard of `test_gate_v3_ring.py` was a wall-clock bound (60 ms) that read 72 ms on a
+slow shared runner; it now counts ICP calls per scan (never a keyframe search, at most 8 per scan, mean
+at most 4). Not a regression: A6 above is 5.56 mean and 17.14 p99 here. A guidance-property test
+(`test_guidance_property.py`, seed 4) failed on main and on this PR for a float rounding at a caution
+zone's edge; fixed in `station_set.py` (test red first).
 
 ## Round 2 (brief 50b)
 

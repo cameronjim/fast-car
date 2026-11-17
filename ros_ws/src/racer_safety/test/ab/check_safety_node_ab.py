@@ -3,8 +3,9 @@
 Runs safety_node_ab_driver, which feeds one scripted input sequence of 2400 gate cycles under a
 manual clock (see that file's header), through:
 
-  A  the frozen copy of main's safety_node.cpp (test/ab/reference/), run twice: the two runs
-     must agree, which proves the harness itself is deterministic
+  A  the frozen copy of main's safety_node.cpp plus brief 49's credit threading
+     (test/ab/reference/), run twice: the two runs must agree, which proves the harness itself is
+     deterministic
   B  this branch's safety_node.cpp, publish_cycle_record false (the default)
   C  this branch's safety_node.cpp, publish_cycle_record true
   D  as C with the /safety/cycle publish made to throw on every cycle
@@ -14,8 +15,8 @@ the /safety/events sequence (source, phase, severity, duration bits, detail) to 
 all of them. It also checks that the script really exercises each gate, that every C record
 matches the script, and that D loses no /drive and no event and counts every failure.
 
-Nothing here is a golden: A is computed on every run from a source file whose git blob hash is
-pinned below, so it is main's file and nothing else. Never edit that file or the hash.
+Nothing here is a golden: A is computed on every run from a source file whose blob hash is
+pinned below, so it is that file and nothing else. Never edit that file or the hash.
 """
 
 from __future__ import annotations
@@ -26,9 +27,16 @@ import pathlib
 import subprocess
 import sys
 
-# git hash-object of ros_ws/src/racer_safety/src/safety_node.cpp on origin/main at f5db7f1, the
-# commit this branch was cut from. The reference copy must be that file, byte for byte.
-MAIN_SAFETY_NODE_BLOB_SHA1 = "8539839f73a85fe1f21f2328fb1cc4a2985b7698"
+# The reference copy is f5db7f1's safety_node.cpp plus brief 49's credit threading, and nothing
+# else. f5db7f1 is the commit brief 45 was cut from; the blob hash of its safety_node.cpp was
+# 8539839f73a85fe1f21f2328fb1cc4a2985b7698. Brief 49 added the rate credit to the gate library
+# (gate_logic.hpp "RATE CREDIT") and the same threading edits to both node files (two credit
+# members, two inputs and two outputs of the gate call, the reset to 0 on the fault path), so that
+# A = B = C = D still holds with the credit threaded on both sides. A reference that did not thread
+# the credit would run the old rule against the branch's new one and differ at the first stalled
+# cycle, which is the change, not a regression. The copy must be this file, byte for byte. Never
+# edit it again, and never edit the hash without the owner.
+MAIN_SAFETY_NODE_BLOB_SHA1 = "63ae49fe0939e1afae7912db224e1fd96c658cb4"
 
 # Every gate the script must engage at least once, as /safety/events sources.
 REQUIRED_SOURCES = (
@@ -61,6 +69,21 @@ def run(exe: str, out: pathlib.Path, *flags: str) -> list[str]:
 
 def gated(lines: list[str]) -> list[str]:
     return [line for line in lines if line.startswith(("D ", "E "))]
+
+
+# Brief 49's rate credit scenarios (see run_scenario in safety_node_ab_driver.cpp): scripted event
+# lists with late and catch-up cycles. Each is played through the reference (A), the branch (B) and
+# the branch with the cycle record on (C), which must agree on /drive, /safety/events and the
+# node's two credits, and the branch's own expectations must all PASS.
+SCENARIOS = {
+    "credit_ramp": 3,
+    "credit_fault": 3,
+    "credit_nofault": 3,
+}
+
+
+def scenario_lines(lines: list[str]) -> list[str]:
+    return [line for line in lines if line.startswith(("D ", "E ", "C "))]
 
 
 def first_difference(a: list[str], b: list[str]) -> str:
@@ -143,6 +166,22 @@ def main() -> None:
         summary.append(
             "C identical, records match the script, D identical with every record failing"
         )
+
+    for name, expected_checks in SCENARIOS.items():
+        sa = run(args.ref, work / f"{name}_a.txt", "--scenario", name)
+        sb = run(args.branch, work / f"{name}_b.txt", "--scenario", name)
+        require_identical(f"scenario {name}, B against A", scenario_lines(sa), scenario_lines(sb))
+        if args.have_cycle:
+            sc = run(args.branch, work / f"{name}_c.txt", "--scenario", name, "--cycle-record")
+            require_identical(
+                f"scenario {name}, C against A", scenario_lines(sa), scenario_lines(sc)
+            )
+        checks = [line for line in sb if line.startswith("CHECK ")]
+        failed = [line for line in checks if not line.endswith(": PASS")]
+        if len(checks) != expected_checks or failed:
+            detail = "\n".join(line for line in sb if not line.startswith(("D ", "C ")))
+            sys.exit(f"FAIL scenario {name}: {len(checks)} checks, failed: {failed}\n{detail}")
+        summary.append(f"{name} {len(checks)} checks pass")
 
     print("PASS bit-identical /drive and /safety/events:", ", ".join(summary))
 

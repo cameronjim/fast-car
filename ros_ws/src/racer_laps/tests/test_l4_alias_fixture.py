@@ -117,3 +117,11 @@ def test_gate_v3_does_not_place_the_alias_by_the_start_scan_even_with_the_design
         pytest.skip("gate v2.1 has no uniqueness test")
     laps = replay(strong_max_violation=0.04)
     assert laps and laps[0].line_source != "start_scan"
+
+
+def test_at_the_registered_0_02_lap_1_of_the_alias_input_closes_at_the_line_by_start_scan() -> None:
+    """The system under test is the registered limit: with it lap 1 of the 5 m straight input
+    closes at the start line by the start scan, as gate v2.1 does (brief 50c)."""
+    laps = replay()
+    assert laps and laps[0].line_source == "start_scan" and not laps[0].missed_gate
+    assert laps[0].length_m == pytest.approx(LOOP_WHEEL_M, abs=0.45)

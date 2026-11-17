@@ -527,6 +527,37 @@ def _count_by_source(events: list[tuple]) -> dict:
     return out
 
 
+def write_event_trace(args, work: Path, trace: dict, t_first: float) -> None:
+    """With RACER_EVENT_TRACE_DIR set, writes <dir>/<case>.json.gz: /drive_raw and /drive as
+    [stamp, received, steering, speed], /safety/events as [stamp, received, source, phase,
+    severity, detail] (the rate_limit detail carries the gate's dt) and the planner status as
+    [stamp, received, state], all in seconds with t_first (the first odometry) given so a time can
+    be read the way the result's safety_events are. Diagnostics only: nothing here is asserted,
+    and without the variable nothing is written. The case name is the pytest temp directory the
+    runner was started under (one per test case)."""
+    directory = os.environ.get("RACER_EVENT_TRACE_DIR")
+    if not directory:
+        return
+    import gzip
+
+    out_dir = Path(directory)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    case = work.parent.name if work.parent.name else "case"
+    stalls = (
+        "stalls"
+        if "debug_stall_profile" in str(getattr(args, "planner_params_json", ""))
+        else "nostalls"
+    )
+    label = (
+        f"{args.track}-{'cw' if args.reverse else 'ccw'}-v{args.v_max_mps}-{stalls}"
+        f"-{getattr(args, 'car', '')}-{getattr(args, 'backend', '')}"
+    )
+    payload = {"case": case, "label": label, "t_first_s": t_first, **trace}
+    stamp = time.strftime("%H%M%S")
+    with gzip.open(out_dir / f"{label}-{case}-{stamp}.json.gz", "wt") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+
+
 def pnp_timing_summary(recording, planner_status: list[tuple[float, int]]) -> dict:
     """What the planner's timing acceptance counts (pre-registration 4.1 and 4.2):
 
@@ -929,20 +960,53 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 )
             )
 
+    # Arrival trace for offline diagnosis (RACER_EVENT_TRACE_DIR, see write_event_trace): the stamp
+    # of each message next to the time it reached this node, on the node's clock (sim time).
+    trace: dict[str, list] = {"drive_raw": [], "drive": [], "events": [], "planner": []}
+
+    def received_s() -> float:
+        return node.get_clock().now().nanoseconds * 1e-9
+
     def on_drive_raw(msg) -> None:
         recording.drive_raw.append(
             (base._stamp_s(msg.header.stamp), msg.drive.speed, msg.drive.steering_angle)
+        )
+        trace["drive_raw"].append(
+            (
+                base._stamp_s(msg.header.stamp),
+                received_s(),
+                msg.drive.steering_angle,
+                msg.drive.speed,
+            )
         )
 
     def on_drive(msg) -> None:
         recording.drive.append(
             (base._stamp_s(msg.header.stamp), msg.drive.speed, msg.drive.steering_angle)
         )
+        trace["drive"].append(
+            (
+                base._stamp_s(msg.header.stamp),
+                received_s(),
+                msg.drive.steering_angle,
+                msg.drive.speed,
+            )
+        )
 
     event_details: list[dict] = []
 
     def on_event(msg) -> None:
         recording.events.append((base._stamp_s(msg.stamp), msg.source, msg.phase, msg.severity))
+        trace["events"].append(
+            (
+                base._stamp_s(msg.stamp),
+                received_s(),
+                msg.source,
+                int(msg.phase),
+                int(msg.severity),
+                msg.detail,
+            )
+        )
         if msg.phase == 0 and len(event_details) < 40:
             event_details.append(
                 {"t_s": base._stamp_s(msg.stamp), "source": msg.source, "detail": msg.detail}
@@ -998,6 +1062,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     def on_planner_status(msg) -> None:
         planner_states.append(msg.state)
         planner_status.append((base._stamp_s(msg.header.stamp), msg.state))
+        trace["planner"].append((base._stamp_s(msg.header.stamp), received_s(), int(msg.state)))
 
     if args.driver == "pnp":
         from racer_pnp_msgs.msg import LapEvent, LapGuidance, PlannerStatus
@@ -1382,6 +1447,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     result["oracle_start_s"] = oracle.truth_start_t
                     result["lap_truth_faults"] = json.loads(args.lap_truth_faults_json)
         t_first = recording.odom[0][0] if recording.odom else 0.0
+        write_event_trace(args, work, trace, t_first)
         if os.environ.get("RUNNER_TRACE_NPZ"):
             # Diagnostics only: the command stream and the events, for timing analysis offline.
             np.savez(

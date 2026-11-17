@@ -35,6 +35,8 @@ A4_LAPS = 20
 A4_MAX_LAP_DIFF_S = 0.10
 A6_MEAN_MS = 12.0
 A6_P99_MS = 25.0
+GAP_PLACED_MIN = 0.045  # reported, no rule: a placed track below this, or an RD gap above 0.030
+GAP_RD_MAX = 0.030
 
 
 @dataclass
@@ -62,6 +64,15 @@ def percentile(values: list[float], q: float) -> float:
     return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
 
 
+def _dump_path(dump_dir: Path, name: str, result: dict[str, Any]) -> Path:
+    """`DIR/dumps/NAME.npz`, or the dump of the accepted attempt (`NAME.attempt<k>.npz`)."""
+    plain = dump_dir / "dumps" / f"{name}.npz"
+    if plain.exists():
+        return plain
+    k = int((result.get("battery_b8") or {}).get("accepted_attempt", 1))
+    return dump_dir / "dumps" / f"{name}.attempt{k}.npz"
+
+
 def replay_dump(dump_dir: Path, name: str, v21: bool) -> Replayed:
     """One dump (`DIR/dumps/NAME.npz` with `DIR/NAME.json` beside it) through the engine."""
     import numpy as np
@@ -72,7 +83,7 @@ def replay_dump(dump_dir: Path, name: str, v21: bool) -> Replayed:
     from racer_laps.vehicle import load_live_vehicle
 
     result = json.loads((dump_dir / f"{name}.json").read_text())
-    z = np.load(dump_dir / "dumps" / f"{name}.npz")
+    z = np.load(_dump_path(dump_dir, name, result))
     params = result["lap_params"]
     left = float(params["yaw_gain_override"])
     right = float(params["yaw_gain_override_right"])
@@ -186,6 +197,17 @@ def lap_diffs(a: Replayed, b: Replayed) -> list[float]:
     return out
 
 
+def gap_numbers(r: Replayed) -> dict[str, Any]:
+    """Reported with no rule (brief 50c): the smallest and median violation gap of the start-scan
+    matches called unique and the largest of those called ambiguous."""
+    st = r.status
+    return {
+        "gap_unique_min": st.get("unique_gap_min", math.nan),
+        "gap_unique_median": st.get("unique_gap_median", math.nan),
+        "gap_ambiguous_max": st.get("ambiguous_gap_max", math.nan),
+    }
+
+
 def a3_verdict(v3: Replayed, v21: Replayed) -> tuple[bool, dict[str, Any]]:
     diffs = lap_diffs(v3, v21)
     worst = max((abs(d) for d in diffs), default=0.0)
@@ -203,6 +225,7 @@ def a3_verdict(v3: Replayed, v21: Replayed) -> tuple[bool, dict[str, Any]]:
         "max_abs_diff_s": worst,
         "sources": sources,
         "max_alias_share": share,
+        **gap_numbers(v3),
     }
 
 
@@ -219,6 +242,35 @@ def a4_verdict(v3: Replayed, v21: Replayed) -> tuple[bool, dict[str, Any]]:
         "missed": missed,
         "sources": sorted({lap.line_source for lap in v3.laps}),
         "max_alias_share": max((lap.alias_share for lap in v3.laps), default=0.0),
+        **gap_numbers(v3),
+    }
+
+
+def c2_verdict(r: Replayed, truth_laps_s: list[float]) -> tuple[bool, dict[str, Any]]:
+    """C2 of brief 50c on one recorded RD dump: every lap by `winding`, none outside the aliased
+    tolerance (the larger of 0.3 s and 4 percent of the truth lap), none missed."""
+    errors = [lap.lap_time_s - t for lap, t in zip(r.laps, truth_laps_s, strict=False)]
+    outside = [
+        k + 1
+        for k, (e, t) in enumerate(zip(errors, truth_laps_s, strict=False))
+        if abs(e) > max(0.3, 0.04 * t)
+    ]
+    sources = sorted({lap.line_source for lap in r.laps})
+    missed = sum(1 for lap in r.laps if lap.missed)
+    ok = (
+        bool(r.laps)
+        and len(r.laps) >= len(truth_laps_s) - 1
+        and sources == ["winding"]
+        and not outside
+        and missed == 0
+    )
+    return ok, {
+        "laps": len(r.laps),
+        "sources": sources,
+        "outside": outside,
+        "missed": missed,
+        "largest_error_s": max((abs(e) for e in errors), default=math.nan),
+        **gap_numbers(r),
     }
 
 
@@ -254,7 +306,7 @@ def _table(rows: list[tuple[str, bool, dict[str, Any]]]) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("check", choices=["a3", "a4", "a6"])
+    parser.add_argument("check", choices=["a3", "a4", "a6", "c2"])
     parser.add_argument("--dumps", type=Path, help="DIR with NAME.json and dumps/NAME.npz")
     parser.add_argument("--bag", type=Path, action="append", default=[])
     args = parser.parse_args(argv)
@@ -262,6 +314,15 @@ def main(argv: list[str] | None = None) -> int:
     ok_all = True
     timed: list[Replayed] = []
     timed_v21: list[Replayed] = []
+    if args.check == "c2":
+        rows = []
+        for name in sorted(p.stem for p in args.dumps.glob("*_RD_*.json")):
+            doc = json.loads((args.dumps / f"{name}.json").read_text())
+            truth = [float(t) for t in doc["gt_lap_times_registered_s"][:12]]
+            ok, d = c2_verdict(replay_dump(args.dumps, name, v21=False), truth)
+            rows.append((name, ok, d))
+        lines += ["C2: the recorded RD dumps through the built gate", ""] + _table(rows)
+        ok_all = len(rows) == 12 and all(ok for _n, ok, _d in rows)
     if args.check in ("a3", "a6") and args.dumps is not None:
         names = sorted(p.stem for p in (args.dumps / "dumps").glob("*.npz"))
         rows = []

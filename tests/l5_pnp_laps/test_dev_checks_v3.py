@@ -104,3 +104,29 @@ def test_lap_diffs_pairs_laps_by_order() -> None:
 def test_percentile_of_nothing_is_nan() -> None:
     assert math.isnan(dc.percentile([], 0.99))
     assert dc.percentile([1.0, 2.0, 3.0], 0.0) == 1.0
+
+
+def test_c2_every_lap_winding_inside_the_tolerance_none_missed() -> None:
+    truth = [12.0] * 5
+    ok, d = dc.c2_verdict(run(laps(5, lap_s=12.2, source="winding")), truth)
+    assert ok and d["largest_error_s"] == pytest.approx(0.2) and d["outside"] == []
+    # 0.5 s on a 12 s lap is outside max(0.3, 0.48)
+    bad = laps(5, lap_s=12.0, source="winding")
+    bad[2] = LapRow(3, 30.0, 12.5, 5.2, "winding", False)
+    ok, d = dc.c2_verdict(run(bad), truth)
+    assert not ok and d["outside"] == [3]
+    assert not dc.c2_verdict(run(laps(5, lap_s=12.0, source="start_scan")), truth)[0]
+    assert not dc.c2_verdict(run(laps(5, lap_s=12.0, source="winding", missed=True)), truth)[0]
+    assert not dc.c2_verdict(run([]), truth)[0]
+
+
+def test_the_gap_numbers_are_read_from_the_status() -> None:
+    r = Replayed(
+        status={"unique_gap_min": 0.05, "unique_gap_median": 0.1, "ambiguous_gap_max": 0.02}
+    )
+    assert dc.gap_numbers(r) == {
+        "gap_unique_min": 0.05,
+        "gap_unique_median": 0.1,
+        "gap_ambiguous_max": 0.02,
+    }
+    assert math.isnan(dc.gap_numbers(Replayed())["gap_unique_min"])

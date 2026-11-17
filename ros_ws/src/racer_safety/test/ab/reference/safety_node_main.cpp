@@ -546,6 +546,8 @@ class SafetyNode : public rclcpp::Node {
       input.obstacle_hold_timer_s = obstacle_hold_timer_s_;
       input.speed_bound_forward_mps = speed_bound_forward_mps_;
       input.speed_bound_reverse_mps = speed_bound_reverse_mps_;
+      input.steering_rate_credit_s = steering_rate_credit_s_;
+      input.speed_rate_credit_s = speed_rate_credit_s_;
       if (has_odom_ && (steady_now - last_odom_steady_).seconds() <= wheel_odom_timeout_s_) {
         input.measured_speed_mps = last_odom_speed_mps_;
       }
@@ -561,6 +563,8 @@ class SafetyNode : public rclcpp::Node {
       obstacle_hold_timer_s_ = result.obstacle_hold_timer_s;
       speed_bound_forward_mps_ = result.speed_bound_forward_mps;
       speed_bound_reverse_mps_ = result.speed_bound_reverse_mps;
+      steering_rate_credit_s_ = result.steering_rate_credit_s;
+      speed_rate_credit_s_ = result.speed_rate_credit_s;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     } catch (const std::exception& e) {
@@ -599,6 +603,10 @@ class SafetyNode : public rclcpp::Node {
       }
       publish_transitions(fault_activations, {}, steady_now, now);
       previous_output_ = safe_output;
+      // The gate did not run, so no cycle time can be trusted to have been spent well: the rate
+      // credits restart at 0 (gate_logic.hpp "RATE CREDIT"), the strict side.
+      steering_rate_credit_s_ = 0.0;
+      speed_rate_credit_s_ = 0.0;
       last_eval_steady_ = steady_now;
       has_evaluated_before_ = true;
     }
@@ -632,6 +640,10 @@ class SafetyNode : public rclcpp::Node {
   // TTC"). Held, not advanced, across an internal fault (the gate did not run).
   double speed_bound_forward_mps_{0.0};
   double speed_bound_reverse_mps_{0.0};
+  // The rate credits of the steering and the speed limiter, threaded the same way (gate_logic.hpp
+  // "RATE CREDIT"). Reset to 0 on the fault path.
+  double steering_rate_credit_s_{0.0};
+  double speed_rate_credit_s_{0.0};
   // Latest /odom/wheel speed and its arrival on the steady clock (on_odom).
   double last_odom_speed_mps_{0.0};
   rclcpp::Time last_odom_steady_{0, 0, RCL_STEADY_TIME};

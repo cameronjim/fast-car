@@ -959,3 +959,20 @@ def test_a_stalled_judged_case_that_is_not_dropped_still_fails_a5(harness) -> No
     fake = FakeRunner(laps={"c_P4_cw_11": 5})  # condition c stalls: not dropped by the rule
     assert go(fake, "dev-run", "--out", str(out), "--cases", "P4", "--seeds", "11") == 0
     assert "A5: FAIL" in bb.dev_report_text(out)
+
+
+def test_c1_needs_12_clean_rd_runs(harness) -> None:
+    go, out = harness
+    fake = FakeRunner()
+    argv = ["--cases", "RD", "--seeds", "11,12,13", "--workers", "1"]
+    assert go(fake, "dev-run", "--out", str(out), *argv) == 0
+    assert "C1: PASS" in bb.dev_report_text(out)
+    path = out / "c_RD_cw_12.json"
+    doc = json.loads(path.read_text())
+    doc["lap_status"]["missed_gate_laps"] = [4]
+    path.write_text(json.dumps(doc))
+    assert "C1: FAIL" in bb.dev_report_text(out)
+    doc["lap_status"]["missed_gate_laps"] = []
+    doc["lap_status"]["lap_line_sources"] = ["winding", "start_scan"]
+    path.write_text(json.dumps(doc))
+    assert "C1: FAIL" in bb.dev_report_text(out)  # two line sources in one run

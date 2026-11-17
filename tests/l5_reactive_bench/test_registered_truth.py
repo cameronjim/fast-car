@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -73,7 +74,9 @@ def test_no_scan_within_the_wait_after_the_report_is_invalid() -> None:
     none = runner.registered_truth(odom, [], 100.0, centreline())
     assert none["truth_invalid_reason"] == "no_scan_at_start"
     assert none["lap_times_s"] == [] and none["crossing0_s"] is None
-    ok = runner.registered_truth(odom, [s for s in scans(99.0, 150.0) if s != 100.0], 100.0, centreline())
+    ok = runner.registered_truth(
+        odom, [s for s in scans(99.0, 150.0) if s != 100.0], 100.0, centreline()
+    )
     assert ok["truth_valid"] is True  # the next scan, 0.1 s later, is inside the 0.25 s
 
 
@@ -111,13 +114,11 @@ def test_truth_takes_nothing_from_the_systems_laps() -> None:
     odom = car_odom(99.2, 150.0)
     truth = runner.registered_truth(odom, scans(99.0, 150.0), 100.0, centreline())
 
-    class Tracker:
-        _crossings = [1.0]
-        lap_times_s = [1.0]
+    tracker = SimpleNamespace(_crossings=[1.0], lap_times_s=[1.0])
 
     def fields(lap_events: list[dict]) -> dict:
         out = runner.lap_results(
-            Tracker(), [], lap_events, [], {}, 100.0, 100.0, rescored=None, truth=truth
+            tracker, [], lap_events, [], {}, 100.0, 100.0, rescored=None, truth=truth
         )
         return {k: v for k, v in out.items() if k.startswith("gt_lap") and "rescored" not in k}
 
@@ -131,12 +132,10 @@ def test_lap_results_reports_validity_and_keeps_the_rescored_numbers_as_a_report
     odom = car_odom(102.3, 150.0)
     truth = runner.registered_truth(odom, scans(99.0, 150.0), 100.0, centreline())
 
-    class Tracker:
-        _crossings: list[float] = []
-        lap_times_s: list[float] = []
+    tracker = SimpleNamespace(_crossings=[], lap_times_s=[])
 
     out = runner.lap_results(
-        Tracker(),
+        tracker,
         [],
         [],
         [],

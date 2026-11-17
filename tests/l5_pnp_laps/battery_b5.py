@@ -450,7 +450,7 @@ def starved(result: dict) -> bool:
 
 def needs_rerun(result: dict) -> bool:
     unusable = "error" in result and "gt_lap_times_by_crossing_s" not in result
-    return unusable or starved(result)
+    return unusable or starved(result) or b4t.invalid_truth(result)
 
 
 def attempt_summary(path: Path) -> dict:

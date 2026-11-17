@@ -146,12 +146,24 @@ def summarise_b4_run(
     result: dict, condition: str, case: str, direction: str, seed: int
 ) -> RunSummary:
     """A RunSummary on the by-crossing ground truth. Refuses a result that lacks it."""
-    if "gt_lap_times_by_crossing_s" not in result:
+    if "gt_lap_times_by_crossing_s" not in result and "gt_lap_times_registered_s" not in result:
         raise RunFileError(
             f"{condition}_{case}_{direction}_{seed}: no gt_lap_times_by_crossing_s "
             "(the runner of brief 29 is required)"
         )
-    gt = tuple(float(t) for t in result["gt_lap_times_by_crossing_s"])
+    # Brief 48: a run of the registered-truth runner carries `gt_lap_times_registered_s`, which
+    # is read first; the stored B4 files have only the older field, read as before.
+    gt_field = (
+        "gt_lap_times_registered_s"
+        if "gt_lap_times_registered_s" in result
+        else "gt_lap_times_by_crossing_s"
+    )
+    gt = tuple(float(t) for t in result[gt_field])
+    error = str(result.get("error", ""))
+    if result.get("truth_valid") is False:
+        # the truth recording does not cover crossing 0: not a result, a run that did not execute
+        reason = f"truth invalid: {result.get('truth_invalid_reason', 'unknown')}"
+        error = f"{error}; {reason}" if error else reason
     system = tuple(float(e["lap_time_s"]) for e in result.get("system_lap_events", []))
     brakes = tuple(
         sum(per.get(src, 0) for src in OBSTACLE_SOURCES) for per in result.get("brake_per_lap", [])
@@ -168,7 +180,7 @@ def summarise_b4_run(
         contacts=int(result.get("wall_contacts", 0)),
         brakes_per_lap=brakes,
         stopped_because=str(result.get("stopped_because", "")),
-        error=str(result.get("error", "")),
+        error=error,
         extras={
             "floor_messages": int(floor.get("messages_with_stations", 0)),
             "floor_active_messages": int(floor.get("messages_floor_active", 0)),

@@ -39,6 +39,7 @@ class Rig:
         start: bool = True,
         status_period_s: float | None = 1.0,
         source: str = "camera",
+        status_at_start: bool = True,
     ) -> None:
         self.gate = ExternalLapGate(cfg or ExternalConfig(), odom_model(gain), source)
         self.speed = speed
@@ -48,7 +49,7 @@ class Rig:
         self.state, self.laps, self.sim = ("running" if ready else "waiting"), 0, 1.0
         self.gate.on_steering(steering_for(lap_m))
         self.gate.on_odom(0.0, speed)
-        if status_period_s is not None:
+        if status_at_start:
             self.deliver_status(0.0)
         if start:
             assert self.gate.set_start(0.0)

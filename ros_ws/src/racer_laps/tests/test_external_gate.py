@@ -32,12 +32,30 @@ def reasons_of(rig: Rig, n: int = -1) -> list[str]:
 # -- the constants are the registered ones --------------------------------------------------------
 
 
+def source_rule(text: str) -> dict[str, float]:
+    """The numeric lines of the yaml's `source_rule` block (no yaml dependency in this package)."""
+    out: dict[str, float] = {}
+    inside = False
+    for line in text.splitlines():
+        if line.startswith("source_rule:"):
+            inside = True
+            continue
+        if inside and not line.startswith("  "):
+            break
+        if inside:
+            key, _, rest = line.strip().partition(":")
+            value = rest.split("#")[0].strip()
+            try:
+                out[key] = float(value)
+            except ValueError:
+                pass
+    return out
+
+
 @pytest.mark.skipif(not YAML.exists(), reason="the pre-registration yaml is outside this checkout")
 def test_defaults_are_the_registered_source_rule() -> None:
-    import yaml
-
     assert hashlib.sha256(YAML.read_bytes()).hexdigest() == YAML_SHA256
-    rule = yaml.safe_load(YAML.read_text())["source_rule"]
+    rule = source_rule(YAML.read_text())
     cfg = ExternalConfig()
     for name in (
         "max_event_latency_s",
@@ -118,8 +136,8 @@ REJECT_CASES = [
     ("latency far over", "latency", 5.2 + 4.0, 1, 5.2),
     ("future just over", "future", 5.2 - 0.05 - EPS, 1, 5.2),
     ("future far", "future", 5.0, 1, 5.5),
-    ("crossing at the start", "not_monotone", 5.3, 1, 0.0),
-    ("crossing before the start", "not_monotone", 5.3, 1, -0.5),
+    ("crossing at the start", "not_monotone", 0.1, 1, 0.0),
+    ("crossing before the start", "not_monotone", 0.1, 1, -0.5),
     ("nan crossing", "not_finite", 5.3, 1, math.nan),
     ("inf crossing", "not_finite", 5.3, 1, math.inf),
     ("nan arrival", "not_finite", math.nan, 1, 5.2),
@@ -209,7 +227,7 @@ READY_CASES = [
 def test_ready_is_decided_at_the_start(
     name: str, state: str, laps: int, sim: float, age: float, ready: bool
 ) -> None:
-    rig = Rig(start=False, status_period_s=None)
+    rig = Rig(start=False, status_period_s=None, status_at_start=False)
     rig.drive_until(3.0)
     rig.gate.on_source_status(rig.t - age, state, laps, sim)
     assert rig.gate.source_ready_now is ready
@@ -217,20 +235,23 @@ def test_ready_is_decided_at_the_start(
     assert rig.gate.set_start(rig.t)
     assert rig.gate.source_ready is ready
     # the run's laps carry the verdict
-    rig.gate.on_source_status(rig.t, "running", 0, 1.0)  # a good status after the start
+    rig.status_period_s = 1.0  # the camera speaks on from here
+    rig.deliver_status(rig.t)
     t0 = rig.t
     c = rig.event(t0 + LAP_M, 1)
     assert c is not None
     assert c.missed is (not ready)
     if not ready:
-        assert reasons_of(rig) == ["ready"]
+        # (a status gap that straddles the start is a gap of the lap as well)
+        expected = ["ready", "alive"] if age > 3.0 else ["ready"]
+        assert reasons_of(rig) == expected
     else:
         assert not rig.gate.doubtful
     assert rig.gate.source_ready is ready  # fixed at the start
 
 
 def test_no_status_at_all_is_not_ready() -> None:
-    rig = Rig(start=False, status_period_s=None)
+    rig = Rig(start=False, status_period_s=None, status_at_start=False)
     assert not rig.gate.source_ready_now
     assert "no source status" in rig.gate.source_not_ready_reason
     rig.gate.set_start(0.0)
@@ -238,7 +259,7 @@ def test_no_status_at_all_is_not_ready() -> None:
 
 
 def test_source_ready_now_follows_the_status_before_the_start() -> None:
-    rig = Rig(start=False, status_period_s=None)
+    rig = Rig(start=False, status_period_s=None, status_at_start=False)
     rig.gate.on_source_status(0.0, "waiting", 0, 0.1)
     assert not rig.gate.source_ready_now
     rig.gate.on_source_status(0.5, "running", 0, 1.0)
@@ -295,16 +316,13 @@ def test_odometry_older_than_the_history_is_not_covered() -> None:
     ("gap_s", "alive"), [(2.0, True), (3.0, True), (3.0 + EPS, False), (6.0, False)]
 )
 def test_the_source_must_stay_alive(gap_s: float, alive: bool) -> None:
+    """Statuses at 0 and at `gap_s`, then every second; odometry runs through the gap."""
     rig = Rig(status_period_s=None)
     rig.gate.on_source_status(0.0, "running", 0, 1.0)
-    rig.drive_until(gap_s * 0.5)
-    rig.gate.on_source_status(rig.t, "running", 0, 1.0)  # (keeps the start ready)
-    # a gap of `gap_s` between two statuses, odometry running through it
-    t_a = rig.t
-    rig.drive_until(t_a + gap_s - 1e-3)
-    rig.gate.on_source_status(t_a + gap_s, "running", 0, 1.0)
-    rig.drive_until(LAP_M)
-    rig.gate.on_source_status(rig.t, "running", 0, 1.0)
+    rig.drive_until(gap_s)
+    rig.gate.on_source_status(gap_s, "running", 0, 1.0)
+    rig.status_period_s = 1.0
+    rig.next_status_s = gap_s + 1.0
     c = rig.event(LAP_M, 1)
     assert c is not None
     assert c.missed is (not alive)
@@ -329,6 +347,7 @@ def test_alive_flag_is_per_lap() -> None:
     rig.gate.on_source_status(4.0, "running", 0, 1.0)
     rig.status_period_s = 1.0
     rig.next_status_s = 5.0
+    rig.state = "running"
     c1 = rig.event(LAP_M, 1)
     assert c1 is not None and reasons_of(rig) == ["alive"]
     c2 = rig.event(2 * LAP_M, 2)
@@ -409,9 +428,10 @@ def test_clockwise_heading_counts_in_magnitude() -> None:
 
 def test_every_failed_reason_is_listed() -> None:
     rig = Rig(ready=False, gain=2.0)
-    c = rig.event(2 * LAP_M, 3)  # not ready, skipped numbers, double length, two turns
+    c = rig.event(2 * LAP_M, 3)  # not ready, skipped numbers, two turns
     assert c is not None
-    assert sorted(reasons_of(rig)) == sorted(["ready", "sequence", "length", "heading"])
+    # no reference yet, so a double first lap is not a length miss; two turns of heading are
+    assert sorted(reasons_of(rig)) == sorted(["ready", "sequence", "heading"])
     assert set(reasons_of(rig)) <= set(DOUBTFUL_REASONS)
 
 
@@ -532,7 +552,7 @@ def test_a_dead_source_sets_it_and_a_returning_status_does_not_clear_it() -> Non
 
 
 def test_before_the_start_nothing_is_uncertain() -> None:
-    rig = Rig(start=False, status_period_s=None)
+    rig = Rig(start=False, status_period_s=None, status_at_start=False)
     rig.drive_until(10.0)
     assert not rig.gate.poll_uncertain()
 

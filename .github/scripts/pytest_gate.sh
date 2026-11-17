@@ -5,6 +5,8 @@
 # coverage table.
 #
 # Usage: pytest_gate.sh <package_dir> <gate>
+#   env PYTEST_XDIST=1 adds `-n auto` (pytest-xdist; the package must list it in its dev group).
+#   pytest-cov combines the worker coverage data, so the gate is still computed over the whole package.
 #   gate: "branch100" | "line90" | "report"
 #     branch100 - envelope/: 100% branch coverage on decision logic, enforced
 #     line90    - racer_policy, sysid/fitting, evaluation/analysis: >=90%
@@ -58,15 +60,20 @@ echo "Found ${COUNT} .py file(s) and a pyproject.toml in ${PKG_DIR}; running pyt
   cd "$PKG_DIR"
   uv sync --all-extras --dev
 
+  XDIST_ARGS=()
+  if [ "${PYTEST_XDIST:-0}" = "1" ]; then
+    XDIST_ARGS=(-n auto)
+  fi
+
   case "$GATE" in
     branch100)
-      uv run pytest --cov=. --cov-branch --cov-report=term-missing --cov-fail-under=100
+      uv run pytest ${XDIST_ARGS[@]+"${XDIST_ARGS[@]}"} --cov=. --cov-branch --cov-report=term-missing --cov-fail-under=100
       ;;
     line90)
-      uv run pytest --cov=. --cov-report=term-missing --cov-fail-under=90
+      uv run pytest ${XDIST_ARGS[@]+"${XDIST_ARGS[@]}"} --cov=. --cov-report=term-missing --cov-fail-under=90
       ;;
     report)
-      uv run pytest --cov=. --cov-report=term-missing
+      uv run pytest ${XDIST_ARGS[@]+"${XDIST_ARGS[@]}"} --cov=. --cov-report=term-missing
       ;;
     *)
       echo "Unknown gate type: ${GATE}" >&2

@@ -1,0 +1,31 @@
+# Dynamics roles of the session 2026-11-15 by the registered rule (pnp-v0.5-dynamics.yaml,
+# block session_2026_11_15): every run of every bag, whatever drove it.
+# Written by tools/pnp_data.py split-v05 before anything is fitted on a train part.
+# Do not edit after the first commit. Times are bag seconds (after the first /scan).
+# The label 2026-11-15 is the planned date of the session; the bags carry UTC dates.
+session: "2026-11-15"
+prereg_id: pnp-v0.5-dynamics
+rule_file_sha256: 2767f297d951c11683b40834b864b832e8cbd0b01343e2765681e11b22e86a82
+rule:
+  min_run_s: 15
+  min_wheel_distance_m: 1
+  train_share: 0.55
+  guard_s: 2
+  heldout: the rest of the run
+  roles: dynamics only; no cells and no labels; the direction of a window is its measured heading
+bags:
+  2026-11-16T22-45-39_car_teleop:
+    first_scan_log_time_s: 1794869142.979
+    segments:
+      - {name: S1, run: R0, kind: pnp, from: 190, to: 193.7, direction: by_heading, command_direction: ccw, dynamics: unused}  # shorter than 15 s
+      - {name: S2a, run: R1, kind: pnp, from: 262, to: 318.1, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S2b, run: R1, kind: pnp, from: 320.1, to: 364, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S3a, run: R2, kind: drive_raw, from: 400, to: 408.25, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S3b, run: R2, kind: drive_raw, from: 410.25, to: 415, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S4, run: R3, kind: drive_raw, from: 440, to: 480, direction: by_heading, command_direction: ccw, dynamics: unused}  # under 1 m of wheel distance
+  2026-11-16T23-04-09_car_teleop:
+    first_scan_log_time_s: 1794870253.533
+    segments:
+      - {name: S5a, run: R0, kind: pnp, from: 70, to: 92, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S5b, run: R0, kind: pnp, from: 94, to: 110, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard
+      - {name: S6, run: R1, kind: pnp, from: 150, to: 164.9, direction: by_heading, command_direction: cw, dynamics: unused}  # shorter than 15 s

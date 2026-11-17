@@ -26,6 +26,7 @@ import numpy as np
 from .bags import Run  # puts tools/ on sys.path, which the next import needs
 from .dataset import Segment
 from .ground_motion import GroundMotion, step_v2
+from .ground_motion_v21 import GroundMotionV21, step_v21
 from .model import DT_S, Nominal, Residual, steering_target, step
 from .vehicle import Vehicle
 from .windows import cmd_at, wheel_at
@@ -47,7 +48,7 @@ class YawModel:
     nominal: Nominal
     residual: Residual | None
     vehicle: Vehicle
-    ground: GroundMotion | None = None  # a contract 2 model: position by step_v2
+    ground: GroundMotion | GroundMotionV21 | None = None  # contract 2: step_v2, 2.1: step_v21
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,8 @@ def _model_states(
     for j in range(n):
         if model.ground is None:
             state = step(state, cmds[:, WARM_STEPS + j, :], nom, veh, res)
+        elif isinstance(model.ground, GroundMotionV21):
+            state = step_v21(state, cmds[:, WARM_STEPS + j, :], nom, veh, model.ground)
         else:
             state = step_v2(state, cmds[:, WARM_STEPS + j, :], nom, veh, model.ground)
         states.append(state.copy())

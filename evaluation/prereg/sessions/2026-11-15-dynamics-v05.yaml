@@ -1,0 +1,57 @@
+# Dynamics roles of the session 2026-11-15 by the registered rule (pnp-v0.5-dynamics.yaml,
+# block session_2026_11_15): every run of every bag, whatever drove it.
+# Written by tools/pnp_data.py split-v05 before anything is fitted on a train part.
+# Do not edit after the first commit. Times are bag seconds (after the first /scan).
+# The label 2026-11-15 is the planned date of the session; the bags carry UTC dates.
+session: "2026-11-15"
+prereg_id: pnp-v0.5-dynamics
+rule_file_sha256: 2767f297d951c11683b40834b864b832e8cbd0b01343e2765681e11b22e86a82
+rule:
+  min_run_s: 15
+  min_wheel_distance_m: 1
+  train_share: 0.55
+  guard_s: 2
+  heldout: the rest of the run
+  roles: dynamics only; no cells and no labels; the direction of a window is its measured heading
+bags:
+  2026-11-16T02-18-54_car_teleop:
+    first_scan_log_time_s: 1794795539.170
+    segments:
+      - {name: S1a, run: R0, kind: pnp, from: 276.129, to: 338.775, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S1b, run: R0, kind: pnp, from: 340.775, to: 390.032, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+  2026-11-16T22-38-47_car_teleop:
+    first_scan_log_time_s: 1794868732.895
+    segments:
+      - {name: S2a, run: R0, kind: pnp, from: 40.433, to: 104.787, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S2b, run: R0, kind: pnp, from: 106.787, to: 157.441, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+  2026-11-16T22-45-39_car_teleop:
+    first_scan_log_time_s: 1794869142.979
+    segments:
+      - {name: S3, run: R0, kind: pnp, from: 190.921, to: 194.604, direction: by_heading, command_direction: ccw, dynamics: unused}  # shorter than 15 s
+      - {name: S4a, run: R1, kind: pnp, from: 262.524, to: 318.862, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S4b, run: R1, kind: pnp, from: 320.862, to: 364.958, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S5a, run: R2, kind: drive_raw, from: 439.281, to: 456.926, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S5b, run: R2, kind: drive_raw, from: 458.926, to: 471.364, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S6a, run: R3, kind: drive_raw, from: 612.616, to: 638.663, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S6b, run: R3, kind: drive_raw, from: 640.663, to: 659.974, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S7a, run: R4, kind: drive_raw, from: 733.714, to: 756.803, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S7b, run: R4, kind: drive_raw, from: 758.803, to: 775.694, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S8a, run: R5, kind: drive_raw, from: 844.788, to: 857.111, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S8b, run: R5, kind: drive_raw, from: 859.111, to: 867.193, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S9a, run: R6, kind: drive_raw, from: 967.188, to: 1001.883, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S9b, run: R6, kind: drive_raw, from: 1003.883, to: 1030.271, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+  2026-11-16T23-04-09_car_teleop:
+    first_scan_log_time_s: 1794870253.533
+    segments:
+      - {name: S10a, run: R0, kind: pnp, from: 68.336, to: 124.231, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S10b, run: R0, kind: pnp, from: 126.231, to: 169.963, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard
+      - {name: S11a, run: R1, kind: drive_raw, from: 357.879, to: 375.723, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S11b, run: R1, kind: drive_raw, from: 377.723, to: 390.323, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard
+      - {name: S12a, run: R2, kind: drive_raw, from: 401.659, to: 428.497, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S12b, run: R2, kind: drive_raw, from: 430.497, to: 450.455, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard
+      - {name: S13a, run: R3, kind: drive_raw, from: 502.341, to: 526.486, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S13b, run: R3, kind: drive_raw, from: 528.486, to: 546.241, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard
+      - {name: S14a, run: R4, kind: drive_raw, from: 563.788, to: 576.443, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S14b, run: R4, kind: drive_raw, from: 578.443, to: 586.797, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard
+      - {name: S15a, run: R5, kind: drive_raw, from: 603.058, to: 638.231, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S15b, run: R5, kind: drive_raw, from: 640.231, to: 667.009, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard

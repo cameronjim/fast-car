@@ -1,0 +1,79 @@
+bundle_schema_version: 2.1.0
+kind: dynamics
+model_id: dyn-v0.5tl-2026-11-16
+created_utc: '2026-11-17T00:16:52Z'
+git_sha: 24da648c9ac58b0afbf0f0f9eb4fc0290490ea29
+training_config_sha256: 46eb4dd68e32c50c11b5e87ee7ecee8f096a31c3d6eb413029410faaaa40c527
+vehicle_params: {schema_version: 0.17.0, sysid_session_id: none-preliminary}
+payload:
+- {file: ground_mlp.f32, sha256: 80f98df423a3181f61c1d4cd83be37e5e93d7da5b730cc9031e88bf0ee78f68f}
+- {file: golden_rollouts.csv, sha256: e316e83a0bca48c988e2fa1919270f89da4e738ea1de884e75ff0804be89eafb}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9482438088762631, speed_deadband_mps: 0.22, speed_tau_s: 0.22460632746810144,
+    accel_max_mps2: 2.0, decel_max_mps2: 0.6731081096112491, steer_gain_left: 0.9166243626015708,
+    steer_gain_right: 1.0114633713998802, steer_offset_rad: 0.015222998571431204,
+    steer_tau_s: 0.02787697420940658, command_delay_s: 0.0, understeer_s2_per_m2: 0.10938200992093731}
+  ground_motion:
+    alpha_bounds: [0.7, 1.05]
+    table:
+      steering_nodes_share_of_side_limit: &id001 [-1.0, -0.5, 0.0, 0.5, 1.0]
+      wheel_speed_nodes_mps: &id002 [0.35, 0.6, 0.85, 1.1, 1.3, 1.5]
+      interpolation: bilinear over steering as a share of each side's limit and wheel
+        speed, held constant outside the grid
+      values:
+      - [0.8472591939152542, 0.8705827254976859, 0.8717510317392031, 0.862172024722427,
+        0.862172024722427, 0.862172024722427]
+      - [0.8782139260515037, 0.9031059523675782, 0.9031059523675782, 0.9289882738866496,
+        0.878072369830987, 0.878072369830987]
+      - [0.9621904167539136, 0.9241541694144597, 0.9241541694144597, 0.9241541694144597,
+        0.9241541694144597, 0.9241541694144597]
+      - [0.8999593053732802, 0.8946780665543069, 0.945825529015294, 0.9023035307763838,
+        0.9152652194755584, 0.9951197880444606]
+      - [0.8876043756218548, 0.943868509246883, 0.9333522114557131, 0.9907416433063541,
+        0.9907416433063541, 0.9907416433063541]
+      support: &id003
+      - [true, true, true, true, false, false]
+      - [true, true, false, true, true, false]
+      - [true, true, false, false, false, false]
+      - [true, true, true, true, true, true]
+      - [true, true, true, true, false, false]
+    yaw_table:
+      steering_nodes_share_of_side_limit: *id001
+      wheel_speed_nodes_mps: *id002
+      interpolation: bilinear over steering as a share of each side's limit and wheel
+        speed, held constant outside the grid
+      values:
+      - [-0.14188577205751643, -0.13169973580437208, -0.09200061390355417, -0.057747605076090586,
+        -0.057747605076090586, -0.057747605076090586]
+      - [-0.07457403201523655, 0.007538863184795754, 0.007538863184795754, 0.08378527021099688,
+        0.16049190853306225, 0.16049190853306225]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      - [-0.07068157759621112, 0.09148027946959314, 0.06787976709115325, 0.15783788367880103,
+        0.14560951324857, 0.2219278847285189]
+      - [-0.10548082849082019, -0.08502820826909184, -0.006860844174753532, 0.02675028673355247,
+        0.02675028673355247, 0.02675028673355247]
+      bounds: [-0.25, 0.25]
+      support: *id003
+    learned:
+      enabled: true
+      inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+      outputs: [d_alpha, rho]
+      layers:
+      - [4, 32]
+      - [32, 32]
+      - [32, 2]
+      activation: tanh
+      input_mean: [0.5769756597872995, 0.13494755114424867, 0.6073951627138802, 0.14114304568079042]
+      input_std: [0.24355681380383898, 0.32348566424572905, 0.25616487091520757, 0.33654239348384996]
+      d_alpha_max: 0.1
+      rho_max: 0.25
+      file: ground_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['train role under T2, session split 4824ec40750db64d2de98b16259149290238a681d5d51f86e80313333af4cbcd,
+    constants 2767f297d951c11683b40834b864b832e8cbd0b01343e2765681e11b22e86a82', 'selection:
+    the 2026-11-14 held-out segments, never fitted on']
+metrics: {outcome: the one-speed contract stays}

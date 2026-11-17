@@ -9,5 +9,10 @@ import importlib.util
 collect_ignore = (
     []
     if importlib.util.find_spec("hypothesis")
-    else ["test_cap_property.py", "test_gate_v2.py", "test_lap_length.py"]
+    else [
+        "test_cap_property.py",
+        "test_gate_v2.py",
+        "test_gate_v21_properties.py",
+        "test_lap_length.py",
+    ]
 )

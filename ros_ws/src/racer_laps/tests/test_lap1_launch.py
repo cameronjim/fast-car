@@ -18,8 +18,9 @@ from racer_laps.engine import LapConfig, LapMemory
 from racer_laps.gate import STANDSTILL_MPS, GateConfig
 from racer_laps.lap_record import STATE_DRIVING
 from racer_laps.scan_match import scan_to_points
+from scripted_car import LAP_M, Car
 from synth import WHEELBASE_M, Stadium
-from test_gate_v21 import LAP_M, PTS, Car
+from test_gate import PTS
 from test_replay_scan import VEHICLE, messages
 
 KEYS = ("lap1_start_stamp_s", "first_motion_stamp_s", "launch_dwell_s")

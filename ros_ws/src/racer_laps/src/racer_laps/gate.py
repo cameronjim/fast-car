@@ -327,6 +327,7 @@ class StartScanGate:
         self._uncertain_lap = False  # a crossing was missed during this lap
         self.n_armed_scans = 0
         self.n_matched_scans = 0
+        self.stale_odometry_scans = 0  # scans skipped: the wheel odometry was stale
         self.last_match: MatchResult | None = None
         self.last_arming_state = "idle"
         self._odom_t: float | None = None
@@ -665,6 +666,13 @@ class StartScanGate:
         closed, if any. Costs one ICP while armed, nothing otherwise."""
         if not self._started:
             return None
+        if self.odometry_stale(t_eff_s):
+            # The pose at the scan would be extrapolated from an old sample: the wheel total is
+            # under-read and every candidate line, and the crossing, comes out early (a node that
+            # served the scan before the odometry queued behind it, on a starved host).
+            self.stale_odometry_scans += 1
+            self.last_arming_state = "stale_odometry"
+            return None
         if not self.tracking:
             self.last_arming_state = "waiting"
             self._cands = []
@@ -815,6 +823,10 @@ class StartScanGate:
     def station_uncertain_at(self, total_m: float) -> bool:
         return total_m - self._origin_m > self._uncertain_after_m()
 
+    def odometry_stale(self, t_s: float) -> bool:
+        """The last wheel odometry sample is more than `MAX_EXTRAPOLATION_S` older than `t_s`."""
+        return bool(self._hist) and t_s - self._hist[-1].t > MAX_EXTRAPOLATION_S
+
     def poll_uncertain(self) -> bool:
         """Latch the uncertain-station condition (call from the node's tick) and return it. The
         latch holds until the next closure, but reads False while a candidate is pending."""
@@ -834,4 +846,5 @@ class StartScanGate:
             "station_uncertain": self.poll_uncertain(),
             "armed_scans": self.n_armed_scans,
             "matched_scans": self.n_matched_scans,
+            "stale_odometry_scans": self.stale_odometry_scans,
         }

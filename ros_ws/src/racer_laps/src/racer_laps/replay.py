@@ -34,7 +34,7 @@ import sys
 import time
 from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -314,6 +314,9 @@ class ScanReplayResult:
     match_times_s: list[float]  # wall seconds of every on_scan call made while armed
     wheel_distance_m: float
     status: dict[str, object]
+    #: Log time of the scan that closed each lap (a lap is decided up to about 0.3 m of travel or
+    #: 0.5 s after the crossing it reports).
+    decision_log_s: list[float] = field(default_factory=list)
 
     def bag_time(self, t_s: float) -> float:
         """A log or stamp time on the bag axis (seconds after the first /scan)."""
@@ -372,6 +375,7 @@ def run_replay_start_scan(
     t_start = None if saw_planner else find_start_time(odom)
     mem = LapMemory(cfg or default_start_scan_config(vehicle))
     laps: list[LapResult] = []
+    decided: list[float] = []
     n_scans = 0
     timing: list[float] = []
     wheel_m = 0.0
@@ -421,6 +425,7 @@ def run_replay_start_scan(
                 start_log = t_log
             if result is not None:
                 laps.append(result)
+                decided.append(t_log)
     assert mem.gate is not None
     return ScanReplayResult(
         laps=laps,
@@ -432,6 +437,7 @@ def run_replay_start_scan(
         match_times_s=timing,
         wheel_distance_m=wheel_m,
         status=mem.status(),
+        decision_log_s=decided,
     )
 
 

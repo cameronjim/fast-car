@@ -156,7 +156,7 @@ def replay_bag(bag: Path, v21: bool) -> Replayed:
     messages = list(read_messages(bag))
     res = run_replay_start_scan(messages, vehicle, default_start_scan_config(vehicle, v21=v21))
     out = Replayed(scan_ms=[1000.0 * t for t in res.scan_times_s], status=res.status)
-    for lap in res.laps:
+    for lap, share in zip(res.laps, res.alias_share_by_lap, strict=True):
         out.laps.append(
             LapRow(
                 lap.lap_index,
@@ -165,6 +165,7 @@ def replay_bag(bag: Path, v21: bool) -> Replayed:
                 lap.length_m,
                 lap.line_source,
                 lap.missed_gate,
+                share,
             )
         )
     return out

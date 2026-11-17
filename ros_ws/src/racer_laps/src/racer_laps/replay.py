@@ -320,6 +320,8 @@ class ScanReplayResult:
     #: wall seconds of every on_scan call after the start scan (gate v3 matches outside the armed
     #: stretch too: keyframes, the uniqueness test)
     scan_times_s: list[float] = field(default_factory=list)
+    #: The share of start-scan matches the uniqueness test called ambiguous, lap by lap.
+    alias_share_by_lap: list[float] = field(default_factory=list)
 
     def bag_time(self, t_s: float) -> float:
         """A log or stamp time on the bag axis (seconds after the first /scan)."""
@@ -383,6 +385,7 @@ def run_replay_start_scan(
     mem = LapMemory(cfg or default_start_scan_config(vehicle))
     laps: list[LapResult] = []
     decided: list[float] = []
+    alias_shares: list[float] = []
     n_scans = 0
     timing: list[float] = []
     timing_all: list[float] = []
@@ -438,6 +441,8 @@ def run_replay_start_scan(
             if result is not None:
                 laps.append(result)
                 decided.append(t_log)
+                assert mem.gate is not None
+                alias_shares.append(mem.gate.alias_share_last_lap)
     assert mem.gate is not None
     return ScanReplayResult(
         laps=laps,
@@ -448,6 +453,7 @@ def run_replay_start_scan(
         matched_scans=mem.gate.n_matched_scans,
         match_times_s=timing,
         scan_times_s=timing_all,
+        alias_share_by_lap=alias_shares,
         wheel_distance_m=wheel_m,
         status=mem.status(),
         decision_log_s=decided,

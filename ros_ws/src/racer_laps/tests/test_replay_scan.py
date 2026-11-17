@@ -168,6 +168,8 @@ def test_the_replay_prints_the_line_source_the_ring_and_the_cost_over_all_scans(
     result = replay.run_replay_start_scan(messages(3.3), VEHICLE)
     assert result.scan_times_s and len(result.scan_times_s) > len(result.match_times_s)
     assert len(result.scan_times_s) == result.n_scans - 1  # every scan after the start scan
+    assert len(result.alias_share_by_lap) == len(result.laps) == 3
+    assert all(share == 0.0 for share in result.alias_share_by_lap)  # a stadium is not aliased
     report = replay.format_scan_report(result)
     assert "start_scan" in report and "on_scan cost over all" in report
     assert "line sources ['start_scan', 'start_scan', 'start_scan']" in report

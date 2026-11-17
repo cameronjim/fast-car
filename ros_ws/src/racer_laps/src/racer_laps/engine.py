@@ -37,6 +37,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from racer_laps.cap_schedule import CapSchedule
+from racer_laps.external_gate import EXTERNAL_SOURCES, ExternalConfig, ExternalLapGate
 from racer_laps.gate import STANDSTILL_MPS, GateConfig, GateCrossing, StartScanGate
 from racer_laps.lap_detector import LapDetector
 from racer_laps.lap_record import STATE_DRIVING, LapRecord, LapRecorder
@@ -53,7 +54,7 @@ STATE_BLOCKED = 5
 STATE_RECOVERING = 7
 CAUTION_STATES = frozenset({STATE_BLOCKED, STATE_RECOVERING})
 
-LAP_SOURCES = ("start_scan", "map_pose")
+LAP_SOURCES = ("start_scan", "map_pose", "camera", "truth")
 LAP_MODES = ("v0", "v1", "observe")
 GUIDANCE_SPACING_M = 0.10
 #: A sample of the lap is kept at most this often (the odometry runs at 50 Hz).
@@ -87,6 +88,10 @@ class LapConfig:
     gate: GateConfig | None = None
     #: Lap-1 cross-check: both sources closing within this many seconds is `agree`.
     crosscheck_window_s: float = 0.5
+    #: Lap source rule of the `camera` and `truth` sources (brief 51); None is the registered
+    #: constants with `min_lap_length_m` from this config. `gate` is then only the odometry model
+    #: (wheelbase and yaw gain) of the external gate.
+    external: ExternalConfig | None = None
 
     def __post_init__(self) -> None:
         if self.lap_source not in LAP_SOURCES:
@@ -96,6 +101,11 @@ class LapConfig:
         if self.lap_source == "start_scan" and self.gate is None:
             raise ValueError(
                 "lap_source start_scan needs a GateConfig (wheelbase from vehicle_params)"
+            )
+        if self.lap_source in EXTERNAL_SOURCES and self.gate is None:
+            raise ValueError(
+                f"lap_source {self.lap_source} needs a GateConfig (wheelbase and yaw gain of "
+                "the odometry model, from vehicle_params)"
             )
         if self.lap_mode == "v1":
             if self.lap_source != "start_scan":
@@ -165,9 +175,15 @@ class LapMemory:
             zone_merge=cfg.zone_merge,
         )
         self._handled_suspect: set[int] = set()
-        self.gate: StartScanGate | None = (
+        self.gate: StartScanGate | ExternalLapGate | None = (
             StartScanGate(cfg.gate) if cfg.lap_source == "start_scan" and cfg.gate else None
         )
+        if cfg.lap_source in EXTERNAL_SOURCES and cfg.gate is not None:
+            self.gate = ExternalLapGate(
+                cfg.external or ExternalConfig(min_lap_length_m=cfg.min_lap_length_m),
+                cfg.gate,
+                cfg.lap_source,
+            )
         self.records: list[LapRecord] = []
         self._recorder = LapRecorder(cfg.min_clearance_clean_m)
         self._driving_seen = False
@@ -243,6 +259,20 @@ class LapMemory:
             return
         gate.on_odom(t_s, v_mps)
         self._odom_tail.append((float(t_s), float(v_mps)))
+        # an external source starts lap 1 at the first odometry sample after the planner's first
+        # DRIVING report (there is no start scan to wait for)
+        if (
+            isinstance(gate, ExternalLapGate)
+            and not gate.started
+            and self._driving_seen
+            and gate.set_start(t_s)
+        ):
+            self._begin_lap(t_s)
+            self._lap1_start_t = float(t_s)
+            self._first_motion_t = next(
+                (t for t, v in self._odom_tail if t >= t_s and v >= STANDSTILL_MPS),
+                math.nan,
+            )
         if not gate.started:
             return
         if (
@@ -288,8 +318,8 @@ class LapMemory:
         """One scan as base_link points (body filtered) at its effective time (header stamp plus
         half the sweep). Returns the lap it closed, if any."""
         gate = self.gate
-        if gate is None:
-            return None
+        if gate is None or isinstance(gate, ExternalLapGate):
+            return None  # no scan work for an external source
         if not gate.started:
             if not self._driving_seen:
                 return None
@@ -305,6 +335,39 @@ class LapMemory:
         if crossing is None:
             return None
         return self._close_station_lap(crossing)
+
+    # -- an external lap source (camera, truth) ----------------------------------------------
+
+    def on_lap_source_status(
+        self, t_arrival_s: float, state: str, laps: int, similarity: float | None
+    ) -> None:
+        """The source's own status with its arrival time (the camera's 1 Hz `/lap/status`): the
+        ready decision and liveness only, never a lap."""
+        if isinstance(self.gate, ExternalLapGate):
+            self.gate.on_source_status(t_arrival_s, state, laps, similarity)
+
+    def on_lap_source_event(
+        self, t_arrival_s: float, lap_no: int, t_cross_s: float
+    ) -> LapResult | None:
+        """One event of the source: arrival time, its number, its crossing time (the peak frame).
+        Returns the lap it closed (judged by `ExternalLapGate`), or None when it was rejected."""
+        gate = self.gate
+        if not isinstance(gate, ExternalLapGate):
+            return None
+        crossing = gate.on_event(t_arrival_s, lap_no, t_cross_s)
+        if crossing is None:
+            return None
+        return self._close_station_lap(crossing)
+
+    def on_lap_source_malformed(self) -> None:
+        """A source message that did not parse or lacked a field (counted, dropped)."""
+        if isinstance(self.gate, ExternalLapGate):
+            self.gate.note_malformed()
+
+    def on_clock(self, t_s: float) -> None:
+        """The node's clock tick (a silent source is noticed without any message)."""
+        if isinstance(self.gate, ExternalLapGate):
+            self.gate.on_clock(t_s)
 
     def _begin_lap(self, t_s: float) -> None:
         self._recorder = LapRecorder(self.cfg.min_clearance_clean_m)
@@ -385,7 +448,7 @@ class LapMemory:
             clean=record.clean,
             stored=stored,
             next_cap_mps=next_cap,
-            source="start_scan",
+            source=self.cfg.lap_source,
             missed_gate=crossing.missed,
             obstacle_brakes=record.obstacle_brake_count,
             timing_brakes=record.brake_count - record.obstacle_brake_count,
@@ -448,6 +511,8 @@ class LapMemory:
         if t_s <= self._last_pose_t:
             return None
         self._last_pose_t = t_s
+        if isinstance(self.gate, ExternalLapGate):
+            return None
         if self.gate is not None:
             self._crosscheck_pose(t_s, x, y, yaw)
             return None
@@ -501,7 +566,7 @@ class LapMemory:
     def crosscheck(self) -> str:
         """`no_pose`, `pending`, `agree` or `disagree` for the lap-1 closure (start scan versus
         map pose)."""
-        if self.gate is None:
+        if self.gate is None or isinstance(self.gate, ExternalLapGate):
             return "off"
         if not self.detector.started and not math.isfinite(self._pose_t1):
             return "no_pose"

@@ -280,9 +280,12 @@ class ExternalLapGate:
         ready decision and its arrival for liveness: never to place a crossing or count a lap."""
         if not math.isfinite(t_arrival_s):
             return
-        if self._started and math.isfinite(self._status_t):
-            if t_arrival_s - self._status_t > self.cfg.source_stale_s:
-                self._dead_lap = True
+        if (
+            self._started
+            and math.isfinite(self._status_t)
+            and t_arrival_s - self._status_t > self.cfg.source_stale_s
+        ):
+            self._dead_lap = True
         self._now = max(self._now, float(t_arrival_s))
         self._note_dead()
         self._status_t = float(t_arrival_s)

@@ -65,3 +65,12 @@ D3C0_MIN_RUNS = 2
 
 #: v0.2 section 4.2, quoted by the baseline check. racer_eval.cli.HAND_COUNT is the same set.
 BASELINE_BAG = "2026-11-13T22-20-18_car_teleop"
+
+#: Lap gate v3 (brief 50): the D7-C0 rule and D8-C0 read their thresholds from the pre-registration
+#: yaml files, `d7_c0` of the first and `d8_c0` of the second, each refused unless its SHA-256 is
+#: the registered one (the same constants as tests/l5_pnp_laps/lap_battery_b7.py and
+#: lap_battery_b8.py).
+D7C0_LAPS_YAML = "evaluation/prereg/pnp-v0.5-laps.yaml"
+D7C0_LAPS_YAML_SHA256 = "35949c7d86dbdd3c5a3dde11eb0551465ea893b5f26e78dc7de0f1a0890428de"
+D8C0_RING_YAML = "evaluation/prereg/pnp-v0.5-laps-ring.yaml"
+D8C0_RING_YAML_SHA256 = "74b1dccd0d30910a7e96a45af65a00de62446902380bfb2bae76512d0498dc36"

@@ -60,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [core, dynamics, laps, laps-report, tools, misc]
+        group: [core, dynamics, laps, tools, misc]
     # INTERIM: claude-docs/03-environments.md says Python tests run in the
     # `sim-cpu` image. That image now exists (docker/sim-cpu/: Dockerfile +
     # uv.lock, built and headless-gym-smoke-tested by the sim-cpu-image job

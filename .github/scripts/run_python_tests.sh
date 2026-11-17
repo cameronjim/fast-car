@@ -19,7 +19,6 @@
 #     core         envelope, racer_policy, sysid/fitting, evaluation/analysis, config/pnp, perception
 #     dynamics     training/racer_pnp_dynamics (pytest-xdist)
 #     laps         ros_ws/src/racer_laps, line90 gate (pytest-xdist)
-#     laps-report  ros_ws/src/racer_laps through the generic ros_ws loop, report only (pytest-xdist)
 #     tools        training/racer_train and the tools/ runs
 #     misc         racer_app agent, sim/*, tests/*, and the other ros_ws packages
 # Coverage is computed over the whole package in every case (pytest-xdist workers are combined by
@@ -30,7 +29,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 GROUP="${1:-all}"
 case "$GROUP" in
-  all | core | dynamics | laps | laps-report | tools | misc) ;;
+  all | core | dynamics | laps | tools | misc) ;;
   *)
     echo "Unknown group: ${GROUP}" >&2
     exit 2
@@ -157,20 +156,18 @@ run "sim/bridge/racer_gym_bridge" report misc
 # config check registered with ament_cmake_pytest. All five are exercised for real by the
 # l3-and-cpp CI job (colcon build + colcon test, including their L3 launch tests) via
 # ros_build_test.sh.
+# racer_laps is skipped here: its gated run above already runs the same tests (the old report-only
+# second run was a duplicate).
 if [ -d ros_ws/src ]; then
   for pkg_dir in ros_ws/src/*/; do
     pkg_name="$(basename "$pkg_dir")"
-    if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_control" ] ||
+    if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_laps" ] || [ "$pkg_name" = "racer_control" ] ||
        [ "$pkg_name" = "racer_safety" ] || [ "$pkg_name" = "racer_bringup" ] ||
        [ "$pkg_name" = "racer_drivers" ] || [ "$pkg_name" = "racer_state" ] ||
        [ "$pkg_name" = "racer_session_tools" ]; then
       continue
     fi
-    if [ "$pkg_name" = "racer_laps" ]; then
-      run "$pkg_dir" report laps-report 1
-    else
-      run "$pkg_dir" report misc
-    fi
+    run "$pkg_dir" report misc
   done
 else
   echo "NOTICE: ros_ws/src does not exist yet. Nothing to test yet. Passing."

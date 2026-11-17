@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 from fakes import healthy_ros
@@ -134,11 +135,12 @@ LOCALISED_STACK = "lidar:=true vesc:=true localization:=true map:=/workspace/dat
 def test_tracker_starts_from_rest_after_amcl_published_its_initial_pose(car, monkeypatch):
     # 2026-11-13 on the car: AMCL publishes /pose on the initial pose and then only once the car
     # has moved 0.05 m / 0.05 rad, so a car parked on the start spot reads /pose at 0 Hz.
-    now = [500.0]
+    now = [time.monotonic()]
     monkeypatch.setattr(car.ros, "_clock", lambda: now[0])
     car.world.start_stack(LOCALISED_STACK)
     car.ros.count("/pose")
     now[0] += 60.0
+    healthy_ros(car.ros)  # the rest of the car is still reporting
     assert car.ros.snapshot().rate("/pose") == 0.0
     car.controller.start_drive("tracker", raceline="track:gym_oval")
     (call,) = detached_execs(car)
@@ -146,7 +148,7 @@ def test_tracker_starts_from_rest_after_amcl_published_its_initial_pose(car, mon
 
 
 def test_tracker_starts_from_rest_on_a_live_map_to_odom_transform(car, monkeypatch):
-    now = [500.0]
+    now = [time.monotonic()]
     monkeypatch.setattr(car.ros, "_clock", lambda: now[0])
     car.world.start_stack(LOCALISED_STACK)
     car.ros.note_tf("odom", "base_link")
@@ -159,11 +161,12 @@ def test_tracker_starts_from_rest_on_a_live_map_to_odom_transform(car, monkeypat
 
 
 def test_tracker_refuses_a_stale_map_to_odom_transform(car, monkeypatch):
-    now = [500.0]
+    now = [time.monotonic()]
     monkeypatch.setattr(car.ros, "_clock", lambda: now[0])
     car.world.start_stack(LOCALISED_STACK)
     car.ros.note_tf("map", "odom")
     now[0] += 30.0
+    healthy_ros(car.ros)  # only the map -> odom transform is stale
     with pytest.raises(ActionError, match="neither /pose nor map -> odom") as exc:
         car.controller.start_drive("tracker", raceline="track:gym_oval")
     assert exc.value.status == 409

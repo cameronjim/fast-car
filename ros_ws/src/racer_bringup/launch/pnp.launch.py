@@ -30,7 +30,7 @@ Refusals (a launch that does not start is the safe outcome):
 * `dynamics_bundle` is required, and `perception_bundle` is required with `backend:=net`.
 * `lap_memory:=true` with `v_lap1_mps` above `v_max_mps`; `lap_mode:=v1` with
   `lap_source:=map_pose` or `camera` (D v1 is indexed by station).
-* `lap_source:=truth` always: it is the simulator's oracle (the sim runner starts its own lap node
+* `lap_source:=truth` always: it is a simulator source (the sim runner starts its own lap node
   with it) and the car has no truth. `lap_source:=camera` with `lap_counter:=false` refuses when no
   `lap_counter_node` is in the graph (the wording of the `require_lap_counter` refusal), and with
   `lap_counter:=true` the planner waits for the counter exactly as with `require_lap_counter`.
@@ -111,8 +111,8 @@ LAP_SHADOW_PREFIX = "/pnp/lap_shadow"
 #: lap_memory_node's default `output_dir`; the shadow node writes to a `shadow` folder below it.
 LAP_OUTPUT_DIR = "/workspace/data/pnp/laps"
 TRUTH_REFUSAL = (
-    "pnp.launch.py: lap_source:=truth is the simulator's truth oracle and the car has no truth: "
-    "use start_scan or camera"
+    "pnp.launch.py: lap_source:=truth is a simulator source (ground-truth line crossings) and "
+    "the car has no truth: use start_scan or camera"
 )
 LAP_MODES = ("v0", "v1", "observe")
 RECORDER_NODE_SUBSTRING = "rosbag2_recorder"
@@ -727,7 +727,7 @@ def generate_launch_description() -> LaunchDescription:
                     "How a lap closes: start_scan (start-scan gate plus wheel odometry, no map "
                     "after lap 1), map_pose (TF map -> base_link, needs mapping or "
                     "localisation) or camera (the camera lap counter's events, judged by the lap "
-                    "node; needs the counter). truth is the simulator's oracle and is refused."
+                    "node; needs the counter). truth is a simulator source and is refused."
                 ),
             ),
             DeclareLaunchArgument(

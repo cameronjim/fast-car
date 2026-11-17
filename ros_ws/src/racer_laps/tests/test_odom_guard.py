@@ -72,7 +72,7 @@ def test_without_late_odometry_every_crossing_is_on_time() -> None:
 
 def test_a_burst_of_0_7_s_late_odometry_over_the_closure_of_lap_3_does_not_place_it_early() -> None:
     _, _, lap_s = run(None)
-    window = (2.0 * lap_s - 1.0, 3.0 * lap_s + 1.5)  # covers the approach and closure of lap 3
+    window = (3.0 * lap_s - 0.9, 3.0 * lap_s - 0.1)  # the approach to the line that ends lap 3
     laps, _t0, _ = run(window)
     assert [r.lap_index for r in laps] == [1, 2, 3, 4]
     errors = crossing_errors(laps, lap_s)

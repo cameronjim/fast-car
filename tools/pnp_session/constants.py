@@ -74,3 +74,11 @@ D7C0_LAPS_YAML = "evaluation/prereg/pnp-v0.5-laps.yaml"
 D7C0_LAPS_YAML_SHA256 = "35949c7d86dbdd3c5a3dde11eb0551465ea893b5f26e78dc7de0f1a0890428de"
 D8C0_RING_YAML = "evaluation/prereg/pnp-v0.5-laps-ring.yaml"
 D8C0_RING_YAML_SHA256 = "74b1dccd0d30910a7e96a45af65a00de62446902380bfb2bae76512d0498dc36"
+
+#: Brief 51 (lap learning fed by the camera lap counter): the pre-registration constants of battery B9,
+#: the offline gate D9-B0 and the car gates D9-P0 and D9-C0, `pnp_session lap-src` reads `d9_c0` and
+#: `d9_b0` from this file, refused unless its SHA-256 is the registered one. The freeze file is
+#: written by PR B; an evaluation bag of D9-B0 is not opened before it exists.
+D9_YAML = "evaluation/prereg/pnp-v0.5-laps-camera.yaml"
+D9_YAML_SHA256 = "013cb2f8bec3ce96d2abf456361c3de93d8f85da48c01900c374287d7473807f"
+D9_FREEZE_FILE = "evaluation/prereg/freeze/b9.json"

@@ -787,3 +787,42 @@ def test_a_stated_git_sha_replaces_git_in_the_container(monkeypatch) -> None:
     monkeypatch.setenv(bb.GIT_SHA_ENV, "xyz")
     with pytest.raises(bb.BatteryError):
         bb.git_sha()
+
+
+# -- brief 48: the registered truth fields and invalid runs ---------------------------------------
+
+
+def test_summarise_reads_the_registered_truth_field_first() -> None:
+    result = {
+        "gt_lap_times_registered_s": [31.9, 10.0],
+        "gt_lap_times_by_crossing_s": [29.6, 10.0],  # the pre-brief-48 field of the same run
+        "system_lap_events": [{"lap_time_s": 32.0}, {"lap_time_s": 10.1}],
+        "truth_valid": True,
+    }
+    s = b4.summarise_b4_run(result, "c", "N3", "cw", 23)
+    assert s.gt_lap_times_s == (31.9, 10.0) and s.error == ""
+
+
+def test_an_invalid_truth_is_a_run_that_failed_to_execute() -> None:
+    result = {
+        "gt_lap_times_registered_s": [29.6] + [10.0] * 11,
+        "system_lap_events": [{"lap_time_s": 32.0}] + [{"lap_time_s": 10.0}] * 11,
+        "truth_valid": False,
+        "truth_invalid_reason": "truth_starts_after_crossing_0",
+    }
+    s = b4.summarise_b4_run(result, "c", "N3", "cw", 23)
+    assert "truth_starts_after_crossing_0" in s.error and not s.completed
+
+
+def test_a_result_without_validity_is_a_stored_b4_run_and_is_read_as_before() -> None:
+    result = {"gt_lap_times_by_crossing_s": [20.0, 10.0], "system_lap_events": []}
+    s = b4.summarise_b4_run(result, "a", "N1", "ccw", 21)
+    assert s.error == "" and s.gt_lap_times_s == (20.0, 10.0)
+
+
+def test_an_invalid_truth_is_rerun_like_a_starved_run() -> None:
+    ok = {"gt_lap_times_by_crossing_s": [10.0], "truth_valid": True}
+    assert not bb.needs_rerun(ok)
+    bad = {**ok, "truth_valid": False, "truth_invalid_reason": "reset_after_driving"}
+    assert bb.needs_rerun(bad)
+    assert not bb.needs_rerun({"gt_lap_times_by_crossing_s": [10.0]})  # a stored B4 file

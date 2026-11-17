@@ -11,9 +11,12 @@ base_link link is static): bags from stack runs with `mapping:=true`. `/pnp/plan
 start line is set at the first pose and every lap is unclean (there is no plan clearance to judge),
 which the output says.
 
-`--lap-source start_scan` needs `/scan`, `/odom/wheel` and `/drive` (no `/tf`): the start scan is
-the first scan of the segment with wheel speed under 0.05 m/s that is followed by motion, or the
-segment's first scan if the car is already moving. `--from-s` and `--to-s` (seconds after the
+`--lap-source start_scan` needs `/scan`, `/odom/wheel` and `/drive` (no `/tf`). With
+`/pnp/planner/status` in the segment every message is fed from the segment's start and the start
+scan is the node's: the first scan after the first DRIVING report, the car standing. Without
+planner status the start scan is the first scan after the last standstill odometry sample
+(`STANDSTILL_MPS`) before the first motion, or the segment's first scan if the car is already
+moving, and DRIVING is assumed from there. `--from-s` and `--to-s` (seconds after the
 first `/scan`, the axis of tools/pnp_replay/bag.py) or `--split <file> --segment T2a+T2b` cut the
 segment; `--compare-pose` runs the map-pose detector over the same segment and starts it at the
 same instant. Needs the `replay` extra (mcap, mcap-ros2-support, pyyaml, jsonschema), no ROS.
@@ -36,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from racer_laps.engine import LAP_SOURCES, LapConfig, LapMemory, LapResult
-from racer_laps.gate import GateConfig
+from racer_laps.gate import STANDSTILL_MPS, GateConfig
 from racer_laps.lap_detector import wrap_angle
 from racer_laps.scan_match import scan_to_points
 from racer_laps.vehicle import LapVehicle, load_live_vehicle
@@ -318,10 +321,12 @@ class ScanReplayResult:
 
 
 def find_start_time(
-    odom: Sequence[tuple[float, float]], standstill_mps: float = 0.05
+    odom: Sequence[tuple[float, float]], standstill_mps: float = STANDSTILL_MPS
 ) -> float | None:
-    """Log time of the start scan's instant: the last standstill odometry sample before the first
-    motion, or the first sample if the car is already moving. `odom` is (log time, speed)."""
+    """Log time of the start scan's instant for a bag WITHOUT planner status: the last standstill
+    odometry sample before the first motion, or the first sample if the car is already moving.
+    `odom` is (log time, speed). With planner status the node's rule is used instead (the first
+    scan after the first DRIVING report): this tool must start lap 1 where the node does."""
     if not odom:
         return None
     t_start = odom[0][0]
@@ -362,7 +367,9 @@ def run_replay_start_scan(
     lo, hi = (-math.inf, math.inf) if window_s is None else window_s
     inside = [m for m in messages if lo <= m[0] - first_scan_log <= hi]
     odom = [(t, float(msg.twist.twist.linear.x)) for t, topic, msg in inside if topic == ODOM_TOPIC]
-    t_start = find_start_time(odom)
+    saw_planner = any(topic == PLANNER_TOPIC for _t, topic, _m in inside)
+    # With planner status nothing is cut: the start scan is the node's (brief 48 item 2).
+    t_start = None if saw_planner else find_start_time(odom)
     mem = LapMemory(cfg or default_start_scan_config(vehicle))
     laps: list[LapResult] = []
     n_scans = 0
@@ -370,7 +377,7 @@ def run_replay_start_scan(
     wheel_m = 0.0
     last_odom_t: float | None = None
     started = False
-    saw_planner = any(topic == PLANNER_TOPIC for _t, topic, _m in inside)
+    start_log: float | None = None  # log time of the start scan (planner status in the segment)
     for t_log, topic, msg in inside:
         if t_start is not None and t_log < t_start:
             continue
@@ -410,12 +417,14 @@ def run_replay_start_scan(
             result = mem.on_scan(stamp + 0.5 * sweep, pts)
             if armed_before:
                 timing.append(time.perf_counter() - t0)
+            if start_log is None and saw_planner and mem.gate is not None and mem.gate.started:
+                start_log = t_log
             if result is not None:
                 laps.append(result)
     assert mem.gate is not None
     return ScanReplayResult(
         laps=laps,
-        start_t_s=t_start,
+        start_t_s=start_log if saw_planner else t_start,
         first_scan_log_s=first_scan_log,
         n_scans=n_scans,
         armed_scans=mem.gate.n_armed_scans,
@@ -445,6 +454,7 @@ def format_scan_report(result: ScanReplayResult) -> str:
             f"{lap.lap_time_s:.2f} s  {lap.length_m:.2f} m  "
             f"{'MISSED-GATE ' if lap.missed_gate else ''}"
             f"{'clean' if lap.clean else 'unclean'}"
+            f"{f'  launch dwell {lap.launch_dwell_s:.2f} s' if lap.lap_index == 1 else ''}"
         )
     cost = result.match_times_s
     if cost:

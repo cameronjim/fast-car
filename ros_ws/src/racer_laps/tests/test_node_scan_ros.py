@@ -367,3 +367,49 @@ def test_scan_points_helper_matches_the_node_inputs() -> None:
     ranges, a0, da = scan_at(STADIUM.walls(), x, y, yaw, np.random.default_rng(0))
     pts = scan_to_points(ranges, a0, da, 0.05, RANGE_MAX_M, MOUNT, BODY)
     assert pts.shape[0] > 300
+
+
+LAUNCH_KEYS = ("lap1_start_stamp_s", "first_motion_stamp_s", "launch_dwell_s")
+
+
+def test_the_launch_status_keys_are_null_before_the_start_scan(harness: Harness) -> None:
+    harness.spin(1.5)
+    status = harness.statuses[-1]
+    assert all(k in status and status[k] is None for k in LAUNCH_KEYS), status
+
+
+def test_the_launch_status_keys_report_the_start_and_the_first_motion_and_lap_1_logs_the_dwell(
+    tmp_path: Path,
+) -> None:
+    h = Harness(tmp_path)
+    h.wait_for_node()
+    try:
+        h.drive_loops(2.3)
+        h.spin(1.3)
+        status = h.statuses[-1]
+        assert all(isinstance(status[k], float) for k in LAUNCH_KEYS), status
+        assert status["first_motion_stamp_s"] >= status["lap1_start_stamp_s"]
+        assert status["launch_dwell_s"] == pytest.approx(
+            status["first_motion_stamp_s"] - status["lap1_start_stamp_s"]
+        )
+        assert 0.0 <= status["launch_dwell_s"] < 0.5  # the harness never stands still
+    finally:
+        out = h.close()
+    lap1 = next(line for line in out.splitlines() if "lap 1:" in line)
+    assert "launch dwell" in lap1
+    assert "launch dwell" not in next(line for line in out.splitlines() if "lap 2:" in line)
+
+
+def test_the_launch_keys_stay_null_when_the_car_is_never_seen_to_move(harness: Harness) -> None:
+    """Scans and a DRIVING report, wheel odometry at zero speed: the lap starts, the car does not
+    move, and the launch keys know the start only."""
+    t_end = time.monotonic() + 2.0
+    while time.monotonic() < t_end:
+        harness.publish_odom(0.0)
+        harness.driving()
+        harness.publish_scan(*STADIUM.pose_at(0.0)[:3])
+        harness.spin(0.05)
+    harness.spin(1.2)
+    status = harness.statuses[-1]
+    assert status["lap1_start_stamp_s"] is not None
+    assert status["first_motion_stamp_s"] is None and status["launch_dwell_s"] is None

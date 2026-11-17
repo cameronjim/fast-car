@@ -252,7 +252,8 @@ DriveCommand SafetyGateLogic::clamp_to_bounds(const DriveCommand& cmd) const {
 DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
                                          const DriveCommand& previous_output,
                                          double steering_allowance_s, double speed_allowance_s,
-                                         double& steering_used_s, double& speed_used_s) const {
+                                         double& steering_used_s, double& speed_used_s,
+                                         bool& steering_clipped, bool& speed_clipped) const {
   DriveCommand out = cmd;
 
   const double steer_delta = cmd.steering_angle_rad - previous_output.steering_angle_rad;
@@ -260,6 +261,10 @@ DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
   const double steer_delta_max = limits_.steering_rate_max_rad_per_s * steering_allowance_s;
   const double clamped_steer_delta = clamp_value(steer_delta, steer_delta_min, steer_delta_max);
   out.steering_angle_rad = previous_output.steering_angle_rad + clamped_steer_delta;
+  // Clipped means the limiter changed the requested delta. Decided on the deltas, not on the
+  // recomputed output: previous + (target - previous) can differ from target by an ulp when nothing
+  // was clipped.
+  steering_clipped = clamped_steer_delta != steer_delta;
   // The time the steering change used, against the limit of the direction it moved (the upward
   // limit when it did not move).
   double steer_limit = steer_delta_max;
@@ -287,12 +292,14 @@ DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
   const double speed_delta = cmd.speed_mps - base_mps;
   const double max_speed_delta = limits_.max_acceleration_mps2 * speed_allowance_s;
   double growth_mps = 0.0;  // the growth of the magnitude the limiter granted
+  speed_clipped = false;
   if (speed_delta > 0.0) {
     if (base_mps >= 0.0) {
       // Forward growth from base_mps.
       if (speed_delta > max_speed_delta) {
         out.speed_mps = base_mps + max_speed_delta;
         growth_mps = max_speed_delta;
+        speed_clipped = true;
       } else {
         out.speed_mps = base_mps + speed_delta;
         growth_mps = speed_delta;
@@ -305,6 +312,7 @@ DriveCommand SafetyGateLogic::rate_limit(const DriveCommand& cmd,
       if (-speed_delta > max_speed_delta) {
         out.speed_mps = base_mps - max_speed_delta;
         growth_mps = max_speed_delta;
+        speed_clipped = true;
       } else {
         out.speed_mps = base_mps + speed_delta;
         growth_mps = -speed_delta;
@@ -717,8 +725,11 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   }
   double steering_used_s = 0.0;
   double speed_used_s = 0.0;
-  DriveCommand rate_limited = rate_limit(target, previous_output, steering_allowance_s,
-                                         speed_allowance_s, steering_used_s, speed_used_s);
+  bool steering_clipped = false;
+  bool speed_clipped = false;
+  DriveCommand rate_limited =
+      rate_limit(target, previous_output, steering_allowance_s, speed_allowance_s, steering_used_s,
+                 speed_used_s, steering_clipped, speed_clipped);
   rate_limited = clamp_to_bounds(rate_limited);
   // Charged for what the limiter granted, even if the bounds clamp or the steering hold below move
   // the output less. A garbage dt left both credits at 0 above.
@@ -733,10 +744,15 @@ GateResult SafetyGateLogic::evaluate(const GateInput& input,
   // car is actually sent; may freeze the steering of `target` and `rate_limited`.
   apply_steering_hold(input, previous_output, dt_s, target, rate_limited, result);
 
+  // rate_limit is reported when the limiter clipped a channel. A steering clip that the hold then
+  // overrides (the output is frozen at the previous angle) is not reported, as before.
   bool rate_clamped = false;
-  if (rate_limited.steering_angle_rad != target.steering_angle_rad) {
-    rate_clamped = true;
-  } else if (rate_limited.speed_mps != target.speed_mps) {
+  if (steering_clipped) {
+    if (!steering_hold_engaged(result.obstacle_hold_timer_s)) {
+      rate_clamped = true;
+    }
+  }
+  if (speed_clipped) {
     rate_clamped = true;
   }
   if (rate_clamped) {

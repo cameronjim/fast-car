@@ -17,21 +17,13 @@
 // see (the one from the tick before). The catch up cycle then runs on its phase with dt
 // `catch_up_dt_s` on the newest command. Every other cycle runs on time with dt 20 ms.
 //
-// The planner is not changed by this test. It must see no rate_limit activation that clipped
-// anything: the gate's rate rule has to give a command stream that moves at 0.45 of the limit by
-// its own clock room for the late and the catch up cycle.
-//
-// What counts as a clip. The gate reports rate_limit when its recomputed output (previous output
-// plus the granted change) differs from the request in any bit, and that sum can land one ulp off
-// a request that is well inside the limit (0.0696 then 0.0120 rad: 0.0696 + (0.0120 - 0.0696) is
-// not 0.0120). Such an event clips nothing: the output is the command to 17 digits. That detection
-// is not this brief's to change, so the test counts an activation as a clip only when the output
-// differs from the command by more than 8 ulps of the larger of the previous output and the
-// command, and prints how many it let pass.
+// The planner is not changed by this test. It must see no rate_limit activation: the gate's rate
+// rule has to give a command stream that moves at 0.45 of the limit by its own clock room for the
+// late and the catch up cycle.
+
 #include <gtest/gtest.h>
 
 #include <cmath>
-#include <cstdio>
 #include <limits>
 
 #include "gate_safety_rig.hpp"
@@ -45,7 +37,6 @@ using namespace racer_planner::test;
 namespace {
 
 constexpr double kTickS = 0.02;
-long g_ulp_events = 0;  // rate_limit activations that clipped nothing (see "What counts as a clip")
 constexpr int kTicks = 24;  // the warm start gate leaves STARTING after 25 ticks
 
 racer_safety::GateInput gate_input(const Command& cmd, double age_s, double dt_s) {
@@ -61,7 +52,7 @@ racer_safety::GateInput gate_input(const Command& cmd, double age_s, double dt_s
 
 // Ticks the planner in STARTING at 20 ms with the gated steering 0.30 rad (where safety_node
 // still sits from the last run) and feeds the real gate as described above. Returns the number of
-// rate_limit activations that clipped; `moved_rad` (if given) receives the largest distance the
+// rate_limit activations; `moved_rad` (if given) receives the largest distance the
 // commanded steering got from the gated 0.30.
 int rate_limit_activations(int stall_at, int stall_cycles, double catch_up_dt_s,
                            double* moved_rad = nullptr) {
@@ -81,17 +72,7 @@ int rate_limit_activations(int stall_at, int stall_cycles, double catch_up_dt_s,
     const racer_safety::GateResult gr = safety.evaluate(gi, prev_out);
     credits.take(gr);
     for (const auto& a : gr.activations) {
-      if (a.source != racer_safety::GateSource::kRateLimit) continue;
-      const double eps = std::numeric_limits<double>::epsilon();
-      const double tol =
-          8.0 * eps *
-          std::fmax(std::fabs(prev_out.steering_angle_rad), std::fabs(cmd.steering_rad));
-      if (std::fabs(gr.output.steering_angle_rad - cmd.steering_rad) > tol ||
-          gr.output.speed_mps != cmd.speed_mps) {
-        ++clips;
-      } else {
-        ++g_ulp_events;
-      }
+      if (a.source == racer_safety::GateSource::kRateLimit) ++clips;
     }
     prev_out = gr.output;
   };
@@ -134,6 +115,4 @@ TEST(StartAgainstSafety, ALateAndACatchUpSafetyCycleNeverClipThePreTurn) {
       }
     }
   }
-  std::printf("rate_limit activations that clipped nothing (ulp rounding), let through: %ld\n",
-              g_ulp_events);
 }

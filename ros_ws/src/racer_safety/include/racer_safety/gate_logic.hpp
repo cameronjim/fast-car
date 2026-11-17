@@ -613,10 +613,13 @@ class SafetyGateLogic {
   DriveCommand clamp_to_bounds(const DriveCommand& cmd) const;
   // Step 3c ("RATE CREDIT"). `steering_allowance_s` and `speed_allowance_s` are the time each
   // channel may use this cycle; the time the limiter actually granted comes back in
-  // `steering_used_s` and `speed_used_s`.
+  // `steering_used_s` and `speed_used_s`, and whether it changed the requested steering delta or
+  // the requested speed growth (`steering_clipped`, `speed_clipped`), which is what rate_limit
+  // events report.
   DriveCommand rate_limit(const DriveCommand& cmd, const DriveCommand& previous_output,
                           double steering_allowance_s, double speed_allowance_s,
-                          double& steering_used_s, double& speed_used_s) const;
+                          double& steering_used_s, double& speed_used_s, bool& steering_clipped,
+                          bool& speed_clipped) const;
   // Step 3b, for one direction: +1.0 forward (range GateInput::min_scan_range_m, latch
   // ttc_brake_latched, source kTtc) or -1.0 reverse (min_rear_scan_range_m,
   // reverse_brake_latched, kTtcReverse). Reads the REQUESTED command, may zero `target`'s

@@ -561,32 +561,6 @@ std::string fmt17(double v) {
   return buffer;
 }
 
-// The pre-existing way the gate decides "the limiter clipped" is one comparison of doubles: the
-// recomputed output (previous + the granted change) against the target. When the request is
-// inside the limit, that sum can still land one ulp off the target (previous + (target - previous)
-// is not always target, e.g. 0.0825 and 0.0214), and the gate then reports rate_limit although
-// nothing was clipped. Brief 49 does not change that detection. The properties below that say
-// "never reported as rate limited" therefore tell a real clip from this rounding by the output:
-// within a few ulps of the request, on each channel the gate could have moved, it is the rounding
-// (steering excepted while the hold freezes it, speed excepted while a latch zeroes it). The
-// rounding events are counted and printed, never silently dropped.
-long g_ulp_artifact_events = 0;
-
-bool is_ulp_artifact(const DriveCommand& previous, const DriveCommand& requested,
-                     const DriveCommand& out, bool steering_frozen) {
-  const double eps = std::numeric_limits<double>::epsilon();
-  const double steer_tol =
-      8.0 * eps *
-      std::fmax(std::fabs(previous.steering_angle_rad), std::fabs(requested.steering_angle_rad));
-  const double speed_tol =
-      8.0 * eps * std::fmax(std::fabs(previous.speed_mps), std::fabs(requested.speed_mps));
-  const bool steering_ok = steering_frozen || std::fabs(out.steering_angle_rad -
-                                                        requested.steering_angle_rad) <= steer_tol;
-  const bool speed_ok =
-      out.speed_mps == 0.0 || std::fabs(out.speed_mps - requested.speed_mps) <= speed_tol;
-  return steering_ok && speed_ok;
-}
-
 double positive_part(double x) { return x > 0.0 ? x : 0.0; }
 
 // The growth of the speed's magnitude one cycle produced, the quantity the speed limiter bounds:
@@ -665,7 +639,6 @@ class PropertyReport {
 // P1 to P4 over adversarial sequences.
 TEST(RateCreditProperties, G1G2G3AndTheCreditInvariantsHoldOnAdversarialSequences) {
   PropertyReport report;
-  g_ulp_artifact_events = 0;
   for (int sequence = 0; sequence < kSequences && !report.failed(); ++sequence) {
     const uint64_t seed = kSeedBase + static_cast<uint64_t>(sequence);
     std::mt19937_64 rng(seed);
@@ -788,17 +761,10 @@ TEST(RateCreditProperties, G1G2G3AndTheCreditInvariantsHoldOnAdversarialSequence
         const bool steering_inside = steer_delta <= rate_max * dt && steer_delta >= rate_min * dt;
         const bool speed_inside = speed_growth(previous.speed_mps, requested_speed) <= acc * dt;
         if (steering_inside && speed_inside) {
-          const bool frozen = gate.steering_hold_engaged(result.obstacle_hold_timer_s);
           for (const GateActivation& a : result.activations) {
-            if (a.source != GateSource::kRateLimit) {
-              continue;
-            }
-            if (is_ulp_artifact(previous, DriveCommand{requested_steering, requested_speed}, out,
-                                frozen)) {
-              ++g_ulp_artifact_events;
-            } else {
+            if (a.source == GateSource::kRateLimit) {
               report.fail(seed, sequence, cycle,
-                          "a request within rate * dt was clipped and reported: " + a.detail +
+                          "a request within rate * dt was reported as rate limited: " + a.detail +
                               " prev=" + fmt17(previous.steering_angle_rad) + "," +
                               fmt17(previous.speed_mps) +
                               " cmd=" + fmt17(input.command.steering_angle_rad) + "," +
@@ -848,9 +814,6 @@ TEST(RateCreditProperties, G1G2G3AndTheCreditInvariantsHoldOnAdversarialSequence
       state.speed_rate_credit_s = result.speed_rate_credit_s;
     }
   }
-  RecordProperty("ulp_artifact_events", static_cast<int>(g_ulp_artifact_events));
-  std::printf("ulp artifact rate_limit events (nothing clipped, see is_ulp_artifact): %ld\n",
-              g_ulp_artifact_events);
 }
 
 // A staircase command stream: a value that changes once per publish (every T on the stream's own
@@ -890,7 +853,6 @@ class Stream {
 // times, and the output is the command.
 TEST(RateCreditProperties, ACommandStreamBelowTheLimitIsNeverClippedWhateverTheCycleTimes) {
   PropertyReport report;
-  g_ulp_artifact_events = 0;
   for (int sequence = 0; sequence < kSequences && !report.failed(); ++sequence) {
     const uint64_t seed = kSeedBase + 0x1000000ULL + static_cast<uint64_t>(sequence);
     std::mt19937_64 rng(seed);
@@ -933,12 +895,7 @@ TEST(RateCreditProperties, ACommandStreamBelowTheLimitIsNeverClippedWhateverTheC
       input.min_rear_scan_range_m = kInf;
       const GateResult result = gate.evaluate(input, previous);
       for (const GateActivation& a : result.activations) {
-        const bool artifact =
-            a.source == GateSource::kRateLimit &&
-            is_ulp_artifact(previous, input.command, result.output, /*steering_frozen=*/false);
-        if (artifact) {
-          ++g_ulp_artifact_events;
-        } else if (a.source == GateSource::kRateLimit || a.source == GateSource::kWatchdog) {
+        if (a.source == GateSource::kRateLimit || a.source == GateSource::kWatchdog) {
           report.fail(
               seed, sequence, cycle,
               std::string("unexpected activation: ") + gate_source_to_string(a.source) + " " +
@@ -959,9 +916,6 @@ TEST(RateCreditProperties, ACommandStreamBelowTheLimitIsNeverClippedWhateverTheC
       state.speed_rate_credit_s = result.speed_rate_credit_s;
     }
   }
-  RecordProperty("ulp_artifact_events", static_cast<int>(g_ulp_artifact_events));
-  std::printf("ulp artifact rate_limit events (nothing clipped, see is_ulp_artifact): %ld\n",
-              g_ulp_artifact_events);
 }
 
 }  // namespace

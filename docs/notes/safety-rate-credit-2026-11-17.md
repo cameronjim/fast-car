@@ -57,12 +57,15 @@ clipped, whatever the cycle times, while the command's age at each cycle stays a
   fault, then a catch-up cycle; the same without the fault).
 - `racer_safety` gate-logic branch coverage stays at 100 per cent (415 of 415 branches).
 
-## One thing this does not change
+## Clip detection (owner decision 10)
 
-The gate decides that the limiter clipped by comparing its recomputed output (`previous + granted
-change`) with the request, bit for bit. That sum can land one ulp off a request that is well inside
-the limit (`0.0696 + (0.0120 - 0.0696)` is not `0.0120`), and the gate then publishes a `rate_limit`
-event although nothing was clipped. It happens for pairs whose magnitudes differ by more than a factor
-of 2, such as a steering command crossing zero over a long cycle. The events are unchanged by this
-brief (event logging is as before), so the new tests count a rate_limit activation as a clip only when
-the output differs from the request by more than 8 ulps, and print how many they let through.
+The gate used to decide that the limiter clipped by comparing its recomputed output (`previous +
+granted change`) with the request, bit for bit. That sum can land one ulp off a request well inside
+the limit (`0.0696 + (0.0120 - 0.0696)` is not `0.0120`), so a `rate_limit` event was published
+although nothing was clipped. It happened for pairs whose magnitudes differ by more than a factor of
+2 (a steering command falling, or crossing zero, over a long cycle). The limiter now reports whether
+it changed the requested steering delta or the requested speed growth, and `rate_limit` is reported
+on that. A steering clip that the steering hold then overrides is still not reported. The output is
+unchanged. The planner start test and the properties P3 and P5 require exactly 0 `rate_limit`
+activations again; `RateLimitDetection` holds three pairs that were reported before and are not now.
+The A/B reference needed no change for this.

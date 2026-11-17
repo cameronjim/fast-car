@@ -972,14 +972,14 @@ def test_the_shadow_lap_node_is_a_second_node_in_observe_that_does_not_stop_the_
     m = _module()
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
     monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
-    common = dict(
-        lap_memory="true",
-        lap_mode="v0",
-        lap_source="start_scan",
-        lap_counter="false",
-        dynamics_bundle=_bundle(tmp_path, 0.9),
-        v_max_mps="0.8",
-    )
+    common = {
+        "lap_memory": "true",
+        "lap_mode": "v0",
+        "lap_source": "start_scan",
+        "lap_counter": "false",
+        "dynamics_bundle": _bundle(tmp_path, 0.9),
+        "v_max_mps": "0.8",
+    }
     actions = m._make_actions(_context(lap_shadow="camera", **common))
     laps = _laps_nodes(actions)
     assert len(laps) == 2

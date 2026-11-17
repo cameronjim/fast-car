@@ -826,3 +826,16 @@ def test_an_invalid_truth_is_rerun_like_a_starved_run() -> None:
     bad = {**ok, "truth_valid": False, "truth_invalid_reason": "reset_after_driving"}
     assert bb.needs_rerun(bad)
     assert not bb.needs_rerun({"gt_lap_times_by_crossing_s": [10.0]})  # a stored B4 file
+
+
+def test_a_nan_system_lap_time_is_never_within_tolerance() -> None:
+    """NaN compares False both ways: it used to be neither within nor outside, so S0a passed with a
+    NaN lap and S0b counted it nowhere (brief 48, found writing the B7 decision tests)."""
+    nan_a = replace(full(), "a", ("N1", "ccw", 21), system=[math.nan] + [27.0] * 11)
+    d = b4.d3_s0(nan_a, CONST)
+    assert not d.passed and failed(d, "S0a: every system lap time")
+    nan_c = replace(full(), "c", ("N1", "ccw", 21), system=[math.nan] + [12.0] * 11)
+    d = b4.d3_s0(nan_c, CONST)
+    # 287 of 288 laps within is above the 98 percent, but a NaN lap is off by more than any limit
+    assert not d.passed and failed(d, "S0b(c): no lap off by more than")
+    assert not failed(d, "S0b(c): at least")

@@ -498,6 +498,37 @@ TEST(RateCredit, CreditIsChargedForWhatTheLimiterGrantedWhenTheSteeringHoldMoves
 }
 
 // ---------------------------------------------------------------------------------------
+// Clip detection: rate_limit is reported when the limiter clipped, not when previous + (target -
+// previous) happens to differ from target by an ulp. The pairs below are ones where it does.
+// ---------------------------------------------------------------------------------------
+TEST(RateLimitDetection, AStepInsideTheLimitIsNeverReportedAsRateLimited) {
+  const SafetyLimits limits = make_limits();
+  struct Pair {
+    double previous_rad;
+    double requested_rad;
+  };
+  const Pair pairs[] = {{0.082482961902298813, 0.021424096807560297},
+                        {-0.18827769076519774, -2.0816681711721685e-17},
+                        {0.069600000000183293, 0.01200000000023568}};
+  for (const Pair& p : pairs) {
+    SCOPED_TRACE(p.requested_rad);
+    // The reason for the test: the recomputed output is not bit-equal to the request.
+    EXPECT_NE(p.previous_rad + (p.requested_rad - p.previous_rad), p.requested_rad);
+    for (const double credit : {0.0, kT}) {
+      GateInput input;
+      input.command = DriveCommand{p.requested_rad, 0.0};
+      input.min_scan_range_m = kInf;
+      input.dt_s = 0.2;  // the step is far inside rate * dt
+      input.steering_rate_credit_s = credit;
+      const GateResult r =
+          SafetyGateLogic(limits).evaluate(input, DriveCommand{p.previous_rad, 0.0});
+      EXPECT_FALSE(rate_limited(r));
+      EXPECT_NEAR(r.output.steering_angle_rad, p.requested_rad, 1e-15);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------
 // Property tests (seeded, no hypothesis for C++). Fixed seeds; a failure prints the seed, the
 // sequence index and the cycle index so it reproduces with one call.
 // ---------------------------------------------------------------------------------------

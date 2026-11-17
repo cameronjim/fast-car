@@ -329,8 +329,8 @@ def run_flagged(mp: pytest.MonkeyPatch, flags: list[bool], step: float = 0.05): 
 @pytest.mark.parametrize(
     ("n_unique", "n_ambiguous", "verdict", "closes"),
     [
-        (5, 0, "unproven", False),  # five unique matches are not proof: the closure is held
-        (6, 0, "proven", True),
+        (3, 0, "unproven", False),  # three unique matches are not proof: the closure is held
+        (4, 0, "proven", True),
         (10, 2, "proven", True),  # two ambiguous matches are not enough to call a place aliased
         (9, 3, "proven", True),  # share exactly 0.25 is not above it
         (8, 3, "aliased", False),  # 3 / 11 is above 0.25
@@ -458,8 +458,8 @@ def test_a_keyframe_whose_matches_are_ambiguous_is_retired_and_gives_no_fix() ->
     g._visit.estimates.append(gate_module.Estimate(10.0, 0.9, 0.02))
     g._visit.estimates.append(gate_module.Estimate(10.01, 0.9, 0.02))
     g._end_visit()
-    assert g.ring.fixes == []  # two unique matches over its life: not proven
-    kf.n_unique = 6
+    assert g.ring.fixes == []  # two unique matches over its life: not proven (4 needed)
+    kf.n_unique = 4
     g._visit = gate_module.Visit(kf)
     g._visit.estimates.append(gate_module.Estimate(10.0, 0.9, 0.02))
     g._visit.estimates.append(gate_module.Estimate(10.01, 0.9, 0.02))

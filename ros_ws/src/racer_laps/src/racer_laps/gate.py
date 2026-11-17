@@ -227,8 +227,10 @@ class GateConfig:
     #: Start-scan matches (with a valid centre) needed for the attitude correction of lap 1.
     attitude_min_scans: int = 5
     #: Unique matches that prove a reference (a start scan or a keyframe): a crossing or a fix needs
-    #: a proven reference.
-    proof_min_unique: int = 6
+    #: a proven reference. 50b's 6 is 4 here: at 3 m/s (the L3 harness, above the car's ceiling) a
+    #: stadium approach gives 3 to 4 matches, the closure waited 1.5 s and lap 1 was placed 0.8 s late;
+    #: the 28 RD, ND and P4 dumps are as clean with 4 (brief 50c: tunable).
+    proof_min_unique: int = 4
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.wheelbase_m) and self.wheelbase_m > 0.0):
@@ -1007,12 +1009,12 @@ class StartScanGate:
 
     def _displaced(self, total_m: float) -> _ScanRec | None:
         """The buffered scan whose wheel distance behind `total_m` is nearest `unique_shift_m`,
-        among those at least `unique_shift_m - unique_shift_tol_m` behind. Up to 2.0 m/s at 10 Hz
+        among those more than `unique_shift_m - unique_shift_tol_m` behind. Up to 2.0 m/s at 10 Hz
         that is the scan within `unique_shift_tol_m` of `unique_shift_m` back; above it the nearest
         scan further back (a larger displacement makes a real place more distinct and leaves a ring
         ambiguous) instead of none. None under that much travel."""
         c = self.cfg
-        near = c.unique_shift_m - c.unique_shift_tol_m - 1e-9
+        near = c.unique_shift_m - c.unique_shift_tol_m + 1e-9  # more than 0.3 m, not 0.3 m
         best: _ScanRec | None = None
         best_d = math.inf
         for rec in self._scans:

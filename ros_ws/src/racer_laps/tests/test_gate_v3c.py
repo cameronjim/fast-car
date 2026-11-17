@@ -104,9 +104,9 @@ def gate_with_scans(spacing: float, n: int = 40) -> tuple[StartScanGate, float]:
 
 @pytest.mark.parametrize(
     ("spacing", "behind"),
-    [(0.05, 0.40), (0.13, 0.39), (0.25, 0.50), (0.30, 0.30), (0.10, 0.40), (0.20, 0.40)],
+    [(0.05, 0.40), (0.13, 0.39), (0.25, 0.50), (0.30, 0.60), (0.10, 0.40), (0.20, 0.40)],
 )
-def test_the_displaced_scan_is_the_nearest_to_0_4_m_back_among_those_at_least_0_3_back(
+def test_the_displaced_scan_is_the_nearest_to_0_4_m_back_among_those_more_than_0_3_back(
     spacing: float, behind: float
 ) -> None:
     gate, now = gate_with_scans(spacing)
@@ -118,7 +118,7 @@ def test_the_displaced_scan_is_the_nearest_to_0_4_m_back_among_those_at_least_0_
 def test_under_0_3_m_of_travel_there_is_no_displaced_scan() -> None:
     gate, now = gate_with_scans(0.05, n=6)  # 0.25 m of travel in the buffer
     assert gate._displaced(now) is None
-    gate, now = gate_with_scans(0.05, n=7)  # exactly 0.30 m
+    gate, now = gate_with_scans(0.05, n=8)  # 0.35 m
     assert gate._displaced(now) is not None
 
 

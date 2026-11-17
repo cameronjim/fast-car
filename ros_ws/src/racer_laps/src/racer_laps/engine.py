@@ -134,6 +134,10 @@ class LapResult:
     #: Lap 1 only (else 0.0): from the start scan to the first wheel odometry sample at or above
     #: `STANDSTILL_MPS`. Lap 1 is the launch lap, its time contains this (design 13 section 19.2).
     launch_dwell_s: float = 0.0
+    #: Start-scan source: what placed the crossing (gate v3): `start_scan`, `anchor` (the
+    #: keyframe ring's estimate of the line) or `winding` (odometry heading reached 2 pi, no
+    #: place told apart from its neighbours).
+    line_source: str = "start_scan"
 
 
 @dataclass(frozen=True)
@@ -389,6 +393,7 @@ class LapMemory:
             n_candidates=crossing.n_candidates,
             spread_m=crossing.spread_m,
             launch_dwell_s=self.launch_dwell_s if crossing.lap_index == 1 else 0.0,
+            line_source=crossing.line_source,
         )
 
     def _reconcile_lengths(self, lap_index: int, stored: bool) -> bool:

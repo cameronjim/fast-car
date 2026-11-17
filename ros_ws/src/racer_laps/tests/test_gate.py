@@ -25,6 +25,10 @@ def make_gate(**kw: object) -> StartScanGate:
         "dead_reckoning_seed": False,
         "seed_search": False,
         "along_search_m": 0.0,
+        # a scripted matcher stands in for the start-scan match of gate v2.1: the v3 additions
+        # (displaced-scan uniqueness, keyframe ring) are off here and tested in test_gate_v3.py
+        "ring_enabled": False,
+        "unique_shift_m": 0.0,
         **kw,
     }
     return StartScanGate(GateConfig(wheelbase_m=WHEELBASE_M, **opts))

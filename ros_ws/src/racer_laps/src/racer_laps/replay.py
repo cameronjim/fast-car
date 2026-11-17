@@ -317,6 +317,11 @@ class ScanReplayResult:
     #: Log time of the scan that closed each lap (a lap is decided up to about 0.3 m of travel or
     #: 0.5 s after the crossing it reports).
     decision_log_s: list[float] = field(default_factory=list)
+    #: wall seconds of every on_scan call after the start scan (gate v3 matches outside the armed
+    #: stretch too: keyframes, the uniqueness test)
+    scan_times_s: list[float] = field(default_factory=list)
+    #: The share of start-scan matches the uniqueness test called ambiguous, lap by lap.
+    alias_share_by_lap: list[float] = field(default_factory=list)
 
     def bag_time(self, t_s: float) -> float:
         """A log or stamp time on the bag axis (seconds after the first /scan)."""
@@ -341,7 +346,10 @@ def find_start_time(
     return t_start
 
 
-def default_start_scan_config(vehicle: LapVehicle) -> LapConfig:
+def default_start_scan_config(vehicle: LapVehicle, v21: bool = False) -> LapConfig:
+    """The start-scan configuration of the node. `v21` turns the gate v3 additions off (the
+    uniqueness test, the keyframe ring): gate v2.1 exactly, for comparisons."""
+    extra: dict[str, Any] = {"ring_enabled": False, "unique_shift_m": 0.0} if v21 else {}
     return LapConfig(
         lap_source="start_scan",
         gate=GateConfig(
@@ -349,6 +357,7 @@ def default_start_scan_config(vehicle: LapVehicle) -> LapConfig:
             yaw_gain_table=vehicle.yaw_gain_table,
             lidar_x_m=vehicle.mount.x_m,
             lidar_y_m=vehicle.mount.y_m,
+            **extra,
         ),
     )
 
@@ -376,8 +385,10 @@ def run_replay_start_scan(
     mem = LapMemory(cfg or default_start_scan_config(vehicle))
     laps: list[LapResult] = []
     decided: list[float] = []
+    alias_shares: list[float] = []
     n_scans = 0
     timing: list[float] = []
+    timing_all: list[float] = []
     wheel_m = 0.0
     last_odom_t: float | None = None
     started = False
@@ -417,15 +428,21 @@ def run_replay_start_scan(
                 vehicle.body,
             )
             armed_before = mem.gate is not None and mem.gate.armed
+            started_before = mem.gate is not None and mem.gate.started
             t0 = time.perf_counter()
             result = mem.on_scan(stamp + 0.5 * sweep, pts)
+            elapsed = time.perf_counter() - t0
             if armed_before:
-                timing.append(time.perf_counter() - t0)
+                timing.append(elapsed)
+            if started_before:
+                timing_all.append(elapsed)
             if start_log is None and saw_planner and mem.gate is not None and mem.gate.started:
                 start_log = t_log
             if result is not None:
                 laps.append(result)
                 decided.append(t_log)
+                assert mem.gate is not None
+                alias_shares.append(mem.gate.alias_share_last_lap)
     assert mem.gate is not None
     return ScanReplayResult(
         laps=laps,
@@ -435,6 +452,8 @@ def run_replay_start_scan(
         armed_scans=mem.gate.n_armed_scans,
         matched_scans=mem.gate.n_matched_scans,
         match_times_s=timing,
+        scan_times_s=timing_all,
+        alias_share_by_lap=alias_shares,
         wheel_distance_m=wheel_m,
         status=mem.status(),
         decision_log_s=decided,
@@ -459,6 +478,7 @@ def format_scan_report(result: ScanReplayResult) -> str:
             f"lap {lap.lap_index}: crossing at bag {result.bag_time(lap.t_cross_s):.2f} s  "
             f"{lap.lap_time_s:.2f} s  {lap.length_m:.2f} m  "
             f"{'MISSED-GATE ' if lap.missed_gate else ''}"
+            f"{lap.line_source}  "
             f"{'clean' if lap.clean else 'unclean'}"
             f"{f'  launch dwell {lap.launch_dwell_s:.2f} s' if lap.lap_index == 1 else ''}"
         )
@@ -468,6 +488,22 @@ def format_scan_report(result: ScanReplayResult) -> str:
         lines.append(
             f"on_scan cost while armed: mean {sum(ms) / len(ms):.1f} ms, "
             f"p99 {ms[min(len(ms) - 1, int(0.99 * len(ms)))]:.1f} ms, max {ms[-1]:.1f} ms"
+        )
+    every = result.scan_times_s
+    if every:
+        ms_all = sorted(1e3 * c for c in every)
+        lines.append(
+            f"on_scan cost over all {len(ms_all)} scans after the start scan: mean "
+            f"{sum(ms_all) / len(ms_all):.1f} ms, p99 "
+            f"{ms_all[min(len(ms_all) - 1, int(0.99 * len(ms_all)))]:.1f} ms, max {ms_all[-1]:.1f} ms"
+        )
+    status = result.status
+    if "ring" in status:
+        lines.append(
+            f"line sources {status.get('lap_line_sources')}, phase observable "
+            f"{status.get('phase_observable')}, ring {status['ring']}, start alias share of the "
+            f"last lap {status.get('start_alias_share_last_lap')}, ring disagreements "
+            f"{status.get('ring_disagreements')}, missed gate laps {status.get('missed_gate_laps')}"
         )
     share = result.matched_scans / result.armed_scans if result.armed_scans else math.nan
     lines.append(
@@ -647,6 +683,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--segment", help="segment name from --split, A+B joins consecutive ones")
     parser.add_argument("--compare-pose", action="store_true", help="also run the map pose")
     parser.add_argument(
+        "--v21",
+        action="store_true",
+        help="start_scan: gate v2.1 (the v3 uniqueness test and keyframe ring off), to compare",
+    )
+    parser.add_argument(
         "--m-r",
         action="store_true",
         help="M-R table (pre-registration pnp-v0.3 1.5): gate v2 on every driven segment of "
@@ -686,7 +727,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--bag is required")
     messages = list(read_messages(args.bag))
     if args.lap_source == "start_scan":
-        scan_result = run_replay_start_scan(messages, load_live_vehicle(), window_s=window)
+        vehicle = load_live_vehicle()
+        scan_result = run_replay_start_scan(
+            messages, vehicle, default_start_scan_config(vehicle, v21=args.v21), window_s=window
+        )
         sys.stdout.write(format_scan_report(scan_result) + "\n")
         if args.compare_pose:
             first = scan_result.first_scan_log_s

@@ -67,6 +67,10 @@ class CautionZone:
         return self.created_lap < lap_in_progress <= self.created_lap + self.hold_laps
 
 
+#: Rounding allowance at the ends of a caution zone, metres (far below the 0.10 m station spacing).
+ZONE_EDGE_EPS_M = 1e-9
+
+
 def _periodic_min_filter(v: FloatArray, half: int) -> FloatArray:
     if half <= 0 or v.shape[0] == 0:
         return v.copy()
@@ -346,7 +350,12 @@ class StationSet:
             if not z.active_on(lap_in_progress):
                 continue
             behind = np.mod(z.centre_m - s_mod, self._l_ref)  # distance back to the event
-            inside = behind <= z.length_m
+            # Both ends of the zone belong to it. `behind` is exact only up to rounding: the end
+            # `centre - length` can come out as `length + 1e-16`, and a station at the event itself
+            # as `l_ref - 1e-16` (a lap away).
+            inside = (behind <= z.length_m + ZONE_EDGE_EPS_M) | (
+                behind >= self._l_ref - ZONE_EDGE_EPS_M
+            )
             zone_cap = np.where(inside, np.minimum(zone_cap, max(0.0, z.speed_mps - 0.1)), zone_cap)
         # inside any zone: the lowest of the zones' caps and v_safe, no exploration step
         bound = np.where(np.isfinite(zone_cap), np.minimum(safe, zone_cap), safe + explore_dv_mps)

@@ -338,6 +338,16 @@ class LapMemoryNode(Node):
                 3.0,
             )
         )
+        ring_enabled = bool(
+            self.declare_parameter(
+                "ring_enabled",
+                True,
+                ParameterDescriptor(
+                    description="Lap gate v3: the uniqueness test, the keyframe ring and the "
+                    "winding closure. false is gate v2.1 exactly (no ring block in the status)."
+                ),
+            ).value
+        )
         self.declare_parameter(
             "save_lap1_map",
             True,
@@ -422,6 +432,8 @@ class LapMemoryNode(Node):
             consensus_past_m=gate.consensus_past_m,
             consensus_wait_s=gate.consensus_wait_s,
             consensus_spread_m=gate.consensus_spread_m,
+            ring_enabled=ring_enabled,
+            unique_shift_m=gate.unique_shift_m if ring_enabled else 0.0,
             lidar_x_m=self._vehicle.mount.x_m,
             lidar_y_m=self._vehicle.mount.y_m,
             yaw_gain_right_scale=(

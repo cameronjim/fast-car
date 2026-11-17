@@ -278,6 +278,71 @@
 //   * Unset (SafetyLimits default +infinity) never holds. safety_node always sets it from the
 //     binding; only tests leave it unset, so the pre-existing suites see no hold.
 //
+// RATE CREDIT (2026-11-17, brief 49, owner decision 7 of owner-decisions-2026-11-16.md; read before
+// changing step 3c).
+//
+// The fault. The rate limiter allowed `rate * dt_s`, with dt_s the time safety_node measured since
+// its previous cycle. When a cycle runs late, the next one runs a few ms after it (rcl realigns the
+// wall timer to its phase). The late cycle was offered a large allowance it did not need, and that
+// allowance was thrown away. The catch-up cycle has a dt of 1 to 12 ms, so an ordinary planner step
+// (0.45 of the limit per 20 ms tick) was clipped: a rate_limit engagement on the L5 Plug-and-Play
+// canary and, probably, the car's 2026-11-16 glitches.
+//
+// The rule. Per channel (steering, speed growth) the gate carries a credit in seconds, threaded by
+// the caller like obstacle_hold_timer_s (GateInput/GateResult steering_rate_credit_s and
+// speed_rate_credit_s, 0 at startup). With T = SafetyLimits::control_period_s, dt = safe_dt(dt_s)
+// and c the credit that came in:
+//
+//     allowance_s = min(c + dt, max(dt, T))        // what this cycle may use
+//     limit       = rate * allowance_s             // rate: the existing SafetyLimits fields
+//     used_s      = (change the limiter granted) / rate, in [0, allowance_s]
+//     c_out       = min(T, c + dt - used_s)        // unused time carries, never more than T
+//
+//   * c in is sanitised: non-finite or negative counts as 0, above T counts as T. A T that is not
+//     finite or not above 0 counts as 0, which gives allowance_s = dt: the pre-brief-49 rule.
+//   * A garbage dt_s (non-finite or negative) keeps the least-permissive answer: the allowance is 0
+//     whatever the credit, and both credits go out as 0, on every path. A dt_s of exactly 0.0 is
+//     not garbage: the carried credit applies.
+//   * Steering keeps its asymmetric rates; used_s divides by the rate of the direction moved. A
+//   zero
+//     rate grants nothing and uses nothing. Speed: only growth of the magnitude is limited and only
+//     growth uses credit. Braking toward zero stays free and uses none; the zero-crossing rule is
+//     unchanged.
+//   * Credit is charged for what rate_limit granted, even when a later step (the bounds clamp, the
+//     steering hold) moves the output less. That errs on the strict side.
+//   * The paths that do not run the limiter (watchdog, non-finite command) do not move the output,
+//     so c_out = min(T, c + dt).
+//   * The steering-hold timer and the decaying speed bound keep using the true dt.
+//   * Both fields default to 0.0, so a caller that does not thread them gets the old rule bit for
+//     bit: with c = 0 the allowance is exactly dt.
+//
+// What it guarantees, and what it gives up (layer 3 is risk reduction, never a guarantee of
+// safety):
+//
+//   G1  never stricter than before: allowance_s >= dt. Nothing the old rule passed is clipped.
+//   G2  never looser per cycle than a minimum dt of one nominal period: allowance_s <= max(dt, T).
+//   G3  the per-second limit, for ANY sequence of cycle times: over any run of consecutive cycles
+//       j+1..k, with the credits threaded, sum(used_s) <= sum(dt) + T, so
+//       |output_k - output_j| <= rate * (sum(dt) + T), and the same for the summed speed growth
+//       with max_acceleration_mps2.
+//
+//   The weakening, plainly: the bound used to be rate * sum(dt) with no slack. It now adds one
+//   nominal period, once per window: at most 3.2 rad/s * 0.02 s = 0.064 rad of steering and
+//   9.51 m/s^2 * 0.02 s = 0.19 m/s of speed (the vehicle_params values of the day, quoted for scale
+//   only). On a catch-up cycle the output may move rate * T in a few ms, paid for by time in which
+//   it moved less than allowed. The long-run rate is unchanged. The bounds, the watchdog, the TTC
+//   gates, fail closed and event logging are as before.
+//
+//   What it fixes: a command stream that moves at share f of the limit by its own clock is never
+//   clipped, whatever the cycle times, while the command's age at each cycle stays at or below
+//   T * (1 - f) / f (24 ms at the planner's 0.45). An older command than that can still clip. That
+//   is intended.
+//
+//   Not used, and why: a minimum dt alone (max(dt, T)) is stateless but allows rate * T on every
+//   call however close the calls are, so the per-second limit would rest on the timer's behaviour,
+//   outside this library; command timestamps are untrusted input on the ROS clock and would let the
+//   publisher buy slew; a credit without the per-cycle cap allows rate * 2T in a nominal cycle.
+//
 // Every field that would naturally come from `config/vehicle_params.yaml` is threaded in
 // through `SafetyLimits`, populated ONLY from the generated vehicle_params C++ binding by
 // safety_node.cpp (CLAUDE.md invariant 2: never hand-write a physical constant) -- this
@@ -446,6 +511,11 @@ struct GateInput {
   // of speed toward the front and toward the rear; 0 at startup.
   double speed_bound_forward_mps = 0.0;
   double speed_bound_reverse_mps = 0.0;
+  // The rate credits as the previous cycle left them (GateResult::steering_rate_credit_s /
+  // speed_rate_credit_s), seconds, 0 at startup. See "RATE CREDIT". A caller that leaves them at
+  // 0 gets the rate rule of dt_s alone.
+  double steering_rate_credit_s = 0.0;
+  double speed_rate_credit_s = 0.0;
   // Covariance gate stub inputs (TODO roadmap task 2.6: wire from /pose once it exists).
   // `has_pose_input` is always false until then; `pose_covariance_trace` is unused while it
   // is.
@@ -491,6 +561,10 @@ struct GateResult {
   // back as next cycle's GateInput::speed_bound_forward_mps / speed_bound_reverse_mps.
   double speed_bound_forward_mps = 0.0;
   double speed_bound_reverse_mps = 0.0;
+  // The rate credits after this cycle ("RATE CREDIT"), in [0, control_period_s]; safety_node feeds
+  // them back as next cycle's GateInput::steering_rate_credit_s / speed_rate_credit_s.
+  double steering_rate_credit_s = 0.0;
+  double speed_rate_credit_s = 0.0;
   // Why an engagement ended, for gates that know (today only the obstacle gate's "ttc brake
   // released" note). Not an engagement: GateEventTracker::update uses a matching
   // (source, severity) entry here as the detail of that engagement's PHASE_RELEASE record.
@@ -537,8 +611,15 @@ class SafetyGateLogic {
 
  private:
   DriveCommand clamp_to_bounds(const DriveCommand& cmd) const;
+  // Step 3c ("RATE CREDIT"). `steering_allowance_s` and `speed_allowance_s` are the time each
+  // channel may use this cycle; the time the limiter actually granted comes back in
+  // `steering_used_s` and `speed_used_s`, and whether it changed the requested steering delta or
+  // the requested speed growth (`steering_clipped`, `speed_clipped`), which is what rate_limit
+  // events report.
   DriveCommand rate_limit(const DriveCommand& cmd, const DriveCommand& previous_output,
-                          double dt_s) const;
+                          double steering_allowance_s, double speed_allowance_s,
+                          double& steering_used_s, double& speed_used_s, bool& steering_clipped,
+                          bool& speed_clipped) const;
   // Step 3b, for one direction: +1.0 forward (range GateInput::min_scan_range_m, latch
   // ttc_brake_latched, source kTtc) or -1.0 reverse (min_rear_scan_range_m,
   // reverse_brake_latched, kTtcReverse). Reads the REQUESTED command, may zero `target`'s

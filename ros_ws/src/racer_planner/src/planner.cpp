@@ -68,6 +68,8 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
   slew_.max_acceleration_mps2 = geometry_.max_acceleration_mps2;
   slew_.fraction = cfg_.logic.rate_limit_fraction;
   slew_.speed_floor_mps = cfg_.mppi.speed_floor_mps;
+  start_slew_ = slew_;
+  start_slew_.fraction = std::min(cfg_.logic.start_steer_fraction, slew_.fraction);
   reverse_limit_mps_ = std::max(cfg_.recovery.recover_speed_mps, cfg_.mppi.speed_floor_mps);
 }
 
@@ -678,6 +680,10 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
                            ? std::min(std::max(wanted.steering_rad, geometry_.steering_min_rad),
                                       geometry_.steering_max_rad)
                            : last_published_.steering_rad;
+      // Hold the steering where it is until the ticks have proven on time (see
+      // LogicParams::start_steer_hold_ticks).
+      if (publish_good_ticks_ < lg.start_steer_hold_ticks)
+        c.steering_rad = last_published_.steering_rad;
     }
   }
   if (state == PlannerState::Driving) {
@@ -701,7 +707,23 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
   }
   if (state == PlannerState::Driving || state == PlannerState::Blocked ||
       state == PlannerState::Recovering || state == PlannerState::Starting) {
-    c = slew_limit(c, last_published_, elapsed, slew_);
+    c = slew_limit(c, last_published_, elapsed,
+                   state == PlannerState::Starting ? start_slew_ : slew_);
+    // Never ask for more than the gate can follow in one cycle above what it last OUTPUT. The
+    // slew above is relative to the last command, and the gate's output can be far below it: a
+    // /drive_raw that reached safety_node late although it was published on time trips the
+    // watchdog (output 0) while this planner's gap stayed under gap_reset_s, and the next command
+    // then asked for the full speed from a standstill, which the gate clipped (found 2026-11-17 in
+    // the canary's stall cases, see test_planner_resume_safety.cpp). In a normal ramp the gated
+    // speed is one or two commands behind, a step or two below what is asked, so this does not
+    // bind there. 0.95 of max_acceleration * tick, under what the gate allows in a cycle.
+    if (finite_now && in.has_gated && std::isfinite(in.gated_speed_mps) &&
+        !is_stale(now, in.gated_stamp_s, lg.gated_timeout_s)) {
+      // A gate output in reverse counts as 0: growth forward is counted from zero.
+      const double follow_mps = std::max(in.gated_speed_mps, 0.0) +
+                                0.95 * slew_.max_acceleration_mps2 * slew_elapsed_s(tick, tick);
+      if (c.speed_mps > follow_mps) c.speed_mps = follow_mps;
+    }
   }
 
   out.state = state;

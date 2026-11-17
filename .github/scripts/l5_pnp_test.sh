@@ -80,6 +80,11 @@ set +u
 source "$RACER_L5_WS_DIR/install/setup.bash"
 set -u
 
+# Diagnostics: the runner writes each case's /drive_raw, /drive, /safety/events and planner status
+# with their arrival times here (tests/l5_reactive_bench/track_family_runner.py
+# write_event_trace); the workflow uploads the directory. Nothing reads it back.
+export RACER_EVENT_TRACE_DIR="${RACER_EVENT_TRACE_DIR:-$REPO_ROOT/canary-trace}"
+
 echo "Running the Plug-and-Play canary (colcon test --shm-size handled by the caller's docker run)..."
 colcon test --build-base "$RACER_L5_WS_DIR/build" --install-base "$RACER_L5_WS_DIR/install" \
   --packages-select l5_pnp --event-handlers console_direct+

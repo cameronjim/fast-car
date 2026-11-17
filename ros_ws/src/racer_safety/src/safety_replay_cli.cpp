@@ -400,6 +400,8 @@ int main(int argc, char** argv) {
   std::optional<double> hold_timer_s;
   double bound_forward = 0.0;
   double bound_reverse = 0.0;
+  double steering_credit_s = 0.0;
+  double speed_credit_s = 0.0;
   racer_safety::GateEventTracker tracker;
   std::optional<DriveCommand> command;
   double command_stamp_s = 0.0;
@@ -449,6 +451,8 @@ int main(int argc, char** argv) {
     input.obstacle_hold_timer_s = hold_timer_s;
     input.speed_bound_forward_mps = bound_forward;
     input.speed_bound_reverse_mps = bound_reverse;
+    input.steering_rate_credit_s = steering_credit_s;
+    input.speed_rate_credit_s = speed_credit_s;
     if (use_odometry && odom_mps && now_s - odom_stamp_s <= odom_timeout_s) {
       input.measured_speed_mps = odom_mps;
     }
@@ -534,6 +538,8 @@ int main(int argc, char** argv) {
     hold_timer_s = result.obstacle_hold_timer_s;
     bound_forward = result.speed_bound_forward_mps;
     bound_reverse = result.speed_bound_reverse_mps;
+    steering_credit_s = result.steering_rate_credit_s;
+    speed_credit_s = result.speed_rate_credit_s;
   }
   return 0;
 }

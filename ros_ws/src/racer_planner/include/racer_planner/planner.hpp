@@ -238,6 +238,7 @@ class Planner {
   PlannerConfig cfg_;
   VehicleGeometry geometry_;
   SlewLimits slew_;
+  SlewLimits start_slew_;    // the STARTING pre-turn: same limits at start_steer_fraction
   DynamicsModel model_pub_;  // publish side (the model has scratch space: one instance per thread)
   double plan_dt_s_;
   double reverse_limit_mps_;

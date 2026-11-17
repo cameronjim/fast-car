@@ -633,3 +633,56 @@ def test_right_turns_use_the_right_scale() -> None:
     for k in range(1, 261):
         g.on_odom(k * DT, 1.0)
     assert g.heading_since_closure_rad == pytest.approx(-0.5 * TWO_PI, abs=1e-6)
+
+
+# -- the JSON of the source topics ----------------------------------------------------------------
+
+
+def test_parse_event() -> None:
+    from racer_laps.external_gate import parse_event_json
+
+    ok = '{"lap":3,"lap_time_s":5.3,"peak_similarity":0.93,"crossing_time_s":12.5,"distance_m":5.2}'
+    assert parse_event_json(ok) == (3, 12.5)
+    assert parse_event_json('{"lap":3.0,"crossing_time_s":12}') == (3, 12.0)
+    for bad in (
+        "",
+        "not json",
+        "[1, 2]",
+        "null",
+        '{"lap":3}',
+        '{"crossing_time_s":1.0}',
+        '{"lap":"3","crossing_time_s":1.0}',
+        '{"lap":3.5,"crossing_time_s":1.0}',
+        '{"lap":true,"crossing_time_s":1.0}',
+        '{"lap":3,"crossing_time_s":"x"}',
+        '{"lap":3,"crossing_time_s":null}',
+        '{"lap":3,"crossing_time_s":true}',
+    ):
+        assert parse_event_json(bad) is None, bad
+    # a NaN literal parses: the gate rejects it as not finite (not "malformed")
+    got = parse_event_json('{"lap":3,"crossing_time_s":NaN}')
+    assert got is not None and math.isnan(got[1])
+
+
+def test_parse_status() -> None:
+    from racer_laps.external_gate import parse_status_json
+
+    ok = '{"state":"running","similarity":0.97,"laps":0,"armed":true}'
+    assert parse_status_json(ok) == ("running", 0, 0.97)
+    assert parse_status_json('{"state":"waiting","similarity":null,"laps":0}') == (
+        "waiting",
+        0,
+        None,
+    )
+    for bad in (
+        "",
+        "{",
+        "3",
+        '{"state":"running","laps":0}',
+        '{"similarity":1.0,"laps":0}',
+        '{"state":"running","similarity":1.0}',
+        '{"state":5,"similarity":1.0,"laps":0}',
+        '{"state":"running","similarity":"x","laps":0}',
+        '{"state":"running","similarity":1.0,"laps":"0"}',
+    ):
+        assert parse_status_json(bad) is None, bad

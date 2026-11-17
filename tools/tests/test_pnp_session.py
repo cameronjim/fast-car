@@ -607,3 +607,75 @@ def test_npz_roundtrip(tmp_path):
     bag.save(p)
     again = SessionBag.load(p)
     assert again.name == "synthetic" and len(again.st_t) == len(bag.st_t)
+
+
+# ------------------------------------------------------------------------------------ M-T2
+
+
+def test_cycle_table_echo_reads_the_latched_command_back_from_drive():
+    # /drive_raw changes every 20 ms with a 4 ms transport; the gate passes it through.
+    bag = make_bag()
+    n = len(bag.draw_t)
+    bag.draw_stamp = bag.draw_t = np.arange(n) * 0.02 + 0.001
+    bag.draw_speed = np.array([float(np.float32(0.3 + 0.001 * i)) for i in range(n)])
+    bag.draw_steer = np.array([float(np.float32(0.001 * (i % 7))) for i in range(n)])
+    bag.drv_stamp = bag.drv_t = np.arange(n) * 0.02 + 0.01
+    j = np.searchsorted(bag.draw_stamp + 0.004, bag.drv_stamp, side="right") - 1
+    j = np.maximum(j, 0)
+    bag.drv_speed = bag.draw_speed[j]
+    bag.drv_steer = bag.draw_steer[j]
+    stamp, _dt, _steer, speed, age = whatif.cycle_table(bag, "echo")
+    assert len(stamp) == n
+    assert np.array_equal(speed[3:-3], bag.draw_speed[j][3:-3])
+    assert np.all(age[3:-3] > 0.0) and np.all(age[3:-3] < 0.05)
+    assert whatif.latched_from_bag(bag).source == "echo"
+
+
+def test_m_t2_report_with_a_fake_tool(tmp_path):
+    bag = make_bag(events=[(1.5, "rate_limit", RL)])
+    a = timing.analyse_timing(bag)
+    r = whatif.m_t2_report(bag, a, fake_cli(tmp_path))
+    assert r["id"] == "M-T2" and r["latch_source"] == "echo"
+    assert r["reproduces"] is True and r["rate_limit"]["missed"] == 0
+    assert 0.0 <= r["ambiguous_share"] <= 1.0
+    assert r["replay"]["arrival"] == "echo"
+    # the same engagement one cycle (20 ms) away is not "the same cycle"
+    bag2 = make_bag(events=[(1.52, "rate_limit", RL)])
+    r2 = whatif.m_t2_report(bag2, timing.analyse_timing(bag2), fake_cli(tmp_path))
+    assert r2["reproduces"] is False and r2["rate_limit"]["missed"] == 1
+
+
+def test_timing_command_with_m_t2_adds_the_block(tmp_path):
+    import argparse
+
+    bag = make_bag(events=[(1.5, "rate_limit", RL)])
+    out = tmp_path / "o.json"
+    args = argparse.Namespace(
+        bag=str(tmp_path),
+        out=str(out),
+        caps=None,
+        caps_from_split=None,
+        wall_contacts=0,
+        limiter_cli=str(fake_cli(tmp_path)),
+        no_limiter=False,
+        check_baseline=False,
+        m_t2=True,
+    )
+    assert cli.cmd_timing(args, read=lambda p: bag) == 0
+    assert json.loads(out.read_text())["m_t2"]["id"] == "M-T2"
+    args.limiter_cli = str(tmp_path / "missing")
+    args.no_limiter = True
+    assert cli.cmd_timing(args, read=lambda p: bag) == 0
+    assert json.loads(out.read_text())["m_t2"]["status"] == "not run"
+
+
+def test_the_r2_fixture_runs_the_echo_part_of_the_timing_chain():
+    from racer_eval import timing_chain
+
+    bag = read_session_bag(CUT)
+    r = timing_chain.chain_report(whatif.chain_inputs(bag))
+    assert r["commands"] == len(bag.draw_stamp) and r["cycles"] == len(bag.drv_stamp)
+    assert r["timing_topic"] is False and r["latch_source"] == "echo"
+    assert 0.0 <= r["share_identified"] <= 1.0
+    lat = whatif.latched_from_bag(bag)
+    assert len(lat.stamp) == len(bag.drv_stamp)

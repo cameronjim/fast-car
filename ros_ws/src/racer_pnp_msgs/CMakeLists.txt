@@ -8,6 +8,7 @@ find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/LocalTrack.msg"
   "msg/PlannerStatus.msg"
+  "msg/PlannerTiming.msg"
   "msg/LapEvent.msg"
   "msg/LapGuidance.msg"
   DEPENDENCIES std_msgs

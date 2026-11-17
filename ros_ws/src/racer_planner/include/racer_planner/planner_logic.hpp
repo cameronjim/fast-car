@@ -160,6 +160,18 @@ Gate evaluate_gate(const LogicInputs& in, const LogicParams& p);
 enum class Age : std::uint8_t { Fresh = 0, Soft = 1, Hard = 2 };
 Age classify_age(double now_s, double stamp_s, double timeout_s, double hard_timeout_s);
 
+// Freshness by source stamp (claude-docs/13 17.4.2), for the odometry and the lap guidance. The age
+// a timeout is judged against is now minus the message's header stamp, not its arrival time. A
+// message whose stamp is not later than the last accepted one (a republished or a delayed old
+// sample) refreshes nothing; a message with no stamp (unset header: zero) takes its arrival time.
+enum class StampVerdict : std::uint8_t {
+  kAccept = 0,         // the stamp advanced: use the message, its age runs from the stamp
+  kAcceptNoStamp = 1,  // unset header: use the message with the arrival time as its stamp
+  kRejectNotLater = 2  // the stamp did not advance: the message is dropped, nothing is refreshed
+};
+StampVerdict judge_stamp(bool header_unset, double header_stamp_s, bool have_last,
+                         double last_stamp_s);
+
 // min(v_max_mps, guidance cap) scaled by (f + (1 - f) * confidence) with f =
 // freespace_speed_fraction, then by the scan staleness ramp (1 up to scan_timeout_s, linear to 0 at
 // scan_hard_timeout_s, 0 for a missing scan or a bad stamp), then at most the last wheel speed plus

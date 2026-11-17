@@ -77,6 +77,11 @@ struct TickInput {
   // The lap profile (lap_profile.hpp), null or not active: no profile.
   const LapProfile* lap = nullptr;
   double gated_steering_rad = 0.0;  // where STARTING slews the steering from
+  // Message counter and receipt time of the gated /drive (brief 42). The counter changes with every
+  // gated message; with it constant (0, the default) no gated command is ever matched to a
+  // published one and the actuator estimate follows the published commands, as it did before.
+  std::uint64_t gated_seq = 0;
+  double gated_receipt_s = 0.0;
 };
 
 // What the publish side needs from outside.
@@ -85,6 +90,9 @@ struct PublishInput {
   bool has_gated = false;  // the gated /drive has been seen at least once
   double gated_stamp_s = 0.0;
   double gated_steering_rad = 0.0;
+  double gated_speed_mps = 0.0;
+  std::uint64_t gated_seq = 0;   // changes with every gated message, see TickInput
+  double gated_receipt_s = 0.0;  // node clock time the latest gated message arrived
 };
 
 struct TickOutput {
@@ -121,6 +129,13 @@ struct TickOutput {
   bool left_starting = false;                       // this publish ended STARTING
   bool drive_suppressed =
       false;  // STARTING before the gated /drive is known: publish no /drive_raw
+  // Timing chain (brief 42): the plan this tick used and what the solver said about it.
+  double plan_time_s = 0.0;  // node clock time of the solve the plan comes from (0 when none)
+  bool has_final_sequence = false;  // a solver ran for this plan (the next fields are set)
+  FinalSequence final_sequence = FinalSequence::kMean;
+  bool unchecked_final_collided = false;            // M-C1, see SolveOutput
+  std::array<double, kCostTermCount> cost_terms{};  // of the final sequence, kCostTermCount order
+  SpeedLimiter speed_limiter = SpeedLimiter::kNone;
 };
 
 struct SolveReport {
@@ -181,6 +196,23 @@ class Planner {
   const PlannerConfig& config() const { return cfg_; }
   void set_v_max(double v_max_mps) { cfg_.logic.v_max_mps = v_max_mps; }
   // Timer callbacks (solve or publish) that arrived under half a tick after the previous one.
+  // The model's actuator estimate (v from the model or the last wheel speed, delta from the
+  // model) as the next solve will read it. For tests and diagnostics; takes the shared mutex.
+  State actuator_estimate() {
+    std::lock_guard<std::mutex> lock(mu_);
+    return shared_.est;
+  }
+  // Publish side tick counts of the actuator estimate (brief 42): a tick whose ring entry was
+  // corrected from the gated /drive (it differed from what was published), one whose gated command
+  // equalled the published one, and one that used the published command because no gated message
+  // matched it.
+  std::uint32_t gated_corrected_ticks() const {
+    return gated_corrected_.load(std::memory_order_relaxed);
+  }
+  std::uint32_t gated_equal_ticks() const { return gated_equal_.load(std::memory_order_relaxed); }
+  std::uint32_t gated_fallback_ticks() const {
+    return gated_fallback_.load(std::memory_order_relaxed);
+  }
   std::uint32_t bunched_ticks() const { return bunched_ticks_.load(std::memory_order_relaxed); }
 
  private:
@@ -197,6 +229,7 @@ class Planner {
   SolveReport solve_fault(const TickInput& in);
   TickOutput publish_impl(const PublishInput& in);
   void advance_model(const Command& published, int steps, const Command& before);
+  void apply_gated(const PublishInput& in, double now);
   void store_snapshot(const PlanSnapshot& s);
   static bool is_moving_state(PlannerState s) {
     return s == PlannerState::Driving || s == PlannerState::Recovering;
@@ -243,6 +276,23 @@ class Planner {
   bool have_starting_since_ = false;
   double last_nonzero_s_ = 0.0;
   TickOutput last_out_;
+  // The last tick's ring entry, waiting for its gated value (publish side only).
+  struct Pending {
+    bool valid = false;
+    int slot = 0;         // ring slot the entry was written to
+    int steps_since = 0;  // model steps taken since (the slot is consumed after delay_ticks_)
+    double publish_s = 0.0;
+    Command published;
+    State est_before;  // delay 0 only: the estimate before the step that used the command
+  };
+  Pending pending_;
+  double pending_publish_s_ = 0.0;
+  std::array<Command, 4> sent_hist_{};  // newest first, for matching a gated message to its tick
+  int sent_hist_n_ = 0;
+  std::uint64_t last_gated_seq_ = 0;
+  std::atomic<std::uint32_t> gated_corrected_{0};
+  std::atomic<std::uint32_t> gated_equal_{0};
+  std::atomic<std::uint32_t> gated_fallback_{0};
 
   // -- shared, under mu_ --------------------------------------------------------------------
   std::mutex mu_;

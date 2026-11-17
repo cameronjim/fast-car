@@ -16,6 +16,15 @@ bool is_stale(double now_s, double stamp_s, double timeout_s) {
   return a > timeout_s || a < -timeout_s;
 }
 
+StampVerdict judge_stamp(bool header_unset, double header_stamp_s, bool have_last,
+                         double last_stamp_s) {
+  if (header_unset) return StampVerdict::kAcceptNoStamp;
+  // A stamp that is not a number is not later than anything.
+  if (!std::isfinite(header_stamp_s)) return StampVerdict::kRejectNotLater;
+  if (have_last && !(header_stamp_s > last_stamp_s)) return StampVerdict::kRejectNotLater;
+  return StampVerdict::kAccept;
+}
+
 double ramp_down(double x, double full, double zero) {
   if (!std::isfinite(x)) return 0.0;
   if (!(zero > full)) return x <= full ? 1.0 : 0.0;

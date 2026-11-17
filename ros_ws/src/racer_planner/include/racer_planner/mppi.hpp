@@ -72,7 +72,53 @@ struct MppiParams {
   // 0.06 over); the quadratic hinge trades against the cost-to-go, so no weight makes a literal
   // step in the bound exact for a car with a speed lag.
   double w_trust = 2500.0;
+  // Check the final sequence (the smoothed weighted mean) for collision and fall back to the best
+  // evaluated collision-free sample of the chosen class when it fails (claude-docs/13 17.4.1).
+  // false is the behaviour of main f5db7f1 and exists only so planner_replay_cli can measure M-C1
+  // (pre-registration addendum 1 section 4) and the L1 tests can show the fault on the old path:
+  // no node parameter reads it, it is never false on the car.
+  bool check_final_sequence = true;
+  // Marginal speed probe of the speed limiter attribution (see SpeedLimiter): the whole final
+  // sequence is re-evaluated with every speed command raised by this much.
+  double limiter_probe_mps = 0.1;
+  double limiter_cap_band_mps = 0.05;  // "at the cap": the plan speed is within this of it
 };
+
+// What the final command sequence of a solve is (SolveOutput::final_sequence). The numeric values
+// are the PlannerTiming.msg constants.
+enum class FinalSequence : std::uint8_t {
+  kMean = 0,        // the smoothed weighted mean, collision free and finite
+  kFallback = 1,    // the mean collided or was not finite: the best clean sample of its class
+  kAllCollide = 2,  // every sample collided: the least bad one with speed 0
+};
+
+// Which term limits the speed of the final sequence. The numeric values are the PlannerTiming.msg
+// constants. The rule (MppiSolver::solve): re-evaluate the final sequence with every speed command
+// raised by MppiParams::limiter_probe_mps (no clamp at the cap). The marginal cost of a term is its
+// change under that probe. The terms that can limit speed are clearance, terminal, gate and
+// lap_trust. G is the marginal reward, the fall of progress plus lap_terminal. If the sum of the
+// positive marginal costs of those four terms is at least G (and above 0) the limiter is the one
+// with the largest marginal cost (ties in the order clearance, terminal, gate, lap bound). If not,
+// speed is held by something else: kCap when the mean speed command over the plan window reaches
+// the cap (within MppiParams::limiter_cap_band_mps), else kSampleChoice (the sampled sequences or
+// their average stop short of both the cap and any penalty). kNone: the plan does not move. The
+// planner turns kCap into kValidity when the track confidence is what lowered the cap
+// (Planner::solve_impl).
+enum class SpeedLimiter : std::uint8_t {
+  kNone = 0,
+  kCap = 1,
+  kClearance = 2,
+  kTerminal = 3,
+  kGate = 4,
+  kLapBound = 5,
+  kValidity = 6,
+  kSampleChoice = 7,
+};
+
+// Order of the cost terms of the final sequence in PlannerTiming.cost_terms.
+constexpr int kCostTermCount = 11;
+// progress, collision, clearance, boundary, lateral, smoothness, steer_rate, terminal, gate,
+// lap_trust, lap_terminal
 
 struct CostBreakdown {
   double progress = 0.0;  // cost term, negative when moving forward
@@ -131,7 +177,30 @@ struct SolveOutput {
   // The gate would brake the first command given the table and the wheel speed (diagnostic: the
   // gate cost is what steers away from it). False without a table.
   bool cmd_would_trip = false;
+  // The final sequence outcome (FinalSequence), its cost terms and the speed limiter. final_cost
+  // is the evaluation of the sequence the command comes from (the mean, or the fallback sample).
+  FinalSequence final_sequence = FinalSequence::kMean;
+  // True when the unchecked mean collided or was not finite although a clean sample existed
+  // (M-C1). Reported whether or not MppiParams::check_final_sequence acted on it.
+  bool unchecked_final_collided = false;
+  CostBreakdown final_cost;
+  SpeedLimiter speed_limiter = SpeedLimiter::kNone;
 };
+
+// The terms of a CostBreakdown in the order of PlannerTiming.cost_terms.
+inline void cost_terms_array(const CostBreakdown& b, double out[kCostTermCount]) {
+  out[0] = b.progress;
+  out[1] = b.collision;
+  out[2] = b.clearance;
+  out[3] = b.boundary;
+  out[4] = b.lateral;
+  out[5] = b.smoothness;
+  out[6] = b.steer_rate;
+  out[7] = b.terminal;
+  out[8] = b.gate;
+  out[9] = b.lap_trust;
+  out[10] = b.lap_terminal;
+}
 
 constexpr int kMinSamples = 64;
 constexpr int kMaxSamples = 4096;
@@ -193,6 +262,8 @@ class MppiSolver {
   double evaluate(const SolveInput& in, const Ctx& ctx, const Control* u, CostBreakdown* bd,
                   Pose2* poses) const;
   void build_samples(const SolveInput& in, double v_cap);
+  SpeedLimiter limiter_of(const SolveInput& in, const Ctx& ctx, const CostBreakdown& base,
+                          double plan_speed_mps, double v_cap);
 
   MppiParams p_;
   DynamicsModel model_;
@@ -213,6 +284,7 @@ class MppiSolver {
   std::vector<unsigned char> hit_;  // capacity, 1 when the sample collided
   std::vector<unsigned char> cls_;  // capacity, 1 when the sample moves (see solve)
   std::vector<Control> u_new_;
+  std::vector<Control> probe_;  // the limiter probe sequence
   std::vector<Pose2> plan_;
 };
 

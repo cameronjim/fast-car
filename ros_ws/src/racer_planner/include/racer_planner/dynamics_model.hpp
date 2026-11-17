@@ -118,6 +118,21 @@ class DynamicsModel {
     return v * std::tan(delta) / wheelbase_ / (1.0 + params_.nominal.understeer_s2_per_m2 * v * v);
   }
 
+  // The yaw rate the step uses for state (v, delta) under command u: the nominal rate plus the
+  // residual's yaw term when the bundle enables one. Dead reckoning (EgoMotion) calls this so the
+  // scan frame compensation and the rollouts share one motion model. Without a residual it is
+  // exactly yaw_rate(v, delta). Not thread safe (the residual has scratch space).
+  double yaw_rate_for(double v, double delta, double speed_cmd, double steering_cmd) const {
+    double w = yaw_rate(v, delta);
+    if (residual_enabled_) {
+      double r[kMlpOut];
+      residual(v, delta, speed_cmd, steering_cmd, r);
+      w += r[1];
+    }
+    return w;
+  }
+  bool has_residual() const { return residual_enabled_; }
+
   // Residual MLP: output_scale * MLP((inputs - mean) / std). Preallocated scratch, not
   // thread safe: one model instance per thread.
   void residual(double v, double delta, double speed_cmd, double steering_cmd,

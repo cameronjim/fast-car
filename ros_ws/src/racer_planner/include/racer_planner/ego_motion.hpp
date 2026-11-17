@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 
+#include "racer_planner/dynamics_model.hpp"
 #include "racer_planner/local_track.hpp"  // Pose2
 
 namespace racer_planner {
@@ -16,10 +17,16 @@ class EgoMotion {
  public:
   // yaw_rate = v * tan(delta) / wheelbase / (1 + understeer * v^2), as in the model step.
   EgoMotion(double wheelbase_m, double understeer_s2_per_m2);
+  // The yaw rate comes from the model's own function (DynamicsModel::yaw_rate_for), the residual
+  // included when the bundle has one, so dead reckoning and the step agree. The model must outlive
+  // this object and is used from the thread that calls relative_pose (it has scratch space).
+  explicit EgoMotion(const DynamicsModel* model);
 
   // Samples are held (zero order) until the next one. Non finite values and times that do not
-  // advance are ignored.
-  void push(double t_s, double v_mps, double delta_rad);
+  // advance are ignored. speed_cmd and steering_cmd are the commands acting at t (the residual's
+  // inputs; ignored by a model without one and by the nominal constructor).
+  void push(double t_s, double v_mps, double delta_rad, double speed_cmd = 0.0,
+            double steering_cmd = 0.0);
   void clear();
   std::size_t size() const { return count_; }
 
@@ -38,6 +45,8 @@ class EgoMotion {
     double t = 0.0;
     double v = 0.0;
     double delta = 0.0;
+    double speed_cmd = 0.0;
+    double steering_cmd = 0.0;
   };
   static constexpr std::size_t kCapacity = 256;
   const Sample& at(std::size_t i) const {  // i = 0 is the oldest
@@ -48,6 +57,7 @@ class EgoMotion {
 
   double wheelbase_;
   double understeer_;
+  const DynamicsModel* model_ = nullptr;
   std::array<Sample, kCapacity> buf_{};
   std::size_t head_ = 0;  // index of the oldest sample
   std::size_t count_ = 0;

@@ -8,26 +8,34 @@ namespace racer_planner {
 EgoMotion::EgoMotion(double wheelbase_m, double understeer_s2_per_m2)
     : wheelbase_(wheelbase_m), understeer_(understeer_s2_per_m2) {}
 
+EgoMotion::EgoMotion(const DynamicsModel* model)
+    : wheelbase_(0.0), understeer_(0.0), model_(model) {}
+
 void EgoMotion::clear() {
   head_ = 0;
   count_ = 0;
 }
 
-void EgoMotion::push(double t_s, double v_mps, double delta_rad) {
+void EgoMotion::push(double t_s, double v_mps, double delta_rad, double speed_cmd,
+                     double steering_cmd) {
   if (!std::isfinite(t_s) || !std::isfinite(v_mps) || !std::isfinite(delta_rad)) return;
+  if (!std::isfinite(speed_cmd)) speed_cmd = 0.0;
+  if (!std::isfinite(steering_cmd)) steering_cmd = 0.0;
   if (count_ > 0 && !(t_s > at(count_ - 1).t)) return;
   if (count_ < kCapacity) {
-    buf_[(head_ + count_) % kCapacity] = Sample{t_s, v_mps, delta_rad};
+    buf_[(head_ + count_) % kCapacity] = Sample{t_s, v_mps, delta_rad, speed_cmd, steering_cmd};
     ++count_;
   } else {
-    buf_[head_] = Sample{t_s, v_mps, delta_rad};
+    buf_[head_] = Sample{t_s, v_mps, delta_rad, speed_cmd, steering_cmd};
     head_ = (head_ + 1) % kCapacity;
   }
 }
 
 void EgoMotion::advance(Pose2* pose, const Sample& s, double dt) const {
   if (!(dt > 0.0)) return;
-  const double w = s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
+  const double w = model_ != nullptr
+                       ? model_->yaw_rate_for(s.v, s.delta, s.speed_cmd, s.steering_cmd)
+                       : s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
   const double th = pose->yaw;
   if (std::fabs(w) > 1e-9) {
     pose->x += s.v * (std::sin(th + w * dt) - std::sin(th)) / w;

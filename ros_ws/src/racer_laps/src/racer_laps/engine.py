@@ -668,6 +668,8 @@ class LapMemory:
                 phase = "waiting_for_driving"
             else:
                 phase = "waiting_for_scan" if self.gate is not None else "waiting_for_pose"
+                if isinstance(self.gate, ExternalLapGate):
+                    phase = "waiting_for_odometry"
         else:
             phase = "running"
         out: dict[str, object] = {
@@ -706,7 +708,9 @@ class LapMemory:
         if not self._driving_seen:
             return "waiting_for_driving"
         if not gate.started:
-            return "waiting_for_scan"
+            return (
+                "waiting_for_odometry" if isinstance(gate, ExternalLapGate) else "waiting_for_scan"
+            )
         if not gate.armed:
             return "gate_not_armed"
         return "armed_no_crossing_yet"

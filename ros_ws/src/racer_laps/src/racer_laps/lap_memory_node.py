@@ -49,6 +49,12 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
 from racer_laps.engine import LAP_MODES, LAP_SOURCES, LapConfig, LapMemory, LapResult
+from racer_laps.external_gate import (
+    EXTERNAL_SOURCES,
+    ExternalConfig,
+    parse_event_json,
+    parse_status_json,
+)
 from racer_laps.gate import GateConfig
 from racer_laps.scan_match import Body, Mount, scan_to_points
 from racer_laps.vehicle import LapVehicle, VehicleParamsNull, from_generated
@@ -116,6 +122,22 @@ class LapMemoryNode(Node):
             "v0",
             f"One of {list(LAP_MODES)}: D v0, D v1, or observe (events and status, no guidance).",
         )
+        lap_event_topic = declare_str(
+            "lap_event_topic",
+            "/lap/event",
+            "camera and truth sources: the JSON String topic of the source's lap events.",
+        )
+        lap_source_status_topic = declare_str(
+            "lap_source_status_topic",
+            "/lap/status",
+            "camera and truth sources: the JSON String topic of the source's own status.",
+        )
+        output_prefix = declare_str(
+            "output_prefix",
+            "/pnp/lap",
+            "Prefix of the event, guidance and status topics (<prefix>/event, /guidance, "
+            "/status). The shadow lap node of pnp.launch.py uses /pnp/lap_shadow.",
+        ).rstrip("/")
         zone_merge = bool(
             self.declare_parameter(
                 "zone_merge",
@@ -398,6 +420,12 @@ class LapMemoryNode(Node):
             raise ValueError(
                 f"lap_source {lap_source!r} / lap_mode {lap_mode!r} not in {LAP_SOURCES} / {LAP_MODES}"
             )
+        if lap_source == "truth" and not bool(self.get_parameter("use_sim_time").value):
+            raise ValueError(
+                "lap_source truth is the simulator's truth oracle and needs use_sim_time:=true; "
+                "the car has no truth"
+            )
+        external = lap_source in EXTERNAL_SOURCES
 
         self._vehicle = self._load_vehicle()
         mount = self._vehicle.mount
@@ -459,13 +487,14 @@ class LapMemoryNode(Node):
             v_bound_floor_mps=float(bound_floor),
             min_filter_half_m=float(min_filter),
             zone_merge=zone_merge,
-            gate=gate if lap_source == "start_scan" else None,
+            gate=gate if lap_source == "start_scan" or external else None,
+            external=ExternalConfig(min_lap_length_m=float(min_len)) if external else None,
         )
         # A bad cap schedule (ceiling below start, ...) raises here and the node exits non-zero.
         self._mem = LapMemory(cfg)
         self._cfg = cfg
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        kind = "station_set" if lap_source == "start_scan" else "safe_set"
+        kind = "safe_set" if lap_source == "map_pose" else "station_set"
         self._save_path = self._output_dir / f"{kind}_{stamp}.npz"
         self._results: list[LapResult] = []
         self._tf_ok = False
@@ -475,17 +504,20 @@ class LapMemoryNode(Node):
         self._map_save = "not_requested"
         self._map_client: Any = None
 
+        self._external = external
+        self._ready_logged: bool | None = None
+        self._save_lap1_map = self._save_lap1_map and not external
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
-        self._event_pub = self.create_publisher(LapEvent, "/pnp/lap/event", _qos(True, 50))
+        self._event_pub = self.create_publisher(LapEvent, f"{output_prefix}/event", _qos(True, 50))
         # observe mode publishes events and status only: no guidance topic at all
         self._guidance_pub = (
             None
             if lap_mode == "observe"
-            else self.create_publisher(LapGuidance, "/pnp/lap/guidance", _qos(True, 5))
+            else self.create_publisher(LapGuidance, f"{output_prefix}/guidance", _qos(True, 5))
         )
-        self._status_pub = self.create_publisher(String, "/pnp/lap/status", _qos(True, 10))
+        self._status_pub = self.create_publisher(String, f"{output_prefix}/status", _qos(True, 10))
         self.create_subscription(
             PlannerStatus, "/pnp/planner/status", self._on_planner, _qos(True, 50)
         )
@@ -495,8 +527,16 @@ class LapMemoryNode(Node):
             AckermannDriveStamped, "/drive_raw", self._on_drive_raw, _qos(False, 10)
         )
         self.create_subscription(AckermannDriveStamped, "/drive", self._on_drive, _qos(False, 10))
-        self.create_subscription(LaserScan, "/scan", self._on_scan, _qos(False, 5))
-        self.create_timer(self._pose_period_s, self._on_pose_timer)
+        if external:
+            # the source's own topics, reliable depth 10: a best-effort publisher is not matched
+            # (the status then says no source)
+            self.create_subscription(String, lap_event_topic, self._on_source_event, _qos(True, 10))
+            self.create_subscription(
+                String, lap_source_status_topic, self._on_source_status, _qos(True, 10)
+            )
+        else:
+            self.create_subscription(LaserScan, "/scan", self._on_scan, _qos(False, 5))
+            self.create_timer(self._pose_period_s, self._on_pose_timer)
         if self._guidance_pub is not None:
             self.create_timer(guidance_period_s, self._publish_guidance)
         self.create_timer(status_period_s, self._publish_status)
@@ -568,6 +608,58 @@ class LapMemoryNode(Node):
         if result is not None:
             self._on_lap(result)
 
+    # -- an external lap source (camera, truth) --------------------------------------------
+
+    def _now_s(self) -> float:
+        return float(self.get_clock().now().nanoseconds) * 1e-9
+
+    def _on_source_event(self, msg: String) -> None:
+        parsed = parse_event_json(msg.data)
+        if parsed is None:
+            self._mem.on_lap_source_malformed()
+            self.get_logger().warn("a lap source event did not parse or lacks a field: dropped")
+            return
+        lap_no, t_cross = parsed
+        result = self._mem.on_lap_source_event(self._now_s(), lap_no, t_cross)
+        if result is not None:
+            self._on_lap(result)
+
+    def _on_source_status(self, msg: String) -> None:
+        parsed = parse_status_json(msg.data)
+        if parsed is None:
+            self._mem.on_lap_source_malformed()
+            self.get_logger().warn("a lap source status did not parse or lacks a field: dropped")
+            return
+        state, laps, similarity = parsed
+        self._mem.on_lap_source_status(self._now_s(), state, laps, similarity)
+        self._log_ready_change()
+
+    def _tick(self) -> None:
+        """The node's clock into the engine (a silent source is noticed without any message)."""
+        if self._external:
+            self._mem.on_clock(self._now_s())
+            self._log_ready_change()
+
+    def _log_ready_change(self) -> None:
+        """One line whenever `source_ready_now` changes, so the person at the car can wait for it
+        (D9-P0). Only before the start: after it the answer is fixed."""
+        status = self._mem.status()
+        if status.get("phase") == "running":
+            return
+        ready = bool(status.get("source_ready_now"))
+        if ready == self._ready_logged:
+            return
+        self._ready_logged = ready
+        if ready:
+            self.get_logger().info(
+                f"{self._cfg.lap_source} source READY (D9-P0): running, 0 laps, similarity at "
+                "least 0.90, car standing"
+            )
+        else:
+            self.get_logger().info(
+                f"{self._cfg.lap_source} source NOT ready: {status.get('source_not_ready_reason')}"
+            )
+
     def _on_pose_timer(self) -> None:
         now_s = self.get_clock().now().nanoseconds * 1e-9
         try:
@@ -598,7 +690,7 @@ class LapMemoryNode(Node):
         self._results.append(r)
         msg = LapEvent()
         msg.header.stamp = _time_msg(r.t_cross_s)
-        msg.header.frame_id = "start_scan" if r.source == "start_scan" else self._map_frame
+        msg.header.frame_id = r.source if r.source != "map_pose" else self._map_frame
         msg.lap_index = r.lap_index
         msg.lap_time_s = float(r.lap_time_s)
         msg.lap_length_m = float(r.length_m)
@@ -607,6 +699,10 @@ class LapMemoryNode(Node):
         msg.min_clearance_m = float(r.min_clearance_m)
         msg.clean = bool(r.clean)
         self._event_pub.publish(msg)
+        if self._external and r.missed_gate:
+            doubtful = self._mem.status().get("doubtful_laps") or []
+            why = doubtful[-1]["reasons"] if doubtful else []  # type: ignore[index]
+            self.get_logger().warn(f"lap {r.lap_index} is DOUBTFUL ({', '.join(why)}): not a lap")
         self.get_logger().info(
             f"lap {r.lap_index}: {r.lap_time_s:.2f} s, {r.length_m:.2f} m, cap {r.cap_mps:.2f}, "
             f"{'clean' if r.clean else 'UNCLEAN'}{' (missed gate, not a lap)' if r.missed_gate else ''}"
@@ -618,7 +714,7 @@ class LapMemoryNode(Node):
         if r.lap_index == 1 and not r.missed_gate and self._save_lap1_map:
             self._request_map_save()
         try:
-            if r.source == "start_scan":
+            if r.source != "map_pose":
                 self._mem.station_set.save(self._save_path)
             else:
                 self._mem.safe_set.save(self._save_path)
@@ -686,6 +782,7 @@ class LapMemoryNode(Node):
             self.get_logger().warn(f"lap-1 map save not possible: {error}")
 
     def _publish_guidance(self) -> None:
+        self._tick()
         g = self._mem.guidance()
         msg = LapGuidance()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -698,6 +795,7 @@ class LapMemoryNode(Node):
         self._guidance_pub.publish(msg)
 
     def _publish_status(self) -> None:
+        self._tick()
         status: dict[str, Any] = {k: _json_safe(v) for k, v in self._mem.status().items()}
         status["tf_ok"] = self._tf_ok
         status["tf_age_s"] = _json_safe(self._tf_age_s)

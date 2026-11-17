@@ -231,7 +231,7 @@ def harness(tmp_path: Path):  # type: ignore[no-untyped-def]
 
 def test_camera_events_become_lap_events_stamped_at_the_crossing(harness: Harness) -> None:
     harness.camera_status()
-    harness.spin(0.5)
+    harness.spin(1.5)  # the node's status is 1 Hz
     assert harness.statuses[-1]["source_ready_now"] is True
     harness.drive(4.0 * LAP_S + 1.0)
     harness.spin(0.3)
@@ -259,7 +259,8 @@ def test_camera_events_become_lap_events_stamped_at_the_crossing(harness: Harnes
     for topic in ("/drive_raw",):
         assert harness.node.get_publishers_info_by_topic(topic) == [], topic
     assert all(
-        i.node_name != "lap_memory_node" for i in harness.node.get_publishers_info_by_topic("/drive")
+        i.node_name != "lap_memory_node"
+        for i in harness.node.get_publishers_info_by_topic("/drive")
     )
 
 

@@ -1,0 +1,619 @@
+"""Run battery B7 of the v0.5 lap pre-registration and report D7-S0 and D7-S1.
+
+    python3 tests/l5_pnp_laps/battery_b7.py check-freeze
+    python3 tests/l5_pnp_laps/battery_b7.py run --out DIR --workers 3
+    python3 tests/l5_pnp_laps/battery_b7.py report --out DIR
+
+Needs the ROS workspace sourced (see .github/scripts/l5_pnp_laps_test.sh) and f1tenth_gym.
+
+Cases P1 to P4, seeds 51 to 53, ccw and cw, 12 laps and the conditions a (D off, cap 0.5), b (D off,
+ceiling) and c (D v0) are read from `evaluation/prereg/pnp-v0.5-laps.yaml`, block
+`lap_battery_b7`, whose SHA-256 is a constant of `lap_battery_b7.py` and is written into every run
+JSON and the report.
+
+NO CASE WITH SEED 51, 52 OR 53 RUNS UNLESS `evaluation/prereg/freeze/b7.json` EXISTS with the freeze
+commit and the yaml's hash (`require_freeze`, called by `command_for`: there is no other way to
+build a B7 command). `check-freeze` verifies the file against git (the freeze commit is an ancestor
+of HEAD and the code under test and the scoring harness are unchanged since) and is run on the host
+before the container runs the battery with B4_GIT_SHA set to the SHA it verified, as B4 did.
+
+Order: the condition a runs of seed 51 first (both directions of every case); a case is dropped if
+the accepted run of either direction has fewer than 3 ground-truth laps (`drops.json`, written once)
+and the rest of the battery then runs without it (18 runs per condition, 16 of 18 instead of 22 of
+24). Every attempt is written once to `<out>/attempts/<name>.attempt<k>.json`. A run is starved
+(a /drive_raw gap over 40 ms, or a real-time factor under 0.8) or has an invalid ground truth
+(`truth_valid` false): it is rerun alone, at most 3 attempts in all, every attempt kept; still
+invalid counts as failed to execute. At most 3 workers (host limit of the launcher).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import battery_b4 as b4t
+import battery_b5 as b5t
+import lap_battery_b4 as b4
+import lap_battery_b7 as b7
+
+REPO_ROOT = HERE.parents[1]
+RUNNER = b4t.RUNNER
+FREEZE_PATH = REPO_ROOT / "evaluation" / "prereg" / "freeze" / "b7.json"
+GUARDED_PATHS = b4t.GUARDED_PATHS  # the lap node, the planner and the runner
+META = "battery_b7"
+MAX_WORKERS = 3  # B4 at 5 workers had 44 of 90 first attempts starved
+MAX_ATTEMPTS = b4t.MAX_ATTEMPTS
+BatteryError = b4t.BatteryError
+DROPS_FILE = "drops.json"
+GIT_SHA_ENV = b4t.GIT_SHA_ENV
+
+# -- the freeze guard ------------------------------------------------------------------------------
+
+
+def read_freeze(path: Path = FREEZE_PATH) -> dict:
+    if not path.exists():
+        raise BatteryError(f"{path} does not exist: B7 may not run before the freeze commit")
+    try:
+        doc = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise BatteryError(f"{path} is not valid JSON: {exc}") from exc
+    commit = doc.get("freeze_commit", "")
+    if not (
+        isinstance(commit, str)
+        and len(commit) == 40
+        and all(c in "0123456789abcdef" for c in commit)
+    ):
+        raise BatteryError(f"{path} has no 40 digit freeze_commit")
+    if doc.get("yaml_sha256") != b7.REGISTERED_YAML_SHA256:
+        raise BatteryError(
+            f"{path} names yaml hash {doc.get('yaml_sha256')}, the registered one is "
+            f"{b7.REGISTERED_YAML_SHA256}"
+        )
+    return doc
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-c", "safe.directory=*", "-C", str(REPO_ROOT), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def verify_freeze_in_git(doc: dict) -> None:
+    """The freeze commit is an ancestor of HEAD and the guarded code is as it was there."""
+    commit = doc["freeze_commit"]
+    if _git("merge-base", "--is-ancestor", commit, "HEAD").returncode != 0:
+        raise BatteryError(f"freeze commit {commit} is not an ancestor of HEAD")
+    diff = _git("diff", "--name-only", commit, "HEAD", "--", *GUARDED_PATHS)
+    if diff.stdout.strip():
+        raise BatteryError(
+            f"the code under test changed since the freeze commit {commit}: "
+            f"{diff.stdout.split()[:6]}"
+        )
+
+
+def require_freeze(path: Path = FREEZE_PATH, verify_git: bool | None = None) -> dict:
+    """The freeze file, or a refusal. With `B4_GIT_SHA` set (the container has no git) the host's
+    `check-freeze` is trusted for the git part."""
+    doc = read_freeze(path)
+    if verify_git is None:
+        verify_git = not os.environ.get(GIT_SHA_ENV)
+    if verify_git:
+        verify_freeze_in_git(doc)
+    return doc
+
+
+# -- cases and commands ------------------------------------------------------------------------------
+
+
+def condition_flags(const: b7.Constants, condition: str, ceiling: float) -> list[str]:
+    try:
+        spec = const.conditions[condition]
+    except KeyError:
+        raise BatteryError(f"condition {condition!r} is not in the yaml") from None
+    # the frozen yaml writes `lap_memory: off` unquoted, which YAML 1.1 reads as the boolean False
+    raw = spec["lap_memory"]
+    mode = "off" if raw is False else str(raw)
+    if mode == "off":
+        cap = spec.get("cap_mps", spec.get("cap"))
+        value = ceiling if cap == "ceiling" else float(cap)
+        return ["--lap-memory", "off", "--v-max-mps", str(value)]
+    return [
+        "--lap-memory",
+        mode,
+        "--v-max-mps",
+        str(ceiling),
+        "--v-lap1-mps",
+        str(const.lap1_cap_mps),
+    ]
+
+
+def command_for(
+    const: b7.Constants,
+    condition: str,
+    case: str,
+    direction: str,
+    seed: int,
+    domain: int,
+    work: Path,
+    out: Path,
+    bundle: Path,
+    data_root: Path,
+    laps: int | None = None,
+    freeze_path: Path = FREEZE_PATH,
+) -> list[str]:
+    """The runner's argv for one run. Refuses without the freeze file, and for a case, seed,
+    direction or condition that is not in the yaml."""
+    require_freeze(freeze_path)
+    cases = const.battery_cases
+    if case not in cases:
+        raise BatteryError(f"case {case!r} is not a B7 case of the yaml ({sorted(cases)})")
+    if seed not in const.battery_seeds:
+        raise BatteryError(f"seed {seed} is not in the yaml's seeds {list(const.battery_seeds)}")
+    if direction not in const.directions:
+        raise BatteryError(f"direction {direction!r} is not in {list(const.directions)}")
+    io = b4t.manifest(bundle)
+    nominal = io["nominal"]
+    track, params = b4t.case_track(cases[case], data_root)
+    command = [
+        sys.executable,
+        str(RUNNER),
+        "--track",
+        track,
+        "--track-params-json",
+        json.dumps(params),
+        "--driver",
+        "pnp",
+        "--backend",
+        "geometric",
+        "--dynamics-bundle",
+        str(bundle),
+        "--plant-bundle",
+        str(bundle),
+        "--plant-speed-deadband",
+        str(nominal["speed_deadband_mps"]),
+        "--plant-steer-tau",
+        str(nominal["steer_tau_s"]),
+        "--plant-command-delay",
+        str(nominal["command_delay_s"]),
+        *condition_flags(const, condition, float(io["validity"]["v_max_mps"])),
+        "--car",
+        "params",
+        "--seed",
+        str(seed),
+        "--stop-after-laps",
+        str(const.laps if laps is None else laps),
+        "--duration",
+        "900",
+        "--stall-s",
+        "30",
+        "--domain-id",
+        str(domain),
+        "--work-dir",
+        str(work),
+        "--out",
+        str(out),
+    ]
+    if direction == "cw":
+        command.append("--reverse")
+    return command
+
+
+# -- attempts --------------------------------------------------------------------------------------------
+
+
+def needs_rerun(result: dict) -> bool:
+    """No usable result, a starved run (gap over 40 ms or real-time factor under 0.8) or an
+    invalid ground truth."""
+    return b5t.needs_rerun(result)
+
+
+def meta_for(
+    const: b7.Constants, freeze: dict, sha: str, job: tuple, attempt: int, command: list[str]
+) -> dict:
+    name, condition, case, direction, seed = job
+    return {
+        "id": "B7",
+        "mode": "battery",
+        "name": name,
+        "condition": condition,
+        "case": case,
+        "direction": direction,
+        "seed": seed,
+        "attempt": attempt,
+        "prereg_yaml_sha256": const.yaml_sha256,
+        "freeze_commit": freeze["freeze_commit"],
+        "git_sha": sha,
+        "command": command[1:],
+    }
+
+
+def run_attempt(
+    const: b7.Constants,
+    args: argparse.Namespace,
+    freeze: dict,
+    sha: str,
+    job: tuple,
+    attempt: int,
+    domain: int,
+    out: Path,
+) -> dict:
+    name, condition, case, direction, seed = job
+    work = out / "work" / f"{name}.attempt{attempt}"
+    work.mkdir(parents=True, exist_ok=True)
+    result_path = work / "result.json"
+    command = command_for(
+        const,
+        condition,
+        case,
+        direction,
+        seed,
+        domain,
+        work,
+        result_path,
+        Path(args.bundle),
+        Path(args.data_root),
+        freeze_path=Path(args.freeze_path),
+    )
+    started = time.monotonic()
+    with (work / "runner.log").open("w") as log:
+        proc = subprocess.run(
+            command, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ), check=False
+        )
+    if result_path.exists():
+        result = json.loads(result_path.read_text())
+    else:
+        result = {"error": f"no result file, runner exit {proc.returncode}"}
+    result[META] = meta_for(const, freeze, sha, job, attempt, command) | {
+        "runner_exit": proc.returncode,
+        "wall_s": round(time.monotonic() - started, 1),
+        "starved": b5t.starved(result),
+        "invalid_truth": b4t.invalid_truth(result),
+    }
+    b4t.write_once(b4t.attempt_path(out, name, attempt), json.dumps(result, indent=1))
+    return result
+
+
+def pending_work(out: Path, jobs: list[tuple]) -> list[tuple[tuple, int]]:
+    """(job, attempt number) still to run; the accepted result of a finished job is written once."""
+    todo = []
+    for job in jobs:
+        name = job[0]
+        final = out / f"{name}.json"
+        if final.exists():
+            continue
+        done = b4t.existing_attempts(out, name)
+        if not done:
+            todo.append((job, 1))
+            continue
+        last = json.loads(done[-1].read_text())
+        k = len(done)
+        if needs_rerun(last) and k < MAX_ATTEMPTS:
+            todo.append((job, k + 1))
+            continue
+        attempts = []
+        for i, p in enumerate(done, start=1):
+            doc = json.loads(p.read_text())
+            attempts.append(
+                {
+                    "attempt": i,
+                    "file": p.name,
+                    "starved": bool(doc[META]["starved"]),
+                    "invalid_truth": bool(doc[META].get("invalid_truth")),
+                    "truth_invalid_reason": doc.get("truth_invalid_reason", ""),
+                    "max_gap_s": (doc.get("drive_raw") or {}).get("max_gap_s"),
+                    "real_time_factor": doc.get("real_time_factor"),
+                    "error": doc.get("error", ""),
+                }
+            )
+        last[META]["attempts"] = attempts
+        last[META]["accepted_attempt"] = k
+        last[META]["accepted_while_starved"] = bool(last[META]["starved"])
+        last[META]["accepted_while_invalid"] = bool(last[META]["invalid_truth"])
+        b4t.write_once(final, json.dumps(last, indent=1))
+    return todo
+
+
+def run_jobs(
+    const: b7.Constants,
+    args: argparse.Namespace,
+    freeze: dict,
+    sha: str,
+    jobs: list[tuple],
+    out: Path,
+    workers: int,
+) -> None:
+    """Attempt 1 of every job with `workers` at a time, then every rerun alone."""
+    lock = threading.Lock()
+    while True:
+        todo = pending_work(out, jobs)
+        if not todo:
+            return
+        first = [t for t in todo if t[1] == 1]
+        batch = first if first else todo[:1]
+        n_workers = min(workers, len(batch)) if first else 1
+        print(f"{len(batch)} attempts, {n_workers} at a time -> {out}", flush=True)
+        domains: queue.Queue[int] = queue.Queue()
+        for k in range(n_workers):
+            domains.put(args.domain_base + k)
+        failures: list[BaseException] = []
+        pending: queue.Queue[tuple] = queue.Queue()
+        for item in batch:
+            pending.put(item)
+
+        def worker(
+            pending: queue.Queue[tuple] = pending,
+            domains: queue.Queue[int] = domains,
+            failures: list[BaseException] = failures,
+        ) -> None:
+            while True:
+                try:
+                    job, attempt = pending.get_nowait()
+                except queue.Empty:
+                    return
+                domain = domains.get()
+                try:
+                    try:
+                        result = run_attempt(const, args, freeze, sha, job, attempt, domain, out)
+                    except BaseException as exc:  # noqa: BLE001 - a dead worker (argparse's SystemExit too)
+                        failures.append(exc)
+                        return
+                    with lock:
+                        print(
+                            f"{job[0]} attempt {attempt}: "
+                            f"{len(result.get('gt_lap_times_registered_s', []))} laps, "
+                            f"starved {b5t.starved(result)}, truth_valid "
+                            f"{result.get('truth_valid')} {result.get('truth_invalid_reason', '')}, "
+                            f"error {result.get('error', '')[:60]!r}",
+                            flush=True,
+                        )
+                finally:
+                    domains.put(domain)
+
+        threads = [threading.Thread(target=worker) for _ in range(n_workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if failures:
+            raise BatteryError(
+                f"a worker failed, the battery stops: {failures[0]!r}"
+            ) from failures[0]
+
+
+def make_jobs(
+    conditions: list[str], cases: list[str], seeds: list[int], directions: tuple[str, ...]
+) -> list[tuple]:
+    return b4t.make_jobs(conditions, cases, seeds, directions)
+
+
+# -- the drop rule -----------------------------------------------------------------------------------------
+
+
+def dropped_cases(out: Path, const: b7.Constants) -> dict:
+    """The registered drop rule on the accepted runs of condition a, seed 51: a case is dropped
+    when either direction has fewer than `min_laps` ground-truth laps (a run that failed to
+    execute has none). Returns {"dropped": [...], "laps": {run: n}}."""
+    rule = const.drop_rule
+    cond, seed, need = str(rule["condition"]), int(rule["seed"]), int(rule["min_laps"])
+    laps: dict[str, int] = {}
+    dropped: list[str] = []
+    for case in const.battery_cases:
+        for direction in const.directions:
+            name = f"{cond}_{case}_{direction}_{seed}"
+            path = out / f"{name}.json"
+            if not path.exists():
+                raise BatteryError(f"{name} has not run: the drop rule cannot be applied")
+            doc = json.loads(path.read_text())
+            n = len(doc.get("gt_lap_times_registered_s", [])) if not doc.get("error") else 0
+            if doc.get("truth_valid") is False:
+                n = 0
+            laps[name] = n
+            if n < need and case not in dropped:
+                dropped.append(case)
+    return {"dropped": dropped, "laps": laps, "min_laps": need}
+
+
+def check_drops(drops: dict, const: b7.Constants) -> list[str]:
+    """The cases left. More than one dropped case has no registered thresholds: refuse."""
+    if len(drops["dropped"]) > 1:
+        raise BatteryError(
+            f"{drops['dropped']} dropped: the pre-registration has 24 or 18 runs per condition, "
+            "not fewer. Stop and report."
+        )
+    return [c for c in const.battery_cases if c not in drops["dropped"]]
+
+
+# -- the commands ----------------------------------------------------------------------------------------
+
+
+def check_freeze_cmd(args: argparse.Namespace) -> None:
+    const = b7.load_constants()
+    doc = require_freeze(Path(args.freeze_path), verify_git=True)
+    print(
+        f"freeze OK: commit {doc['freeze_commit']}, yaml sha256 {const.yaml_sha256}, "
+        f"HEAD {b4t.git_sha()}"
+    )
+
+
+def run_cmd(args: argparse.Namespace) -> None:
+    const = b7.load_constants()
+    if args.workers < 1 or args.workers > MAX_WORKERS:
+        raise BatteryError(f"--workers must be 1 to {MAX_WORKERS} (host limit)")
+    freeze = require_freeze(Path(args.freeze_path))
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    b4t.check_clean()
+    sha = b4t.git_sha()
+    seeds = list(const.battery_seeds)
+    all_cases = list(const.battery_cases)
+    first = make_jobs(["a"], all_cases, [51], const.directions)
+    for job in first:  # validates every command before anything starts
+        command_for(
+            const, job[1], job[2], job[3], job[4], args.domain_base, out, out,
+            Path(args.bundle), Path(args.data_root), freeze_path=Path(args.freeze_path),
+        )  # fmt: skip
+    print(
+        f"B7: git {sha}, freeze {freeze['freeze_commit']}, yaml sha256 {const.yaml_sha256}",
+        flush=True,
+    )
+    run_jobs(const, args, freeze, sha, first, out, args.workers)
+    drops_path = out / DROPS_FILE
+    if not drops_path.exists():
+        b4t.write_once(drops_path, json.dumps(dropped_cases(out, const), indent=1))
+    drops = json.loads(drops_path.read_text())
+    cases = check_drops(drops, const)
+    print(f"drop rule: dropped {drops['dropped']}, laps {drops['laps']}", flush=True)
+    rest = [
+        j
+        for j in make_jobs(list(b7.B7_CONDITIONS), cases, seeds, const.directions)
+        if not (j[1] == "a" and j[4] == 51)
+    ]
+    run_jobs(const, args, freeze, sha, rest, out, args.workers)
+
+
+# -- the report ------------------------------------------------------------------------------------------
+
+
+def missed_flags(out: Path, name: str, accepted_attempt: int) -> int:
+    """Laps the lap node flagged missed gate in the accepted attempt (its log's lap lines)."""
+    log = out / "work" / f"{name}.attempt{accepted_attempt}" / "lap_memory_node.log"
+    if not log.exists():
+        return 0
+    return sum(1 for line in log.read_text(errors="replace").splitlines() if "missed gate" in line)
+
+
+def report_text(out: Path) -> str:
+    const = b7.load_constants()
+    drops_path = out / DROPS_FILE
+    dropped: list[str] = (
+        json.loads(drops_path.read_text())["dropped"] if drops_path.exists() else []
+    )
+    cases = [c for c in const.battery_cases if c not in dropped]
+    # the runs of a dropped case (its condition a seed 51 runs, which decided the drop) are not
+    # part of the battery
+    runs = [r for r in b7.load_runs(out) if r.case in cases]
+    # attempts are reported for every run on disk, the decisions use the kept cases only
+    every = {p.stem: json.loads(p.read_text()) for p in sorted(out.glob("*_*_*_*.json"))}
+    docs = {n: d for n, d in every.items() if n.split("_")[1] in cases}
+    metas = [d[META] for d in every.values()]
+    shas = sorted({m["git_sha"] for m in metas})
+    freezes = sorted({m["freeze_commit"] for m in metas})
+    lines = [
+        "# Battery B7 report",
+        "",
+        f"constants file sha256 now: {const.yaml_sha256} (registered {b7.REGISTERED_YAML_SHA256})",
+        f"constants file sha256 in the run files: {sorted({m['prereg_yaml_sha256'] for m in metas})}",
+        f"freeze commit in the run files: {freezes}",
+        f"git sha of the checkout in the run files: {shas}",
+        f"runs: {len(runs)}",
+    ]
+    if drops_path.exists():
+        drops = json.loads(drops_path.read_text())
+        lines.append(f"drop rule: dropped {drops['dropped']}, seed 51 laps {drops['laps']}")
+    else:
+        lines.append("drop rule: not applied")
+    lines += ["", "## Attempts", ""]
+    unusual = [
+        m
+        for m in metas
+        if m.get("accepted_attempt", 1) > 1
+        or m.get("accepted_while_starved")
+        or m.get("accepted_while_invalid")
+    ]
+    for m in sorted(unusual, key=lambda x: x["name"]):
+        lines.append(f"{m['name']}: {m['attempts']}")
+    if not unusual:
+        lines.append("every run was accepted on its first attempt, none starved or invalid")
+    lines += ["", "## Runs", "", b4.run_table(runs), ""]
+    want = {
+        (c, case, d, s)
+        for c in b7.B7_CONDITIONS
+        for case in cases
+        for d in const.directions
+        for s in const.battery_seeds
+    }
+    have = {(r.condition, r.case, r.direction, r.seed) for r in runs}
+    if want != have:
+        lines.append(
+            f"INCOMPLETE: {len(want - have)} runs missing, {len(have - want)} unexpected; "
+            "no decision is made"
+        )
+        return "\n".join(lines)
+    lines.append("## Decisions")
+    decisions = {"D7-S0": b7.d7_s0(runs, const), "D7-S1": b7.d7_s1(runs, const)}
+    for dec in decisions.values():
+        lines += ["", str(dec)]
+    both = all(d.passed for d in decisions.values())
+    lines += [
+        "",
+        "## What this lets D do",
+        "",
+        (
+            "D7-S0 and D7-S1 both PASS on B7 at the freeze commit: D v0 may drive on the plain "
+            "donut at the next car session if that commit is what runs on the car and D7-C0 "
+            "passes earlier in the same session (pre-registration section 5)."
+            if both
+            else "D7-S0 or D7-S1 FAILED: D does not drive, the cap stays fixed "
+            "(pre-registration section 5). A failed gate is a result: no tuning, no re-scoring."
+        ),
+        "",
+        "## Reported without a threshold",
+        "",
+        "Lap 1, system against the registered truth:",
+        "",
+        b7.lap1_table(b7.lap1_rows(docs)),
+        "",
+    ]
+    flags = {
+        n: missed_flags(out, n, int(d[META].get("accepted_attempt", 1))) for n, d in docs.items()
+    }
+    lines += [f"- {x}" for x in b7.missed_flags_per_condition(flags)]
+    return "\n".join(lines)
+
+
+def report_cmd(args: argparse.Namespace) -> None:
+    out = Path(args.out)
+    text = report_text(out)
+    print(text)
+    (out / "report.md").write_text(text + "\n")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("check-freeze", "run", "report"):
+        p = sub.add_parser(name)
+        if name != "check-freeze":
+            p.add_argument("--out", required=True)
+        if name != "report":
+            p.add_argument("--freeze-path", default=str(FREEZE_PATH))
+        if name == "run":
+            p.add_argument("--workers", type=int, default=3)
+            p.add_argument("--domain-base", type=int, default=120)
+            p.add_argument("--bundle", default=str(b4t.DEFAULT_BUNDLE))
+            p.add_argument("--data-root", default=str(b4t.DEFAULT_DATA_ROOT))
+    args = parser.parse_args(argv)
+    try:
+        {"check-freeze": check_freeze_cmd, "run": run_cmd, "report": report_cmd}[args.command](args)
+    except (BatteryError, b7.PreregError) as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

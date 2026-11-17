@@ -168,6 +168,9 @@ class ExternalLapGate:
         self.missed_laps: list[int] = []
         self.latency_last = math.nan
         self.latency_max = math.nan
+        # brief 51b: a diagnostic only, it feeds no verdict, reason, cap or reference
+        self.reference_suspect = False
+        self.reference_suspect_lap: int | None = None
         self.events_seen = 0
 
     # -- state -----------------------------------------------------------------------------
@@ -384,6 +387,8 @@ class ExternalLapGate:
         self._t_lap_start = last.t
         self._started = True
         self._dead_lap = False
+        self.reference_suspect = False
+        self.reference_suspect_lap = None
         return True
 
     # -- the event --------------------------------------------------------------------------
@@ -455,6 +460,7 @@ class ExternalLapGate:
             reasons.append("heading")
         doubtful = bool(reasons)
         self._laps += 1
+        self._note_suspect(reasons, length)
         crossing = GateCrossing(
             lap_index=self._laps,
             t_cross_s=float(t_cross_s),
@@ -481,6 +487,18 @@ class ExternalLapGate:
         self._uncertain_lap = False
         self._dead_lap = False
         return crossing
+
+    def _note_suspect(self, reasons: list[str], length: float) -> None:
+        """Brief 51b: the reference rests on exactly one confirmed lap and this lap fails only
+        `length`: lap 1 was probably not a whole lap. Latched until the next start. A diagnostic:
+        it reads the verdict and changes nothing."""
+        if self.reference_suspect or len(self._lengths) != 1 or reasons != ["length"]:
+            return
+        self.reference_suspect = True
+        self.reference_suspect_lap = self._laps
+        self.suspect_lap_length_m = float(length)
+
+    suspect_lap_length_m = math.nan
 
     # -- uncertainty ------------------------------------------------------------------------
 
@@ -534,6 +552,8 @@ class ExternalLapGate:
             "rejected_events": dict(self.rejected),
             "event_latency_s_last": self.latency_last,
             "event_latency_s_max": self.latency_max,
+            "reference_suspect": self.reference_suspect,
+            "reference_suspect_lap": self.reference_suspect_lap,
         }
 
 

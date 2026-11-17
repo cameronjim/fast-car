@@ -506,6 +506,7 @@ class LapMemoryNode(Node):
 
         self._external = external
         self._ready_logged: bool | None = None
+        self._suspect_logged = False
         self._save_lap1_map = self._save_lap1_map and not external
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
@@ -699,6 +700,18 @@ class LapMemoryNode(Node):
         msg.min_clearance_m = float(r.min_clearance_m)
         msg.clean = bool(r.clean)
         self._event_pub.publish(msg)
+        gate = self._mem.gate
+        if (
+            self._external
+            and getattr(gate, "reference_suspect", False)
+            and not self._suspect_logged
+        ):
+            self._suspect_logged = True
+            self.get_logger().warn(
+                f"reference_suspect: the reference length is {gate.l_ref_m:.2f} m (one lap) and lap "
+                f"{gate.reference_suspect_lap} is {gate.suspect_lap_length_m:.2f} m, otherwise fine: "
+                "lap 1 was probably not a whole lap: stop and relaunch from the mark"
+            )
         if self._external and r.missed_gate:
             doubtful = self._mem.status().get("doubtful_laps") or []
             why = doubtful[-1]["reasons"] if doubtful else []  # type: ignore[index]

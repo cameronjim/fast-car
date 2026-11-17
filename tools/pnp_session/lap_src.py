@@ -831,6 +831,8 @@ def drive_table(bag: BagData) -> dict[str, Any]:
         "lap_source": st.get("lap_source"),
         "lap_mode": st.get("lap_mode"),
         "source_ready": st.get("source_ready"),
+        "reference_suspect": st.get("reference_suspect"),
+        "reference_suspect_lap": st.get("reference_suspect_lap"),
         "rows": rows,
     }
 
@@ -928,11 +930,19 @@ def markdown_b0(block: dict[str, Any], label: str, assume_ready: bool) -> str:
     return "\n".join(lines)
 
 
+def _suspect_text(table: dict[str, Any]) -> str:
+    flag = table.get("reference_suspect")
+    if flag is None:
+        return "unknown"
+    return f"True (lap {table.get('reference_suspect_lap')})" if flag else "False"
+
+
 def markdown_drive(table: dict[str, Any]) -> str:
     lines = [
         (
             f"# drive table {table['bag']} ({table['lap_node']}, source {table['lap_source']}, "
-            f"mode {table['lap_mode']}, source_ready {table['source_ready']})"
+            f"mode {table['lap_mode']}, source_ready {table['source_ready']}, "
+            f"reference_suspect {_suspect_text(table)})"
         ),
         "",
         "| lap | verdict | reasons | cap m/s | lap time s | length m | clean |",

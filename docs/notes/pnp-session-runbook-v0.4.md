@@ -350,5 +350,8 @@ Added with the camera lap source attempt; nothing above this heading changed.
    `ros2 launch racer_bringup pnp.launch.py lap_memory:=true lap_mode:=v0 lap_source:=camera lap_shadow:=start_scan v_lap1_mps:=0.5 v_max_mps:=<ceiling>`.
    Wait for READY. 10 laps. The owner holds the kill switch. Stop the run at any wall
    contact, at a second doubtful lap in the status, or at a second obstacle brake.
+   If the status says `reference_suspect`, stop at once and relaunch from the mark; the run is
+   not evidence. If it happens twice in a direction, change the start view and repeat the test
+   pass (step 2) for that direction.
 5. **After.** `lap-src --drive --bag <bag>` for the lap table. Write the session note the same
    day.

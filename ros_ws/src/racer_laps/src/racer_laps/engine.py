@@ -37,7 +37,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from racer_laps.cap_schedule import CapSchedule
-from racer_laps.gate import GateConfig, GateCrossing, StartScanGate
+from racer_laps.gate import STANDSTILL_MPS, GateConfig, GateCrossing, StartScanGate
 from racer_laps.lap_detector import LapDetector
 from racer_laps.lap_record import STATE_DRIVING, LapRecord, LapRecorder
 from racer_laps.safe_set import SafeSet
@@ -131,6 +131,9 @@ class LapResult:
     heading_rad: float = math.nan  # start-scan source: heading integrated over the lap
     n_candidates: int = 0  # start-scan source: STRONG matches the crossing came from
     spread_m: float = 0.0  # ... and their spread
+    #: Lap 1 only (else 0.0): from the start scan to the first wheel odometry sample at or above
+    #: `STANDSTILL_MPS`. Lap 1 is the launch lap, its time contains this (design 13 section 19.2).
+    launch_dwell_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,12 @@ class LapMemory:
         self._gate_t1 = math.nan  # lap-1 closure time of the start-scan gate
         self._pose_t1 = math.nan  # lap-1 closure time of the pose detector
         self._pose_feeding = True
+        self._lap1_start_t = math.nan  # effective time of the start scan (lap 1 begins)
+        self._first_motion_t = math.nan  # first wheel sample at or above STANDSTILL_MPS after it
+        # the last odometry samples (stamp, speed): the start scan's effective time is its header
+        # stamp plus half a sweep, so odometry up to 0.05 s older than the scan's arrival is
+        # already known when it starts lap 1
+        self._odom_tail: deque[tuple[float, float]] = deque(maxlen=200)
 
     # -- inputs ----------------------------------------------------------------------------
 
@@ -229,8 +238,15 @@ class LapMemory:
         if gate is None:
             return
         gate.on_odom(t_s, v_mps)
+        self._odom_tail.append((float(t_s), float(v_mps)))
         if not gate.started:
             return
+        if (
+            math.isnan(self._first_motion_t)
+            and t_s >= self._lap1_start_t
+            and v_mps >= STANDSTILL_MPS
+        ):
+            self._first_motion_t = float(t_s)
         gate.poll_uncertain()
         station = gate.station_m
         self._recent.append((station, max(0.0, float(v_mps))))
@@ -275,6 +291,11 @@ class LapMemory:
                 return None
             if gate.set_start(t_eff_s, points):
                 self._begin_lap(t_eff_s)
+                self._lap1_start_t = float(t_eff_s)
+                self._first_motion_t = next(
+                    (t for t, v in self._odom_tail if t >= t_eff_s and v >= STANDSTILL_MPS),
+                    math.nan,
+                )
             return None
         crossing = gate.on_scan(t_eff_s, points)
         if crossing is None:
@@ -367,6 +388,7 @@ class LapMemory:
             heading_rad=crossing.heading_rad,
             n_candidates=crossing.n_candidates,
             spread_m=crossing.spread_m,
+            launch_dwell_s=self.launch_dwell_s if crossing.lap_index == 1 else 0.0,
         )
 
     def _reconcile_lengths(self, lap_index: int, stored: bool) -> bool:
@@ -515,6 +537,12 @@ class LapMemory:
     # -- outputs ---------------------------------------------------------------------------
 
     @property
+    def launch_dwell_s(self) -> float:
+        """Seconds from the start scan's effective time to the first wheel odometry sample at or
+        above `STANDSTILL_MPS` (NaN until both are known)."""
+        return self._first_motion_t - self._lap1_start_t
+
+    @property
     def laps_completed(self) -> int:
         if self.gate is not None:
             return self.gate.laps_completed
@@ -593,6 +621,11 @@ class LapMemory:
             out["caution_zones"] = len(self.station_set.zones)
             out["zones_created"] = self._zone_count
             out["why_no_lap"] = self._why_no_lap()
+            # lap 1 is the launch lap: where it started and when the car first moved (NaN, null in
+            # the node's JSON, until known)
+            out["lap1_start_stamp_s"] = self._lap1_start_t
+            out["first_motion_stamp_s"] = self._first_motion_t
+            out["launch_dwell_s"] = self.launch_dwell_s
         return out
 
     def _why_no_lap(self) -> str:

@@ -980,3 +980,9 @@ def test_ma2_only_names_must_be_jobs_of_the_stage(tmp_path: Path, monkeypatch) -
     assert bb.main(["ma2", "--out", str(tmp_path / "o"), "--only", "o_S3_ccw_11"]) == 0
     assert ran == [["o_S3_ccw_11"]]
     assert bb.main(["ma2", "--out", str(tmp_path / "p"), "--only", "o_ZZ_ccw_11"]) == 2
+
+
+def test_an_invalid_truth_is_rerun_like_a_starved_run_in_b5() -> None:
+    ok = {"gt_lap_times_by_crossing_s": [10.0], "truth_valid": True}
+    assert not bb.needs_rerun(ok)
+    assert bb.needs_rerun({**ok, "truth_valid": False, "truth_invalid_reason": "no_scan_at_start"})

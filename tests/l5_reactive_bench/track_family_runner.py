@@ -355,6 +355,8 @@ def registered_truth(
         "truth_valid": reason == "",
         "truth_invalid_reason": reason,
         "truth_first_odom_s": first_odom,
+        # brief 50: where the truth recording ends (B8 judges a count window that must be inside)
+        "truth_last_odom_s": float(odom[-1][0]) if odom else None,
         "crossing0_s": crossing0,
         "crossings_s": crossings,
         "lap_times_s": crossing_lap_times(crossings, crossing0),
@@ -504,6 +506,7 @@ def lap_results(
                 "truth_valid": bool(truth["truth_valid"]),
                 "truth_invalid_reason": str(truth["truth_invalid_reason"]),
                 "truth_first_odom_s": truth["truth_first_odom_s"],
+                "truth_last_odom_s": truth.get("truth_last_odom_s"),
                 # what rescore_from_start_scan made of the system's first LapEvent: reported only
                 "gt_lap_times_rescored_s": (
                     [round(t, 3) for t in rescored[0]] if rescored is not None else []

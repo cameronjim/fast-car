@@ -308,3 +308,24 @@ def test_the_start_scan_source_is_untouched() -> None:
     mem.on_lap_source_status(1.0, "running", 0, 1.0)
     mem.on_clock(1.0)
     assert mem.laps_completed == 0
+
+
+# -- the messages are byte-identical ----------------------------------------------------------------
+
+
+def test_lap_messages_are_unchanged() -> None:
+    """Brief 51 changes no message: new fields go in the JSON of /pnp/lap/status."""
+    import hashlib
+    from pathlib import Path
+
+    msgs = Path(__file__).resolve().parents[2] / "racer_pnp_msgs" / "msg"
+    if not msgs.is_dir():
+        pytest.skip("racer_pnp_msgs is outside this checkout")
+    got = {
+        name: hashlib.md5((msgs / name).read_bytes()).hexdigest()
+        for name in ("LapEvent.msg", "LapGuidance.msg")
+    }
+    assert got == {
+        "LapEvent.msg": "ba79fcf3b4720849edd8c16b9c300c7c",
+        "LapGuidance.msg": "833d1b7aee456dfc685f2b9750de39b6",
+    }

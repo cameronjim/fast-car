@@ -61,6 +61,11 @@ jobs:
       fail-fast: false
       matrix:
         group: [core, dynamics, laps, tools, misc]
+    env:
+      # uv otherwise takes the runner's system Python for the first package in a job and a
+      # previously installed managed one for the rest, so the interpreter (and numpy) depended on
+      # the order. 3.11 is what the locks and the packages pinned to ==3.11 expect.
+      UV_PYTHON: "3.11"
     # INTERIM: claude-docs/03-environments.md says Python tests run in the
     # `sim-cpu` image. That image now exists (docker/sim-cpu/: Dockerfile +
     # uv.lock, built and headless-gym-smoke-tested by the sim-cpu-image job

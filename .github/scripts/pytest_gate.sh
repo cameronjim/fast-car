@@ -58,6 +58,11 @@ echo "Found ${COUNT} .py file(s) and a pyproject.toml in ${PKG_DIR}; running pyt
 
 (
   cd "$PKG_DIR"
+  # CI pins UV_PYTHON so the interpreter does not depend on which package ran first in the job.
+  # A package that carries its own .python-version (the racer app agent, the car's 3.10) keeps it.
+  if [ -f .python-version ]; then
+    unset UV_PYTHON
+  fi
   uv sync --all-extras --dev
 
   XDIST_ARGS=()

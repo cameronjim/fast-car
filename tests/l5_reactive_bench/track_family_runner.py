@@ -111,6 +111,10 @@ LAP_NODE_COUNTING = REPO_ROOT / "tests" / "l5_pnp_laps" / "lap_node_counting.py"
 #: The truth oracle's topics (brief 51): the lap node reads these instead of the camera's.
 TRUTH_EVENT_TOPIC = "/sim/lap/truth_event"
 TRUTH_STATUS_TOPIC = "/sim/lap/truth_status"
+#: Test hook of the canary (brief 51c item 1, not a runner argument): hold the oracle's status back
+#: until this many seconds of node time after the planner's first DRIVING report. It reproduces the
+#: start the B9 lap node could take (a source status that arrives after the start).
+ORACLE_HOLD_ENV = "RUNNER_ORACLE_HOLD_AFTER_DRIVING_S"
 
 
 def write_oracle_ground_truth(synthetic, path: Path) -> None:
@@ -364,6 +368,61 @@ def registered_truth(
         "crossing0_s": crossing0,
         "crossings_s": crossings,
         "lap_times_s": crossing_lap_times(crossings, crossing0),
+    }
+
+
+def oracle_hold_after_driving_s() -> float | None:
+    """The canary's hold (`ORACLE_HOLD_ENV`), or None. A value that is not a number is an error:
+    a test hook that silently did nothing would pass for the thing it was meant to prove."""
+    raw = os.environ.get(ORACLE_HOLD_ENV)
+    if raw is None or raw == "":
+        return None
+    return float(raw)
+
+
+def oracle_status_held(now_s: float, driving_first_s: float | None, hold_s: float | None) -> bool:
+    """True while the hook holds the oracle's status back: no DRIVING report yet, or fewer than
+    `hold_s` seconds since it. No hook: never."""
+    if hold_s is None:
+        return False
+    if driving_first_s is None:
+        return True
+    return now_s < driving_first_s + hold_s
+
+
+def _finite_or_none(value: float | None) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def start_trace(
+    lap_node_first_status_s: float | None = None,
+    ready_first_s: float | None = None,
+    gate_start_s: float | None = None,
+    planner_spawn_s: float | None = None,
+    driving_first_s: float | None = None,
+    lap1_start_s: float | None = None,
+    oracle_first_status_s: float | None = None,
+    gate_verdict: str | None = None,
+    gate_reason: str | None = None,
+) -> dict:
+    """The start of a run as the report prints it (brief 51c): when the lap node's first status
+    reached the runner, when one first said `source_ready_now`, when the start gate said start,
+    when the planner was spawned, when its first DRIVING report arrived, when the lap node's lap 1
+    started, when the oracle first published a status (all node time, seconds), and the gate's
+    verdict and reason. None for what did not happen; a non-finite time is None, so the JSON
+    stays valid."""
+    return {
+        "lap_node_first_status_s": _finite_or_none(lap_node_first_status_s),
+        "ready_first_s": _finite_or_none(ready_first_s),
+        "gate_start_s": _finite_or_none(gate_start_s),
+        "planner_spawn_s": _finite_or_none(planner_spawn_s),
+        "driving_first_s": _finite_or_none(driving_first_s),
+        "lap1_start_s": _finite_or_none(lap1_start_s),
+        "oracle_first_status_s": _finite_or_none(oracle_first_status_s),
+        "gate_verdict": gate_verdict,
+        "gate_reason": gate_reason,
     }
 
 
@@ -888,7 +947,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
 
     processes: list[tuple[str, subprocess.Popen]] = []
 
+    planner_spawned: list[float] = []  # node time of the planner's spawn (start_trace)
+
     def spawn(name: str, command: list[str]) -> None:
+        if name == PLANNER_NODE:
+            planner_spawned.append(received_s())
         log = (work / f"{name}.log").open("w")
         if name == "localization":
             cmd = command
@@ -1058,6 +1121,10 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     oracle_events: list[dict] = []
     oracle_pubs: dict = {}
     lap_status: dict = {}
+    lap_first_status: list[float] = []  # node time the lap node's first status arrived
+    lap_ready_first: list[float] = []  # node time the first status with source_ready_now arrived
+    oracle_first_status: list[float] = []  # node time the oracle first published a status
+    oracle_hold_s = oracle_hold_after_driving_s()
     # B4 report item: guidance messages with stations, and those whose lowest per station bound
     # sits at the D v1 floor (the floor was the active bound). Counted here, not in the node.
     guidance_floor: dict = {
@@ -1134,6 +1201,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             def on_lap_status(m) -> None:
                 lap_status.clear()
                 lap_status.update(json.loads(m.data))
+                now_s = received_s()
+                if not lap_first_status:
+                    lap_first_status.append(now_s)
+                if not lap_ready_first and lap_status.get("source_ready_now") is True:
+                    lap_ready_first.append(now_s)
 
             from sensor_msgs.msg import LaserScan
 
@@ -1202,8 +1274,12 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 }
             )
             oracle_pubs["event"].publish(String(data=json.dumps(ev.payload)))
-        if t >= status_due[0]:
+        if t >= status_due[0] and not oracle_status_held(
+            received_s(), driving_first[0] if driving_first else None, oracle_hold_s
+        ):
             status_due[0] = t + 1.0
+            if not oracle_first_status:
+                oracle_first_status.append(received_s())
             oracle_pubs["status"].publish(String(data=json.dumps(oracle.status())))
 
     stopped_because = "duration"
@@ -1454,6 +1530,16 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     )
                 )
                 result["startup_reset_done_s"] = reset_done[0] if reset_done else None
+                # brief 51c: the start of the run, so a start failure is explained by the report
+                result["start_trace"] = start_trace(
+                    lap_node_first_status_s=lap_first_status[0] if lap_first_status else None,
+                    ready_first_s=lap_ready_first[0] if lap_ready_first else None,
+                    planner_spawn_s=planner_spawned[0] if planner_spawned else None,
+                    driving_first_s=driving_receipt,
+                    lap1_start_s=lap_status.get("lap1_start_stamp_s"),
+                    oracle_first_status_s=oracle_first_status[0] if oracle_first_status else None,
+                )
+                result["source_ready"] = lap_status.get("source_ready")
                 result["guidance_cap_series"] = [[round(a, 3), b] for a, b in cap_series]
                 if oracle is not None:
                     result["oracle_events"] = oracle_events

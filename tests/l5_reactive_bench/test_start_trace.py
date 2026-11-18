@@ -1,11 +1,11 @@
-"""L1 tests (brief 51c, item 1): the runner's `start_trace` and the test hook that holds the
-oracle's status back. No ROS."""
+"""L1 tests (brief 51c, item 1): the runner's `start_trace`. No ROS. (The item-1 hook that held
+the oracle's status back until after the DRIVING report is gone: the start gate makes that stimulus
+a refusal, and `--lap-truth-ready-after-s` replaced it.)"""
 
 from __future__ import annotations
 
 import math
 
-import pytest
 import track_family_runner as runner
 
 TRACE_KEYS = {
@@ -49,29 +49,3 @@ def test_the_trace_keeps_what_it_is_given() -> None:
 def test_a_non_finite_time_is_written_as_none_so_the_json_stays_valid() -> None:
     out = runner.start_trace(driving_first_s=math.nan, lap1_start_s=math.inf)
     assert out["driving_first_s"] is None and out["lap1_start_s"] is None
-
-
-@pytest.mark.parametrize(
-    ("hold", "driving", "now", "held"),
-    [
-        (None, None, 5.0, False),  # no hook: never held
-        (1.0, None, 5.0, True),  # no DRIVING report yet: held
-        (1.0, 10.0, 10.5, True),  # inside the hold after the report
-        (1.0, 10.0, 11.0, False),  # exactly at the end of the hold: released
-        (1.0, 10.0, 11.5, False),
-    ],
-)
-def test_the_hold_after_driving_hook(
-    hold: float | None, driving: float | None, now: float, held: bool
-) -> None:
-    assert runner.oracle_status_held(now, driving, hold) is held
-
-
-def test_the_hook_is_read_from_the_environment_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(runner.ORACLE_HOLD_ENV, raising=False)
-    assert runner.oracle_hold_after_driving_s() is None
-    monkeypatch.setenv(runner.ORACLE_HOLD_ENV, "1.0")
-    assert runner.oracle_hold_after_driving_s() == 1.0
-    monkeypatch.setenv(runner.ORACLE_HOLD_ENV, "not a number")
-    with pytest.raises(ValueError):
-        runner.oracle_hold_after_driving_s()

@@ -13,7 +13,7 @@ import pytest
 import track_family_runner as runner
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros_ws/src/racer_laps/src"))
-from racer_laps.start_ready import StartGateConfig, StartReadyGate  # noqa: E402
+from racer_laps.start_ready import StartGateConfig, StartReadyGate
 
 
 def stack():

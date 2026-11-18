@@ -60,6 +60,16 @@ def is_aliased(n_unique: int, n_ambiguous: int, min_scans: int, max_share: float
     return n_ambiguous / total > max_share
 
 
+def is_proven(n_unique: int, n_ambiguous: int, proof_min_unique: int, max_share: float) -> bool:
+    """A reference is proven with `proof_min_unique` unique matches over its life and at most
+    `max_share` of its unique plus ambiguous matches ambiguous (no minimum count: brief 50d).
+    The caller adds "and not aliased"."""
+    if n_unique < proof_min_unique:
+        return False
+    total = n_unique + n_ambiguous
+    return total > 0 and n_ambiguous / total <= max_share + 1e-12
+
+
 @dataclass(frozen=True)
 class Estimate:
     """One STRONG, unique match: an estimate of the wheel total at the reference."""

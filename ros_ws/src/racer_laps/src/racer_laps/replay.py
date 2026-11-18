@@ -346,10 +346,13 @@ def find_start_time(
     return t_start
 
 
-def default_start_scan_config(vehicle: LapVehicle, v21: bool = False) -> LapConfig:
+def default_start_scan_config(
+    vehicle: LapVehicle, v21: bool = False, gate_extra: dict[str, Any] | None = None
+) -> LapConfig:
     """The start-scan configuration of the node. `v21` turns the gate v3 additions off (the
     uniqueness test, the keyframe ring): gate v2.1 exactly, for comparisons."""
     extra: dict[str, Any] = {"ring_enabled": False, "unique_shift_m": 0.0} if v21 else {}
+    extra.update(gate_extra or {})
     return LapConfig(
         lap_source="start_scan",
         gate=GateConfig(

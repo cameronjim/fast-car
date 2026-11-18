@@ -130,3 +130,96 @@ def test_the_gap_numbers_are_read_from_the_status() -> None:
         "gap_ambiguous_max": 0.02,
     }
     assert math.isnan(dc.gap_numbers(Replayed())["gap_unique_min"])
+
+
+# -- brief 50d: M1, M2, M3 and the three-class gap report -----------------------------------------
+
+
+def with_gaps(
+    unique: list[float], unknown: list[float], ambiguous: list[float], **kw: object
+) -> Replayed:
+    rows = kw.pop("laps", laps(3))
+    return Replayed(
+        laps=rows,  # type: ignore[arg-type]
+        status={
+            "gaps_unique": unique,
+            "gaps_unknown": unknown,
+            "gaps_ambiguous": ambiguous,
+            **kw,
+        },
+    )
+
+
+def test_the_m_thresholds_are_the_ones_written_in_the_brief() -> None:
+    assert (dc.M1_MIN_ABOVE_ALIAS_GAP, dc.M2_MIN_AMBIGUOUS_SHARE) == (0.004, 0.75)
+    assert (dc.M3_SHIFT, dc.M3_MAX_LAP_DIFF_S) == (0.003, 0.05)
+
+
+def test_gap_classes_count_and_range_each_class() -> None:
+    r = with_gaps([0.05, 0.04], [0.03], [])
+    assert dc.gap_classes(r) == {
+        "unique": "2 (0.040 to 0.050)",
+        "unknown": "1 (0.030 to 0.030)",
+        "ambiguous": "0",
+    }
+
+
+@pytest.mark.parametrize(
+    ("unique", "unknown", "ambiguous", "ok"),
+    [
+        ([0.04], [], [], True),
+        ([0.029], [], [], True),  # exactly 0.004 above alias_gap 0.025
+        ([0.0289], [], [], False),
+        ([0.04], [0.027], [], False),
+        ([0.05], [], [0.02], False),  # one ambiguous match
+        ([], [], [], True),  # unique matches whose displaced scan did not match: no gap to read
+    ],
+)
+def test_m1_no_ambiguous_match_and_a_smallest_gap_above_the_band(
+    unique: list[float], unknown: list[float], ambiguous: list[float], ok: bool
+) -> None:
+    r = with_gaps(unique, unknown, ambiguous, life_unique=10)
+    assert dc.m1_verdict(r, 0.025)[0] is ok
+    assert not dc.m1_verdict(with_gaps(unique, unknown, ambiguous), 0.025)[0]  # nothing counted
+
+
+@pytest.mark.parametrize(
+    ("verdict", "source", "latched", "nu", "na", "ok"),
+    [
+        ("aliased", "winding", 12, 2, 6, True),  # share exactly 0.75
+        ("aliased", "winding", 12, 3, 6, False),  # 0.667
+        ("proven", "winding", None, 0, 9, False),
+        ("aliased", "anchor", 12, 0, 9, False),
+        ("aliased", "winding", None, 0, 9, False),
+    ],
+)
+def test_m2_a_ring_is_latched_winds_every_lap_and_is_mostly_ambiguous(
+    verdict: str, source: str, latched: int | None, nu: int, na: int, ok: bool
+) -> None:
+    r = with_gaps(
+        [],
+        [],
+        [],
+        laps=laps(3, source=source),
+        start_verdict=verdict,
+        latched_at_scan=latched,
+        life_unique=nu,
+        life_ambiguous=na,
+    )
+    assert dc.m2_verdict(r)[0] is ok
+
+
+def test_m3_the_shifted_replays_must_keep_verdict_sources_and_lap_times() -> None:
+    base = with_gaps([], [], [], start_verdict="proven")
+    same = with_gaps([], [], [], start_verdict="proven")
+    assert dc.m3_verdict(base, [same, same])[0]
+    other = with_gaps([], [], [], start_verdict="aliased")
+    assert not dc.m3_verdict(base, [same, other])[0]
+    wound = with_gaps([], [], [], laps=laps(3, source="winding"), start_verdict="proven")
+    assert not dc.m3_verdict(base, [wound])[0]
+    near = with_gaps([], [], [], laps=laps(3, lap_s=5.2 + 0.049), start_verdict="proven")
+    assert dc.m3_verdict(base, [near])[0]
+    far = with_gaps([], [], [], laps=laps(3, lap_s=5.2 + 0.051), start_verdict="proven")
+    assert not dc.m3_verdict(base, [far])[0]
+    short = with_gaps([], [], [], laps=laps(2), start_verdict="proven")
+    assert not dc.m3_verdict(base, [short])[0]

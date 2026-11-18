@@ -396,3 +396,43 @@ def test_the_trace_of_a_refusal_and_of_an_empty_gate() -> None:
     t = g.trace()
     assert t["verdict"] == "refuse" and t["refuse_s"] == 131.0
     assert t["reason"] == REFUSAL_NO_STATUS
+
+
+# -- the deadline wins (outside review of brief 51c, finding 8) ------------------------------------
+
+
+def test_ready_statuses_that_arrive_after_the_deadline_are_a_refusal_not_a_start() -> None:
+    g = gate(0.0)
+    g.on_status(31.0, ready())
+    g.on_status(32.0, ready())
+    assert g.decide(32.0)[0] == "refuse"
+
+
+def test_the_late_status_is_not_counted_even_when_the_first_decide_comes_late() -> None:
+    g = gate(0.0)
+    g.on_status(29.0, ready())
+    g.on_status(31.0, ready())  # after the deadline: the wait is over before it arrives
+    verdict, reason = g.decide(31.0)
+    assert verdict == "refuse" and reason
+
+
+def test_two_ready_statuses_inside_the_window_and_a_late_poll_still_start() -> None:
+    g = gate(0.0)
+    g.on_status(29.0, ready())
+    g.on_status(29.5, ready())  # both arrived in time; the caller only polled at 30.2
+    assert g.decide(30.2)[0] in ("start", "wait")  # a stale pair is reset, never refused early
+    g2 = gate(0.0)
+    g2.on_status(29.0, ready())
+    g2.on_status(29.5, ready())
+    assert g2.decide(29.5)[0] == "start"
+
+
+def test_the_deadline_wins_at_the_boundary() -> None:
+    g = gate(0.0)
+    g.on_status(29.0, ready())
+    g.on_status(30.0, ready())  # exactly on the deadline: in time
+    assert g.decide(30.0)[0] == "start"
+    h = gate(0.0)
+    h.on_status(29.0, ready())
+    h.on_status(30.0 + EPS, ready())  # epsilon over: out of time
+    assert h.decide(30.0 + EPS)[0] == "refuse"

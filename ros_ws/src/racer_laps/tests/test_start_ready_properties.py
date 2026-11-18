@@ -116,3 +116,18 @@ def test_a_verdict_never_changes_once_it_is_not_wait(
             assert verdict == final
         elif verdict[0] != "wait":
             final = verdict
+
+
+@SETTINGS
+@given(plan=steps, wait_s=st.floats(1.0, 40.0))
+def test_start_only_if_the_second_ready_status_arrived_inside_the_wait(
+    plan: list[tuple[float, str]], wait_s: float
+) -> None:
+    gate = StartReadyGate(StartGateConfig(wait_s=wait_s), 50.0)
+    t = 50.0
+    for dt, kind in plan:
+        t += dt
+        gate.on_status(math.nan if kind == "nan_time" else t, make_status(kind))
+        if gate.decide(t)[0] == "start":
+            assert t <= 50.0 + wait_s + 1e-9, (t, wait_s)
+            break

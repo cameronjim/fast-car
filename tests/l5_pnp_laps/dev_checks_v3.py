@@ -367,10 +367,12 @@ def m4_verdict(r: Replayed, round4_laps: list[float] | None) -> tuple[bool, dict
         diffs = [abs(lap.lap_time_s - t) for lap, t in zip(r.laps, round4_laps, strict=True)]
         worst = max(diffs, default=0.0)
         laps_ok = worst <= M4_MAX_LAP_DIFF_S
-    ok = ok2 and releases == 0 and share >= M4_MIN_SHARE and laps_ok
+    never_proven = st.get("proven_first_scan") is None
+    ok = ok2 and releases == 0 and share >= M4_MIN_SHARE and laps_ok and never_proven
     return ok, {
         "entered_at_scan": st.get("aliased_entered_at_scan"),
         "releases": releases,
+        "never_proven": never_proven,
         "share_over_run": share,
         "share_min_since_entry": st.get("share_min_since_entry", math.nan),
         "worst_lap_vs_round4_s": worst,

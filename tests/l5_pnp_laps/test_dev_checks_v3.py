@@ -217,6 +217,19 @@ def test_m4_a_ring_is_never_released_is_over_0_9_ambiguous_and_keeps_round_4_lap
     )
     assert dc.m4_verdict(r, [5.2] * 3)[0] is ok
     assert not dc.m4_verdict(r, None)[0]  # no round 4 reference: not a pass
+    proven = with_gaps(
+        [],
+        [],
+        [],
+        laps=laps(3, lap_s=5.2, source="winding"),
+        start_verdict="aliased",
+        latched_at_scan=10,
+        aliased_releases=0,
+        life_unique=1,
+        life_ambiguous=9,
+        proven_first_scan=5,  # proven at some scan: a ring must never be
+    )
+    assert not dc.m4_verdict(proven, [5.2] * 3)[0]
     assert not dc.m4_verdict(r, [5.2] * 2)[0]
 
 

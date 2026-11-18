@@ -462,6 +462,7 @@ class StartScanGate:
         self.aliased_released_at_scan: int | None = None  # the last release
         self.aliased_entries = 0
         self.aliased_releases = 0
+        self.proven_first_scan: int | None = None  # first scan at which the start scan was proven
         self.share_max_a3 = 0.0  # largest ambiguous share seen once at least 3 were ambiguous
         self.share_min_since_entry = math.nan  # smallest share from the first entry on
         self.lap_pair_shares: list[float] = []
@@ -711,6 +712,7 @@ class StartScanGate:
         self.aliased_entered_at_scan = self.aliased_released_at_scan = None
         self.aliased_entries = self.aliased_releases = 0
         self.share_max_a3 = 0.0
+        self.proven_first_scan = None
         self.share_min_since_entry = math.nan
         self._w_star_m = None
         self._psi_origin = self._hist[-1].psi
@@ -1048,6 +1050,8 @@ class StartScanGate:
             self._latched = False
             self.aliased_releases += 1
             self.aliased_released_at_scan = self._scan_count
+        if self.proven_first_scan is None and self.start_proven:
+            self.proven_first_scan = self._scan_count
 
     # -- gate v3: uniqueness, keyframes, placing the crossing --------------------------------
 
@@ -1551,6 +1555,7 @@ class StartScanGate:
             out["latched_at_scan"] = self.latched_at_scan
             out["aliased_entered_at_scan"] = self.aliased_entered_at_scan
             out["aliased_released_at_scan"] = self.aliased_released_at_scan
+            out["proven_first_scan"] = self.proven_first_scan
             out["share_max_a3"] = self.share_max_a3
             out["share_min_since_entry"] = self.share_min_since_entry
             out["aliased_entries"] = self.aliased_entries

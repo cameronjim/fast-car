@@ -151,7 +151,8 @@ def with_gaps(
 
 
 def test_the_m_thresholds_are_the_ones_written_in_the_brief() -> None:
-    assert (dc.M1_MIN_ABOVE_ALIAS_GAP, dc.M2_MIN_AMBIGUOUS_SHARE) == (0.004, 0.75)
+    assert (dc.M1P_MAX_SHARE_A3, dc.M2_MIN_AMBIGUOUS_SHARE) == (0.5, 0.75)
+    assert (dc.M4_MIN_SHARE, dc.M4_MAX_LAP_DIFF_S) == (0.9, 0.05)
     assert (dc.M3_SHIFT, dc.M3_MAX_LAP_DIFF_S) == (0.003, 0.05)
 
 
@@ -165,22 +166,58 @@ def test_gap_classes_count_and_range_each_class() -> None:
 
 
 @pytest.mark.parametrize(
-    ("unique", "unknown", "ambiguous", "ok"),
+    ("entries", "share", "source", "counted", "ok"),
     [
-        ([0.04], [], [], True),
-        ([0.029], [], [], True),  # exactly 0.004 above alias_gap 0.025
-        ([0.0289], [], [], False),
-        ([0.04], [0.027], [], False),
-        ([0.05], [], [0.02], False),  # one ambiguous match
-        ([], [], [], True),  # unique matches whose displaced scan did not match: no gap to read
+        (0, 0.0, "start_scan", 10, True),
+        (0, 0.5, "start_scan", 10, True),  # exactly 0.5 is allowed
+        (0, 0.51, "start_scan", 10, False),
+        (1, 0.0, "start_scan", 10, False),  # entered the aliased state once
+        (0, 0.0, "winding", 10, False),
+        (0, 0.0, "start_scan", 0, False),  # nothing counted is no evidence
     ],
 )
-def test_m1_no_ambiguous_match_and_a_smallest_gap_above_the_band(
-    unique: list[float], unknown: list[float], ambiguous: list[float], ok: bool
+def test_m1p_a_placed_track_is_never_aliased_and_never_mostly_ambiguous(
+    entries: int, share: float, source: str, counted: int, ok: bool
 ) -> None:
-    r = with_gaps(unique, unknown, ambiguous, life_unique=10)
-    assert dc.m1_verdict(r, 0.025)[0] is ok
-    assert not dc.m1_verdict(with_gaps(unique, unknown, ambiguous), 0.025)[0]  # nothing counted
+    r = with_gaps(
+        [],
+        [],
+        [],
+        laps=laps(3, source=source),
+        aliased_entries=entries,
+        share_max_a3=share,
+        life_unique=counted,
+        life_ambiguous=0,
+    )
+    assert dc.m1p_verdict(r)[0] is ok
+
+
+@pytest.mark.parametrize(
+    ("releases", "nu", "na", "diff", "ok"),
+    [
+        (0, 1, 9, 0.05, True),  # share 0.9 and 0.05 s are the limits
+        (0, 1, 8, 0.0, False),  # 0.889
+        (1, 0, 9, 0.0, False),  # released once
+        (0, 1, 9, 0.051, False),
+    ],
+)
+def test_m4_a_ring_is_never_released_is_over_0_9_ambiguous_and_keeps_round_4_laps(
+    releases: int, nu: int, na: int, diff: float, ok: bool
+) -> None:
+    r = with_gaps(
+        [],
+        [],
+        [],
+        laps=laps(3, lap_s=5.2 + diff, source="winding"),
+        start_verdict="aliased",
+        latched_at_scan=10,
+        aliased_releases=releases,
+        life_unique=nu,
+        life_ambiguous=na,
+    )
+    assert dc.m4_verdict(r, [5.2] * 3)[0] is ok
+    assert not dc.m4_verdict(r, None)[0]  # no round 4 reference: not a pass
+    assert not dc.m4_verdict(r, [5.2] * 2)[0]
 
 
 @pytest.mark.parametrize(

@@ -52,22 +52,26 @@ def make_ref(
 
 
 def is_aliased(n_unique: int, n_ambiguous: int, min_scans: int, max_share: float) -> bool:
-    """A reference is aliased on an approach when at least `min_scans` of its STRONG matches are
-    ambiguous and their share of all STRONG matches is above `max_share`."""
+    """A reference is aliased (entered) when at least `min_scans` of its counted matches over its
+    life are ambiguous and their share of unique plus ambiguous is above `max_share`: a clear
+    majority of enough matches (brief 50e)."""
     total = n_unique + n_ambiguous
     if total <= 0 or n_ambiguous < min_scans:
         return False
     return n_ambiguous / total > max_share
 
 
-def is_proven(n_unique: int, n_ambiguous: int, proof_min_unique: int, max_share: float) -> bool:
-    """A reference is proven with `proof_min_unique` unique matches over its life and at most
-    `max_share` of its unique plus ambiguous matches ambiguous (no minimum count: brief 50d).
-    The caller adds "and not aliased"."""
-    if n_unique < proof_min_unique:
-        return False
+def is_released(n_unique: int, n_ambiguous: int, release_share: float) -> bool:
+    """An aliased reference is released when the ambiguous share is `release_share` or under
+    (0.5: unique matches have caught up). Between that and the entry share nothing changes."""
     total = n_unique + n_ambiguous
-    return total > 0 and n_ambiguous / total <= max_share + 1e-12
+    return total > 0 and n_ambiguous / total <= release_share + 1e-12
+
+
+def is_proven(n_unique: int, n_ambiguous: int, proof_min_unique: int) -> bool:
+    """A reference is proven with `proof_min_unique` unique matches and more unique than ambiguous
+    ones (the plain majority). The caller adds "and not aliased"."""
+    return n_unique >= proof_min_unique and n_unique > n_ambiguous
 
 
 @dataclass(frozen=True)

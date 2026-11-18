@@ -121,23 +121,10 @@ def test_the_5_m_stadium_with_unique_gap_0_035_is_not_latched() -> None:
 # -- proof needs the share too ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("n_unique", "n_ambiguous", "proven"),
-    [(4, 2, False), (4, 1, True), (4, 0, True), (8, 2, True), (3, 0, False), (9, 3, True)],
-)
-def test_proof_is_unique_matches_and_a_quarter_at_most_ambiguous(
-    n_unique: int, n_ambiguous: int, proven: bool
-) -> None:
-    from racer_laps.ring import is_proven
-
-    assert is_proven(n_unique, n_ambiguous, 4, 0.25) is proven
-
-
-def test_a_start_scan_with_4_unique_and_2_ambiguous_holds_its_candidates(
+def test_a_start_scan_with_4_unique_and_2_ambiguous_is_proven_under_the_plain_majority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """50e replaces 50d's quarter rule: 4 and 2 is a placed track at speed and closes on time."""
     closed, gate = run_flagged(monkeypatch, [True] * 4 + [False] * 2)
-    assert gate.start_verdict == "unproven"
-    assert closed is None
-    assert not gate.start_aliased
-    assert len(gate._cands) == 4
+    assert gate.start_verdict == "proven"
+    assert closed is not None and closed.line_source == "start_scan"

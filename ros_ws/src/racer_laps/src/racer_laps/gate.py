@@ -86,7 +86,17 @@ from itertools import pairwise
 
 import numpy as np
 
-from racer_laps.ring import Estimate, Fix, Ref, Ring, Visit, is_aliased, is_proven, make_ref
+from racer_laps.ring import (
+    Estimate,
+    Fix,
+    Ref,
+    Ring,
+    Visit,
+    is_aliased,
+    is_proven,
+    is_released,
+    make_ref,
+)
 from racer_laps.scan_match import (
     DENSE_MAX_POINTS,
     DENSE_VOXEL_M,
@@ -214,8 +224,12 @@ class GateConfig:
     #: evidence either way (`UNKNOWN`, as without a displaced scan). `unique_gap` alone put the 5 m
     #: stadium (0.029 and more) and the box ring (0.031 and less) on one line.
     alias_gap: float = 0.025
-    alias_max_share: float = 0.25
-    alias_min_scans: int = 3
+    #: Brief 50e: the alias verdict is a clear majority (more than `alias_max_share`) of at least
+    #: `alias_min_scans` counted matches over the life of the reference, held (not for good) until
+    #: the ambiguous share is `alias_release_share` or under.
+    alias_max_share: float = 0.75
+    alias_min_scans: int = 6
+    alias_release_share: float = 0.5
     kf_spacing_m: float = 0.5
     kf_max: int = 120
     kf_window_m: float = 0.3
@@ -260,6 +274,8 @@ class GateConfig:
             )
         if not (0.0 <= self.alias_max_share <= 1.0) or self.alias_min_scans < 1:
             raise ValueError("alias_max_share must be in [0, 1], alias_min_scans at least 1")
+        if not (0.0 <= self.alias_release_share <= self.alias_max_share):
+            raise ValueError("alias_release_share must be in [0, alias_max_share]")
         if self.ring_enabled and (
             self.kf_spacing_m <= 0.0
             or self.kf_max < 2
@@ -444,7 +460,13 @@ class StartScanGate:
         self.gaps_ambiguous: list[float] = []
         self.gaps_unknown: list[float] = []  # the dead band between `alias_gap` and `unique_gap`
         self._scan_count = 0  # scans served since the start scan (reported with the latch)
-        self.latched_at_scan: int | None = None
+        self.latched_at_scan: int | None = None  # the first entry (kept for the dev checks)
+        self.aliased_entered_at_scan: int | None = None  # the last entry
+        self.aliased_released_at_scan: int | None = None  # the last release
+        self.aliased_entries = 0
+        self.aliased_releases = 0
+        self.share_max_a3 = 0.0  # largest ambiguous share seen once at least 3 were ambiguous
+        self.share_min_since_entry = math.nan  # smallest share from the first entry on
         self.lap_pair_shares: list[float] = []
         self.lap1_d_beta = 0.0
         self.line_sources: list[str] = []
@@ -510,10 +532,7 @@ class StartScanGate:
         if self.cfg.unique_shift_m <= 0.0:
             return True
         return not self._latched and is_proven(
-            self._life_unique,
-            self._life_ambiguous,
-            self.cfg.proof_min_unique,
-            self.cfg.alias_max_share,
+            self._life_unique, self._life_ambiguous, self.cfg.proof_min_unique
         )
 
     @property
@@ -687,6 +706,10 @@ class StartScanGate:
         self._latched = False
         self._scan_count = 0
         self.latched_at_scan = None
+        self.aliased_entered_at_scan = self.aliased_released_at_scan = None
+        self.aliased_entries = self.aliased_releases = 0
+        self.share_max_a3 = 0.0
+        self.share_min_since_entry = math.nan
         self._w_star_m = None
         self._psi_origin = self._hist[-1].psi
         self._start_total_m = self._hist[-1].total_m
@@ -988,21 +1011,38 @@ class StartScanGate:
             elif verdict == AMBIGUOUS:
                 self._n_ambiguous += 1
                 self._life_ambiguous += 1
-                if is_aliased(
-                    self._life_unique,
-                    self._life_ambiguous,
-                    c.alias_min_scans,
-                    c.alias_max_share,
-                ):
-                    if not self._latched:
-                        self.latched_at_scan = self._scan_count
-                    self._latched = True
+            if verdict in (UNIQUE, AMBIGUOUS):
+                self._update_verdict()
             if self._latched:
-                self._cands = []  # an aliased start scan places nothing, ever
+                self._cands = []  # an aliased start scan places nothing while it is aliased
                 return
             if verdict != UNIQUE:
                 return
         self._cands.append(_Candidate(t_eff_s, line, res))
+
+    def _update_verdict(self) -> None:
+        """Enter the aliased state at a clear majority of enough ambiguous matches, leave it when
+        unique matches have caught up (brief 50e). Only at a counted match."""
+        c = self.cfg
+        u, a = self._life_unique, self._life_ambiguous
+        share = a / (u + a) if u + a else 0.0
+        if a >= 3:
+            self.share_max_a3 = max(self.share_max_a3, share)
+        if self.aliased_entries and not (share >= self.share_min_since_entry):
+            self.share_min_since_entry = share
+        if not self._latched:
+            if is_aliased(u, a, c.alias_min_scans, c.alias_max_share):
+                self._latched = True
+                self.aliased_entries += 1
+                self.aliased_entered_at_scan = self._scan_count
+                if not (share >= self.share_min_since_entry):
+                    self.share_min_since_entry = share
+                if self.latched_at_scan is None:
+                    self.latched_at_scan = self._scan_count
+        elif is_released(u, a, c.alias_release_share):
+            self._latched = False
+            self.aliased_releases += 1
+            self.aliased_released_at_scan = self._scan_count
 
     # -- gate v3: uniqueness, keyframes, placing the crossing --------------------------------
 
@@ -1175,8 +1215,7 @@ class StartScanGate:
         kf = visit.keyframe
         self._ring.note_visit(kf)
         proven = c.unique_shift_m <= 0.0 or (
-            not kf.retired
-            and is_proven(kf.n_unique, kf.n_ambiguous, c.proof_min_unique, c.alias_max_share)
+            not kf.retired and is_proven(kf.n_unique, kf.n_ambiguous, c.proof_min_unique)
         )
         if not proven or not visit.estimates:
             return
@@ -1281,6 +1320,14 @@ class StartScanGate:
         # last one with the reference still unproven (scarce scans are not evidence of aliasing:
         # v2.1's case, v2.1's answer).
         unproven = not self.start_proven
+        # While the majority of its matches is ambiguous (and there is one) the hold does not run
+        # out either: a ring in its first matches places nothing before it is aliased (brief 50e).
+        majority_ambiguous = (
+            unproven
+            and self.cfg.unique_shift_m > 0.0
+            and self._life_ambiguous >= 1
+            and self._life_ambiguous >= self._life_unique
+        )
         if not unproven:
             self._cands = [k for k in self._cands if t_eff_s - k.t_eff_s <= c.candidate_ttl_s]
         if not self._cands:
@@ -1305,7 +1352,9 @@ class StartScanGate:
         wait = t_eff_s - wait_from >= c.consensus_wait_s and bool(at_line)
         if not (past or wait):
             return None
-        if unproven and t_eff_s - self._cands[-1].t_eff_s < c.candidate_ttl_s:
+        if majority_ambiguous or (
+            unproven and t_eff_s - self._cands[-1].t_eff_s < c.candidate_ttl_s
+        ):
             return None  # held: not proven yet
         t_cross = self._time_at_total(median)
         if t_cross is None:
@@ -1484,6 +1533,12 @@ class StartScanGate:
             out["life_unique"] = self._life_unique
             out["life_ambiguous"] = self._life_ambiguous
             out["latched_at_scan"] = self.latched_at_scan
+            out["aliased_entered_at_scan"] = self.aliased_entered_at_scan
+            out["aliased_released_at_scan"] = self.aliased_released_at_scan
+            out["share_max_a3"] = self.share_max_a3
+            out["share_min_since_entry"] = self.share_min_since_entry
+            out["aliased_entries"] = self.aliased_entries
+            out["aliased_releases"] = self.aliased_releases
             out["unknown_gap_count"] = len(gk)
             out["unknown_gap_min"] = min(gk) if gk else math.nan
             out["unknown_gap_max"] = max(gk) if gk else math.nan

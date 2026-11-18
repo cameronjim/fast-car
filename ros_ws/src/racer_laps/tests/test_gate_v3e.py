@@ -74,8 +74,8 @@ def test_an_aliased_start_scan_is_released_when_unique_matches_catch_up(
     else:
         assert gate.aliased_entered_at_scan == 6  # type: ignore[attr-defined]
         assert gate.aliased_released_at_scan == 12  # type: ignore[attr-defined]
-        assert gate.status()["aliased_entries"] == 1
-        assert gate.status()["aliased_releases"] == 1
+        assert gate.aliased_entries == 1
+        assert gate.aliased_releases == 1
     if verdict == "proven":
         assert closed is not None and closed.line_source == "start_scan"  # type: ignore[attr-defined]
 

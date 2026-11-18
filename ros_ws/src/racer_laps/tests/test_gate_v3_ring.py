@@ -331,12 +331,15 @@ def run_flagged(mp: pytest.MonkeyPatch, flags: list[bool], step: float = 0.05): 
     [
         (3, 0, "unproven", False),  # three unique matches are not proof: the closure is held
         (4, 0, "proven", True),
-        (10, 2, "proven", True),  # two ambiguous matches are not enough to call a place aliased
-        (9, 3, "proven", True),  # share exactly 0.25 is not above it
-        (8, 3, "aliased", False),  # 3 / 11 is above 0.25
-        (4, 4, "aliased", False),
-        (0, 3, "aliased", False),  # nothing but ambiguous matches
-        (2, 3, "aliased", False),
+        (10, 2, "proven", True),
+        (9, 3, "proven", True),
+        (8, 3, "proven", True),  # brief 50e: the plain majority (50d held this one)
+        (4, 4, "unproven", False),  # not a majority unique: held, and the hold does not run out
+        (0, 3, "unproven", False),
+        (2, 3, "unproven", False),
+        (2, 6, "unproven", False),  # 0.75 is not over 0.75
+        (0, 6, "aliased", False),  # a clear majority of enough matches
+        (2, 7, "aliased", False),
     ],
 )
 def test_the_verdict_states_decide_whether_a_place_may_place_the_line(
@@ -353,12 +356,13 @@ def test_the_verdict_states_decide_whether_a_place_may_place_the_line(
     assert gate.start_proven is (verdict == "proven")
 
 
-def test_an_aliased_start_scan_stays_aliased_after_20_unique_matches_and_set_start_clears_it(
+def test_an_aliased_start_scan_stays_aliased_between_the_two_shares_and_set_start_clears_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    closed, gate = run_flagged(monkeypatch, [False] * 3 + [True] * 20, step=0.02)
+    # 5 unique, 8 ambiguous: share 0.62, between the release (0.5) and the entry (0.75) share
+    closed, gate = run_flagged(monkeypatch, [False] * 8 + [True] * 5, step=0.02)
     assert gate.start_aliased and closed is None
-    assert gate._life_unique == 20 and gate._cands == []
+    assert gate._life_unique == 5 and gate._cands == []
     assert gate.set_start(gate._hist[-1].t, PTS)
     assert gate.start_verdict == "unproven" and not gate.start_aliased
 
@@ -398,7 +402,7 @@ def test_a_held_closure_is_released_as_v21_when_the_ttl_passes_with_the_referenc
 def test_a_held_closure_is_dropped_when_the_reference_turns_out_aliased(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    closed, gate = run_flagged(monkeypatch, [True, True, False, False, False])
+    closed, gate = run_flagged(monkeypatch, [True, True] + [False] * 7)
     assert closed is None and gate.start_aliased and gate._cands == []
 
 

@@ -223,6 +223,11 @@ def test_one_lap_event_per_lap_with_start_scan_frame_and_v0_guidance(harness: Ha
         assert abs(e.lap_length_m - STADIUM.length_m) < 0.6
         assert e.safety_brakes == 0
     assert [e.clean for e in events] == [True] * 4
+    # brief 50e (M5): a placed track at 3 m/s is never taken for a ring, whatever the scan timing
+    status = harness.statuses[-1]
+    print(f"M5 u={status['life_unique']} a={status['life_ambiguous']}", flush=True)
+    assert status["aliased_entries"] == 0 and status["start_verdict"] == "proven", status
+    assert set(status["lap_line_sources"]) == {"start_scan"}
     assert [round(e.v_cap_mps, 2) for e in events] == [0.5, 0.6, 0.7, 0.8]
     # guidance at 10 Hz, arrays empty in D v0, the cap follows the laps
     times = [t for t, _ in harness.guidance]

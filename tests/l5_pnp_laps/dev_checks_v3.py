@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -27,7 +28,10 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
-sys.path.insert(0, str(REPO_ROOT / "ros_ws" / "src" / "racer_laps" / "src"))
+sys.path.insert(
+    0,
+    os.environ.get("RACER_LAPS_SRC", str(REPO_ROOT / "ros_ws" / "src" / "racer_laps" / "src")),
+)
 
 #: A3, A4, A6 as written in the brief before any code.
 A3_MAX_LAP_DIFF_S = 0.02
@@ -39,7 +43,9 @@ A6_P99_MS = 25.0
 GAP_PLACED_MIN = 0.045  # reported, no rule: a placed track below this, or an RD gap above 0.030
 GAP_RD_MAX = 0.030
 #: M1, M2, M3 of brief 50d as written before any code.
-M1_MIN_ABOVE_ALIAS_GAP = 0.004
+M1P_MAX_SHARE_A3 = 0.5  # M1' (brief 50e): placed tracks, the share once 3 are ambiguous
+M4_MIN_SHARE = 0.9
+M4_MAX_LAP_DIFF_S = 0.05
 M2_MIN_AMBIGUOUS_SHARE = 0.75
 M3_SHIFT = 0.003
 M3_MAX_LAP_DIFF_S = 0.05
@@ -304,23 +310,22 @@ def gap_classes(r: Replayed) -> dict[str, Any]:
     return {"unique": _range(gu), "unknown": _range(gk), "ambiguous": _range(ga)}
 
 
-def m1_verdict(r: Replayed, alias_gap: float) -> tuple[bool, dict[str, Any]]:
-    """A placed track: no ambiguous match, matches were classified at all (a unique match whose
-    displaced scan was not accepted at the same pose has no gap), and the smallest gap of any
-    accepted same-pose displaced scan at least `M1_MIN_ABOVE_ALIAS_GAP` above `alias_gap`."""
-    gu, gk, ga = _gaps(r)
-    every = gu + gk + ga
-    smallest = min(every) if every else math.nan
-    n_unique = int(r.status.get("life_unique", 0))
-    ok = (
-        not ga
-        and n_unique > 0
-        and (not every or smallest >= alias_gap + M1_MIN_ABOVE_ALIAS_GAP - 1e-12)
-    )
+def m1p_verdict(r: Replayed) -> tuple[bool, dict[str, Any]]:
+    """M1' (brief 50e), a placed track: never aliased at any scan, at every scan with at least 3
+    ambiguous matches the ambiguous share at most `M1P_MAX_SHARE_A3`, every lap `start_scan`, and
+    matches were counted at all."""
+    st = r.status
+    entries = int(st.get("aliased_entries", 0))
+    share = float(st.get("share_max_a3", 0.0))
+    sources = sorted({lap.line_source for lap in r.laps})
+    counted = int(st.get("life_unique", 0)) + int(st.get("life_ambiguous", 0))
+    ok = entries == 0 and share <= M1P_MAX_SHARE_A3 and sources == ["start_scan"] and counted > 0
     return ok, {
-        "ambiguous": len(ga),
-        "unique_matches": n_unique,
-        "smallest_gap": smallest,
+        "entries": entries,
+        "u": int(st.get("life_unique", 0)),
+        "a": int(st.get("life_ambiguous", 0)),
+        "share_max_when_a>=3": share,
+        "sources": sources,
         **gap_classes(r),
     }
 
@@ -345,6 +350,31 @@ def m2_verdict(r: Replayed) -> tuple[bool, dict[str, Any]]:
         "sources": sources,
         "ambiguous_share": share,
         **gap_classes(r),
+    }
+
+
+def m4_verdict(r: Replayed, round4_laps: list[float] | None) -> tuple[bool, dict[str, Any]]:
+    """M4 (brief 50e), a ring: M2 plus never released, the ambiguous share over the run at least
+    `M4_MIN_SHARE`, every lap time within `M4_MAX_LAP_DIFF_S` of round 4's."""
+    st = r.status
+    ok2, d2 = m2_verdict(r)
+    nu, na = int(st.get("life_unique", 0)), int(st.get("life_ambiguous", 0))
+    share = na / (nu + na) if nu + na else 0.0
+    releases = int(st.get("aliased_releases", 0))
+    worst = math.nan
+    laps_ok = False
+    if round4_laps is not None and len(round4_laps) == len(r.laps):
+        diffs = [abs(lap.lap_time_s - t) for lap, t in zip(r.laps, round4_laps, strict=True)]
+        worst = max(diffs, default=0.0)
+        laps_ok = worst <= M4_MAX_LAP_DIFF_S
+    ok = ok2 and releases == 0 and share >= M4_MIN_SHARE and laps_ok
+    return ok, {
+        "entered_at_scan": st.get("aliased_entered_at_scan"),
+        "releases": releases,
+        "share_over_run": share,
+        "share_min_since_entry": st.get("share_min_since_entry", math.nan),
+        "worst_lap_vs_round4_s": worst,
+        "sources": d2["sources"],
     }
 
 
@@ -434,40 +464,56 @@ def run_m(args: argparse.Namespace) -> tuple[list[str], bool]:
             if any(f"_{case}_" in p.stem for case in ("RD", "ND", "P4")):
                 rings.append(("dump", str(d), p.stem))
     everything = placed + [r for r in rings if r not in placed]
-    shifts = [(0.0, False), (-M3_SHIFT, False), (M3_SHIFT, False), (0.0, True)]
+    shifts = [(0.0, False), (-M3_SHIFT, False), (M3_SHIFT, False)]
     jobs = [(k, p, n, sh, r3) for k, p, n in everything for sh, r3 in shifts]
     with mp.Pool(args.workers) as pool:
         done = pool.map(_replay_any, jobs, chunksize=1)
     by_key = {(j[1], j[2], j[3], j[4]): d[1] for j, d in zip(jobs, done, strict=True)}
-    _unique, alias = _default_gaps()
     lines: list[str] = []
     ok_all = True
 
     def get(kind_path: tuple[str, str, str], shift: float, r3: bool) -> Replayed:
         return by_key[(kind_path[1], kind_path[2], shift, r3)]
 
+    round4 = json.loads(args.round4_laps.read_text()) if args.round4_laps else {}
+    out_laps = {
+        item[2]: {
+            "laps": [lap.lap_time_s for lap in get(item, 0.0, False).laps],
+            "entered": get(item, 0.0, False).status.get(
+                "aliased_entered_at_scan", get(item, 0.0, False).status.get("latched_at_scan")
+            ),
+        }
+        for item in everything
+    }
+    if args.laps_out:
+        args.laps_out.write_text(json.dumps(out_laps))
     m1_rows = []
     for item in placed:
-        ok, d = m1_verdict(get(item, 0.0, False), alias)
+        ok, d = m1p_verdict(get(item, 0.0, False))
         m1_rows.append((item[2], ok, d))
     m2_rows = []
     for item in rings:
         base = get(item, 0.0, False)
-        r3 = get(item, 0.0, True)
-        ok, d = m2_verdict(base)
-        d["latched_at_scan_round3"] = r3.status.get("latched_at_scan")
-        a, b = base.status.get("latched_at_scan"), r3.status.get("latched_at_scan")
-        d["scans_later_than_round3"] = (a - b) if a is not None and b is not None else "-"
+        ok2, _d2 = m2_verdict(base)
+        ref = round4.get(item[2], {})
+        ok, d = m4_verdict(base, ref.get("laps"))
+        ok = ok and ok2
+        a, b = base.status.get("aliased_entered_at_scan"), ref.get("entered")
+        d["scans_later_than_round4"] = (a - b) if a is not None and b is not None else "-"
         m2_rows.append((item[2], ok, d))
     m3_rows = []
     for item in everything:
         base = get(item, 0.0, False)
         ok, d = m3_verdict(base, [get(item, -M3_SHIFT, False), get(item, M3_SHIFT, False)])
         m3_rows.append((item[2], ok, d))
-    lines += ["M1: placed tracks, no ambiguous match", ""] + _table(m1_rows) + [""]
-    lines += ["M2: rings latched before the first closure", ""] + _table(m2_rows) + [""]
+    lines += ["M1p: placed tracks, never aliased", ""] + _table(m1_rows) + [""]
+    lines += (
+        ["M2/M4: rings aliased before the first closure, never released", ""]
+        + _table(m2_rows)
+        + [""]
+    )
     lines += ["M3: both gaps moved by -0.003 and +0.003", ""] + _table(m3_rows)
-    for name, rows in (("M1", m1_rows), ("M2", m2_rows), ("M3", m3_rows)):
+    for name, rows in (("M1p", m1_rows), ("M2/M4", m2_rows), ("M3", m3_rows)):
         passed = bool(rows) and all(ok for _n, ok, _d in rows)
         ok_all &= passed
         lines += ["", f"{name}: {'PASS' if passed else 'FAIL'}"]
@@ -480,6 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--placed", type=Path, action="append", default=[])
     parser.add_argument("--ring", type=Path, action="append", default=[])
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--round4-laps", type=Path, help="JSON NAME -> lap times of round 4")
+    parser.add_argument("--laps-out", type=Path, help="write NAME -> lap times of this run")
     parser.add_argument("--dumps", type=Path, help="DIR with NAME.json and dumps/NAME.npz")
     parser.add_argument("--bag", type=Path, action="append", default=[])
     args = parser.parse_args(argv)

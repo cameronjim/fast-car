@@ -12,43 +12,69 @@
 # Each package is delegated to pytest_gate.sh, which is scaffold-aware: a
 # package with no .py source yet prints a NOTICE and passes. Once a package
 # gains real source + tests, its gate binds automatically on the next push.
+#
+# Usage: run_python_tests.sh [group]
+#   No argument (or "all") runs every package, as before. CI runs one group per matrix job so the
+#   packages run in parallel; the groups together cover exactly the packages listed below.
+#     core         envelope, racer_policy, sysid/fitting, evaluation/analysis, config/pnp, perception
+#     dynamics     training/racer_pnp_dynamics (pytest-xdist)
+#     laps         ros_ws/src/racer_laps, line90 gate (pytest-xdist)
+#     tools        training/racer_train and the tools/ runs
+#     misc         racer_app agent, sim/*, tests/*, and the other ros_ws packages
+# Coverage is computed over the whole package in every case (pytest-xdist workers are combined by
+# pytest-cov), with the same thresholds.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+
+GROUP="${1:-all}"
+case "$GROUP" in
+  all | core | dynamics | laps | tools | misc) ;;
+  *)
+    echo "Unknown group: ${GROUP}" >&2
+    exit 2
+    ;;
+esac
+
+# want <group>: true when the whole script is running, or when <group> is the selected one.
+want() { [ "$GROUP" = "all" ] || [ "$GROUP" = "$1" ]; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE_SCRIPT="${SCRIPT_DIR}/pytest_gate.sh"
 FAIL=0
 
+# run <dir> <gate> <group> [xdist]
 run() {
-  local dir="$1" gate="$2"
-  if ! "$GATE_SCRIPT" "$dir" "$gate"; then
+  local dir="$1" gate="$2" group="$3" xdist="${4:-0}"
+  want "$group" || return 0
+  if ! PYTEST_XDIST="$xdist" "$GATE_SCRIPT" "$dir" "$gate"; then
     FAIL=1
   fi
 }
 
 # Critical / correctness-critical packages with explicit coverage gates.
-run "training/envelope" branch100
-run "ros_ws/src/racer_policy" line90
-run "sysid/fitting" line90
-run "evaluation/analysis" line90
+run "training/envelope" branch100 core
+run "ros_ws/src/racer_policy" line90 core
+run "sysid/fitting" line90 core
+run "evaluation/analysis" line90 core
 # Plug-and-Play (claude-docs/13-plug-and-play.md): the bundle schema, and the per-part training
 # packages. A directory that does not exist yet passes with a notice.
-run "config/pnp" line90
-run "training/racer_pnp_perception" report
-run "training/racer_pnp_dynamics" line90
+run "config/pnp" line90 core
+run "training/racer_pnp_perception" report core
+run "training/racer_pnp_dynamics" line90 dynamics 1
 # Lap memory (D): the start-scan gate, the station set, the engine and the cap schedule are the
 # decision logic that raises the car's speed lap over lap. 90 percent line coverage; the ROS node
 # and the mcap reader are omitted in pyproject.toml and covered by the L3 and real-bag checks. The
 # generic ros_ws loop below runs the package again as report only.
-run "ros_ws/src/racer_laps" line90
+run "ros_ws/src/racer_laps" line90 laps 1
 
 # Normal packages: reported, not gated.
-run "training/racer_train" report
-run "tools" report
+run "training/racer_train" report tools
+run "tools" report tools
 # tools/pnp_session (brief 34, the car session timing report): 90 percent line coverage of the
 # package itself. The `session` extra (racer_eval, scipy) is installed by --all-extras. The tests
 # that need the built limiter_whatif_cli skip here and run in the ROS job (ctest).
+if want tools; then
 echo "::group::pytest: tools/pnp_session (gate=line90 on the package)"
 if ! (cd tools && uv sync --all-extras --dev &&
   uv run pytest tests/test_pnp_session.py tests/test_pnp_session_v04.py tests/test_pnp_session_lap_c0.py tests/test_pnp_session_lap_src.py tests/test_pnp_cap_schedule.py tests/test_pnp_excitation_plan.py --cov=pnp_session --cov-report=term-missing \
@@ -56,9 +82,11 @@ if ! (cd tools && uv sync --all-extras --dev &&
   FAIL=1
 fi
 echo "::endgroup::"
+fi
 # tools/pnp_data and tools/lapref (brief 36, the data loop and the offline lap reference): 90 percent
 # line coverage of the two packages. They need the `session` extra (racer_eval) and mcap-ros2-support,
 # both installed by --all-extras; the bag writer in the tests is mcap_ros2's.
+if want tools; then
 echo "::group::pytest: tools/pnp_data and tools/lapref (gate=line90 on the two packages)"
 if ! (cd tools && uv sync --all-extras --dev &&
   uv run pytest tests/test_pnp_data.py tests/test_pnp_data_v05.py tests/test_lapref.py tests/test_lapref_compare.py --cov=pnp_data --cov=lapref \
@@ -66,31 +94,32 @@ if ! (cd tools && uv sync --all-extras --dev &&
   FAIL=1
 fi
 echo "::endgroup::"
+fi
 # The racer app's backend agent (tools/racer_app/agent): the docker command whitelist, the
 # pre-drive checks, the disk guard and the HTTP API, all tested against a fake docker/systemd/ROS
 # layer. Gated at 90 percent because it decides what the app is allowed to make the car's
 # computer do. The web UI half (vitest) runs in the racer-app job of ci.yml.
-run "tools/racer_app/agent" line90
-run "sim/racer_gym" report
+run "tools/racer_app/agent" line90 misc
+run "sim/racer_gym" report misc
 
 # L4/L5/L6 test harness scaffolds (roadmap task 0.9, claude-docs/12-testing.md).
 # Each is a standalone, ROS/gym-free dependency manifest (same pattern as
 # sim/bridge/racer_gym_bridge below): report-gated, not coverage-enforced,
 # since these are harness/tooling packages rather than the correctness-
 # critical decision logic 12-testing.md names for a hard gate.
-run "tests/replay_harness" report
-run "tests/sim_in_loop" report
-run "tests/bench" report
-run "tests/l5_reactive_bench" report
+run "tests/replay_harness" report misc
+run "tests/sim_in_loop" report misc
+run "tests/bench" report misc
+run "tests/l5_reactive_bench" report misc
 # tests/l5_pnp_laps (brief 30): the lap battery decision functions and the B4 tool, with their
 # L2 properties (hypothesis). The ROS canary in the same directory skips here.
-run "tests/l5_pnp_laps" report
+run "tests/l5_pnp_laps" report misc
 # tests/l5_pnp_oracle (brief 40): the oracle track's geometry and the guard that the car's launch
 # cannot start it. The ROS parity test and the canary in the same directory skip here.
-run "tests/l5_pnp_oracle" report
+run "tests/l5_pnp_oracle" report misc
 # tests/launch_support: the orderly end of a launch_testing stack the L5 and e2e canaries use
 # (one DDS participant leaves at a time). ROS-free, needs /proc; skips itself elsewhere.
-run "tests/launch_support" report
+run "tests/launch_support" report misc
 
 # tests/sim_regression (roadmap task S.6) is deliberately NOT run here: it installs and
 # steps the pinned f1tenth_gym through several maneuvers (like sim/racer_gym above), which
@@ -104,7 +133,7 @@ run "tests/launch_support" report
 # launch_testing node tests need rclpy + f1tenth_gym and skip cleanly here
 # via pytest.importorskip -- they run for real in the sim-bridge-test CI
 # job instead (see .github/workflows/ci.yml).
-run "sim/bridge/racer_gym_bridge" report
+run "sim/bridge/racer_gym_bridge" report misc
 
 # Any other ros_ws Python package (racer_policy is handled above with its explicit gate;
 # racer_tools has its own standalone pyproject.toml -- see that package's comment on why --
@@ -127,16 +156,18 @@ run "sim/bridge/racer_gym_bridge" report
 # config check registered with ament_cmake_pytest. All five are exercised for real by the
 # l3-and-cpp CI job (colcon build + colcon test, including their L3 launch tests) via
 # ros_build_test.sh.
+# racer_laps is skipped here: its gated run above already runs the same tests (the old report-only
+# second run was a duplicate).
 if [ -d ros_ws/src ]; then
   for pkg_dir in ros_ws/src/*/; do
     pkg_name="$(basename "$pkg_dir")"
-    if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_control" ] ||
+    if [ "$pkg_name" = "racer_policy" ] || [ "$pkg_name" = "racer_laps" ] || [ "$pkg_name" = "racer_control" ] ||
        [ "$pkg_name" = "racer_safety" ] || [ "$pkg_name" = "racer_bringup" ] ||
        [ "$pkg_name" = "racer_drivers" ] || [ "$pkg_name" = "racer_state" ] ||
        [ "$pkg_name" = "racer_session_tools" ]; then
       continue
     fi
-    run "$pkg_dir" report
+    run "$pkg_dir" report misc
   done
 else
   echo "NOTICE: ros_ws/src does not exist yet. Nothing to test yet. Passing."

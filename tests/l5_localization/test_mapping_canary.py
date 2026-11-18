@@ -28,6 +28,7 @@ import launch_testing
 import launch_testing.actions
 import launch_testing.asserts
 import rclpy
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "launch_support"))
@@ -118,6 +119,12 @@ class TestMappingCanary(unittest.TestCase):
             # tracker_node starts TRACKER_START_DELAY_S after the stack, so the car is still on
             # its start pose: slam_toolbox's map frame is this pose.
             start = common.first_ground_truth_pose(self, node)
+            # slam_toolbox publishes /pose once per scan it accepts (the car has moved), so on a
+            # trajectory that does not change the count does not either; fewer is a dropped scan.
+            slam_poses: list[float] = []
+            node.create_subscription(
+                PoseWithCovarianceStamped, "/pose", lambda m: slam_poses.append(1.0), 200
+            )
             result = common.run_laps(
                 self, node, TRACK, target_laps=LAPS, max_wall_s=MAX_TEST_WALL_S
             )
@@ -134,6 +141,7 @@ class TestMappingCanary(unittest.TestCase):
                 {
                     **comparison,
                     "slam_pose": summary,
+                    "slam_pose_updates": len(slam_poses),
                     "speed_mps": SPEED_MPS,
                     "noise": common.noise_on(),
                     "seed": SEED,

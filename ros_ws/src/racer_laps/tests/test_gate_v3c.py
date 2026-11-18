@@ -158,14 +158,27 @@ BOX_RING = Stadium(straight_m=0.0, lane_m=1.2, island_r_m=0.50, box=(0.35, 0.20,
 
 
 @pytest.mark.parametrize("clockwise", [False, True])
-def test_a_ring_with_a_box_the_start_scan_may_see_is_latched_aliased_before_any_closure(
+def test_a_ring_with_a_box_gets_its_laps_from_one_source_and_the_laps_are_right(
     clockwise: bool,
 ) -> None:
+    """Brief 50e: what the gate owes is the lap, not a class name. Counter-clockwise (the box in
+    sight) the start scan is aliased and winds; clockwise (out of sight) it is distinct enough and
+    may close by `start_scan`. One source for the run, no release."""
     mem, laps = run(BOX_RING, 3.4, 0.5, clockwise=clockwise)
-    assert [r.line_source for r in laps] == ["winding"] * 3
     status = mem.status()
-    assert status["lap_start_verdicts"][0] == "aliased"  # type: ignore[index]
-    assert status["start_verdict"] == "aliased" and status["missed_gate_laps"] == []
+    assert len(laps) == 3
+    sources = {r.line_source for r in laps}
+    assert len(sources) == 1 and status["missed_gate_laps"] == []
+    assert status["aliased_releases"] == 0
     truth = BOX_RING.length_m / 0.5
+    if sources == {"winding"}:
+        assert status["start_verdict"] == "aliased"
+        tol = max(0.3, 0.04 * truth)
+    else:
+        assert sources == {"start_scan"}
+        tol = 0.15
     for r in laps:
-        assert abs(r.lap_time_s - truth) <= max(0.3, 0.04 * truth), r.lap_time_s
+        assert abs(r.lap_time_s - truth) <= tol, r.lap_time_s
+    if not clockwise:
+        assert sources == {"winding"}
+        assert status["lap_start_verdicts"][0] == "aliased"  # type: ignore[index]

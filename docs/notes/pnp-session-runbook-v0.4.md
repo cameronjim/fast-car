@@ -384,9 +384,10 @@ brief 51 section as superseded. Steps 1, 3 and 5 are those of brief 51 with the 
    only after the start view was changed, every attempt reported.
 4. **D v0, only in a direction whose D10-C0 passed, same mark, same lights, same session, and
    only after the D10 gates passed on B10 at the freeze commit that is on the car.**
-   `ros2 launch racer_bringup pnp.launch.py lap_memory:=true lap_mode:=v0 lap_source:=camera lap_shadow:=start_scan v_lap1_mps:=0.5 v_max_mps:=<ceiling>`.
-   10 laps. The owner holds the kill switch. Stop the run at any wall contact, at a second
-   doubtful lap in the status, or at a second obstacle brake. If the status says
-   `reference_suspect`, stop at once and relaunch from the mark; the run is not evidence. If it
+   `ros2 launch racer_bringup pnp.launch.py lap_memory:=true lap_mode:=v0 lap_source:=camera v_lap1_mps:=0.5 v_max_mps:=<ceiling>`.
+   The lidar lap gate shadow (`lap_shadow:=start_scan`) is not started by default and not part of
+   this command; add it only on purpose, for data. 10 laps. The owner holds the kill switch. Stop
+   the run at any wall contact, at a second doubtful lap in the status, or at a second obstacle
+   brake. If the status says `reference_suspect`, stop at once and relaunch from the mark; the run is not evidence. If it
    happens twice in a direction, change the start view and repeat the test pass (step 2).
 5. **After.** `lap-src --drive --bag <bag>` for the lap table. Write the session note the same day.

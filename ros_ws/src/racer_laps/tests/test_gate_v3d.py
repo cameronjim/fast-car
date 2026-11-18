@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 import racer_laps.gate as gate_module
+from gate_v2_support import ISLAND_R_M, LANE_M, LAPS, feed, make_mem, truth_lap_times
 from racer_laps.gate import AMBIGUOUS, UNIQUE, UNKNOWN, GateConfig
 from racer_laps.scan_match import MatchResult
 from synth import WHEELBASE_M, Stadium
-from test_gate_v2 import ISLAND_R_M, LANE_M, LAPS, feed, make_mem, truth_lap_times
 from test_gate_v3 import feed_gate
 from test_gate_v3_ring import run_flagged
 from test_gate_v3c import classified, same

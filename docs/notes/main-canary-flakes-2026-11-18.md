@@ -73,3 +73,77 @@ attempts. It is the one judgement call in this change; it matches the mapping ca
 ("a rerun is the right answer"). The cause (slam_toolbox's single-slot scan queue dropping scans while
 the node is busy, or the order the EKF's odometry and the scans pair up) is still open under issue
 156. The canary now records `slam_pose_updates` so a future change can look for a signal.
+
+## 4. L5 lap learning canary again, PR 212 run 44270021089 (traces in hand)
+
+Job 134683997950, two failures, both on the first attempt (`attempt 1` in the log: the starvation
+rule did not fire, `drive_raw` and `safety_drive` gaps were 0.02 s, no brakes). The
+`l5-pnp-laps-canary-trace` artefact has one trace per test (drive_raw, drive, planner status,
+safety events). Nothing below touches racer_laps or the planner: it is a reading of the harness.
+
+### 4a. Lap 1: system 21.34 s, truth 20.98 s (0.36 s over the 0.3 s tolerance)
+
+Differences per lap [0.36, 0.16, 0.12, 0.05, -0.05, 0.08]; the truth crossings are later than the
+system's by 1.09, 0.93, 0.81, 0.76, 0.81, 0.73 s. The system's lap 1 started at
+23.78 - 21.34 = 2.44 s (its start scan). The truth's crossing 0 is 3.89 s. Lap 1 error is the start
+gap (1.45 s) minus the first crossing gap (1.09 s); later laps only see the crossing gap change
+(1.09 to 0.93 is 0.16, 0.93 to 0.81 is 0.12, and so on: each printed difference reproduces
+exactly). So the system and the truth count lap 1 from two different points on the track, about
+0.3 m apart, and the time cost of that gap is large at the launch (slow) and small at the end of
+the lap. That is also why the error shrinks as the cap rises. A passing run has no gap, so the
+two cancel (the 0.03 to 0.055 s of the passing local runs).
+
+Why the truth starts late (measured in the trace, not guessed): the runner took the planner's first
+DRIVING report at 3.82 s, but the car was already moving.
+
+- `/drive` (safety_node output) leaves zero at 1.86 s and ramps to 0.33 m/s by 3.8 s (0.35 m of
+  commanded travel between 1.86 and 3.82 s). The planner was therefore publishing from about 1.8 s.
+- The runner's `/drive_raw` and planner status recordings both begin at exactly 3.82 s, the first
+  status it saw is already DRIVING (`planner_states {'1': 4821}`, no STARTING record at all), and
+  the `/safety/events` ENGAGE at t = 0 is missing (only the release at 1.72 s is recorded). In the
+  other five traces of the same job the first `/drive_raw` is at or before the first `/drive`
+  motion (lag -0.1 to -4.5 s) and the t = 0 ENGAGE is present. Here it is 1.96 s after.
+- The lap node, on the same topics, started its lap at 2.44 s.
+
+Root cause hypothesis: the runner's subscriptions to `/drive_raw` and the planner status matched
+the planner's publishers about 2 s late (DDS discovery in a loaded container, the planner being a
+phase two node), so its first DRIVING receipt, the registered crossing 0 rule ("first scan stamped
+at or after the receipt of the first DRIVING report"), fell 1.4 s after the lap node's start. The
+car had moved 0.3 m by then, so the truth line is 0.3 m ahead of the system's. This is the same
+family as the two cases documented in `first_scan_at_or_after` (the spin loop lag of
+a_S1_ccw_13, the late first DRIVING of a_T2_ccw_12), reached by a third route. Not proven: the
+trace has no discovery timestamps. What would prove it: the runner logging the time it first sees
+a publisher on `/drive_raw` and the planner status topic (`get_publishers_info_by_topic`), which is cheap.
+
+The existing starvation rule cannot see it (no gap in either topic after the first message), and
+`truth_first_odom_s < driving_first_s` holds, so `assert_truth_valid` passes.
+
+Suggested brief (needs the owner's decision, it touches the registered truth rule so it is not
+done here): add a validity condition to `registered_truth` that the car is at rest at crossing 0,
+from the recorded ground-truth odometry the runner already has (displacement between the first
+odometry sample and the sample at crossing 0 under a few centimetres, or `|v|` under the
+standstill threshold at crossing 0). That reads nothing from the system, matches the rule's own
+statement that an invalid run is rerun, never scored, and the run goes through the existing
+`starved` retry. The alternative, anchoring crossing 0 to the first `/drive` motion instead of the
+receipt, changes the registered definition and would need a pre-registration amendment.
+
+### 4b. Oracle test: `no_scan_at_start` at line 150
+
+A different failure. In the trace the planner status goes NO_ODOM (2.03 s), NO_SCAN (2.04 s),
+STARTING (2.12 s) and stays in STARTING until the run ends at 15.55 s (677 statuses, never DRIVING,
+so `driving_first_s` is None and the runner reports `no_scan_at_start`). `/drive_raw` is steady
+(longest gap 0.03 s), speed 0 (noise under 0.09 m/s), steering 0; the car never moved and the run
+stopped on the stall rule. This is the planner's warm start gate not passing for 13 s (conditions
+after scan and odom: track, 25 publish ticks inside `start_tick_gap_s`, 25 solves, gated
+`/drive`), not a late subscription. Which condition is unknown: the planner logs the missing one
+after `start_timeout_s`, and that log is in the runner's stdout/stderr, which the test throws away
+unless the result file is missing. This case is also not retried: `run_truth` goes through
+`run_runner` with `check_validity=True`, outside `run_judged`.
+
+Open, needs data: the runner's captured stdout/stderr (the planner's `start_missing` line) kept
+next to the trace on failure. Do not add a retry before that: a planner that never leaves
+STARTING is a product symptom until shown to be starvation. A second occurrence with that log
+decides it.
+
+Both failed in the same job, 4 minutes apart, which fits a loaded runner; 4a does not need a load
+to explain it, only a late match.

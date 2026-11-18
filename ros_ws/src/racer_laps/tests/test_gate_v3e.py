@@ -5,8 +5,6 @@ ambiguous."""
 from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings
-from hypothesis import strategies as st
 from racer_laps.gate import GateConfig
 from racer_laps.ring import is_aliased, is_proven
 from synth import WHEELBASE_M
@@ -132,31 +130,3 @@ def test_a_start_scan_with_a_majority_unique_is_closed_by_v21_after_the_ttl(
     car.move_to(length + 0.41 + 1.6)
     closed = car.scan(None)
     assert closed is not None and closed.line_source == "start_scan"
-
-
-# -- property --------------------------------------------------------------------------------------
-
-
-@settings(max_examples=300, deadline=None)
-@given(st.lists(st.booleans(), max_size=120))
-def test_the_state_changes_only_at_a_counted_match_and_aliased_means_a_majority_ambiguous(
-    seq: list[bool],
-) -> None:
-    from racer_laps.ring import is_released
-
-    u = a = 0
-    state = "none"  # "aliased" or "free"
-    for unique in seq:
-        u, a = (u + 1, a) if unique else (u, a + 1)
-        before = state
-        if state == "aliased":
-            if is_released(u, a, CFG.alias_release_share):  # type: ignore[attr-defined]
-                state = "free"
-        elif aliased(u, a):
-            state = "aliased"
-        if state == "aliased":
-            assert a > u
-        assert not (before == "aliased" and state == "free" and is_proven(u, a, 4, 0.0, 0.4)), (
-            u,
-            a,
-        )

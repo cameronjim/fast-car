@@ -244,11 +244,11 @@ export function TuneTab() {
               <div class="field">
                 <span>Lap source</span>
                 <div class="seg" role="group" aria-label="ML driver lap source">
-                  {(["start_scan", "map_pose"] as const).map((s) => (
+                  {(["start_scan", "map_pose", "camera"] as const).map((s) => (
                     <button
                       key={s}
                       aria-pressed={n.lap_source === s}
-                      disabled={(s === "map_pose" && lap === "v1") || !lapSourceOffered(options, s)}
+                      disabled={(s !== "start_scan" && lap === "v1") || !lapSourceOffered(options, s)}
                       onClick={() => setPnp({ lap_source: s })}
                     >
                       {s}

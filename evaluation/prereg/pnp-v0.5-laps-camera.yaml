@@ -1,0 +1,133 @@
+schema: pnp-prereg-laps/3
+written: 2026-11-17
+supersedes: nothing        # pnp-v0.5-laps.yaml (B7) and pnp-v0.5-laps-ring.yaml (B8) and their results stand
+v05_laps_file: evaluation/prereg/pnp-v0.5-laps.yaml
+v05_laps_sha256: 35949c7d86dbdd3c5a3dde11eb0551465ea893b5f26e78dc7de0f1a0890428de
+v05_laps_ring_file: evaluation/prereg/pnp-v0.5-laps-ring.yaml
+v05_laps_ring_sha256: 74b1dccd0d30910a7e96a45af65a00de62446902380bfb2bae76512d0498dc36
+source_rule:                 # ExternalConfig of racer_laps/external_gate.py; fixed here
+  crossing_time: event.crossing_time_s      # the peak frame; never arrival, never /lap/status
+  max_event_latency_s: 2.5
+  future_tol_s: 0.05
+  min_lap_length_m: 3.0
+  heading_slack_rad: 1.2
+  band_abs_m: 0.5
+  band_rel: 0.08
+  length_median_laps: 5
+  overdue_factor: 1.25
+  source_stale_s: 3.0
+  ready_similarity_min: 0.90
+  odom_extrapolation_s: 0.2
+  doubtful_lap: missed_gate_path            # not clean, not stored, one step down, two clean to rise
+  overdue_or_dead_source_cap: lap1_cap
+camera_counter:              # racer_perception lap_counter_node, unchanged by this attempt
+  package: racer_perception
+  event_topic: /lap/event
+  status_topic: /lap/status
+  similarity_threshold: 0.80
+  rearm_threshold: 0.55
+  min_lap_distance_m: 3.0
+lap_battery_b9:
+  id: B9
+  seeds: [71, 72]
+  directions: [ccw, cw]
+  laps_judged: 12
+  laps_driven: 13
+  lap1_cap_mps: 0.5
+  ceiling: dynamics bundle validity v_max_mps (config/pnp/fixtures/dyn-car-2026-11-12)
+  plant: car-like (as pnp-v0.3.yaml lap_battery), scan noise on
+  lap_source: truth          # oracle from the simulator's ground-truth pose
+  development:               # run and read without limit; never evidence
+    seeds: [11, 12, 13]
+    cases_read_before: [T, T2, S1, S2, S3, S4, OD, ND, N1, N2, N3, P1, P2, P3, P4]
+  cases:
+    U1: {track: stadium, lane_width_m: 1.15, straight_length_m: 2.0, island_radius_m: 0.48}
+    U2: {track: rounded_rect, lane_width_m: 1.05, straight_length_m: 3.0, island_width_m: 1.5, island_radius_m: 0.40}
+    U3: {track: stadium, lane_width_m: 1.15, straight_length_m: 0.0, island_radius_m: 0.70}
+  drop_rule: {condition: a, seed: 71, min_laps: 3, either_direction: true,
+              max_dropped: 1, min_cases_left: 2}
+  conditions:
+    a: {lap_memory: off, cap_mps: 0.5, seeds: [71]}
+    b: {lap_memory: off, cap: ceiling}
+    c: {lap_memory: v0, lap_source: truth}
+    f: {lap_memory: v0, lap_source: truth, faults: fault_plan}
+  fault_plan:
+    drop_truth_crossings: [4, 7]
+    false_event: {lap: 9, share_of_median_truth_lap_path: 0.6}
+    duplicate_truth_crossing: {crossing: 10, delay_s: 0.2}
+    numbering: consecutive
+  truth: {crossing_0: first_scan_stamp_at_or_after_driving_receipt, reads_system_laps: false,
+          reads_oracle: false}
+  validity: {max_scan_wait_s: 0.25, max_attempts: 3, invalid_counts_as: failed_to_execute,
+             recording_must_cover_judged_laps: true}
+  thresholds:
+    s0_tolerance_s: 0.3
+    s0_doubtful_allowed: 0
+    s0_rejected_allowed: 0
+    s1_min_complete: {of_12: 11, of_8: 7}
+    s1_complete_laps: 10
+    s1_reach_ratio: 1.05
+    s1_reach_min_runs: {of_12: 11, of_8: 7}
+    s1_median_r_max: 0.80
+    late_laps: [8, 9, 10]
+    s2_contacts_allowed: 0
+    s2_confirmed_lap_tolerance_s: 0.3
+    s2_expected_doubtful_at_truth_crossings: [5, 8]
+    s2_expected_doubtful_false_event_and_next: true
+    s2_duplicate_rejected: true
+    s2_cap_after_doubtful: not_above_cap_of_doubtful_lap
+    s2_overdue_window: {from: dropped_crossing_plus_half_truth_lap, to: next_truth_crossing,
+                        min_guidance_cap: lap1_cap}
+d9_b0:
+  tool: tools/pnp_session lap-src --offline
+  development_bags: [2026-11-16T22-38-47_car_teleop, 2026-11-16T02-18-54_car_teleop]
+  evaluation_bags: [2026-11-16T22-45-39_car_teleop, 2026-11-16T23-04-09_car_teleop]
+  judged: every_camera_lap_event_after_the_first_of_its_run
+  crossing_stamp_tolerance_s: 0.001
+  lap_time_tolerance_s: 0.02
+  length_tolerance_m: 0.10
+  lapref_band: [0.85, 1.15]
+  confirmed_outside_band_allowed: 0
+  confirmed_inside_band_min_share: 0.90
+  ready_assumed_for_verdict_item: true
+  insufficient_if: {judged_laps_below: 10, or_no_run_with_lapref_period: true}
+d9_p0:
+  enforced_by: lap_memory_node
+  status_max_age_s: 3.0
+  state: running
+  laps: 0
+  similarity_min: 0.90
+  not_met: every_lap_of_the_run_doubtful
+d9_c0:
+  mode: observe
+  per: direction
+  speed: ceiling_of_the_d_run
+  laps_judged: 10
+  count: equals_owner_count_at_stop        # wheel rule of pnp-v0.5-laps.yaml d7_c0 if not taken; phone video backup
+  lap_distance_within_share_of_median_laps_2_to_10: 0.10
+  peak_similarity_min: 0.88
+  lap_node: {started_ready: true, confirmed_laps: 10, rejected_events: 0,
+             length_tolerance_m: 0.10}
+  event_latency_max_s: 0.5
+  status_gap_max_s: 3.0
+  max_attempts_per_direction: 3            # a new attempt needs a changed start view
+  tool: tools/pnp_session lap-src
+d9_drive:
+  requires: [D9-S0, D9-S1, D9-S2, D9-B0 pass_or_insufficient, freeze_commit_on_car,
+             D9-C0 same_session_same_direction_same_mark, D9-P0 at_launch]
+  lap_mode: v0
+  lap_source: camera
+  lap1_cap_mps: 0.5
+  laps_per_direction: 10
+  layout: plain_donut
+  kill_switch: owner
+  abort: {doubtful_laps: 2, wall_contacts: 1, obstacle_brakes: 2}
+  d_v1: does_not_drive
+  stands_in_for_d3_before_b5_b6: false
+owner_decisions:
+  given: {date: 2026-11-17, source: claude-docs/owner-decisions-2026-11-16.md,
+          item_12_camera_lap_source_and_truth_oracle: true, item_11_terms_of_a_d_v0_drive: true}
+  asked_not_given:
+    d9_pass_lets_d_v0_drive_on_camera_source: null
+    fallback_is_missed_gate_path_stricter_than_hold: null
+    one_freeze_commit_for_b8_and_b9_or_start_scan_unchanged_test_accepted: null

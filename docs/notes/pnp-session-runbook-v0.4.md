@@ -326,3 +326,32 @@ whose reference count is not the wheel distance count is REPEAT: drive it again.
 the freeze commit (`evaluation/prereg/freeze/b8.json`) with `ring_enabled` left at its default.
 `--replay` recomputes the events through the checked-out gate and labels the report REGRESSION, NOT A
 GATE: never use it as the car result.
+
+## Camera lap source: D9-C0 and D v0 on the camera (brief 51)
+
+Added with the camera lap source attempt; nothing above this heading changed.
+
+1. **Start view.** Put the car on a taped mark (four corners) so that it faces something
+   that looks like nowhere else on the lap: a door frame, furniture, a box or poster placed
+   for the purpose, within about 3 m, with large light and dark areas. Not a bare wall. Not
+   along a long straight where the view hardly changes as the car approaches. Lights as they
+   will stay. Nobody walks through the view. Every launch of this section starts from this
+   mark; the cw runs get their own mark and their own view.
+2. **Test pass, one run per direction.**
+   `ros2 launch racer_bringup pnp.launch.py lap_memory:=true lap_mode:=observe lap_source:=start_scan lap_shadow:=camera v_max_mps:=<the ceiling D will get>`.
+   Before switching to auto, wait for the log line that the camera source is READY (D9-P0):
+   camera `running`, 0 laps, similarity at least 0.90, car standing. If it does not come,
+   relaunch; do not drive a judged run without it. Drive 11 laps, count them aloud, stop.
+3. **Score.** `cd tools && uv run python -m pnp_session lap-src --bag <ccw> --bag <cw> --laps-counted 11 --laps-counted 11`.
+   D9-C0 per direction. The same two bags give D8-C0 through `lap-c0`. A direction that fails
+   may be tried again after the start view was changed, at most 3 attempts per direction; every
+   attempt is reported.
+4. **D v0, only in a direction whose D9-C0 passed, same mark, same lights, same session.**
+   `ros2 launch racer_bringup pnp.launch.py lap_memory:=true lap_mode:=v0 lap_source:=camera lap_shadow:=start_scan v_lap1_mps:=0.5 v_max_mps:=<ceiling>`.
+   Wait for READY. 10 laps. The owner holds the kill switch. Stop the run at any wall
+   contact, at a second doubtful lap in the status, or at a second obstacle brake.
+   If the status says `reference_suspect`, stop at once and relaunch from the mark; the run is
+   not evidence. If it happens twice in a direction, change the start view and repeat the test
+   pass (step 2) for that direction.
+5. **After.** `lap-src --drive --bag <bag>` for the lap table. Write the session note the same
+   day.

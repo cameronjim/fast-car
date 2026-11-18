@@ -45,7 +45,7 @@ def test_f_two_agreeing_unique_matches_do_not_place_the_line_and_ambiguous_ones_
     car = Car(monkeypatch, ring_enabled=True, unique_shift_m=0.4)
     # the scripted matcher answers the start-scan match only: no pair centre here
     monkeypatch.setattr(car.gate, "_update_pair", lambda now: None, raising=False)
-    flags = iter([True, True, False, False, False])
+    flags = iter([True, True] + [False] * 7)  # brief 50e: six ambiguous and over 3/4 latch
     monkeypatch.setattr(
         car.gate,
         "_classify",
@@ -60,7 +60,7 @@ def test_f_two_agreeing_unique_matches_do_not_place_the_line_and_ambiguous_ones_
     car.move_to(length + 0.31)
     assert car.scan(None) is None  # two unique matches are not proof: the closure is held
     closures = []
-    for x in (0.35, 0.4, 0.45, 0.5, 0.6):
+    for x in [0.34 + 0.035 * k for k in range(7)]:
         car.move_to(length + x)
         closed = car.scan(result(x))
         if closed is not None:

@@ -321,3 +321,63 @@ missed, laps 2 to 20 within 0.14 s of the camera's, and the crossing instants si
 
 Nothing after A6: no freeze file, no B8 case, no seed 61 to 63. PR 207 (the B7 result) was still
 open when this branch was cut from `origin/main` (71ae56d); the two PRs touch no common file.
+
+## Round 4 (brief 50d: a dead band for the alias verdict)
+
+Built as written: `alias_gap` 0.025 (`0 < alias_gap <= unique_gap`, checked), the match of a same-pose
+displaced scan is UNIQUE at a gap of 0.0325 and over, AMBIGUOUS under 0.025, UNKNOWN between (counted
+for neither verdict, places no candidate); `ring.is_proven` (4 unique over life, ambiguous at most a
+quarter of unique plus ambiguous, no minimum count) used by `start_proven` and by the keyframe fix.
+Status: `gaps_unique`, `gaps_unknown`, `gaps_ambiguous`, `latched_at_scan`, life counts. Development
+data only; no R or Q case, seeds 61 to 63 or B7/B8 run directory was opened. `unique_gap`,
+`proof_min_unique` and every other threshold are where round 3 left them, `alias_gap` was not tuned.
+
+### Development checks
+
+| check | result |
+|---|---|
+| A1 / A2 (full local suite) | one registered L1 test red, see findings 2 below; everything else green |
+| A3, A4 | PASS (A4: 20 laps each, 0.000 s from v2.1, none missed) |
+| A5 | PASS (16 runs, 0 of 192 judged laps outside the tolerance) |
+| A6 | PASS (mean 5.2 ms, p99 16.0 ms; v2.1 3.1 and 15.6 ms) |
+| C1 | PASS (12 fresh RD runs, 12 of 12 clean, every lap by winding, 0 of 144 laps outside) |
+| C2 | PASS (the 12 recorded RD dumps) |
+| M1 | PASS on the 13 stadium dumps and the two car bags (0 ambiguous; smallest same-pose gap 0.040, so 0.015 over `alias_gap`; the bags have 178 and more unique matches whose displaced scan did not match at the same pose, so no gap at all); FAIL on the synthetic 5 m stadium, see finding 1 |
+| M2 | PASS on the 28 RD, ND and P4 dumps: all latched aliased, every lap by winding, ambiguous share 0.95 to 1.00; latched the same scan as round 3 in 27, one scan later in c_ND_cw_11 |
+| M3 | PASS: all 43 dumps and bags replayed at -0.003 and +0.003, same verdict, same line sources, lap times identical to 0.000 s |
+| L3 at 3.0 m/s | 24 of 26 on the first run, then the failing test passed twice; flaky, see finding 3 |
+
+Gap classes per data set (count and range), the three classes:
+
+- 13 stadium dumps: unique 78 to 93 each (0.040 to 0.207), unknown 0, ambiguous 0.
+- 2 car bags: no same-pose displaced scan at all (life unique 178 and more, ambiguous 0).
+- ND (4 dumps): unique 2 to 9 (0.033 to 0.062), unknown 1 to 13 (0.026 to 0.031), ambiguous 163 to 240 (-0.017 to 0.024).
+- P4 (12 dumps): unique 0, unknown 0, ambiguous 161 to 246 (-0.002 to 0.002).
+- RD (12 dumps): unique 0, unknown 0 to 72 (0.026 to 0.031), ambiguous 67 to 249 (-0.019 to 0.024).
+
+### Findings the brief did not say, with the design as written
+
+1. **The 5 m stadium has ambiguous matches when the speed rises.** The v2 test matrix (straight 5 m,
+   speed rising 0.1 m/s a lap to 1.2 m/s) gives 1 to 4 ambiguous gaps (0.019 to 0.0238) in five of its six
+   rising runs (the brief expected a smallest gap of 0.029); worst case counter-clockwise, scale 1.05:
+   4 of 46 matches, nothing latches (share 0.09), every lap by `start_scan`. Constant 0.5 m/s: none.
+   `alias_gap` may not go under 0.020 and 0.019 would still be ambiguous there. The F test
+   (`test_the_5_m_stadium_has_no_ambiguous_match...`) is kept as written and marked xfail on the rising runs.
+2. **The box ring clockwise is not latched.** `test_a_ring_with_a_box_the_start_scan_may_see...[True]`
+   (clockwise, the box out of sight) is red: 26 unique matches (0.033 to 0.038), 4 unknown (0.026 to 0.031),
+   3 ambiguous (0.017 to 0.019): proven, every lap `start_scan`, lap times within 0.1 s of truth. Round 3
+   latched it only because the four band matches counted as ambiguous at that moment (7 of 33). No value of
+   `alias_gap` in 0.020 to 0.028 changes it (at most one more ambiguous match). Left red.
+3. **A stadium at 3.0 m/s can latch in L3.** One of three runs of the L3 lap test: 5 unique (0.040 to 0.112)
+   and 3 ambiguous (0.007, 0.019, 0.021) in the first approaches, share 0.375, latched at scan 65, laps 2 to
+   4 by winding, lap 2 to 4 times 0.4 to 1.0 s short. All three gaps are under 0.025, so the band does not
+   touch them: round 3 has the same exposure (the run to run difference is scan timing in the node). The latch
+   is for good, which is what the brief's own reasoning says is dangerous.
+4. The two 50c table rows "gap 0.032" and "gap 0.031, the largest alias of RD" now expect UNKNOWN (they are
+   the rows the brief replaces); no other row, test, tolerance or golden changed.
+
+### Not done
+
+No freeze, no B8. Not merged: finding 2 leaves a registered L1 test red and finding 3 is an L3 flake; M1
+fails on the 5 m stadium (finding 1). `alias_gap` was not tuned because no value in 0.020 to 0.028 changes
+any of the three.

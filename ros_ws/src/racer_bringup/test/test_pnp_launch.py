@@ -299,7 +299,7 @@ def test_lap_memory_adds_the_node_with_the_cap_range_and_the_planner_fallback(
     p = _flat_params(laps[0])
     assert float(p["v_cap_ceiling_mps"]) == 0.8 and float(p["v_cap_start_mps"]) == 0.4
     assert p["lap_mode"] == "v1" and p["lap_source"] == "start_scan"
-    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    planner = _planner_of(actions)
     q = _flat_params(planner)
     assert q["use_lap_guidance"] is True
     assert float(q["v_max_mps"]) == 0.8
@@ -328,7 +328,7 @@ def test_lap_mode_observe_starts_the_lap_node_and_launches_the_planner_as_withou
     assert len(laps) == 1
     p = _flat_params(laps[0])
     assert p["lap_mode"] == "observe" and p["lap_source"] == "start_scan"
-    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    planner = _planner_of(actions)
     q = _flat_params(planner)
     assert "use_lap_guidance" not in q and "v_no_guidance_mps" not in q
     assert float(q["v_max_mps"]) == 0.7
@@ -810,6 +810,17 @@ def _laps_nodes(actions) -> list:
     return [a for a in actions if getattr(a, "node_package", "") == "racer_laps"]
 
 
+def _planner_of(actions):
+    """The planner node: at the top level when the launch starts it at once, else the one the
+    camera start chain holds back (brief 51c: a camera lap node, primary or shadow, gates it)."""
+    from launch.actions import OpaqueFunction
+
+    top = [a for a in actions if getattr(a, "node_package", "") == "racer_planner"]
+    if top:
+        return top[0]
+    return [a for a in actions if isinstance(a, OpaqueFunction)][-1].chain.planner
+
+
 def _described_nodes(m, monkeypatch, **overrides):
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
     actions = m._make_actions(_context(**overrides))
@@ -870,7 +881,7 @@ def test_lap_source_camera_starts_the_lap_node_on_the_camera_source(monkeypatch,
     p = _flat_params(laps[0])
     assert p["lap_source"] == "camera" and p["lap_mode"] == "v0"
     assert float(p["v_cap_start_mps"]) == 0.5 and float(p["v_cap_ceiling_mps"]) == 0.8
-    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    planner = _planner_of(actions)
     q = _flat_params(planner)
     assert q["use_lap_guidance"] is True and float(q["v_no_guidance_mps"]) == 0.5
 
@@ -994,8 +1005,8 @@ def test_the_shadow_lap_node_is_a_second_node_in_observe_that_does_not_stop_the_
     assert "output_prefix" not in _flat_params(primary)
     # the planner and the primary are those of a run with no shadow
     solo = m._make_actions(_context(**common))
-    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
-    planner_solo = next(a for a in solo if getattr(a, "node_package", "") == "racer_planner")
+    planner = _planner_of(actions)
+    planner_solo = _planner_of(solo)
     assert _flat_params(planner) == _flat_params(planner_solo)
     assert _flat_params(primary) == _flat_params(_laps_nodes(solo)[0])
     # the primary's exit shuts the launch down, the shadow's only logs

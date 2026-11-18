@@ -331,6 +331,9 @@ GATE: never use it as the car result.
 
 Added with the camera lap source attempt; nothing above this heading changed.
 
+**Superseded by "Camera lap source: D10-C0 and D v0 on the camera (brief 51c)" below. Read that
+section; this one is kept as written.**
+
 1. **Start view.** Put the car on a taped mark (four corners) so that it faces something
    that looks like nowhere else on the lap: a door frame, furniture, a box or poster placed
    for the purpose, within about 3 m, with large light and dark areas. Not a bare wall. Not
@@ -355,3 +358,35 @@ Added with the camera lap source attempt; nothing above this heading changed.
    pass (step 2) for that direction.
 5. **After.** `lap-src --drive --bag <bag>` for the lap table. Write the session note the same
    day.
+
+## Camera lap source: D10-C0 and D v0 on the camera (brief 51c)
+
+Added with the start gate; nothing above this heading changed except the one line that marks the
+brief 51 section as superseded. Steps 1, 3 and 5 are those of brief 51 with the changes named.
+
+1. **Start view.** As brief 51 step 1. The mark, the view and the lights are the session's.
+2. **Test pass, one run per direction.**
+   `ros2 launch racer_bringup pnp.launch.py lap_memory:=true lap_mode:=observe lap_source:=start_scan lap_shadow:=camera v_max_mps:=<the ceiling D will get>`.
+   **The launch does not start the planner until the camera source is ready.** It waits for the
+   counter, calls `/lap_counter/reset`, then `lap_source_ready_wait` waits (at most 30 s) for the
+   camera lap node to say ready on two consecutive statuses: camera `running`, 0 laps, similarity
+   at least 0.90. Only then the planner starts. There is nothing to wait for by eye any more: the
+   old rule "wait for READY before switching to auto" is replaced by the gate. If the launch
+   refuses (one ERROR line beginning "refusing to drive: the camera lap source is not ready:" with
+   the lap node's own reason, then it shuts down), the planner never started and the car did not
+   move: fix the start view, relaunch. Switch to auto when the planner reports. Drive 11 laps,
+   count them aloud, stop.
+3. **Score.** `cd tools && uv run python -m pnp_session lap-src --d10 --bag <ccw> --bag <cw> --laps-counted 11 --laps-counted 11`.
+   D10-C0 per direction: items (i) to (v) as D9-C0, with the same thresholds, and item (vi): the
+   first planner status of the bag is later than the second of two consecutive ready statuses of
+   the camera lap node. The `lapref` period and autocorrelation peak are printed per bag, with no
+   threshold (the record grows). Attempts as before: at most 3 per direction per session, a new one
+   only after the start view was changed, every attempt reported.
+4. **D v0, only in a direction whose D10-C0 passed, same mark, same lights, same session, and
+   only after the D10 gates passed on B10 at the freeze commit that is on the car.**
+   `ros2 launch racer_bringup pnp.launch.py lap_memory:=true lap_mode:=v0 lap_source:=camera lap_shadow:=start_scan v_lap1_mps:=0.5 v_max_mps:=<ceiling>`.
+   10 laps. The owner holds the kill switch. Stop the run at any wall contact, at a second
+   doubtful lap in the status, or at a second obstacle brake. If the status says
+   `reference_suspect`, stop at once and relaunch from the mark; the run is not evidence. If it
+   happens twice in a direction, change the start view and repeat the test pass (step 2).
+5. **After.** `lap-src --drive --bag <bag>` for the lap table. Write the session note the same day.

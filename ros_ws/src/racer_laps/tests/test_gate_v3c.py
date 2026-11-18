@@ -10,9 +10,9 @@ import pytest
 import racer_laps.gate as gate_module
 from racer_laps.gate import AMBIGUOUS, UNIQUE, UNKNOWN, GateConfig, StartScanGate, _ScanRec
 from racer_laps.scan_match import MatchResult
-from synth import WHEELBASE_M, Stadium
+from synth import WHEELBASE_M, Stadium, feed
 from test_gate_v3 import feed_gate
-from v3_support import RING, STADIUM, lap_s, run
+from v3_support import RING, STADIUM, lap_s, make_mem, run
 
 RING_GATE_KW = {"ring_enabled": False}
 
@@ -110,15 +110,33 @@ def gate_with_scans(spacing: float, n: int = 40) -> tuple[StartScanGate, float]:
 
 @pytest.mark.parametrize(
     ("spacing", "behind"),
-    [(0.05, 0.40), (0.13, 0.39), (0.25, 0.50), (0.30, 0.60), (0.10, 0.40), (0.20, 0.40)],
+    [
+        (0.05, 0.40),
+        (0.13, 0.52),  # 50e: not 0.39: under 0.4 m back the gap is not evidence (round 5)
+        (0.25, 0.50),
+        (0.30, 0.60),
+        (0.303, 0.606),  # not 0.303: the knife edge at 3.0 m/s of a 10 Hz scan
+        (0.35, 0.70),
+        (0.10, 0.40),
+        (0.20, 0.40),
+    ],
 )
-def test_the_displaced_scan_is_the_nearest_to_0_4_m_back_among_those_more_than_0_3_back(
+def test_the_displaced_scan_is_the_nearest_to_0_4_m_back_among_those_at_least_0_4_back(
     spacing: float, behind: float
 ) -> None:
     gate, now = gate_with_scans(spacing)
     rec = gate._displaced(now)
     assert rec is not None
     assert now - rec.total_m == pytest.approx(behind, abs=1e-9)
+
+
+def test_in_the_first_0_4_m_the_displaced_scan_is_the_nearest_more_than_0_3_back() -> None:
+    gate, now = gate_with_scans(0.05, n=8)  # 0.35 m of travel: nothing at 0.4 yet
+    rec = gate._displaced(now)
+    assert rec is not None and now - rec.total_m == pytest.approx(0.35, abs=1e-9)
+    gate, now = gate_with_scans(0.05, n=9)  # 0.40 m: now the scan at 0.4
+    rec = gate._displaced(now)
+    assert rec is not None and now - rec.total_m == pytest.approx(0.40, abs=1e-9)
 
 
 def test_under_0_3_m_of_travel_there_is_no_displaced_scan() -> None:
@@ -148,6 +166,37 @@ def test_a_stadium_above_2_m_per_s_is_proven_and_never_wound(speed: float) -> No
     assert {r.line_source for r in laps} == {"start_scan"}
     assert mem.status()["start_verdict"] == "proven"
     assert mem.status()["start_alias_share_last_lap"] == 0.0
+
+
+L3_STADIUM = Stadium()  # the stadium of the L3 lap test (straight 2 m)
+
+
+@pytest.mark.parametrize("seed", [1, 7])
+@pytest.mark.parametrize("speed", [3.0, 3.03, 3.1, 3.2, 3.3, 3.5, 3.9])
+def test_a_stadium_a_little_over_3_m_per_s_is_never_taken_for_a_ring_and_closes_on_time(
+    speed: float, seed: int
+) -> None:
+    """Round 5 (the L3 flake): a scan spacing just over 0.30 m put the displaced scan 0.30 to 0.35 m
+    back, where a placed track showed 30 to 40 percent ambiguous matches: its first laps closed
+    1.7 s late (the hold), or never."""
+    closed_at: list[float] = []
+
+    def watch(mem: object, tick: object) -> None:
+        n = mem.laps_completed  # type: ignore[attr-defined]
+        if n > len(closed_at):
+            closed_at.append(tick.t)  # type: ignore[attr-defined]
+
+    mem = make_mem()
+    laps = feed(mem, L3_STADIUM, 3.4, speed_mps=speed, t0=0.0, seed=seed, on_tick=watch)
+    truth = lap_s(L3_STADIUM, speed)
+    assert len(laps) == 3 and len(closed_at) == 3
+    assert {r.line_source for r in laps} == {"start_scan"}  # type: ignore[attr-defined]
+    gate = mem.gate
+    assert gate is not None and gate.aliased_entries == 0
+    assert gate._life_ambiguous == 0
+    for k, (r, t_closed) in enumerate(zip(laps, closed_at, strict=True), start=1):
+        assert abs(r.lap_time_s - truth) < 0.05, (k, r.lap_time_s, truth)  # type: ignore[attr-defined]
+        assert t_closed - k * truth < 0.5, (k, t_closed - k * truth)  # not held for the ttl
 
 
 # -- the box ring ---------------------------------------------------------------------------------------

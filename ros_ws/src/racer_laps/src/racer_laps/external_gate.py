@@ -172,6 +172,11 @@ class ExternalLapGate:
         self.reference_suspect = False
         self.reference_suspect_lap: int | None = None
         self.events_seen = 0
+        # brief 51c: three status keys that read state and feed no verdict, reason, cap or
+        # reference (a test pins that): where the first source status stood against the start
+        self._statuses_before_start = 0
+        self._status_age_at_start = math.nan
+        self._status_gap_max = math.nan
 
     # -- state -----------------------------------------------------------------------------
 
@@ -284,6 +289,7 @@ class ExternalLapGate:
         ready decision and its arrival for liveness: never to place a crossing or count a lap."""
         if not math.isfinite(t_arrival_s):
             return
+        self._trace_status(float(t_arrival_s))
         if (
             self._started
             and math.isfinite(self._status_t)
@@ -302,6 +308,23 @@ class ExternalLapGate:
     def _note_dead(self) -> None:
         if self._started and self.status_age_s() > self.cfg.source_stale_s:
             self._dead_lap = True
+
+    def _trace_status(self, t_arrival_s: float) -> None:
+        """Brief 51c bookkeeping, called before a source status is taken in: the count of statuses
+        before the start and the largest gap between two statuses since the start. Reads state,
+        writes only its own three fields."""
+        if not self._started:
+            self._statuses_before_start += 1
+            return
+        if math.isfinite(self._status_t):
+            gap = t_arrival_s - self._status_t
+            if math.isnan(self._status_gap_max) or gap > self._status_gap_max:
+                self._status_gap_max = gap
+
+    def _trace_start(self) -> None:
+        """Brief 51c bookkeeping, called at the start before the ready decision: the age of the
+        last source status at that instant (infinite if none came)."""
+        self._status_age_at_start = self.status_age_s()
 
     # -- odometry ---------------------------------------------------------------------------
 
@@ -380,6 +403,7 @@ class ExternalLapGate:
         if self._started or not self._hist or not math.isfinite(t_s):
             return False
         self._now = max(self._now, t_s)
+        self._trace_start()
         self._ready, self._ready_reason = self._ready_check()
         last = self._hist[-1]
         self._origin_m = last.total_m
@@ -554,6 +578,9 @@ class ExternalLapGate:
             "event_latency_s_max": self.latency_max,
             "reference_suspect": self.reference_suspect,
             "reference_suspect_lap": self.reference_suspect_lap,
+            "source_status_age_at_start_s": self._status_age_at_start,
+            "source_statuses_before_start": self._statuses_before_start,
+            "source_status_gap_max_s": self._status_gap_max,
         }
 
 

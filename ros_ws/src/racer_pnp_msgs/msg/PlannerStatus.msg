@@ -60,3 +60,14 @@ uint8 BLOCK_RECOVERY_EXHAUSTED=5
 uint8 block_reason
 # Recovery attempts counted since the car last covered 0.5 m forward.
 uint8 recovery_attempts
+# Appended 2026-11-18. While STATE_STARTING: the first warm start condition not yet met
+# (racer_planner StartMissing, same values), START_MISSING_NONE otherwise.
+uint8 START_MISSING_NONE=0
+uint8 START_MISSING_NO_PLAN=1
+uint8 START_MISSING_SCAN=2
+uint8 START_MISSING_ODOM=3
+uint8 START_MISSING_TRACK=4
+uint8 START_MISSING_TICK_TIMING=5
+uint8 START_MISSING_SOLVER_WARMUP=6
+uint8 START_MISSING_GATED=7
+uint8 start_missing

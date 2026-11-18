@@ -258,6 +258,14 @@ Control interpolate_plan(const Control* seq, int n, double dt_s, double age_s) {
   return c;
 }
 
+bool tick_gap_within(double gap_s, double limit_s) {
+  if (!std::isfinite(gap_s) || !std::isfinite(limit_s)) return false;
+  // Far from the limit the rounding cannot matter (and llround stays in range).
+  if (gap_s > limit_s + 1e-3) return false;
+  if (gap_s < limit_s - 1e-3) return true;
+  return std::llround(gap_s * 1e9) <= std::llround(limit_s * 1e9);
+}
+
 const char* start_missing_name(StartMissing m) {
   switch (m) {
     case StartMissing::None:

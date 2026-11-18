@@ -195,3 +195,41 @@ def test_the_suspect_flag_changes_no_verdict_cap_or_reference(
 
     a, b = run_events(False), run_events(True)
     assert repr(a) == repr(b)
+
+
+@SETTINGS
+@given(
+    plan=st.lists(actions, min_size=1, max_size=9),
+    speed=st.floats(0.5, 2.0),
+    status_period=st.one_of(st.none(), st.floats(0.2, 4.0)),
+)
+def test_the_start_diagnostic_keys_change_no_verdict_reason_cap_or_reference(
+    plan: list[Action], speed: float, status_period: float | None
+) -> None:
+    """Brief 51c: the same events and statuses with the three new status keys present and with
+    their bookkeeping stubbed out give identical verdicts, reasons, caps and reference length."""
+    from racer_laps.external_gate import ExternalLapGate
+
+    def run_events(stub: bool) -> list[object]:
+        saved = (ExternalLapGate._trace_status, ExternalLapGate._trace_start)
+        if stub:
+            ExternalLapGate._trace_status = lambda self, t: None  # type: ignore[method-assign]
+            ExternalLapGate._trace_start = lambda self: None  # type: ignore[method-assign]
+        try:
+            out: list[object] = []
+            rig = EngineRig(speed=speed, status_period_s=status_period)
+            for arrival, number, cross in build_events(plan, speed):
+                rig.drive_until(arrival)
+                r = rig.mem.on_lap_source_event(arrival, number, cross)
+                if r is not None:
+                    out.append(
+                        (r.missed_gate, r.clean, r.stored, r.cap_mps, r.next_cap_mps, r.length_m)
+                    )
+            g = rig.mem.gate
+            assert g is not None
+            out.append((g.l_ref_m, g.station_uncertain, g.source_ready))  # type: ignore[attr-defined]
+            return out
+        finally:
+            ExternalLapGate._trace_status, ExternalLapGate._trace_start = saved  # type: ignore[method-assign]
+
+    assert repr(run_events(False)) == repr(run_events(True))

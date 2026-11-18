@@ -202,7 +202,8 @@ def cmd_lap_c0(args: argparse.Namespace) -> int:
 
 
 def cmd_lap_src(args: argparse.Namespace) -> int:
-    """D9-C0 (default), D9-B0 (--offline) or the lap table (--drive) of the camera lap source."""
+    """D9-C0 (default), D10-C0 (--d10), D9-B0 (--offline) or the lap table (--drive) of the
+    camera lap source."""
     from pnp_session import lap_src
 
     bags = [Path(b) for b in args.bag]
@@ -213,6 +214,7 @@ def cmd_lap_src(args: argparse.Namespace) -> int:
             offline=bool(args.offline),
             assume_ready=bool(args.assume_ready),
             drive=bool(args.drive),
+            d10=bool(args.d10),
         )
     except (lap_src.PreregError, lap_src.FreezeRequired, lap_src.NoCameraNode) as error:
         print(f"REFUSED: {error}", file=sys.stderr)
@@ -443,6 +445,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --offline: the lap table shows the replay with ready assumed (development)",
     )
     ls.add_argument("--drive", action="store_true", help="the lap table of a D run")
+    ls.add_argument(
+        "--d10",
+        action="store_true",
+        help="D10-C0 (brief 51c): D9-C0's items plus (vi), the planner started after two ready "
+        "lap node statuses, and the lapref period and autocorrelation peak (reported, no "
+        "threshold). Thresholds read through the D10 yaml's hash",
+    )
     ls.add_argument("--out", help="write the JSON here")
     ls.set_defaults(func=cmd_lap_src)
     h = sub.add_parser("host-facts", help="scheduling policy, CPU governor, load: read only")

@@ -768,7 +768,12 @@ def test_the_command_line_scores_a_bag_and_writes_json(tmp_path: Path) -> None:
     assert code == 0 and "wheel rule" in text
 
 
-def test_the_command_line_drive_table_and_the_refusals(tmp_path: Path) -> None:
+def test_the_command_line_drive_table_and_the_refusals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the refusal under test is the one before the freeze: B9 has been frozen since (the repo now
+    # carries evaluation/prereg/freeze/b9.json), so the test points the guard at no freeze file
+    monkeypatch.setattr(lap_src, "D9_FREEZE_FILE", "evaluation/prereg/freeze/no-such-freeze.json")
     bag = tmp_path / "bag.mcap"
     write_bag(bag, Scenario(node_prefix="/pnp/lap"))
     code, text, _ = run_cli("--bag", str(bag), "--drive")

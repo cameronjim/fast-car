@@ -211,11 +211,17 @@ def test_a_failed_item_vi_fails_the_bag() -> None:
 def test_under_ten_laps_is_still_insufficient_and_still_judges_item_vi() -> None:
     th = lap_src.load_d10()
     bag = Scenario(n=4).bag()
+    bag.streams = dataclasses.replace(
+        bag.streams,
+        planner_arrival=np.array([2.0, 2.1]),
+        planner_state=np.array([0, 1], dtype=np.int64),
+        planner_clearance=np.array([0.3, 0.3]),
+    )
     bag.nodes[PREFIX].statuses = [(0.5, ready_body()), (1.5, ready_body())]
     block = lap_src.evaluate_c0_d10(bag, 4, th)
-    assert block["verdict"] == INSUFFICIENT
     assert [i["verdict"] for i in block["items"][:5]] == [INSUFFICIENT] * 5
-    assert block["items"][5]["item"].startswith("(vi)")
+    assert block["items"][5]["item"].startswith("(vi)") and block["items"][5]["verdict"] == PASS
+    assert block["verdict"] == INSUFFICIENT
 
 
 def test_the_run_function_reads_d10_through_its_own_hash_and_has_no_offline_gate(
@@ -243,7 +249,9 @@ def test_the_command_line_flag_d10(tmp_path: Path) -> None:
     bag = tmp_path / "bag.mcap"
     write_bag(bag)
     out = tmp_path / "report.json"
-    _code, text, _err = run_cli("--bag", str(bag), "--laps-counted", "12", "--d10", "--out", str(out))
+    _code, text, _err = run_cli(
+        "--bag", str(bag), "--laps-counted", "12", "--d10", "--out", str(out)
+    )
     assert "D10-C0 bag.mcap" in text
     report = json.loads(out.read_text())
     assert report["d10_c0"][0]["items"][5]["item"].startswith("(vi)")

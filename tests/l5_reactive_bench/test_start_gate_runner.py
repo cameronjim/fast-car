@@ -113,6 +113,28 @@ def test_a_gate_that_cannot_decide_in_the_polls_is_an_error_and_the_planner_neve
     assert "spawn mppi_planner_node" not in log
 
 
+def test_the_gate_wait_is_bounded_by_gate_polls_not_by_the_startup_polls() -> None:
+    """The canary found it: a spin returns at every message, so 30 s of simulated time is many
+    more polls than the startup's own bound."""
+    clock, log = Clock(statuses_from_poll=40, period_s=0.1), []
+    with pytest.raises(RuntimeError, match="did not answer"):
+        start(clock, log, polls=20)  # the default bound: too few polls
+    clock, log = Clock(statuses_from_poll=40, period_s=0.1), []
+    verdict = runner.run_startup(
+        stack(),
+        two_phase=True,
+        spawn=lambda name, _c: log.append(f"spawn {name}"),
+        ready=lambda: True,
+        spin=clock.spin,
+        reset=lambda: None,
+        after_reset=lambda: None,
+        wait_timeout_polls=20,
+        start_decide=clock.decide,
+        gate_polls=10**6,
+    )
+    assert verdict == ("start", "") and log[-1] == "spawn mppi_planner_node"
+
+
 def test_with_another_lap_source_the_order_is_todays() -> None:
     log: list[str] = []
     answered = {"n": 0}

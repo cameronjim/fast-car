@@ -490,6 +490,7 @@ def run_startup(
     wait_timeout_polls: int,
     lap_ready=None,
     start_decide=None,
+    gate_polls: int | None = None,
 ) -> tuple[str, str]:
     """The runner's startup order. `spawn(name, command)` starts a node, `ready()` says the
     reset service is there (and what the caller also needs before the reset), `spin()` serves
@@ -508,7 +509,10 @@ def run_startup(
 
     `start_decide` (brief 51c, lap source `truth`) replaces `lap_ready`: it returns the start
     rule's `(verdict, reason)` (`racer_laps.start_ready.StartReadyGate`, the rule the car's launch
-    uses). The planner, the only publisher of /drive_raw, is spawned on `start` and never on
+    uses); `gate_polls` bounds that wait in polls (default `wait_timeout_polls`; the runner passes a
+    very large number and bounds the wait in wall time instead, since a spin returns at every
+    message and 30 s of simulated time is many thousands of polls). The planner, the only
+    publisher of /drive_raw, is spawned on `start` and never on
     `refuse`. Returns `("start", "")`, or `("refuse", reason)` with the planner not started."""
     first = [item for item in stack if item[0] in PHASE_ONE_NODES] if two_phase else list(stack)
     later = [item for item in stack if item not in first]
@@ -528,7 +532,7 @@ def run_startup(
         spawn(name, command)
     has_lap_node = any(item[0] == LAP_NODE for item in others)
     if planner and start_decide is not None and has_lap_node:
-        for _ in range(wait_timeout_polls):
+        for _ in range(wait_timeout_polls if gate_polls is None else gate_polls):
             verdict, reason = start_decide()
             if verdict != "wait":
                 break
@@ -1203,6 +1207,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     lap_ready_first: list[float] = []  # node time the first status with source_ready_now arrived
     oracle_status: OracleStatusPublisher | None = None  # set where the oracle's publishers exist
     gate_box: list = []  # the start gate (lap source truth), created when the wait begins
+    gate_wall_start: list[float] = []  # wall time the wait began (it is bounded in wall time too)
     # B4 report item: guidance messages with stations, and those whose lowest per station bound
     # sits at the D v1 floor (the floor was the active bound). Counted here, not in the node.
     guidance_floor: dict = {
@@ -1424,6 +1429,12 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             created when the wait begins so that its 30 s count from there."""
             if not gate_box:
                 gate_box.append(StartReadyGate(StartGateConfig(), received_s()))
+                gate_wall_start.append(time.monotonic())
+            if time.monotonic() - gate_wall_start[0] > base.STARTUP_TIMEOUT_S:
+                raise RuntimeError(
+                    f"lap_memory_node did not answer before the planner was due: the start gate "
+                    f"was undecided after {base.STARTUP_TIMEOUT_S:g} s of wall time"
+                )
             return gate_box[0].decide(received_s())
 
         verdict = run_startup(
@@ -1439,6 +1450,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             start_decide=start_decide
             if args.lap_source == "truth" and oracle is not None
             else None,
+            gate_polls=10**9,
         )
         if verdict[0] == "refuse":
             raise StartRefused(verdict[1])

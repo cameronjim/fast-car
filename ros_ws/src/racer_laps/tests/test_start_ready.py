@@ -172,9 +172,7 @@ def test_a_status_that_does_not_say_ready_never_counts(bad: dict[str, Any]) -> N
     assert g.decide(103.0)[0] == "wait"  # the bad status reset the count: ready, bad, ready
 
 
-@pytest.mark.parametrize(
-    "key", ["lap_source", "phase", "source_ready_now", "source_alive"]
-)
+@pytest.mark.parametrize("key", ["lap_source", "phase", "source_ready_now", "source_alive"])
 def test_a_missing_key_resets_the_count(key: str) -> None:
     g = gate()
     g.on_status(101.0, ready())
@@ -199,7 +197,7 @@ def test_a_start_scan_lap_node_never_starts() -> None:
     while t < 140.0:
         t += 1.0
         g.on_status(t, ready(lap_source="start_scan"))
-        verdict, reason = g.decide(t)
+        verdict = g.decide(t)[0]
         assert verdict != "start"
     assert verdict == "refuse"
 

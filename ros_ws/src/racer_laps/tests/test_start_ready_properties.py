@@ -45,9 +45,7 @@ def make_status(kind: str) -> dict[str, Any]:
     return out
 
 
-steps = st.lists(
-    st.tuples(st.floats(0.0, 6.0), st.sampled_from(KINDS)), min_size=0, max_size=40
-)
+steps = st.lists(st.tuples(st.floats(0.0, 6.0), st.sampled_from(KINDS)), min_size=0, max_size=40)
 
 
 def says_ready(kind: str) -> bool:

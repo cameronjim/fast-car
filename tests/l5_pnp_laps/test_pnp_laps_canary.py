@@ -43,6 +43,9 @@ pytest.importorskip("rclpy")
 pytest.importorskip("f1tenth_gym")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "tests" / "l5_reactive_bench"))
+import starvation
+
 RUNNER = REPO_ROOT / "tests" / "l5_reactive_bench" / "track_family_runner.py"
 # The planner's model and, for the plant, the same fitted car: its actuation, its 0.22 m/s speed
 # dead zone, its steering lag and command delay (io.nominal of the manifest).
@@ -89,8 +92,10 @@ def run_runner(
     v_max_mps: float | None = None,
     track_params: dict | None = None,
     extra_flags: list[str] | None = None,
+    check_validity: bool = True,
 ) -> dict:
     out = tmp_path / "result.json"
+    out.unlink(missing_ok=True)
     command = [
         sys.executable,
         str(RUNNER),
@@ -134,14 +139,66 @@ def run_runner(
     assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
     result = json.loads(out.read_text())
     assert "error" not in result, result["error"]
-    # Brief 48: the truth recording covers crossing 0 in every case (it started before the planner
-    # reported DRIVING, which only the two-phase start guarantees).
+    if check_validity:
+        assert_truth_valid(result)
+    return result
+
+
+def assert_truth_valid(result: dict) -> None:
+    """Brief 48: the truth recording covers crossing 0 in every case (it started before the planner
+    reported DRIVING, which only the two-phase start guarantees)."""
     assert result["truth_valid"] is True, result.get("truth_invalid_reason")
     assert result["truth_first_odom_s"] < result["driving_first_s"], (
         result["truth_first_odom_s"],
         result["driving_first_s"],
     )
-    return result
+
+
+def run_judged(tmp_path, capsys, judge, report, **run_args) -> dict:
+    """run_runner, the truth validity check and `judge` as ONE judgement that is run again, at most
+    starvation.MAX_ATTEMPTS attempts in all, when a failing attempt was starved: a gap in the
+    planner's /drive_raw or in safety_node's /drive (starvation.py), or a truth recording the
+    runner itself could not make valid (no scan at the start, a truth that begins after crossing 0:
+    its process was not scheduled in time). The judgement is the same for every attempt."""
+
+    def say(line: str) -> None:
+        with capsys.disabled():
+            print(line)
+
+    def judged(result: dict) -> None:
+        assert_truth_valid(result)
+        judge(result)
+
+    def starved(result: dict) -> bool:
+        return (
+            starvation.starvation_gap_s(result) > starvation.STARVED_GAP_S
+            or result.get("truth_valid") is not True
+        )
+
+    return starvation.run_judged(
+        lambda: run_runner(tmp_path, check_validity=False, **run_args),
+        judged,
+        report,
+        say,
+        starved=starved,
+    )
+
+
+def lap_diagnosis(result: dict) -> str:
+    """What a lap time failure needs to be read afterwards (main run 44199589402 had only the two
+    lap times): the per-lap system minus truth, where the system and the truth think the laps end,
+    the start the truth was counted from, what the machine did to the processes (gaps in
+    /drive_raw and /drive, starvation.py) and the safety brakes."""
+    system = result["system_lap_events"]
+    return (
+        f"system minus truth per lap {[round(e['lap_time_s'] - g, 2) for e, g in zip(system, result['gt_lap_times_s'], strict=False)]}, "
+        f"system crossings {[round(e['t_cross_s'], 2) for e in system]}, "
+        f"truth crossings {[round(c, 2) for c in result.get('gt_lap_crossings_s', [])]}, "
+        f"truth start {result.get('gt_lap1_start_s')}, driving first {result.get('driving_first_s')}, "
+        f"system lap lengths {[round(e['length_m'], 2) for e in system]}, "
+        f"drive_raw {result.get('drive_raw')}, safety_drive {result.get('safety_drive')}, "
+        f"safety_brakes {result['safety_brakes']}"
+    )
 
 
 def check_laps(result: dict, mode: str, capsys: pytest.CaptureFixture[str]) -> None:
@@ -158,7 +215,9 @@ def check_laps(result: dict, mode: str, capsys: pytest.CaptureFixture[str]) -> N
     assert len(gt) >= LAPS, result.get("stopped_because")
     assert len(system) == len(gt), f"system {len(system)} laps, ground truth {len(gt)}"
     for k, (s, g) in enumerate(zip(system, gt, strict=True), start=1):
-        assert abs(s - g) <= LAP_TIME_TOLERANCE_S, f"lap {k}: system {s:.2f} s, truth {g:.2f} s"
+        assert abs(s - g) <= LAP_TIME_TOLERANCE_S, (
+            f"lap {k}: system {s:.2f} s, truth {g:.2f} s; {lap_diagnosis(result)}"
+        )
     assert result["wall_contacts"] == 0
     assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
     assert result["publisher_nodes"] == {
@@ -175,9 +234,20 @@ def check_laps(result: dict, mode: str, capsys: pytest.CaptureFixture[str]) -> N
 def test_the_lap_memory_counts_the_laps_with_the_start_scan_source_and_the_cap_rises(
     tmp_path, capsys
 ):
-    result = run_runner(tmp_path, domain=83, mode="v0", laps=LAPS, duration_s=300.0)
-    assert all(e["frame_id"] == "start_scan" for e in result["system_lap_events"])
-    check_laps(result, "v0", capsys)
+    def judge(result: dict) -> None:
+        assert all(e["frame_id"] == "start_scan" for e in result["system_lap_events"])
+        check_laps(result, "v0", capsys)
+
+    run_judged(
+        tmp_path,
+        capsys,
+        judge,
+        lambda result: f"l5_pnp_laps start scan source run: laps {result.get('laps')}",
+        domain=83,
+        mode="v0",
+        laps=LAPS,
+        duration_s=300.0,
+    )
 
 
 def test_the_gate_does_not_close_at_half_a_lap(tmp_path, capsys):
@@ -204,8 +274,29 @@ T2_LAPS = 4
 
 def test_the_long_straight_stadium_t2_counts_every_lap_with_the_right_time(tmp_path, capsys):
     """D3-S0a on development case T2 (5.0 m straight), ccw, seed 11, condition a, 4 laps."""
-    result = run_runner(
+
+    def judge(result: dict) -> None:
+        gt = result["gt_lap_times_by_crossing_s"]
+        system = [e["lap_time_s"] for e in result["system_lap_events"]]
+        with capsys.disabled():
+            print(
+                f"\nl5_pnp_laps T2 ccw D off: gt laps {gt} system laps {system} "
+                f"lengths {[round(e['length_m'], 2) for e in result['system_lap_events']]} "
+                f"loop {result['loop_length_m']} contacts {result['wall_contacts']}"
+            )
+        assert len(gt) >= T2_LAPS, result.get("stopped_because")
+        assert len(system) == len(gt), f"system {len(system)} laps, ground truth {len(gt)}"
+        for k, (s, g) in enumerate(zip(system, gt, strict=True), start=1):
+            assert abs(s - g) <= LAP_TIME_TOLERANCE_S, (
+                f"lap {k}: system {s:.2f} s, truth {g:.2f} s; {lap_diagnosis(result)}"
+            )
+        assert result["wall_contacts"] == 0
+
+    run_judged(
         tmp_path,
+        capsys,
+        judge,
+        lambda result: f"l5_pnp_laps T2 run: laps {result.get('laps')}",
         domain=85,
         mode="off",
         laps=T2_LAPS,
@@ -213,19 +304,6 @@ def test_the_long_straight_stadium_t2_counts_every_lap_with_the_right_time(tmp_p
         v_max_mps=LAP1_CAP_MPS,
         track_params=T2_STADIUM,
     )
-    gt = result["gt_lap_times_by_crossing_s"]
-    system = [e["lap_time_s"] for e in result["system_lap_events"]]
-    with capsys.disabled():
-        print(
-            f"\nl5_pnp_laps T2 ccw D off: gt laps {gt} system laps {system} "
-            f"lengths {[round(e['length_m'], 2) for e in result['system_lap_events']]} "
-            f"loop {result['loop_length_m']} contacts {result['wall_contacts']}"
-        )
-    assert len(gt) >= T2_LAPS, result.get("stopped_because")
-    assert len(system) == len(gt), f"system {len(system)} laps, ground truth {len(gt)}"
-    for k, (s, g) in enumerate(zip(system, gt, strict=True), start=1):
-        assert abs(s - g) <= LAP_TIME_TOLERANCE_S, f"lap {k}: system {s:.2f} s, truth {g:.2f} s"
-    assert result["wall_contacts"] == 0
 
 
 P4_RING = {"lane_width_m": 1.1, "straight_length_m": 0.0, "island_radius_m": 0.40}

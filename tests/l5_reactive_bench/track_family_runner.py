@@ -603,6 +603,20 @@ def pnp_timing_summary(recording, planner_status: list[tuple[float, int]]) -> di
             "max_first_speed_after_zero_mps": round(max(starts), 4) if starts else 0.0,
             "starts_from_zero": len(starts),
         }
+    # safety_node's own output. It publishes /drive on a 50 Hz WALL timer and stamps with the sim
+    # clock, and the sim never runs faster than the wall clock, so two /drive stamps more than a
+    # few cycles apart mean the safety_node process was not scheduled for that long (a loaded
+    # runner), not that anything the planner did was late. Its watchdog then reads the wall time
+    # since the last /drive_raw it received as a stale command and brakes, and the release is a
+    # ramp the rate limit clips (a brake plus a rate_limit engagement, the whole signature).
+    drive_out = [d for d in recording.drive if d[0] > 0.0]
+    if len(drive_out) >= 2:
+        out_gaps = np.diff(np.array([d[0] for d in drive_out]))
+        out["safety_drive"] = {
+            "messages": len(drive_out),
+            "max_gap_s": round(float(out_gaps.max()), 4),
+            "gaps_over_50ms": int((out_gaps > 0.05).sum()),
+        }
     return out
 
 

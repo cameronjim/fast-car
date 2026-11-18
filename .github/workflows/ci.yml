@@ -430,6 +430,15 @@ jobs:
           docker run --rm --shm-size=1gb -v "${{ github.workspace }}:/workspace" -w /workspace \
             --entrypoint bash ros-dev:ci -c "./.github/scripts/l5_pnp_laps_test.sh"
 
+      - name: Keep the canary's command and event traces (diagnostics only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: l5-pnp-laps-canary-trace
+          path: canary-trace
+          if-no-files-found: ignore
+          retention-days: 14
+
   l5-pnp-oracle:
     name: L5 obstacle development case OD and the oracle track (geometric and ground truth LocalTrack, parity with the perception node, ros-dev + gym)
     runs-on: ubuntu-latest

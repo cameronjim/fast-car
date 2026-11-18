@@ -78,7 +78,26 @@ set +u
 source "$RACER_L5_WS_DIR/install/setup.bash"
 set -u
 
+# The mapping canary is run on its own because it alone is run again when it fails (at most 3
+# attempts, ctest --repeat until-pass:3). slam_toolbox closes a loop at the wrong place on the
+# plain, featureless lane in about 1 run in 11 (2 of 22 local runs on 2 CPUs with a 70 per cent
+# load; the localisation job failed in 11 of the last 80 CI runs), and nothing in a failed run tells
+# it from a regression: the trajectory is identical (same lap times, same samples) and the lockstep
+# gate timeouts are those of a good run, so there is no starved-run signal to key a rerun on. The
+# cause is inside slam_toolbox (suspected: a scan dropped while its single-slot scan queue is
+# busy, and how the EKF's odometry and the scans pair up), which the mapping canary's own header
+# and docs/notes/sim-time-lockstep-2026-11-14.md already record as "a rerun is the right answer".
+# A regression that builds a wrong map every time still fails all three attempts; no threshold is
+# touched. The AMCL localisation canaries are judged once, as before.
+# See docs/notes/main-canary-flakes-2026-11-18.md.
+status=0
 echo "Running the L5 localisation canaries (colcon test --shm-size handled by the caller's docker run)..."
 colcon test --build-base "$RACER_L5_WS_DIR/build" --install-base "$RACER_L5_WS_DIR/install" \
-  --packages-select l5_localization --event-handlers console_direct+
-colcon test-result --test-result-base "$RACER_L5_WS_DIR/build" --verbose
+  --packages-select l5_localization --event-handlers console_direct+ \
+  --ctest-args -E test_mapping_canary || status=$?
+echo "Running the L5 mapping canary (up to 3 attempts, see the comment above)..."
+colcon test --build-base "$RACER_L5_WS_DIR/build" --install-base "$RACER_L5_WS_DIR/install" \
+  --packages-select l5_localization --event-handlers console_direct+ \
+  --ctest-args -R test_mapping_canary --repeat until-pass:3 || status=$?
+colcon test-result --test-result-base "$RACER_L5_WS_DIR/build" --verbose || status=$?
+exit "$status"

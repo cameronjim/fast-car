@@ -654,7 +654,8 @@ def dev_run_cmd(args: argparse.Namespace) -> None:
     out.mkdir(parents=True, exist_ok=True)
     sha = b4t.git_sha() if os.environ.get(GIT_SHA_ENV) or _git("rev-parse", "HEAD").stdout else ""
     sha = sha or "unknown"
-    jobs = b4t.make_jobs(list(args.conditions), cases, seeds, const.directions)
+    directions = tuple(args.directions.split(",")) if args.directions else const.directions
+    jobs = b4t.make_jobs(list(args.conditions), cases, seeds, directions)
     for job in jobs:
         command_for(
             const, job[1], job[2], job[3], job[4], args.domain_base, out, out,
@@ -680,14 +681,19 @@ def _decide(fn, runs, const, need: str):
         return b10.Decision(fn.__name__.upper().replace("_", "-"), None, {}, f"{need}: {exc}")
 
 
-def decisions_text(runs, const) -> list[str]:
+def decisions_text(runs, const, s1_seed: int | None = None) -> list[str]:
+    """The three decisions. `s1_seed` (development only): D10-S1 on the runs of that seed alone,
+    where the development battery has the paired control b (brief 51c G3: seed 11's pairs)."""
     out = []
     for name, fn, need in (
         ("D10-S0", b10.d10_s0, "needs condition c runs"),
         ("D10-S1", b10.d10_s1, "needs conditions b and c runs"),
         ("D10-S2", b10.d10_s2, "needs condition f runs"),
     ):
-        d = _decide(fn, runs, const, need)
+        use = runs
+        if s1_seed is not None and name == "D10-S1":
+            use = [r for r in runs if r.seed == s1_seed]
+        d = _decide(fn, use, const, need)
         out.append(f"### {name}: {verdict(d)}" + (f" ({d.note})" if d.note else ""))
         out += [
             "",
@@ -847,7 +853,13 @@ def dev_report_text(out: Path) -> str:
         "## E4: D10-S0, D10-S1 (6 of 6) and D10-S2 on the development runs",
         "",
     ]
-    lines += decisions_text(runs, dev)
+    lines += decisions_text(runs, dev, s1_seed=11)
+    started = [r for r in runs if r.condition in ("c", "f")]
+    through = [r for r in started if not b10.started_through_gate(r)]
+    lines += [
+        f"Started ready through the gate (G3): {len(through)} of {len(started)} c and f runs.",
+        "",
+    ]
     lines += ["## E5: the oracle against the registered truth", ""]
     rows = oracle_rows([r for r in runs if r.condition == "c"])
     lines += [
@@ -948,6 +960,11 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--conditions", default="bc")
             p.add_argument(
                 "--laps", type=int, help="development only: stop after this many laps (default 13)"
+            )
+            p.add_argument(
+                "--directions",
+                default=None,
+                help="development only: ccw, cw or ccw,cw (default both)",
             )
             p.add_argument(
                 "--ready-after-s",

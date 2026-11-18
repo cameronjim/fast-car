@@ -1,0 +1,122 @@
+schema: pnp-prereg-laps/4
+written: 2026-11-18
+supersedes: nothing        # pnp-v0.5-laps-camera.yaml (B9: D9-S0 FAIL, D9-S1 FAIL, D9-S2 PASS, D9-B0 INSUFFICIENT) and its results stand
+v05_laps_camera_file: evaluation/prereg/pnp-v0.5-laps-camera.yaml
+v05_laps_camera_sha256: 013cb2f8bec3ce96d2abf456361c3de93d8f85da48c01900c374287d7473807f
+source_rule:                 # unchanged from pnp-v0.5-laps-camera.yaml; a test compares the two blocks
+  crossing_time: event.crossing_time_s
+  max_event_latency_s: 2.5
+  future_tol_s: 0.05
+  min_lap_length_m: 3.0
+  heading_slack_rad: 1.2
+  band_abs_m: 0.5
+  band_rel: 0.08
+  length_median_laps: 5
+  overdue_factor: 1.25
+  source_stale_s: 3.0
+  ready_similarity_min: 0.90
+  odom_extrapolation_s: 0.2
+  doubtful_lap: missed_gate_path
+  overdue_or_dead_source_cap: lap1_cap
+start_gate:                  # racer_laps/start_ready.py; fixed here
+  rule: racer_laps.start_ready.StartReadyGate
+  used_by: [ros_ws/src/racer_bringup/launch/pnp.launch.py, tests/l5_reactive_bench/track_family_runner.py]
+  status: lap_node_status    # <prefix>/status of the lap node on the external source
+  ready_keys: {source_ready_now: true, source_alive: true, phase_not: running}
+  ready_statuses_required: 2
+  status_gap_max_s: 2.5
+  wait_s: 30.0
+  on_timeout: refuse_planner_never_started
+  car_order: [lap_counter_in_graph, lap_counter_reset_ok, start_gate, planner]
+lap_battery_b10:
+  id: B10
+  seeds: [81, 82]
+  directions: [ccw, cw]
+  laps_judged: 12
+  laps_driven: 13
+  lap1_cap_mps: 0.5
+  ceiling: dynamics bundle validity v_max_mps (config/pnp/fixtures/dyn-car-2026-11-12)
+  plant: car-like (as pnp-v0.3.yaml lap_battery), scan noise on
+  lap_source: truth
+  development:
+    seeds: [11, 12, 13]
+    cases_read_before: [T, T2, S1, S2, S3, S4, OD, ND, N1, N2, N3, P1, P2, P3, P4]
+  spent_never_run_again: {cases: [U1, U2, U3], seeds: [71, 72], runs: car-data/pnp/battery/v0.5-b9}
+  cases:
+    V1: {track: stadium, lane_width_m: 1.25, straight_length_m: 2.8, island_radius_m: 0.52}
+    V2: {track: rounded_rect, lane_width_m: 1.1, straight_length_m: 3.2, island_width_m: 1.6, island_radius_m: 0.42}
+    V3: {track: stadium, lane_width_m: 1.2, straight_length_m: 0.0, island_radius_m: 0.65}
+  drop_rule: {condition: a, seed: 81, min_laps: 3, either_direction: true,
+              max_dropped: 1, min_cases_left: 2}
+  conditions:
+    a: {lap_memory: off, cap_mps: 0.5, seeds: [81]}
+    b: {lap_memory: off, cap: ceiling}
+    c: {lap_memory: v0, lap_source: truth, oracle_ready_after_s: by_seed}
+    f: {lap_memory: v0, lap_source: truth, faults: fault_plan, oracle_ready_after_s: by_seed}
+    r: {lap_memory: v0, lap_source: truth, oracle_ready_after_s: never, seeds: [81], directions: [ccw]}
+  oracle_ready_after_s: {81: 0.0, 82: 6.0}     # sim time after the lap node's first status
+  fault_plan:                                   # B9's, unchanged
+    drop_truth_crossings: [4, 7]
+    false_event: {lap: 9, share_of_median_truth_lap_path: 0.6}
+    duplicate_truth_crossing: {crossing: 10, delay_s: 0.2}
+    numbering: consecutive
+  truth: {crossing_0: first_scan_stamp_at_or_after_driving_receipt, reads_system_laps: false,
+          reads_oracle: false}
+  validity: {max_scan_wait_s: 0.25, max_attempts: 3, invalid_counts_as: failed_to_execute,
+             recording_must_cover_judged_laps: true, start_refused_in_c_or_f: failed_to_execute_not_repeated}
+  thresholds:
+    s0_started_through_gate: every_c_run
+    s0_tolerance_s: 0.3
+    s0_doubtful_allowed: 0
+    s0_rejected_allowed: 0
+    s0_refusal: {within_s_of_lap_node_first_status: 35.0, planner_started: false,
+                 drive_raw_messages: 0, max_truth_path_m: 0.05, reason_named: true}
+    s1_min_complete: {of_12: 11, of_8: 7}
+    s1_complete_laps: 10
+    s1_reach_ratio: 1.05
+    s1_reach_min_runs: {of_12: 11, of_8: 7}
+    s1_median_r_max: 0.80
+    late_laps: [8, 9, 10]
+    s2_started_through_gate: every_f_run
+    s2_contacts_allowed: 0
+    s2_confirmed_lap_tolerance_s: 0.3
+    s2_expected_doubtful_at_truth_crossings: [5, 8]
+    s2_expected_doubtful_false_event_and_next: true
+    s2_duplicate_rejected: true
+    s2_cap_after_doubtful: not_above_cap_of_doubtful_lap
+    s2_overdue_window: {from: dropped_crossing_plus_half_truth_lap, to: next_truth_crossing,
+                        min_guidance_cap: lap1_cap}
+d9_b0_carried:
+  result: {i: PASS, ii: PASS, iii: INSUFFICIENT, judged_laps: 23}
+  rescored: false
+  carries_only_if: brief_51c_check_G1_identical_lap_results
+  d10_b0: none
+  reported_no_threshold: lapref_period_and_autocorrelation_on_d10_c0_bags
+d10_p0:
+  enforced_by: [pnp.launch.py start gate, lap_memory_node]
+  gate_not_met: launch_refuses_planner_never_started
+  node_rule: {status_max_age_s: 3.0, state: running, laps: 0, similarity_min: 0.90,
+              not_met: every_lap_of_the_run_doubtful}
+d10_c0:
+  as: d9_c0 of pnp-v0.5-laps-camera.yaml, items i to v, thresholds unchanged
+  item_vi: planner_first_status_after_second_consecutive_ready_status_of_camera_lap_node
+  max_attempts_per_direction: 3
+  tool: tools/pnp_session lap-src
+d10_drive:
+  requires: [D10-S0, D10-S1, D10-S2, G1 held so D9-B0 carries, freeze_commit_on_car,
+             D10-C0 same_session_same_direction_same_mark, D10-P0 at_launch]
+  lap_mode: v0
+  lap_source: camera
+  lap1_cap_mps: 0.5
+  laps_per_direction: 10
+  layout: plain_donut
+  kill_switch: owner
+  abort: {doubtful_laps: 2, wall_contacts: 1, obstacle_brakes: 2}
+  d_v1: does_not_drive
+  stands_in_for_d3_before_b5_b6: false
+owner_decisions:
+  given: {source: claude-docs/owner-decisions-2026-11-16.md, items: [11, 12, 13, 15]}
+  asked_not_given:
+    d10_pass_lets_d_v0_drive_on_camera_source: null
+    d9_b0_carries_no_new_offline_gate: null
+    lidar_lap_gate_parked_shadow_only: null

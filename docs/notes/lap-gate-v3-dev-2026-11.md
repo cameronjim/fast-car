@@ -358,7 +358,7 @@ Gap classes per data set (count and range), the three classes:
 ### Findings the brief did not say, with the design as written
 
 1. **The 5 m stadium has ambiguous matches when the speed rises.** The v2 test matrix (straight 5 m,
-   speed rising 0.1 m/s a lap to 1.2 m/s) gives 1 to 4 ambiguous gaps (0.019 to 0.0238) in five of its six
+   speed rising 0.1 m/s a lap to 1.2 m/s) gives 1 to 4 ambiguous gaps (0.019 to 0.0238) in three of its six (all counter-clockwise)
    rising runs (the brief expected a smallest gap of 0.029); worst case counter-clockwise, scale 1.05:
    4 of 46 matches, nothing latches (share 0.09), every lap by `start_scan`. Constant 0.5 m/s: none.
    `alias_gap` may not go under 0.020 and 0.019 would still be ambiguous there. The F test

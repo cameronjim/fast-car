@@ -98,7 +98,14 @@ class Harness:
         self.events: list[LapEvent] = []
         self.guidance: list[tuple[float, LapGuidance]] = []
         self.statuses: list[dict[str, Any]] = []
-        self.node.create_subscription(LapEvent, "/pnp/lap/event", self.events.append, rel)
+        self.event_wall_s: list[float] = []  # arrival of each lap event, from the play start
+
+        def on_event(msg: LapEvent) -> None:
+            self.events.append(msg)
+            self.event_wall_s.append(time.monotonic() - self.t0_mono)
+
+        self.t0_mono = time.monotonic()
+        self.node.create_subscription(LapEvent, "/pnp/lap/event", on_event, rel)
         self.node.create_subscription(
             LapGuidance,
             "/pnp/lap/guidance",
@@ -110,6 +117,10 @@ class Harness:
         )
         self.walls = self.stadium.walls()
         self.rng = np.random.default_rng(7)
+        #: wall time of every scan published, and how late the latest was against its slot: a loaded
+        #: host starves the harness, which plays the stadium in real time
+        self.scan_wall_s: list[float] = []
+        self.scan_late_s = 0.0
 
     def spin(self, seconds: float) -> None:
         end = time.monotonic() + seconds
@@ -169,6 +180,8 @@ class Harness:
     ) -> None:
         """Play the stadium in real time: odometry and steering at 50 Hz, scans at 10 Hz."""
         t0 = time.monotonic()
+        self.t0_mono = t0
+        self.t0_stamp_s = self.now_s()
         next_scan = 0.0
         while True:
             t = time.monotonic() - t0
@@ -181,7 +194,9 @@ class Harness:
             if planner:
                 self.driving()
             if scans and t >= next_scan:
+                self.scan_late_s = max(self.scan_late_s, t - next_scan)
                 next_scan += 0.1
+                self.scan_wall_s.append(t)
                 self.publish_scan(x, y, yaw)
             self.spin(0.02)
 
@@ -219,7 +234,13 @@ def test_one_lap_event_per_lap_with_start_scan_frame_and_v0_guidance(harness: Ha
     last = harness.statuses[-1]
     print(  # brief 50e (M5): what the verdict counted, shown even when a later assertion fails
         f"M5 u={last['life_unique']} a={last['life_ambiguous']} "
-        f"entries={last['aliased_entries']} laps={[e.lap_index for e in events]}",
+        f"entries={last['aliased_entries']} laps={[e.lap_index for e in events]} "
+        f"scans={len(harness.scan_wall_s)} late={harness.scan_late_s:.3f} "
+        f"gap={max(np.diff(harness.scan_wall_s), default=0.0):.3f} "
+        f"start_delay={last['lap1_start_stamp_s'] - harness.t0_stamp_s:.3f} "
+        f"arrive={[round(x, 2) for x in harness.event_wall_s]} loop={harness.loop_s:.2f} "
+        f"missed={last['missed_gate_laps']} why={last['why_no_lap']!r} "
+        f"sources={last['lap_line_sources']} stale={last['stale_odometry_scans']}",
         flush=True,
     )
     assert [e.lap_index for e in events] == [1, 2, 3, 4]

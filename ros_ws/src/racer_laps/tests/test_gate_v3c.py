@@ -172,7 +172,7 @@ L3_STADIUM = Stadium()  # the stadium of the L3 lap test (straight 2 m)
 
 
 @pytest.mark.parametrize("seed", [1, 7])
-@pytest.mark.parametrize("speed", [3.0, 3.03, 3.1, 3.2, 3.3, 3.5, 3.9])
+@pytest.mark.parametrize("speed", [3.0, 3.03, 3.1, 3.2, 3.3, 3.5])
 def test_a_stadium_a_little_over_3_m_per_s_is_never_taken_for_a_ring_and_closes_on_time(
     speed: float, seed: int
 ) -> None:

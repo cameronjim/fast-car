@@ -1070,22 +1070,27 @@ class StartScanGate:
 
     def _displaced(self, total_m: float) -> _ScanRec | None:
         """The buffered scan whose wheel distance behind `total_m` is nearest `unique_shift_m`,
-        among those more than `unique_shift_m - unique_shift_tol_m` behind. Up to 2.0 m/s at 10 Hz
-        that is the scan within `unique_shift_tol_m` of `unique_shift_m` back; above it the nearest
-        scan further back (a larger displacement makes a real place more distinct and leaves a ring
-        ambiguous) instead of none. None under that much travel."""
+        among those at least `unique_shift_m` behind: under that shift the gap of a placed track
+        is not evidence (a 10 Hz scan spacing just over 0.30 m, 3.0 m/s, gave a 0.30 to 0.35 m shift
+        and 30 to 40 percent ambiguous matches on a stadium: round 5). Up to 2.0 m/s at 10 Hz that is
+        the scan `unique_shift_m` back; above it the nearest scan further back (a larger
+        displacement makes a real place more distinct and leaves a ring ambiguous) instead of none.
+        In the first `unique_shift_m` of travel, when nothing is that far back yet, the nearest
+        more than `unique_shift_m - unique_shift_tol_m` back. None under that much travel."""
         c = self.cfg
-        near = c.unique_shift_m - c.unique_shift_tol_m + 1e-9  # more than 0.3 m, not 0.3 m
         best: _ScanRec | None = None
-        best_d = math.inf
-        for rec in self._scans:
-            behind = total_m - rec.total_m
-            if behind < near:
-                continue
-            d = abs(behind - c.unique_shift_m)
-            if d < best_d:
-                best, best_d = rec, d
-        return best
+        for floor in (c.unique_shift_m - 1e-9, c.unique_shift_m - c.unique_shift_tol_m + 1e-9):
+            best_d = math.inf
+            for rec in self._scans:
+                behind = total_m - rec.total_m
+                if behind < floor:
+                    continue
+                d = abs(behind - c.unique_shift_m)
+                if d < best_d:
+                    best, best_d = rec, d
+            if best is not None:
+                return best
+        return None
 
     def _classify(self, res: MatchResult, ref: Ref, total_m: float) -> str:
         """The uniqueness test. Match the displaced scan (about `unique_shift_m` of wheel distance

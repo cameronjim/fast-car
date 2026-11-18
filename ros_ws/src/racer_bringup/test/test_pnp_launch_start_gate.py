@@ -10,6 +10,7 @@ that dies after one ready status refuses."""
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import threading
 import time
@@ -41,10 +42,10 @@ def _processes(actions) -> list:
     return [a for a in actions if type(a).__name__ == "ExecuteProcess"]
 
 
-def _camera_actions(m, monkeypatch, tmp_path, **overrides):
+def _camera_actions(m, monkeypatch, tmp_path, counter_in_graph=False, **overrides):
     _with_perception_installed(monkeypatch)
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
-    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: counter_in_graph)
     args = {
         "lap_memory": "true",
         "lap_source": "camera",
@@ -166,7 +167,7 @@ def test_without_a_reset_the_chain_goes_from_the_counter_to_the_waiter(
 ) -> None:
     m = _module()
     # the counter is run by someone else: this launch makes no reset call, the gate still holds
-    actions = _camera_actions(m, monkeypatch, tmp_path, lap_counter="false")
+    actions = _camera_actions(m, monkeypatch, tmp_path, counter_in_graph=True, lap_counter="false")
     gate = _gate_of(actions)
     assert gate is not None and gate.chain.reset is None and not _planner_nodes(actions)
     out = gate.chain.after_counter()
@@ -339,21 +340,33 @@ def run_chain(m, tmp_path: Path, reset_cmd: list[str], timeout_s: float):
     )
     service = LaunchService(noninteractive=True)
     service.include_launch_description(description)
-    thread = threading.Thread(target=service.run, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout_s)
-    finished = not thread.is_alive()
-    if not finished:
-        service.shutdown()
-        thread.join(timeout=10.0)
-    return (marker.stat().st_mtime if marker.exists() else None), finished
+    records: list[str] = []
+
+    class Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record.getMessage())
+
+    collector = Collect()
+    user_log = logging.getLogger("launch.user")
+    user_log.addHandler(collector)
+    # LaunchService runs in the main thread; a timer ends it if the chain does not
+    timer = threading.Timer(timeout_s, service.shutdown)
+    timer.start()
+    started = time.monotonic()
+    try:
+        service.run()
+    finally:
+        timer.cancel()
+        user_log.removeHandler(collector)
+    finished = time.monotonic() - started < timeout_s
+    return (marker.stat().st_mtime if marker.exists() else None), finished, "\n".join(records)
 
 
 def test_g6_ready_after_8_s_starts_the_planner_after_it(tmp_path, capfd) -> None:
     m = _module()
     fake = FakeLapNode(ready_after_s=8.0)
     try:
-        started, finished = run_chain(m, tmp_path, ["true"], timeout_s=60.0)
+        started, finished, _log = run_chain(m, tmp_path, ["true"], timeout_s=60.0)
     finally:
         fake.close()
     assert finished and started is not None
@@ -365,12 +378,11 @@ def test_g6_never_ready_refuses_within_35_s_with_the_reason_and_no_planner(tmp_p
     fake = FakeLapNode(ready_after_s=None)
     t0 = time.monotonic()
     try:
-        started, finished = run_chain(m, tmp_path, ["true"], timeout_s=60.0)
+        started, finished, log = run_chain(m, tmp_path, ["true"], timeout_s=60.0)
     finally:
         fake.close()
     elapsed = time.monotonic() - t0
-    out = capfd.readouterr()
-    text = out.out + out.err
+    text = log
     assert finished and started is None  # the planner process was never created
     assert elapsed <= 35.0 + 3.0  # the 30 s wait and the launch's own start and stop
     assert REFUSAL in text and "similarity 0.50 below 0.90" in text
@@ -380,20 +392,19 @@ def test_g6_a_reset_that_fails_refuses(tmp_path, capfd) -> None:
     m = _module()
     fake = FakeLapNode(ready_after_s=0.0)
     try:
-        started, finished = run_chain(m, tmp_path, ["false"], timeout_s=30.0)
+        started, finished, log = run_chain(m, tmp_path, ["false"], timeout_s=30.0)
     finally:
         fake.close()
-    text = capfd.readouterr().out
     assert finished and started is None
-    assert REFUSAL in text and "reset" in text
+    assert REFUSAL in log and "reset" in log
 
 
 def test_g6_a_lap_node_that_dies_after_one_ready_status_refuses(tmp_path, capfd) -> None:
     m = _module()
     fake = FakeLapNode(ready_after_s=0.0, die_after_s=0.5)  # one ready status, then silence
     try:
-        started, finished = run_chain(m, tmp_path, ["true"], timeout_s=60.0)
+        started, finished, log = run_chain(m, tmp_path, ["true"], timeout_s=60.0)
     finally:
         fake.close()
     assert finished and started is None
-    assert REFUSAL in capfd.readouterr().out
+    assert REFUSAL in log

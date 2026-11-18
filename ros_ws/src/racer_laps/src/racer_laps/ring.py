@@ -68,10 +68,19 @@ def is_released(n_unique: int, n_ambiguous: int, release_share: float) -> bool:
     return total > 0 and n_ambiguous / total <= release_share + 1e-12
 
 
-def is_proven(n_unique: int, n_ambiguous: int, proof_min_unique: int) -> bool:
-    """A reference is proven with `proof_min_unique` unique matches and more unique than ambiguous
-    ones (the plain majority). The caller adds "and not aliased"."""
-    return n_unique >= proof_min_unique and n_unique > n_ambiguous
+def is_proven(
+    n_unique: int, n_ambiguous: int, proof_min_unique: int, span_m: float, shift_m: float
+) -> bool:
+    """A reference is proven when more of its matches are unique than ambiguous and either it has
+    `proof_min_unique` unique matches, or it has three, none ambiguous, with the wheel distance from
+    its first unique match to its latest at least `shift_m` (brief 50f: the place stayed distinct
+    over a displacement of its own size; four matches 0.05 m apart are one look). The caller adds
+    "and not aliased"."""
+    if n_unique <= n_ambiguous:
+        return False
+    if n_unique >= proof_min_unique:
+        return True
+    return n_unique >= 3 and n_ambiguous == 0 and span_m >= shift_m - 1e-9
 
 
 @dataclass(frozen=True)
@@ -95,6 +104,8 @@ class Keyframe:
     #: verdict belongs to the place.
     n_unique: int = 0
     n_ambiguous: int = 0
+    first_unique_m: float = math.nan  # wheel total of its first and latest unique match (the span)
+    last_unique_m: float = math.nan
     visited: bool = False  # matched on the current lap (the tail of a lap is tracked by the
     # start scan and never visited: it must not keep a useless ring alive)
 

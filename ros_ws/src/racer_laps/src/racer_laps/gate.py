@@ -212,7 +212,6 @@ class GateConfig:
     #: give gate v2.1 exactly. See the module docstring of ring.py and `StartScanGate`.
     ring_enabled: bool = True
     unique_shift_m: float = 0.4
-    unique_shift_tol_m: float = 0.1
     unique_same_m: float = 0.2
     #: Brief 50c: a match is unique only if the displaced scan, at the same pose, is worse by at
     #: least this much free-space violation than the match itself. The brief's 0.035 (between the
@@ -263,15 +262,11 @@ class GateConfig:
             raise ValueError("consensus_past_m and consensus_wait_s must not be negative")
         if (
             self.unique_shift_m < 0.0
-            or self.unique_shift_tol_m < 0.0
             or self.unique_same_m <= 0.0
             or self.unique_gap < 0.0
             or not (0.0 < self.alias_gap <= self.unique_gap)
         ):
-            raise ValueError(
-                "unique_shift_m and unique_shift_tol_m must not be negative, "
-                "alias_gap in (0, unique_gap]"
-            )
+            raise ValueError("unique_shift_m must not be negative, alias_gap in (0, unique_gap]")
         if not (0.0 <= self.alias_max_share <= 1.0) or self.alias_min_scans < 1:
             raise ValueError("alias_max_share must be in [0, 1], alias_min_scans at least 1")
         if not (0.0 <= self.alias_release_share <= self.alias_max_share):
@@ -445,6 +440,8 @@ class StartScanGate:
         self._n_ambiguous = 0  # ... and ambiguous (the alias verdict of this lap)
         self._life_unique = 0  # the same, over the life of the start scan (the verdict)
         self._life_ambiguous = 0
+        self._life_first_unique_m = math.nan  # wheel total of its first and latest unique match
+        self._life_last_unique_m = math.nan
         self._latched = False  # the start scan is aliased: for good, until set_start
         self._w_star_m: float | None = None  # wheel total where the winding angle reached 2 pi
         self._psi_origin = 0.0
@@ -532,7 +529,11 @@ class StartScanGate:
         if self.cfg.unique_shift_m <= 0.0:
             return True
         return not self._latched and is_proven(
-            self._life_unique, self._life_ambiguous, self.cfg.proof_min_unique
+            self._life_unique,
+            self._life_ambiguous,
+            self.cfg.proof_min_unique,
+            self._life_last_unique_m - self._life_first_unique_m,
+            self.cfg.unique_shift_m,
         )
 
     @property
@@ -703,6 +704,7 @@ class StartScanGate:
         self._visit = None
         self._n_unique = self._n_ambiguous = 0
         self._life_unique = self._life_ambiguous = 0
+        self._life_first_unique_m = self._life_last_unique_m = math.nan
         self._latched = False
         self._scan_count = 0
         self.latched_at_scan = None
@@ -1008,6 +1010,9 @@ class StartScanGate:
             if verdict == UNIQUE:
                 self._n_unique += 1
                 self._life_unique += 1
+                if self._life_unique == 1:
+                    self._life_first_unique_m = now.total_m
+                self._life_last_unique_m = now.total_m
             elif verdict == AMBIGUOUS:
                 self._n_ambiguous += 1
                 self._life_ambiguous += 1
@@ -1070,27 +1075,23 @@ class StartScanGate:
 
     def _displaced(self, total_m: float) -> _ScanRec | None:
         """The buffered scan whose wheel distance behind `total_m` is nearest `unique_shift_m`,
-        among those at least `unique_shift_m` behind: under that shift the gap of a placed track
-        is not evidence (a 10 Hz scan spacing just over 0.30 m, 3.0 m/s, gave a 0.30 to 0.35 m shift
-        and 30 to 40 percent ambiguous matches on a stadium: round 5). Up to 2.0 m/s at 10 Hz that is
-        the scan `unique_shift_m` back; above it the nearest scan further back (a larger
-        displacement makes a real place more distinct and leaves a ring ambiguous) instead of none.
-        In the first `unique_shift_m` of travel, when nothing is that far back yet, the nearest
-        more than `unique_shift_m - unique_shift_tol_m` back. None under that much travel."""
-        c = self.cfg
+        among those at least `unique_shift_m` behind (brief 50f): under that shift the gap of a
+        placed track is not evidence (a 10 Hz scan spacing just over 0.30 m, 3.0 m/s, gave a 0.30
+        to 0.35 m shift and 30 to 40 percent ambiguous matches on a stadium), and a larger one
+        makes a real place more distinct and leaves a ring ambiguous. Up to 2.5 m/s that is the
+        scan `unique_shift_m` back or the next one; above it the nearest scan further back. None
+        under that much travel."""
+        floor = self.cfg.unique_shift_m - 1e-9
         best: _ScanRec | None = None
-        for floor in (c.unique_shift_m - 1e-9, c.unique_shift_m - c.unique_shift_tol_m + 1e-9):
-            best_d = math.inf
-            for rec in self._scans:
-                behind = total_m - rec.total_m
-                if behind < floor:
-                    continue
-                d = abs(behind - c.unique_shift_m)
-                if d < best_d:
-                    best, best_d = rec, d
-            if best is not None:
-                return best
-        return None
+        best_d = math.inf
+        for rec in self._scans:
+            behind = total_m - rec.total_m
+            if behind < floor:
+                continue
+            d = abs(behind - self.cfg.unique_shift_m)
+            if d < best_d:
+                best, best_d = rec, d
+        return best
 
     def _classify(self, res: MatchResult, ref: Ref, total_m: float) -> str:
         """The uniqueness test. Match the displaced scan (about `unique_shift_m` of wheel distance
@@ -1206,6 +1207,9 @@ class StartScanGate:
             if verdict != UNIQUE:
                 return
         kf.n_unique += 1
+        if kf.n_unique == 1:
+            kf.first_unique_m = now.total_m
+        kf.last_unique_m = now.total_m
         visit.estimates.append(Estimate(now.total_m - res.x_m, res.inlier_share, res.rms_m))
 
     def _end_visit(self) -> None:
@@ -1220,7 +1224,14 @@ class StartScanGate:
         kf = visit.keyframe
         self._ring.note_visit(kf)
         proven = c.unique_shift_m <= 0.0 or (
-            not kf.retired and is_proven(kf.n_unique, kf.n_ambiguous, c.proof_min_unique)
+            not kf.retired
+            and is_proven(
+                kf.n_unique,
+                kf.n_ambiguous,
+                c.proof_min_unique,
+                kf.last_unique_m - kf.first_unique_m,
+                c.unique_shift_m,
+            )
         )
         if not proven or not visit.estimates:
             return

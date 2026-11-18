@@ -42,7 +42,7 @@ def test_the_constants_are_the_ones_written_in_the_brief() -> None:
 )
 def test_the_verdict_table(u: int, a: int, is_al: bool, is_pr: bool) -> None:
     assert aliased(u, a) is is_al
-    assert is_proven(u, a, CFG.proof_min_unique) is is_pr  # type: ignore[call-arg]
+    assert is_proven(u, a, CFG.proof_min_unique, 0.0, CFG.unique_shift_m) is is_pr  # type: ignore[call-arg]
 
 
 def test_a_stadium_at_speed_with_5_unique_and_3_ambiguous_is_never_aliased(
@@ -156,4 +156,7 @@ def test_the_state_changes_only_at_a_counted_match_and_aliased_means_a_majority_
             state = "aliased"
         if state == "aliased":
             assert a > u
-        assert not (before == "aliased" and state == "free" and is_proven(u, a, 4)), (u, a)
+        assert not (before == "aliased" and state == "free" and is_proven(u, a, 4, 0.0, 0.4)), (
+            u,
+            a,
+        )

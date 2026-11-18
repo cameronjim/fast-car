@@ -98,3 +98,41 @@ def test_keyboard_node_receives_the_min_speed_as_a_float_parameter():
     value = merged["min_speed_mps"].evaluate(context)
     assert isinstance(value, float)
     assert value == 0.57
+
+
+def _safety_params(context):
+    safety = [e for e in _entities() if isinstance(e, Node) and e.node_executable == "safety_node"]
+    assert len(safety) == 1
+    merged = {}
+    for entry in safety[0]._Node__parameters:
+        for key, value in entry.items():
+            name = "".join(k.perform(context) for k in key) if isinstance(key, tuple) else key
+            merged[name] = value
+    return merged
+
+
+def test_safety_cycle_record_argument_defaults_true():
+    args = {e.name: e for e in _entities() if isinstance(e, DeclareLaunchArgument)}
+    assert "safety_cycle_record" in args
+    default = "".join(s.perform(LaunchContext()) for s in args["safety_cycle_record"].default_value)
+    assert default == "true"
+
+
+def test_safety_node_gets_publish_cycle_record_at_construction_as_a_bool():
+    for text, expected in (("true", True), ("false", False)):
+        context = LaunchContext()
+        context.launch_configurations["safety_cycle_record"] = text
+        merged = _safety_params(context)
+        assert "publish_cycle_record" in merged
+        value = merged["publish_cycle_record"].evaluate(context)
+        assert isinstance(value, bool)
+        assert value is expected
+
+
+def test_recorder_topic_list_includes_safety_cycle_and_keeps_the_rest():
+    import re
+
+    regex = re.compile(_load_launch_module()._RECORDED_TOPIC_REGEX)
+    for topic in ("/safety/cycle", "/safety/events", "/drive", "/drive_raw", "/pnp/plan"):
+        assert regex.match(topic), topic
+    assert not regex.match("/safety/cycle/extra")

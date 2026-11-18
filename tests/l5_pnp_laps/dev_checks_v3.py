@@ -3,6 +3,7 @@
     python3 tests/l5_pnp_laps/dev_checks_v3.py a3 --dumps DIR
     python3 tests/l5_pnp_laps/dev_checks_v3.py a4 --bag BAG --bag BAG
     python3 tests/l5_pnp_laps/dev_checks_v3.py a6 --dumps DIR --bag BAG --bag BAG
+    python3 tests/l5_pnp_laps/dev_checks_v3.py m --placed DIR --bag BAG --ring DIR [--ring DIR ...]
 
 `a3`: the 13 development dumps of `v0.5-lap3-dev` (the lap node's inputs of B4 runs, DEVELOPMENT
 data) through gate v3 and, next to it, through gate v2.1 (the v3 additions off): every lap time
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -26,7 +28,10 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
-sys.path.insert(0, str(REPO_ROOT / "ros_ws" / "src" / "racer_laps" / "src"))
+sys.path.insert(
+    0,
+    os.environ.get("RACER_LAPS_SRC", str(REPO_ROOT / "ros_ws" / "src" / "racer_laps" / "src")),
+)
 
 #: A3, A4, A6 as written in the brief before any code.
 A3_MAX_LAP_DIFF_S = 0.02
@@ -37,6 +42,13 @@ A6_MEAN_MS = 12.0
 A6_P99_MS = 25.0
 GAP_PLACED_MIN = 0.045  # reported, no rule: a placed track below this, or an RD gap above 0.030
 GAP_RD_MAX = 0.030
+#: M1, M2, M3 of brief 50d as written before any code.
+M1P_MAX_SHARE_A3 = 0.5  # M1' (brief 50e): placed tracks, the share once 3 are ambiguous
+M4_MIN_SHARE = 0.9
+M4_MAX_LAP_DIFF_S = 0.05
+M2_MIN_AMBIGUOUS_SHARE = 0.75
+M3_SHIFT = 0.003
+M3_MAX_LAP_DIFF_S = 0.05
 
 
 @dataclass
@@ -73,7 +85,9 @@ def _dump_path(dump_dir: Path, name: str, result: dict[str, Any]) -> Path:
     return dump_dir / "dumps" / f"{name}.attempt{k}.npz"
 
 
-def replay_dump(dump_dir: Path, name: str, v21: bool) -> Replayed:
+def replay_dump(
+    dump_dir: Path, name: str, v21: bool, gate_extra: dict[str, Any] | None = None
+) -> Replayed:
     """One dump (`DIR/dumps/NAME.npz` with `DIR/NAME.json` beside it) through the engine."""
     import numpy as np
     from racer_laps.engine import LapConfig, LapMemory
@@ -89,6 +103,7 @@ def replay_dump(dump_dir: Path, name: str, v21: bool) -> Replayed:
     right = float(params["yaw_gain_override_right"])
     vehicle = load_live_vehicle()
     extra: dict[str, Any] = {"ring_enabled": False, "unique_shift_m": 0.0} if v21 else {}
+    extra.update(gate_extra or {})
     mem = LapMemory(
         LapConfig(
             lap_source="start_scan",
@@ -155,7 +170,7 @@ def replay_dump(dump_dir: Path, name: str, v21: bool) -> Replayed:
     return out
 
 
-def replay_bag(bag: Path, v21: bool) -> Replayed:
+def replay_bag(bag: Path, v21: bool, gate_extra: dict[str, Any] | None = None) -> Replayed:
     from racer_laps.replay import (
         default_start_scan_config,
         read_messages,
@@ -165,7 +180,9 @@ def replay_bag(bag: Path, v21: bool) -> Replayed:
 
     vehicle = load_live_vehicle()
     messages = list(read_messages(bag))
-    res = run_replay_start_scan(messages, vehicle, default_start_scan_config(vehicle, v21=v21))
+    res = run_replay_start_scan(
+        messages, vehicle, default_start_scan_config(vehicle, v21=v21, gate_extra=gate_extra)
+    )
     out = Replayed(scan_ms=[1000.0 * t for t in res.scan_times_s], status=res.status)
     for lap, share in zip(res.laps, res.alias_share_by_lap, strict=True):
         out.laps.append(
@@ -274,6 +291,114 @@ def c2_verdict(r: Replayed, truth_laps_s: list[float]) -> tuple[bool, dict[str, 
     }
 
 
+def _gaps(r: Replayed) -> tuple[list[float], list[float], list[float]]:
+    st = r.status
+    return (
+        list(st.get("gaps_unique", [])),
+        list(st.get("gaps_unknown", [])),
+        list(st.get("gaps_ambiguous", [])),
+    )
+
+
+def _range(values: list[float]) -> str:
+    return f"{len(values)} ({min(values):.3f} to {max(values):.3f})" if values else "0"
+
+
+def gap_classes(r: Replayed) -> dict[str, Any]:
+    """Count and range of the start-scan gaps in each of the three classes (50d, no rule)."""
+    gu, gk, ga = _gaps(r)
+    return {"unique": _range(gu), "unknown": _range(gk), "ambiguous": _range(ga)}
+
+
+def m1p_verdict(r: Replayed) -> tuple[bool, dict[str, Any]]:
+    """M1' (brief 50e), a placed track: never aliased at any scan, at every scan with at least 3
+    ambiguous matches the ambiguous share at most `M1P_MAX_SHARE_A3`, every lap `start_scan`, and
+    matches were counted at all."""
+    st = r.status
+    entries = int(st.get("aliased_entries", 0))
+    share = float(st.get("share_max_a3", 0.0))
+    sources = sorted({lap.line_source for lap in r.laps})
+    counted = int(st.get("life_unique", 0)) + int(st.get("life_ambiguous", 0))
+    ok = entries == 0 and share <= M1P_MAX_SHARE_A3 and sources == ["start_scan"] and counted > 0
+    return ok, {
+        "entries": entries,
+        "u": int(st.get("life_unique", 0)),
+        "a": int(st.get("life_ambiguous", 0)),
+        "share_max_when_a>=3": share,
+        "sources": sources,
+        **gap_classes(r),
+    }
+
+
+def m2_verdict(r: Replayed) -> tuple[bool, dict[str, Any]]:
+    """A ring: latched aliased, every lap by `winding` (so latched before the first closure),
+    at least three quarters of the counted matches ambiguous."""
+    st = r.status
+    nu, na = int(st.get("life_unique", 0)), int(st.get("life_ambiguous", 0))
+    share = na / (nu + na) if nu + na else 0.0
+    sources = sorted({lap.line_source for lap in r.laps})
+    ok = (
+        st.get("start_verdict") == "aliased"
+        and st.get("latched_at_scan") is not None
+        and bool(r.laps)
+        and sources == ["winding"]
+        and share >= M2_MIN_AMBIGUOUS_SHARE
+    )
+    return ok, {
+        "verdict": st.get("start_verdict"),
+        "latched_at_scan": st.get("latched_at_scan"),
+        "sources": sources,
+        "ambiguous_share": share,
+        **gap_classes(r),
+    }
+
+
+def m4_verdict(r: Replayed, round4_laps: list[float] | None) -> tuple[bool, dict[str, Any]]:
+    """M4 (brief 50e), a ring: M2 plus never released, the ambiguous share over the run at least
+    `M4_MIN_SHARE`, every lap time within `M4_MAX_LAP_DIFF_S` of round 4's."""
+    st = r.status
+    ok2, d2 = m2_verdict(r)
+    nu, na = int(st.get("life_unique", 0)), int(st.get("life_ambiguous", 0))
+    share = na / (nu + na) if nu + na else 0.0
+    releases = int(st.get("aliased_releases", 0))
+    worst = math.nan
+    laps_ok = False
+    if round4_laps is not None and len(round4_laps) == len(r.laps):
+        diffs = [abs(lap.lap_time_s - t) for lap, t in zip(r.laps, round4_laps, strict=True)]
+        worst = max(diffs, default=0.0)
+        laps_ok = worst <= M4_MAX_LAP_DIFF_S
+    never_proven = st.get("proven_first_scan") is None
+    ok = ok2 and releases == 0 and share >= M4_MIN_SHARE and laps_ok and never_proven
+    return ok, {
+        "entered_at_scan": st.get("aliased_entered_at_scan"),
+        "releases": releases,
+        "never_proven": never_proven,
+        "share_over_run": share,
+        "share_min_since_entry": st.get("share_min_since_entry", math.nan),
+        "worst_lap_vs_round4_s": worst,
+        "sources": d2["sources"],
+    }
+
+
+def m3_verdict(base: Replayed, shifted: list[Replayed]) -> tuple[bool, dict[str, Any]]:
+    """Every shifted replay: the same verdict, the same line source of every lap, lap times
+    within `M3_MAX_LAP_DIFF_S` of the defaults."""
+    worst = 0.0
+    same_verdict = same_sources = True
+    for r in shifted:
+        same_verdict &= r.status.get("start_verdict") == base.status.get("start_verdict")
+        same_sources &= [lap.line_source for lap in r.laps] == [
+            lap.line_source for lap in base.laps
+        ]
+        worst = max([worst, *(abs(d) for d in lap_diffs(r, base))])
+    ok = same_verdict and same_sources and worst <= M3_MAX_LAP_DIFF_S
+    return ok, {
+        "same_verdict": same_verdict,
+        "same_sources": same_sources,
+        "worst_lap_diff_s": worst,
+    }
+
+
 def a6_verdict(runs: list[Replayed]) -> tuple[bool, dict[str, float]]:
     """Cost over all scans after the start scan of every replay together."""
     every = [ms for r in runs for ms in r.scan_ms]
@@ -304,12 +429,114 @@ def _table(rows: list[tuple[str, bool, dict[str, Any]]]) -> list[str]:
     return lines
 
 
+def _default_gaps() -> tuple[float, float]:
+    from racer_laps.gate import GateConfig
+
+    cfg = GateConfig(wheelbase_m=0.3)
+    return cfg.unique_gap, cfg.alias_gap
+
+
+def _shift_extra(delta: float) -> dict[str, Any]:
+    unique, alias = _default_gaps()
+    return {"unique_gap": unique + delta, "alias_gap": alias + delta}
+
+
+def _replay_any(job: tuple[str, str, str, float, bool]) -> tuple[str, Replayed]:
+    """(kind, path, name, shift, round3) -> replay; picklable for the worker pool."""
+    kind, path, name, shift, round3 = job
+    extra = _shift_extra(shift)
+    if round3:
+        extra["alias_gap"] = extra["unique_gap"]
+    if kind == "bag":
+        return name, replay_bag(Path(path), v21=False, gate_extra=extra)
+    return name, replay_dump(Path(path), name, v21=False, gate_extra=extra)
+
+
+def run_m(args: argparse.Namespace) -> tuple[list[str], bool]:
+    """M1, M2, M3 on development data (brief 50d), with the later-than-round-3 latch report."""
+    import multiprocessing as mp
+
+    placed: list[tuple[str, str, str]] = []  # kind, path, name
+    for d in args.placed:
+        placed += [("dump", str(d), p.stem) for p in sorted((d / "dumps").glob("*.npz"))]
+    placed += [("bag", str(b), b.name) for b in args.bag]
+    rings: list[tuple[str, str, str]] = []
+    for d in args.ring:
+        for p in sorted(d.glob("*.json")):
+            if any(f"_{case}_" in p.stem for case in ("RD", "ND", "P4")):
+                rings.append(("dump", str(d), p.stem))
+    everything = placed + [r for r in rings if r not in placed]
+    shifts = [(0.0, False), (-M3_SHIFT, False), (M3_SHIFT, False)]
+    jobs = [(k, p, n, sh, r3) for k, p, n in everything for sh, r3 in shifts]
+    with mp.Pool(args.workers) as pool:
+        done = pool.map(_replay_any, jobs, chunksize=1)
+    by_key = {(j[1], j[2], j[3], j[4]): d[1] for j, d in zip(jobs, done, strict=True)}
+    lines: list[str] = []
+    ok_all = True
+
+    def get(kind_path: tuple[str, str, str], shift: float, r3: bool) -> Replayed:
+        return by_key[(kind_path[1], kind_path[2], shift, r3)]
+
+    round4 = json.loads(args.round4_laps.read_text()) if args.round4_laps else {}
+    out_laps = {
+        item[2]: {
+            "laps": [lap.lap_time_s for lap in get(item, 0.0, False).laps],
+            "entered": get(item, 0.0, False).status.get(
+                "aliased_entered_at_scan", get(item, 0.0, False).status.get("latched_at_scan")
+            ),
+        }
+        for item in everything
+    }
+    if args.laps_out:
+        args.laps_out.write_text(json.dumps(out_laps))
+    m1_rows = []
+    for item in placed:
+        ok, d = m1p_verdict(get(item, 0.0, False))
+        m1_rows.append((item[2], ok, d))
+    m2_rows = []
+    for item in rings:
+        base = get(item, 0.0, False)
+        ok2, _d2 = m2_verdict(base)
+        ref = round4.get(item[2], {})
+        ok, d = m4_verdict(base, ref.get("laps"))
+        ok = ok and ok2
+        a, b = base.status.get("aliased_entered_at_scan"), ref.get("entered")
+        d["scans_later_than_round4"] = (a - b) if a is not None and b is not None else "-"
+        m2_rows.append((item[2], ok, d))
+    m3_rows = []
+    for item in everything:
+        base = get(item, 0.0, False)
+        ok, d = m3_verdict(base, [get(item, -M3_SHIFT, False), get(item, M3_SHIFT, False)])
+        m3_rows.append((item[2], ok, d))
+    lines += ["M1p: placed tracks, never aliased", ""] + _table(m1_rows) + [""]
+    lines += (
+        ["M2/M4: rings aliased before the first closure, never released", ""]
+        + _table(m2_rows)
+        + [""]
+    )
+    lines += ["M3: both gaps moved by -0.003 and +0.003", ""] + _table(m3_rows)
+    for name, rows in (("M1p", m1_rows), ("M2/M4", m2_rows), ("M3", m3_rows)):
+        passed = bool(rows) and all(ok for _n, ok, _d in rows)
+        ok_all &= passed
+        lines += ["", f"{name}: {'PASS' if passed else 'FAIL'}"]
+    return lines, ok_all
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("check", choices=["a3", "a4", "a6", "c2"])
+    parser.add_argument("check", choices=["a3", "a4", "a6", "c2", "m"])
+    parser.add_argument("--placed", type=Path, action="append", default=[])
+    parser.add_argument("--ring", type=Path, action="append", default=[])
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--round4-laps", type=Path, help="JSON NAME -> lap times of round 4")
+    parser.add_argument("--laps-out", type=Path, help="write NAME -> lap times of this run")
     parser.add_argument("--dumps", type=Path, help="DIR with NAME.json and dumps/NAME.npz")
     parser.add_argument("--bag", type=Path, action="append", default=[])
     args = parser.parse_args(argv)
+    if args.check == "m":
+        m_lines, m_ok = run_m(args)
+        sys.stdout.write("\n".join(m_lines) + "\n")
+        return 0 if m_ok else 1
     lines: list[str] = []
     ok_all = True
     timed: list[Replayed] = []

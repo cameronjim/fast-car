@@ -130,3 +130,146 @@ def test_the_gap_numbers_are_read_from_the_status() -> None:
         "gap_ambiguous_max": 0.02,
     }
     assert math.isnan(dc.gap_numbers(Replayed())["gap_unique_min"])
+
+
+# -- brief 50d: M1, M2, M3 and the three-class gap report -----------------------------------------
+
+
+def with_gaps(
+    unique: list[float], unknown: list[float], ambiguous: list[float], **kw: object
+) -> Replayed:
+    rows = kw.pop("laps", laps(3))
+    return Replayed(
+        laps=rows,  # type: ignore[arg-type]
+        status={
+            "gaps_unique": unique,
+            "gaps_unknown": unknown,
+            "gaps_ambiguous": ambiguous,
+            **kw,
+        },
+    )
+
+
+def test_the_m_thresholds_are_the_ones_written_in_the_brief() -> None:
+    assert (dc.M1P_MAX_SHARE_A3, dc.M2_MIN_AMBIGUOUS_SHARE) == (0.5, 0.75)
+    assert (dc.M4_MIN_SHARE, dc.M4_MAX_LAP_DIFF_S) == (0.9, 0.05)
+    assert (dc.M3_SHIFT, dc.M3_MAX_LAP_DIFF_S) == (0.003, 0.05)
+
+
+def test_gap_classes_count_and_range_each_class() -> None:
+    r = with_gaps([0.05, 0.04], [0.03], [])
+    assert dc.gap_classes(r) == {
+        "unique": "2 (0.040 to 0.050)",
+        "unknown": "1 (0.030 to 0.030)",
+        "ambiguous": "0",
+    }
+
+
+@pytest.mark.parametrize(
+    ("entries", "share", "source", "counted", "ok"),
+    [
+        (0, 0.0, "start_scan", 10, True),
+        (0, 0.5, "start_scan", 10, True),  # exactly 0.5 is allowed
+        (0, 0.51, "start_scan", 10, False),
+        (1, 0.0, "start_scan", 10, False),  # entered the aliased state once
+        (0, 0.0, "winding", 10, False),
+        (0, 0.0, "start_scan", 0, False),  # nothing counted is no evidence
+    ],
+)
+def test_m1p_a_placed_track_is_never_aliased_and_never_mostly_ambiguous(
+    entries: int, share: float, source: str, counted: int, ok: bool
+) -> None:
+    r = with_gaps(
+        [],
+        [],
+        [],
+        laps=laps(3, source=source),
+        aliased_entries=entries,
+        share_max_a3=share,
+        life_unique=counted,
+        life_ambiguous=0,
+    )
+    assert dc.m1p_verdict(r)[0] is ok
+
+
+@pytest.mark.parametrize(
+    ("releases", "nu", "na", "diff", "ok"),
+    [
+        (0, 1, 9, 0.05, True),  # share 0.9 and 0.05 s are the limits
+        (0, 1, 8, 0.0, False),  # 0.889
+        (1, 0, 9, 0.0, False),  # released once
+        (0, 1, 9, 0.051, False),
+    ],
+)
+def test_m4_a_ring_is_never_released_is_over_0_9_ambiguous_and_keeps_round_4_laps(
+    releases: int, nu: int, na: int, diff: float, ok: bool
+) -> None:
+    r = with_gaps(
+        [],
+        [],
+        [],
+        laps=laps(3, lap_s=5.2 + diff, source="winding"),
+        start_verdict="aliased",
+        latched_at_scan=10,
+        aliased_releases=releases,
+        life_unique=nu,
+        life_ambiguous=na,
+    )
+    assert dc.m4_verdict(r, [5.2] * 3)[0] is ok
+    assert not dc.m4_verdict(r, None)[0]  # no round 4 reference: not a pass
+    proven = with_gaps(
+        [],
+        [],
+        [],
+        laps=laps(3, lap_s=5.2, source="winding"),
+        start_verdict="aliased",
+        latched_at_scan=10,
+        aliased_releases=0,
+        life_unique=1,
+        life_ambiguous=9,
+        proven_first_scan=5,  # proven at some scan: a ring must never be
+    )
+    assert not dc.m4_verdict(proven, [5.2] * 3)[0]
+    assert not dc.m4_verdict(r, [5.2] * 2)[0]
+
+
+@pytest.mark.parametrize(
+    ("verdict", "source", "latched", "nu", "na", "ok"),
+    [
+        ("aliased", "winding", 12, 2, 6, True),  # share exactly 0.75
+        ("aliased", "winding", 12, 3, 6, False),  # 0.667
+        ("proven", "winding", None, 0, 9, False),
+        ("aliased", "anchor", 12, 0, 9, False),
+        ("aliased", "winding", None, 0, 9, False),
+    ],
+)
+def test_m2_a_ring_is_latched_winds_every_lap_and_is_mostly_ambiguous(
+    verdict: str, source: str, latched: int | None, nu: int, na: int, ok: bool
+) -> None:
+    r = with_gaps(
+        [],
+        [],
+        [],
+        laps=laps(3, source=source),
+        start_verdict=verdict,
+        latched_at_scan=latched,
+        life_unique=nu,
+        life_ambiguous=na,
+    )
+    assert dc.m2_verdict(r)[0] is ok
+
+
+def test_m3_the_shifted_replays_must_keep_verdict_sources_and_lap_times() -> None:
+    base = with_gaps([], [], [], start_verdict="proven")
+    same = with_gaps([], [], [], start_verdict="proven")
+    assert dc.m3_verdict(base, [same, same])[0]
+    other = with_gaps([], [], [], start_verdict="aliased")
+    assert not dc.m3_verdict(base, [same, other])[0]
+    wound = with_gaps([], [], [], laps=laps(3, source="winding"), start_verdict="proven")
+    assert not dc.m3_verdict(base, [wound])[0]
+    near = with_gaps([], [], [], laps=laps(3, lap_s=5.2 + 0.049), start_verdict="proven")
+    assert dc.m3_verdict(base, [near])[0]
+    far = with_gaps([], [], [], laps=laps(3, lap_s=5.2 + 0.051), start_verdict="proven")
+    assert not dc.m3_verdict(base, [far])[0]
+    short = with_gaps([], [], [], laps=laps(2), start_verdict="proven")
+    assert not dc.m3_verdict(base, [short])[0]

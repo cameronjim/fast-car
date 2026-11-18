@@ -86,7 +86,17 @@ from itertools import pairwise
 
 import numpy as np
 
-from racer_laps.ring import Estimate, Fix, Ref, Ring, Visit, is_aliased, make_ref
+from racer_laps.ring import (
+    Estimate,
+    Fix,
+    Ref,
+    Ring,
+    Visit,
+    is_aliased,
+    is_proven,
+    is_released,
+    make_ref,
+)
 from racer_laps.scan_match import (
     DENSE_MAX_POINTS,
     DENSE_VOXEL_M,
@@ -202,7 +212,6 @@ class GateConfig:
     #: give gate v2.1 exactly. See the module docstring of ring.py and `StartScanGate`.
     ring_enabled: bool = True
     unique_shift_m: float = 0.4
-    unique_shift_tol_m: float = 0.1
     unique_same_m: float = 0.2
     #: Brief 50c: a match is unique only if the displaced scan, at the same pose, is worse by at
     #: least this much free-space violation than the match itself. The brief's 0.035 (between the
@@ -210,8 +219,16 @@ class GateConfig:
     #: latched a stadium with a 5 m straight aliased (gaps 0.029 to 0.039: gate v2's long straight
     #: tests failed): 0.0325 holds both that stadium and the box ring.
     unique_gap: float = 0.0325
-    alias_max_share: float = 0.25
-    alias_min_scans: int = 3
+    #: Brief 50d: below this gap a match is ambiguous; between it and `unique_gap` there is no
+    #: evidence either way (`UNKNOWN`, as without a displaced scan). `unique_gap` alone put the 5 m
+    #: stadium (0.029 and more) and the box ring (0.031 and less) on one line.
+    alias_gap: float = 0.025
+    #: Brief 50e: the alias verdict is a clear majority (more than `alias_max_share`) of at least
+    #: `alias_min_scans` counted matches over the life of the reference, held (not for good) until
+    #: the ambiguous share is `alias_release_share` or under.
+    alias_max_share: float = 0.75
+    alias_min_scans: int = 6
+    alias_release_share: float = 0.5
     kf_spacing_m: float = 0.5
     kf_max: int = 120
     kf_window_m: float = 0.3
@@ -245,13 +262,15 @@ class GateConfig:
             raise ValueError("consensus_past_m and consensus_wait_s must not be negative")
         if (
             self.unique_shift_m < 0.0
-            or self.unique_shift_tol_m < 0.0
             or self.unique_same_m <= 0.0
             or self.unique_gap < 0.0
+            or not (0.0 < self.alias_gap <= self.unique_gap)
         ):
-            raise ValueError("unique_shift_m and unique_shift_tol_m must not be negative")
+            raise ValueError("unique_shift_m must not be negative, alias_gap in (0, unique_gap]")
         if not (0.0 <= self.alias_max_share <= 1.0) or self.alias_min_scans < 1:
             raise ValueError("alias_max_share must be in [0, 1], alias_min_scans at least 1")
+        if not (0.0 <= self.alias_release_share <= self.alias_max_share):
+            raise ValueError("alias_release_share must be in [0, alias_max_share]")
         if self.ring_enabled and (
             self.kf_spacing_m <= 0.0
             or self.kf_max < 2
@@ -421,6 +440,8 @@ class StartScanGate:
         self._n_ambiguous = 0  # ... and ambiguous (the alias verdict of this lap)
         self._life_unique = 0  # the same, over the life of the start scan (the verdict)
         self._life_ambiguous = 0
+        self._life_first_unique_m = math.nan  # wheel total of its first and latest unique match
+        self._life_last_unique_m = math.nan
         self._latched = False  # the start scan is aliased: for good, until set_start
         self._w_star_m: float | None = None  # wheel total where the winding angle reached 2 pi
         self._psi_origin = 0.0
@@ -434,6 +455,16 @@ class StartScanGate:
         self.lap_verdicts: list[str] = []
         self.gaps_unique: list[float] = []  # start-scan matches: displaced minus own violation
         self.gaps_ambiguous: list[float] = []
+        self.gaps_unknown: list[float] = []  # the dead band between `alias_gap` and `unique_gap`
+        self._scan_count = 0  # scans served since the start scan (reported with the latch)
+        self.latched_at_scan: int | None = None  # the first entry (kept for the dev checks)
+        self.aliased_entered_at_scan: int | None = None  # the last entry
+        self.aliased_released_at_scan: int | None = None  # the last release
+        self.aliased_entries = 0
+        self.aliased_releases = 0
+        self.proven_first_scan: int | None = None  # first scan at which the start scan was proven
+        self.share_max_a3 = 0.0  # largest ambiguous share seen once at least 3 were ambiguous
+        self.share_min_since_entry = math.nan  # smallest share from the first entry on
         self.lap_pair_shares: list[float] = []
         self.lap1_d_beta = 0.0
         self.line_sources: list[str] = []
@@ -498,7 +529,13 @@ class StartScanGate:
         aliased. Without the uniqueness test every reference is proven."""
         if self.cfg.unique_shift_m <= 0.0:
             return True
-        return not self._latched and self._life_unique >= self.cfg.proof_min_unique
+        return not self._latched and is_proven(
+            self._life_unique,
+            self._life_ambiguous,
+            self.cfg.proof_min_unique,
+            self._life_last_unique_m - self._life_first_unique_m,
+            self.cfg.unique_shift_m,
+        )
 
     @property
     def start_verdict(self) -> str:
@@ -668,7 +705,15 @@ class StartScanGate:
         self._visit = None
         self._n_unique = self._n_ambiguous = 0
         self._life_unique = self._life_ambiguous = 0
+        self._life_first_unique_m = self._life_last_unique_m = math.nan
         self._latched = False
+        self._scan_count = 0
+        self.latched_at_scan = None
+        self.aliased_entered_at_scan = self.aliased_released_at_scan = None
+        self.aliased_entries = self.aliased_releases = 0
+        self.share_max_a3 = 0.0
+        self.proven_first_scan = None
+        self.share_min_since_entry = math.nan
         self._w_star_m = None
         self._psi_origin = self._hist[-1].psi
         self._start_total_m = self._hist[-1].total_m
@@ -677,7 +722,7 @@ class StartScanGate:
         self._d_beta = 0.0
         self._psi_pair_m = self._psi_all_m = 0.0
         self.lap_verdicts, self.lap_pair_shares = [], []
-        self.gaps_unique, self.gaps_ambiguous = [], []
+        self.gaps_unique, self.gaps_ambiguous, self.gaps_unknown = [], [], []
         self.lap1_d_beta = 0.0
         self.line_sources = []
         self.missed_laps = []
@@ -890,6 +935,7 @@ class StartScanGate:
 
     def _on_scan(self, t_eff_s: float, points: FloatArray) -> GateCrossing | None:
         c = self.cfg
+        self._scan_count += 1
         if self.odometry_stale(t_eff_s):
             # The pose at the scan would be extrapolated from an old sample: the wheel total at
             # the scan is under-read and every candidate line, and the crossing, comes out early
@@ -966,22 +1012,46 @@ class StartScanGate:
             if verdict == UNIQUE:
                 self._n_unique += 1
                 self._life_unique += 1
+                if self._life_unique == 1:
+                    self._life_first_unique_m = now.total_m
+                self._life_last_unique_m = now.total_m
             elif verdict == AMBIGUOUS:
                 self._n_ambiguous += 1
                 self._life_ambiguous += 1
-                if is_aliased(
-                    self._life_unique,
-                    self._life_ambiguous,
-                    c.alias_min_scans,
-                    c.alias_max_share,
-                ):
-                    self._latched = True
+            if verdict in (UNIQUE, AMBIGUOUS):
+                self._update_verdict()
             if self._latched:
-                self._cands = []  # an aliased start scan places nothing, ever
+                self._cands = []  # an aliased start scan places nothing while it is aliased
                 return
             if verdict != UNIQUE:
                 return
         self._cands.append(_Candidate(t_eff_s, line, res))
+
+    def _update_verdict(self) -> None:
+        """Enter the aliased state at a clear majority of enough ambiguous matches, leave it when
+        unique matches have caught up (brief 50e). Only at a counted match."""
+        c = self.cfg
+        u, a = self._life_unique, self._life_ambiguous
+        share = a / (u + a) if u + a else 0.0
+        if a >= 3:
+            self.share_max_a3 = max(self.share_max_a3, share)
+        if self.aliased_entries and not (share >= self.share_min_since_entry):
+            self.share_min_since_entry = share
+        if not self._latched:
+            if is_aliased(u, a, c.alias_min_scans, c.alias_max_share):
+                self._latched = True
+                self.aliased_entries += 1
+                self.aliased_entered_at_scan = self._scan_count
+                if not (share >= self.share_min_since_entry):
+                    self.share_min_since_entry = share
+                if self.latched_at_scan is None:
+                    self.latched_at_scan = self._scan_count
+        elif is_released(u, a, c.alias_release_share):
+            self._latched = False
+            self.aliased_releases += 1
+            self.aliased_released_at_scan = self._scan_count
+        if self.proven_first_scan is None and self.start_proven:
+            self.proven_first_scan = self._scan_count
 
     # -- gate v3: uniqueness, keyframes, placing the crossing --------------------------------
 
@@ -1009,19 +1079,20 @@ class StartScanGate:
 
     def _displaced(self, total_m: float) -> _ScanRec | None:
         """The buffered scan whose wheel distance behind `total_m` is nearest `unique_shift_m`,
-        among those more than `unique_shift_m - unique_shift_tol_m` behind. Up to 2.0 m/s at 10 Hz
-        that is the scan within `unique_shift_tol_m` of `unique_shift_m` back; above it the nearest
-        scan further back (a larger displacement makes a real place more distinct and leaves a ring
-        ambiguous) instead of none. None under that much travel."""
-        c = self.cfg
-        near = c.unique_shift_m - c.unique_shift_tol_m + 1e-9  # more than 0.3 m, not 0.3 m
+        among those at least `unique_shift_m` behind (brief 50f): under that shift the gap of a
+        placed track is not evidence (a 10 Hz scan spacing just over 0.30 m, 3.0 m/s, gave a 0.30
+        to 0.35 m shift and 30 to 40 percent ambiguous matches on a stadium), and a larger one
+        makes a real place more distinct and leaves a ring ambiguous. Up to 2.5 m/s that is the
+        scan `unique_shift_m` back or the next one; above it the nearest scan further back. None
+        under that much travel."""
+        floor = self.cfg.unique_shift_m - 1e-9
         best: _ScanRec | None = None
         best_d = math.inf
         for rec in self._scans:
             behind = total_m - rec.total_m
-            if behind < near:
+            if behind < floor:
                 continue
-            d = abs(behind - c.unique_shift_m)
+            d = abs(behind - self.cfg.unique_shift_m)
             if d < best_d:
                 best, best_d = rec, d
         return best
@@ -1032,8 +1103,9 @@ class StartScanGate:
 
         Not accepted: `UNIQUE`. Accepted but more than `unique_same_m` from `res` along or across:
         `UNIQUE`. Accepted at the same pose: its free-space violation against `res`'s own; at
-        least `unique_gap` above it `UNIQUE`, below it `AMBIGUOUS`, whether the displaced scan
-        passes STRONG or not (a near miss of the limit is not proof: brief 50c). With no displaced
+        least `unique_gap` above it `UNIQUE`, below `alias_gap` `AMBIGUOUS`, between the two
+        `UNKNOWN` (brief 50d), whether the displaced scan passes STRONG or not (a near miss of
+        the limit is not proof: brief 50c). With no displaced
         scan (the first 0.3 m, standstill, dropped scans) the match is not unique and not
         ambiguous either: `UNKNOWN` (no evidence for the alias verdict; counting it as ambiguous
         would call a stadium aliased whenever scans drop out)."""
@@ -1059,10 +1131,15 @@ class StartScanGate:
             return UNIQUE
         violation = self._freespace(other, rec.points, ref, rec.dense)
         gap = violation - res.freespace_violation
-        unique = gap >= c.unique_gap - 1e-12
-        if ref is self._start:  # reported: the lane between the two is what `unique_gap` stands in
-            (self.gaps_unique if unique else self.gaps_ambiguous).append(gap)
-        return UNIQUE if unique else AMBIGUOUS
+        if gap >= c.unique_gap - 1e-12:
+            verdict, bucket = UNIQUE, self.gaps_unique
+        elif gap < c.alias_gap - 1e-12:
+            verdict, bucket = AMBIGUOUS, self.gaps_ambiguous
+        else:
+            verdict, bucket = UNKNOWN, self.gaps_unknown
+        if ref is self._start:  # reported, three ways
+            bucket.append(gap)
+        return verdict
 
     def _is_unique(self, res: MatchResult, ref: Ref, total_m: float) -> bool:
         return self._classify(res, ref, total_m) == UNIQUE
@@ -1134,6 +1211,9 @@ class StartScanGate:
             if verdict != UNIQUE:
                 return
         kf.n_unique += 1
+        if kf.n_unique == 1:
+            kf.first_unique_m = now.total_m
+        kf.last_unique_m = now.total_m
         visit.estimates.append(Estimate(now.total_m - res.x_m, res.inlier_share, res.rms_m))
 
     def _end_visit(self) -> None:
@@ -1147,7 +1227,16 @@ class StartScanGate:
         c = self.cfg
         kf = visit.keyframe
         self._ring.note_visit(kf)
-        proven = c.unique_shift_m <= 0.0 or (not kf.retired and kf.n_unique >= c.proof_min_unique)
+        proven = c.unique_shift_m <= 0.0 or (
+            not kf.retired
+            and is_proven(
+                kf.n_unique,
+                kf.n_ambiguous,
+                c.proof_min_unique,
+                kf.last_unique_m - kf.first_unique_m,
+                c.unique_shift_m,
+            )
+        )
         if not proven or not visit.estimates:
             return
         lines = sorted(e.line_m for e in visit.estimates)
@@ -1251,6 +1340,14 @@ class StartScanGate:
         # last one with the reference still unproven (scarce scans are not evidence of aliasing:
         # v2.1's case, v2.1's answer).
         unproven = not self.start_proven
+        # While the majority of its matches is ambiguous (and there is one) the hold does not run
+        # out either: a ring in its first matches places nothing before it is aliased (brief 50e).
+        majority_ambiguous = (
+            unproven
+            and self.cfg.unique_shift_m > 0.0
+            and self._life_ambiguous >= 1
+            and self._life_ambiguous >= self._life_unique
+        )
         if not unproven:
             self._cands = [k for k in self._cands if t_eff_s - k.t_eff_s <= c.candidate_ttl_s]
         if not self._cands:
@@ -1275,7 +1372,9 @@ class StartScanGate:
         wait = t_eff_s - wait_from >= c.consensus_wait_s and bool(at_line)
         if not (past or wait):
             return None
-        if unproven and t_eff_s - self._cands[-1].t_eff_s < c.candidate_ttl_s:
+        if majority_ambiguous or (
+            unproven and t_eff_s - self._cands[-1].t_eff_s < c.candidate_ttl_s
+        ):
             return None  # held: not proven yet
         t_cross = self._time_at_total(median)
         if t_cross is None:
@@ -1447,6 +1546,23 @@ class StartScanGate:
             out["unique_gap_min"] = min(gu) if gu else math.nan
             out["unique_gap_median"] = float(np.median(gu)) if gu else math.nan
             out["ambiguous_gap_max"] = max(ga) if ga else math.nan
+            gk = self.gaps_unknown
+            out["gaps_unique"] = list(gu)
+            out["gaps_unknown"] = list(gk)
+            out["gaps_ambiguous"] = list(ga)
+            out["life_unique"] = self._life_unique
+            out["life_ambiguous"] = self._life_ambiguous
+            out["latched_at_scan"] = self.latched_at_scan
+            out["aliased_entered_at_scan"] = self.aliased_entered_at_scan
+            out["aliased_released_at_scan"] = self.aliased_released_at_scan
+            out["proven_first_scan"] = self.proven_first_scan
+            out["share_max_a3"] = self.share_max_a3
+            out["share_min_since_entry"] = self.share_min_since_entry
+            out["aliased_entries"] = self.aliased_entries
+            out["aliased_releases"] = self.aliased_releases
+            out["unknown_gap_count"] = len(gk)
+            out["unknown_gap_min"] = min(gk) if gk else math.nan
+            out["unknown_gap_max"] = max(gk) if gk else math.nan
         return out
 
     @property

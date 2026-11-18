@@ -46,7 +46,7 @@ PROTOTYPE = {
 }
 
 
-def replay(name: str, **gate_kw: object) -> list[LapResult]:
+def replay(name: str, trace: list[bool] | None = None, **gate_kw: object) -> list[LapResult]:
     z = np.load(FIXTURES / f"{name}.npz")
     scan_t, scan_mm, odom, drive = z["scan_t"], z["scan_mm"], z["odom"], z["drive"]
     left, right = (float(x) for x in z["yaw_gains"])
@@ -88,6 +88,8 @@ def replay(name: str, **gate_kw: object) -> list[LapResult]:
                 ranges, ANGLE_MIN, ANGLE_INC, 0.05, 16.0, vehicle.mount, vehicle.body
             )
             r = mem.on_scan(float(scan_t[i]), pts)
+            if trace is not None and mem.gate is not None:
+                trace.append(bool(mem.gate.start_proven))
             if r is not None:
                 laps.append(r)
     return laps
@@ -100,6 +102,14 @@ def test_the_fixtures_are_small_and_complete() -> None:
         z = np.load(path)
         assert z["scan_mm"].shape[1] == 720 and z["scan_mm"].dtype == np.uint16
         assert len(z["truth_lap_s"]) == (4 if name.startswith("p4") else 13)
+
+
+@pytest.mark.parametrize("name", list(PROTOTYPE))
+def test_no_ring_is_proven_at_any_scan(name: str) -> None:
+    """Brief 50f: proof by span must not prove a ring, not even on its first matches."""
+    trace: list[bool] = []
+    replay(name, trace=trace)
+    assert trace and not any(trace), (name, trace.index(True) if any(trace) else None)
 
 
 @pytest.mark.parametrize("name", list(PROTOTYPE))

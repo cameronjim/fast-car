@@ -52,12 +52,35 @@ def make_ref(
 
 
 def is_aliased(n_unique: int, n_ambiguous: int, min_scans: int, max_share: float) -> bool:
-    """A reference is aliased on an approach when at least `min_scans` of its STRONG matches are
-    ambiguous and their share of all STRONG matches is above `max_share`."""
+    """A reference is aliased (entered) when at least `min_scans` of its counted matches over its
+    life are ambiguous and their share of unique plus ambiguous is above `max_share`: a clear
+    majority of enough matches (brief 50e)."""
     total = n_unique + n_ambiguous
     if total <= 0 or n_ambiguous < min_scans:
         return False
     return n_ambiguous / total > max_share
+
+
+def is_released(n_unique: int, n_ambiguous: int, release_share: float) -> bool:
+    """An aliased reference is released when the ambiguous share is `release_share` or under
+    (0.5: unique matches have caught up). Between that and the entry share nothing changes."""
+    total = n_unique + n_ambiguous
+    return total > 0 and n_ambiguous / total <= release_share + 1e-12
+
+
+def is_proven(
+    n_unique: int, n_ambiguous: int, proof_min_unique: int, span_m: float, shift_m: float
+) -> bool:
+    """A reference is proven when more of its matches are unique than ambiguous and either it has
+    `proof_min_unique` unique matches, or it has three, none ambiguous, with the wheel distance from
+    its first unique match to its latest at least `shift_m` (brief 50f: the place stayed distinct
+    over a displacement of its own size; four matches 0.05 m apart are one look). The caller adds
+    "and not aliased"."""
+    if n_unique <= n_ambiguous:
+        return False
+    if n_unique >= proof_min_unique:
+        return True
+    return n_unique >= 3 and n_ambiguous == 0 and span_m >= shift_m - 1e-9
 
 
 @dataclass(frozen=True)
@@ -81,6 +104,8 @@ class Keyframe:
     #: verdict belongs to the place.
     n_unique: int = 0
     n_ambiguous: int = 0
+    first_unique_m: float = math.nan  # wheel total of its first and latest unique match (the span)
+    last_unique_m: float = math.nan
     visited: bool = False  # matched on the current lap (the tail of a lap is tracked by the
     # start scan and never visited: it must not keep a useless ring alive)
 

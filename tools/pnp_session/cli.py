@@ -201,6 +201,30 @@ def cmd_lap_c0(args: argparse.Namespace) -> int:
     return 0 if verdict == lap_c0.PASS else 1
 
 
+def cmd_lap_src(args: argparse.Namespace) -> int:
+    """D9-C0 (default), D9-B0 (--offline) or the lap table (--drive) of the camera lap source."""
+    from pnp_session import lap_src
+
+    bags = [Path(b) for b in args.bag]
+    try:
+        report, text, code = lap_src.run(
+            bags,
+            laps_counted=args.laps_counted or (),
+            offline=bool(args.offline),
+            assume_ready=bool(args.assume_ready),
+            drive=bool(args.drive),
+        )
+    except (lap_src.PreregError, lap_src.FreezeRequired, lap_src.NoCameraNode) as error:
+        print(f"REFUSED: {error}", file=sys.stderr)
+        return EXIT_PREREG
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(report, indent=2, sort_keys=True, default=_json_default) + "\n"
+        )
+    print(text)
+    return code
+
+
 def cmd_host_facts(args: argparse.Namespace, runner: hostfacts.Runner | None = None) -> int:
     facts = hostfacts.collect(runner or hostfacts.default_runner)
     out_dir = Path(args.out_dir)
@@ -395,6 +419,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lc.add_argument("--out", help="write the JSON here")
     lc.set_defaults(func=cmd_lap_c0)
+    ls = sub.add_parser(
+        "lap-src",
+        help="D9-C0 (camera lap source, from recorded topics), --offline D9-B0, --drive lap table "
+        "(brief 51)",
+    )
+    ls.add_argument("--bag", action="append", required=True, help="a bag, once per run")
+    ls.add_argument(
+        "--laps-counted",
+        action="append",
+        type=int,
+        help="the owner's count at the stop, once per bag in order (else the wheel rule)",
+    )
+    ls.add_argument(
+        "--offline",
+        action="store_true",
+        help="D9-B0: replay the camera's events through the lap source rule. Regression unless the "
+        "bags are the frozen evaluation bags",
+    )
+    ls.add_argument(
+        "--assume-ready",
+        action="store_true",
+        help="with --offline: the lap table shows the replay with ready assumed (development)",
+    )
+    ls.add_argument("--drive", action="store_true", help="the lap table of a D run")
+    ls.add_argument("--out", help="write the JSON here")
+    ls.set_defaults(func=cmd_lap_src)
     h = sub.add_parser("host-facts", help="scheduling policy, CPU governor, load: read only")
     h.add_argument("--out-dir", required=True)
     h.set_defaults(func=cmd_host_facts)

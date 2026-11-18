@@ -62,6 +62,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools" / "track_session"))
 
 import pnp_tick_summary as pts
 import reactive_bench_runner as base
+from truth_lap_source import FaultPlan, TruthLapSource
 
 TRACKS = (
     "lane_square",
@@ -107,6 +108,9 @@ PNP_LOCKSTEP_ACK = "racer_pnp_msgs/msg/LocalTrack@/pnp/local_track"
 ORACLE_DIR = REPO_ROOT / "tests" / "l5_pnp_oracle"
 ORACLE_NODE = ORACLE_DIR / "oracle_track_node.py"
 LAP_NODE_COUNTING = REPO_ROOT / "tests" / "l5_pnp_laps" / "lap_node_counting.py"
+#: The truth oracle's topics (brief 51): the lap node reads these instead of the camera's.
+TRUTH_EVENT_TOPIC = "/sim/lap/truth_event"
+TRUTH_STATUS_TOPIC = "/sim/lap/truth_status"
 
 
 def write_oracle_ground_truth(synthetic, path: Path) -> None:
@@ -742,6 +746,17 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     "output_dir": str(work / "laps"),
                 }
             )
+            if args.lap_source == "truth":
+                # the simulator's oracle (brief 51): the lap node reads its two topics, on
+                # simulated time (the node refuses `truth` without it)
+                if not args.sim_time:
+                    raise ValueError("--lap-source truth needs --sim-time")
+                lap_params.update(
+                    {
+                        "lap_event_topic": TRUTH_EVENT_TOPIC,
+                        "lap_source_status_topic": TRUTH_STATUS_TOPIC,
+                    }
+                )
             # D v1 variants (brief 29): the defaults are the node's own.
             lap_params["zone_merge"] = bool(args.lap_zone_merge)
             if args.lap_bound_floor_mps is not None:
@@ -1019,6 +1034,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     tracker_resets: list[float] = []  # stamps of ground-truth teleports (the tracker restarts)
     lap_events: list[dict] = []
     guidance_log: list[tuple] = []
+    cap_series: list[tuple[float, float]] = []  # (t, cap) at every change of the guidance cap
+    cap_last = [math.nan]
+    oracle: TruthLapSource | None = (
+        TruthLapSource(FaultPlan.from_dict(json.loads(args.lap_truth_faults_json)))
+        if args.driver == "pnp" and args.lap_memory != "none" and args.lap_source == "truth"
+        else None
+    )
+    oracle_events: list[dict] = []
+    oracle_pubs: dict = {}
     lap_status: dict = {}
     # B4 report item: guidance messages with stations, and those whose lowest per station bound
     # sits at the D v1 floor (the floor was the active bound). Counted here, not in the node.
@@ -1080,6 +1104,10 @@ def run_benchmark(args: argparse.Namespace) -> dict:
 
             def on_guidance(m) -> None:
                 note_guidance_floor(guidance_floor, list(m.v_ref_mps))
+                now_s = node.get_clock().now().nanoseconds * 1e-9
+                if not cap_series or abs(cap_series[-1][1] - float(m.v_cap_mps)) > 1e-9:
+                    cap_series.append((now_s, float(m.v_cap_mps)))
+                cap_last[0] = now_s
                 guidance_log.append(
                     (
                         node.get_clock().now().nanoseconds * 1e-9,
@@ -1097,6 +1125,13 @@ def run_benchmark(args: argparse.Namespace) -> dict:
 
             def on_scan_seen(m) -> None:
                 scan_stamps.append(base._stamp_s(m.header.stamp))
+                if (
+                    oracle is not None
+                    and driving_first
+                    and base._stamp_s(m.header.stamp) >= driving_first[0]
+                ):
+                    # the registered crossing 0: the first /scan stamped at or after the report
+                    oracle.arm(base._stamp_s(m.header.stamp))
                 if driving_first and not first_scan_after_driving:
                     first_scan_after_driving.append(base._stamp_s(m.header.stamp))
 
@@ -1110,6 +1145,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     depth=5,
                 ),
             )
+            if oracle is not None:
+                oracle_pubs["event"] = node.create_publisher(String, TRUTH_EVENT_TOPIC, reliable)
+                oracle_pubs["status"] = node.create_publisher(String, TRUTH_STATUS_TOPIC, reliable)
             node.create_subscription(LapEvent, "/pnp/lap/event", on_lap_event, reliable)
             node.create_subscription(LapGuidance, "/pnp/lap/guidance", on_guidance, reliable)
             node.create_subscription(String, "/pnp/lap/status", on_lap_status, reliable)
@@ -1131,6 +1169,28 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         msg.pose.covariance[0] = msg.pose.covariance[7] = 0.05**2
         msg.pose.covariance[35] = 0.05**2
         initial_pose_pub.publish(msg)
+
+    status_due = [-math.inf]
+
+    def publish_oracle(t: float, x: float, y: float, yaw: float) -> None:
+        """Feed the oracle a ground-truth pose and publish what it says (brief 51): the events
+        due, and its status once a second of simulated time."""
+        from std_msgs.msg import String
+
+        assert oracle is not None
+        for ev in oracle.on_truth_odom(t, x, y, yaw):
+            oracle_events.append(
+                {
+                    "kind": ev.kind,
+                    "truth_crossing": ev.truth_crossing,
+                    "publish_t": ev.publish_t,
+                    **ev.payload,
+                }
+            )
+            oracle_pubs["event"].publish(String(data=json.dumps(ev.payload)))
+        if t >= status_due[0]:
+            status_due[0] = t + 1.0
+            oracle_pubs["status"].publish(String(data=json.dumps(oracle.status())))
 
     stopped_because = "duration"
     # Brief 48: a pnp run starts the bridge and safety_node, resets the simulator, clears the
@@ -1270,6 +1330,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                             pending_reset = request_reset()
                 if t >= cooldown_until:
                     lap_tracker.update(x, y, t)
+                if oracle is not None:
+                    publish_oracle(t, x, y, yaw)
                 if abs(v) > 0.05 or (last_motion is None and t >= stall_from[0]):
                     last_motion = t
                 previous = sample
@@ -1378,6 +1440,12 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     )
                 )
                 result["startup_reset_done_s"] = reset_done[0] if reset_done else None
+                result["guidance_cap_series"] = [[round(a, 3), b] for a, b in cap_series]
+                if oracle is not None:
+                    result["oracle_events"] = oracle_events
+                    result["oracle_truth_crossings_s"] = list(oracle.truth_crossings)
+                    result["oracle_start_s"] = oracle.truth_start_t
+                    result["lap_truth_faults"] = json.loads(args.lap_truth_faults_json)
         t_first = recording.odom[0][0] if recording.odom else 0.0
         write_event_trace(args, work, trace, t_first)
         if os.environ.get("RUNNER_TRACE_NPZ"):
@@ -1495,9 +1563,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lap-source",
         default="start_scan",
-        choices=("start_scan", "map_pose"),
+        choices=("start_scan", "map_pose", "truth"),
         help="lap source of the lap memory (map_pose needs a map -> base_link transform, which "
-        "this runner does not provide)",
+        "this runner does not provide; truth is the simulator's oracle of brief 51, with "
+        "--sim-time: it publishes the ground-truth line crossing on /sim/lap/truth_event)",
+    )
+    parser.add_argument(
+        "--lap-truth-faults-json",
+        default="{}",
+        help="lap source truth: the fault plan (the yaml's lap_battery_b9.fault_plan as JSON: "
+        "drop_truth_crossings, false_event, duplicate_truth_crossing); {} is the clean oracle",
     )
     parser.add_argument(
         "--v-lap1-mps",

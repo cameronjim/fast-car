@@ -228,7 +228,7 @@ export class DemoCar {
         default_speed: 0.5,
         params_files: ["planner-tight.yaml", "planner-wide.yaml"],
         lap_modes: ["v0", "v1", "observe"],
-        lap_sources: ["start_scan", "map_pose"],
+        lap_sources: ["start_scan", "map_pose", "camera"],
       },
       patrols: ["loop-a"],
       spiderbot_rules: ["arms_raised"],
@@ -304,7 +304,7 @@ export class DemoCar {
     const mode = b.pnp_lap_mode ?? "v0";
     if (!["v0", "v1", "observe"].includes(String(mode))) return "pnp lap mode must be one of ['v0', 'v1', 'observe']";
     const source = b.pnp_lap_source ?? "start_scan";
-    if (!["start_scan", "map_pose"].includes(String(source))) return "pnp lap source must be one of ['start_scan', 'map_pose']";
+    if (!["start_scan", "map_pose", "camera"].includes(String(source))) return "pnp lap source must be one of ['start_scan', 'map_pose', 'camera']";
     const memory = b.pnp_lap_memory === true || mode === "observe";
     if (mode !== "v0" && !memory) return `pnp lap mode ${mode} needs lap memory on`;
     if (mode === "v1" && source !== "start_scan") return "pnp lap mode v1 needs lap source start_scan";

@@ -39,6 +39,10 @@ pytest.importorskip("rclpy")
 pytest.importorskip("f1tenth_gym")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "tests" / "l5_reactive_bench"))
+import starvation
+from starvation import MAX_ATTEMPTS, STARVED_GAP_S
+
 RUNNER = REPO_ROOT / "tests" / "l5_reactive_bench" / "track_family_runner.py"
 DYNAMICS_BUNDLE = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-nominal-v0"
 # The planner's model: the fitted car fixture, which carries the speed dead zone (0.22 m/s), so the
@@ -53,6 +57,37 @@ V_MAX_MPS = 0.6
 SEED = 11
 MAX_SAFETY_BRAKES = 3
 STATE_FAULT = 6
+
+# A run that fails and shows a gap in the planner's /drive_raw or in safety_node's /drive was starved
+# by the machine and is run again; see tests/l5_reactive_bench/starvation.py for the argument and
+# the one place the rule lives.
+TIMING_MAX_ATTEMPTS = MAX_ATTEMPTS
+
+
+def run_judged(command, out, report, judge, capsys, timeout_s=500):
+    """Run the runner and judge its result, running it again when a failing attempt was starved."""
+
+    def run_once():
+        out.unlink(missing_ok=True)
+        proc = subprocess.run(
+            command,
+            env=dict(os.environ),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+        assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
+        result = json.loads(out.read_text())
+        assert "error" not in result, result["error"]
+        return result
+
+    def say(line):
+        with capsys.disabled():
+            print(line)
+
+    return starvation.run_judged(run_once, judge, report, say)
+
 
 STADIUM = (
     "stadium",
@@ -121,14 +156,9 @@ def test_pnp_laps_the_track_through_the_real_command_path(
         command += ["--perception-bundle", str(PERCEPTION_BUNDLE)]
     if reverse:
         command.append("--reverse")
-    proc = subprocess.run(
-        command, env=dict(os.environ), capture_output=True, text=True, timeout=500, check=False
-    )
-    assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
-    result = json.loads(out.read_text())
-    assert "error" not in result, result["error"]
-    with capsys.disabled():
-        print(
+
+    def report(result):
+        return (
             f"\nl5_pnp {name} {'cw' if reverse else 'ccw'} {backend}: "
             f"laps {result['laps']} lap_times_s {result['lap_times_s']} "
             f"safety_brakes {result['safety_brakes']} "
@@ -137,18 +167,22 @@ def test_pnp_laps_the_track_through_the_real_command_path(
             f"min_clearance_m {result['min_body_clearance_m']} "
             f"planner_states {result['planner_states']}"
         )
-    assert result["laps"] >= LAPS, result.get("stopped_because")
-    assert result["wall_contacts"] == 0
-    assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
-    assert result["rate_limit_events"] == 0, (
-        "safety_node rate-limited the planner's command: "
-        f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
-    )
-    assert result["publisher_nodes"] == {
-        "/drive_raw": ["mppi_planner_node"],
-        "/drive": ["safety_node"],
-    }
-    assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+    def judge(result):
+        assert result["laps"] >= LAPS, result.get("stopped_because")
+        assert result["wall_contacts"] == 0
+        assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
+        assert result["rate_limit_events"] == 0, (
+            "safety_node rate-limited the planner's command: "
+            f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
+        )
+        assert result["publisher_nodes"] == {
+            "/drive_raw": ["mppi_planner_node"],
+            "/drive": ["safety_node"],
+        }
+        assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+    run_judged(command, out, report, judge, capsys)
 
 
 # --- the car-like plant (2026-11-12) ----------------------------------------------------------
@@ -238,14 +272,9 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
         command.append("--no-perception")
     if reverse:
         command.append("--reverse")
-    proc = subprocess.run(
-        command, env=dict(os.environ), capture_output=True, text=True, timeout=500, check=False
-    )
-    assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
-    result = json.loads(out.read_text())
-    assert "error" not in result, result["error"]
-    with capsys.disabled():
-        print(
+
+    def report(result):
+        return (
             f"\nl5_pnp car-like {name} lane {params['lane_width_m']} "
             f"{'cw' if reverse else 'ccw'}{'' if perception else ' no-perception'}: "
             f"laps {result['laps']} lap_times_s {result['lap_times_s']} "
@@ -255,18 +284,22 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
             f"min_clearance_m {result['min_body_clearance_m']} "
             f"planner_states {result['planner_states']}"
         )
-    assert result["laps"] >= LAPS, result.get("stopped_because")
-    assert result["wall_contacts"] == 0
-    assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
-    assert result["rate_limit_events"] == 0, (
-        "safety_node rate-limited the planner's command: "
-        f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
-    )
-    assert result["publisher_nodes"] == {
-        "/drive_raw": ["mppi_planner_node"],
-        "/drive": ["safety_node"],
-    }
-    assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+    def judge(result):
+        assert result["laps"] >= LAPS, result.get("stopped_because")
+        assert result["wall_contacts"] == 0
+        assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
+        assert result["rate_limit_events"] == 0, (
+            "safety_node rate-limited the planner's command: "
+            f"{[e for e in result['safety_events'] if e['source'] == 'rate_limit']}"
+        )
+        assert result["publisher_nodes"] == {
+            "/drive_raw": ["mppi_planner_node"],
+            "/drive": ["safety_node"],
+        }
+        assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+    run_judged(command, out, report, judge, capsys)
 
 
 # --- step contract 2 (brief 43) ---------------------------------------------------------------
@@ -319,29 +352,29 @@ def test_pnp_laps_with_a_contract_2_planner_bundle(reverse, tmp_path, capsys):
     ]
     if reverse:
         command.append("--reverse")
-    proc = subprocess.run(
-        command, env=dict(os.environ), capture_output=True, text=True, timeout=500, check=False
-    )
-    assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
-    result = json.loads(out.read_text())
-    assert "error" not in result, result["error"]
-    with capsys.disabled():
-        print(
+
+    def report(result):
+        return (
             f"\nl5_pnp contract 2 stadium lane 1.0 {'cw' if reverse else 'ccw'}: "
             f"laps {result['laps']} lap_times_s {result['lap_times_s']} "
             f"safety_brakes {result['safety_brakes']} wall_contacts {result['wall_contacts']} "
+            f"rate_limit_events {result['rate_limit_events']} "
             f"min_clearance_m {result['min_body_clearance_m']} "
             f"planner_states {result['planner_states']}"
         )
-    assert result["laps"] >= LAPS, result.get("stopped_because")
-    assert result["wall_contacts"] == 0
-    assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
-    assert result["rate_limit_events"] == 0
-    assert result["publisher_nodes"] == {
-        "/drive_raw": ["mppi_planner_node"],
-        "/drive": ["safety_node"],
-    }
-    assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+    def judge(result):
+        assert result["laps"] >= LAPS, result.get("stopped_because")
+        assert result["wall_contacts"] == 0
+        assert result["safety_brakes"] <= MAX_SAFETY_BRAKES
+        assert result["rate_limit_events"] == 0
+        assert result["publisher_nodes"] == {
+            "/drive_raw": ["mppi_planner_node"],
+            "/drive": ["safety_node"],
+        }
+        assert str(STATE_FAULT) not in result["planner_states"], result["planner_states"]
+
+    run_judged(command, out, report, judge, capsys)
 
 
 # --- planner timing (2026-11-13 night, design 14.7, pre-registration 4.1) ----------------------
@@ -364,13 +397,6 @@ RATE_FRACTION = 0.45  # the planner's rate_limit_fraction (its default; the case
 # Runs in parallel containers on one docker network see each other's DDS traffic unless their
 # domain ids differ: RACER_L5_PNP_DOMAIN_OFFSET shifts the ids of the timing cases.
 DOMAIN_OFFSET = int(os.environ.get("RACER_L5_PNP_DOMAIN_OFFSET", "0"))
-# A run in which the planner's own /drive_raw stream has a gap over this (s) was starved by the
-# machine (the whole process was not scheduled): whatever safety events it shows say nothing about
-# the planner's timing logic, and whole-process starvation is the owner's real-time scheduling
-# decision. Such a run that fails is run again, at most TIMING_MAX_ATTEMPTS attempts in all; a run
-# without such a gap is judged at once, and the criteria are the same for every attempt.
-STARVED_GAP_S = 0.040
-TIMING_MAX_ATTEMPTS = 3
 FULL = os.environ.get("RACER_L5_PNP_FULL") == "1"
 FULL_SKIP = pytest.mark.skipif(
     not FULL,

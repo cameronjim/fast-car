@@ -29,7 +29,12 @@ Refusals (a launch that does not start is the safe outcome):
   Only sim tests pass false.
 * `dynamics_bundle` is required, and `perception_bundle` is required with `backend:=net`.
 * `lap_memory:=true` with `v_lap1_mps` above `v_max_mps`; `lap_mode:=v1` with
-  `lap_source:=map_pose` (D v1 is indexed by station).
+  `lap_source:=map_pose` or `camera` (D v1 is indexed by station).
+* `lap_source:=truth` always: it is a simulator source (the sim runner starts its own lap node
+  with it) and the car has no truth. `lap_source:=camera` with `lap_counter:=false` refuses when no
+  `lap_counter_node` is in the graph (the wording of the `require_lap_counter` refusal), and with
+  `lap_counter:=true` the planner waits for the counter exactly as with `require_lap_counter`.
+  `lap_shadow` equal to `lap_source`, or `lap_shadow` without `lap_memory:=true`.
 * `require_lap_counter:=true` (evaluation runs) refuses when no `lap_counter_node` is in the graph
   (checked for 5 s before anything starts with `lap_counter:=false`). With `lap_counter:=true` the
   planner is NOT started until the counter is in the graph (it takes about 4 s to come up on the
@@ -41,8 +46,11 @@ Refusals (a launch that does not start is the safe outcome):
 
 Options that are measurements, not part of the command path:
 
-* `lap_memory` (default false) adds racer_laps' lap_memory_node (`lap_source:=start_scan|map_pose`,
-  `lap_mode:=v0|v1|observe`) and sets the planner's `use_lap_guidance`. With `lap_mode:=observe`
+* `lap_memory` (default false) adds racer_laps' lap_memory_node (`lap_source:=start_scan|map_pose|
+  camera`, `lap_mode:=v0|v1|observe`) and sets the planner's `use_lap_guidance`. With
+  `lap_source:=camera` D takes its laps from the camera lap counter (`/lap/event`, `/lap/status`,
+  design 13 section 21) and says when it does not believe one; D9-P0: it logs READY once the
+  counter has a reference, 0 laps and a similarity of at least 0.90. With `lap_mode:=observe`
   the node publishes `/pnp/lap/event` and `/pnp/lap/status` and no guidance, and the planner is
   launched exactly as with `lap_memory:=false` (fixed cap `v_max_mps`); `v_lap1_mps` is ignored
   and the launch log says so.
@@ -51,6 +59,11 @@ Options that are measurements, not part of the command path:
   reference frame is this run's start line. If the package or OpenCV is missing (the node exits
   with code 3) the launch logs one clear error and the driver keeps running. `/lap/event` and
   `/lap/status` are in the stack recorder's regex.
+* `lap_shadow:=camera|start_scan` (default empty: none) starts a SECOND lap node,
+  `lap_memory_shadow_node`, always `lap_mode:=observe`, publishing `/pnp/lap_shadow/event` and
+  `/pnp/lap_shadow/status` (no guidance publisher, so it cannot reach the planner) and writing to
+  its own `shadow` output folder. A measurement: its exit is logged and does not stop the launch.
+  One observe run therefore gives the lap gate's laps and the camera's.
 * `deskew` (default false) starts racer_track_perception's scan_deskew_node (`/scan`, `/odom/wheel`
   and the gated `/drive` steering in, `/pnp/scan_deskewed` out) and points the scan subscription
   of track_perception_node, mppi_planner_node, lap_memory_node and the shadow perception node at
@@ -88,7 +101,19 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 BACKENDS = ("net", "geometric")
-LAP_SOURCES = ("start_scan", "map_pose")
+LAP_SOURCES = ("start_scan", "map_pose", "camera", "truth")
+#: `truth` is a simulator source: lap_memory_parameters accepts it (the sim runner calls it) and
+#: the launch refuses it.
+LAUNCH_LAP_SOURCES = ("start_scan", "map_pose", "camera")
+LAP_SHADOW_SOURCES = ("camera", "start_scan")
+LAP_SHADOW_NODE_NAME = "lap_memory_shadow_node"
+LAP_SHADOW_PREFIX = "/pnp/lap_shadow"
+#: lap_memory_node's default `output_dir`; the shadow node writes to a `shadow` folder below it.
+LAP_OUTPUT_DIR = "/workspace/data/pnp/laps"
+TRUTH_REFUSAL = (
+    "pnp.launch.py: lap_source:=truth is a simulator source (ground-truth line crossings) and "
+    "the car has no truth: use start_scan or camera"
+)
 LAP_MODES = ("v0", "v1", "observe")
 RECORDER_NODE_SUBSTRING = "rosbag2_recorder"
 RECORDER_WAIT_S = 5.0
@@ -330,6 +355,19 @@ def lap_memory_parameters(
     }
 
 
+def lap_shadow_parameters(
+    dynamics_bundle: str, v_max_mps: float, lap_shadow: str, laser_yaw_from_vehicle_params: bool
+) -> dict:
+    """Parameters of the shadow lap node: `observe` always (events and status, no guidance), its
+    own topics under `/pnp/lap_shadow` and its own output folder. It has no guidance publisher, so
+    it cannot reach the planner."""
+    params = lap_memory_parameters(dynamics_bundle, v_max_mps, None, "observe", lap_shadow)
+    params["output_prefix"] = LAP_SHADOW_PREFIX
+    params["output_dir"] = f"{LAP_OUTPUT_DIR}/shadow"
+    params["laser_yaw_from_vehicle_params"] = laser_yaw_from_vehicle_params
+    return params
+
+
 def _bool(value: str, name: str) -> bool:
     value = value.strip().lower()
     if value not in ("true", "false"):
@@ -451,13 +489,33 @@ def _make_actions(context: LaunchContext) -> list:
     deskew_node = deskew_node_for(arg("params_file")) if deskew_on else None
     lap_counter = _bool(arg("lap_counter"), "lap_counter")
     require_counter = _bool(arg("require_lap_counter"), "require_lap_counter")
+    lap_source = arg("lap_source")
+    lap_shadow = LaunchConfiguration("lap_shadow", default="").perform(context).strip()
+    if lap_source == "truth":
+        raise RuntimeError(TRUTH_REFUSAL)
+    if lap_shadow:
+        if lap_shadow not in LAP_SHADOW_SOURCES:
+            raise RuntimeError(
+                f"pnp.launch.py: lap_shadow must be one of {list(LAP_SHADOW_SOURCES)} or empty"
+            )
+        if lap_shadow == lap_source:
+            raise RuntimeError(
+                f"pnp.launch.py: lap_shadow:={lap_shadow} equals lap_source: the shadow lap node "
+                "is there to read the other source"
+            )
+        if not lap_memory:
+            raise RuntimeError("pnp.launch.py: lap_shadow needs lap_memory:=true")
+    # D on the camera source depends on the counter being there: the same requirement as
+    # require_lap_counter (refusal wording, and the planner waits for the counter)
+    if lap_memory and lap_source == "camera":
+        require_counter = True
     v_lap1_text = arg("v_lap1_mps")
     v_lap1 = float(v_lap1_text) if v_lap1_text else None
     lap_params = None
     log: list[str] = []
     if lap_memory:
         lap_params = lap_memory_parameters(
-            arg("dynamics_bundle"), v_max, v_lap1, arg("lap_mode"), arg("lap_source")
+            arg("dynamics_bundle"), v_max, v_lap1, arg("lap_mode"), lap_source
         )
         if arg("lap_mode") == "observe":
             # the planner is launched exactly as with lap_memory:=false: fixed cap, no guidance
@@ -519,6 +577,35 @@ def _make_actions(context: LaunchContext) -> list:
                 OnProcessExit(
                     target_action=laps,
                     on_exit=[EmitEvent(event=Shutdown(reason="lap_memory_node exited"))],
+                )
+            ),
+        ]
+    if lap_shadow:
+        shadow_laps = Node(
+            package="racer_laps",
+            executable="lap_memory_node",
+            name=LAP_SHADOW_NODE_NAME,
+            output="screen",
+            parameters=[
+                *([arg("params_file")] if arg("params_file") else []),
+                lap_shadow_parameters(
+                    arg("dynamics_bundle"),
+                    v_max,
+                    lap_shadow,
+                    perception_params["laser_yaw_from_vehicle_params"],
+                ),
+            ],
+            remappings=[scan_remapping] if scan_remapping else None,
+        )
+        actions += [
+            shadow_laps,
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=shadow_laps,
+                    on_exit=_log_exit(
+                        "shadow lap node",
+                        "a measurement only, nothing reads it: the driver keeps running",
+                    ),
                 )
             ),
         ]
@@ -638,8 +725,17 @@ def generate_launch_description() -> LaunchDescription:
                 choices=list(LAP_SOURCES),
                 description=(
                     "How a lap closes: start_scan (start-scan gate plus wheel odometry, no map "
-                    "after lap 1) or map_pose (TF map -> base_link, needs mapping or "
-                    "localisation)."
+                    "after lap 1), map_pose (TF map -> base_link, needs mapping or "
+                    "localisation) or camera (the camera lap counter's events, judged by the lap "
+                    "node; needs the counter). truth is a simulator source and is refused."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "lap_shadow",
+                default_value="",
+                description=(
+                    "camera or start_scan (not the lap_source): also start a second lap node, "
+                    "lap_memory_shadow_node, in observe mode on /pnp/lap_shadow/*. Empty: none."
                 ),
             ),
             DeclareLaunchArgument(

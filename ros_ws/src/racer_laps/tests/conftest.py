@@ -11,6 +11,7 @@ collect_ignore = (
     if importlib.util.find_spec("hypothesis")
     else [
         "test_cap_property.py",
+        "test_external_gate_properties.py",
         "test_gate_v2.py",
         "test_gate_v21_properties.py",
         "test_gate_v3_properties.py",

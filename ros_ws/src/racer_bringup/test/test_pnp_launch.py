@@ -102,6 +102,7 @@ def test_argument_defaults() -> None:
         "v_lap1_mps": "",
         "lap_mode": "v0",
         "lap_source": "start_scan",
+        "lap_shadow": "",
         "lap_counter": "true",
         "require_lap_counter": "false",
         "deskew": "false",
@@ -111,7 +112,7 @@ def test_argument_defaults() -> None:
     assert declared["deskew"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
-    assert declared["lap_source"].choices == ["start_scan", "map_pose"]
+    assert declared["lap_source"].choices == ["start_scan", "map_pose", "camera", "truth"]
 
 
 def test_launch_description_builds() -> None:
@@ -800,3 +801,251 @@ def test_deskew_true_never_touches_the_command_path_or_safety(monkeypatch) -> No
             assert "/drive" not in r
     source = (_LAUNCH_DIR / "pnp.launch.py").read_text()
     assert not re.search(r"""["']/drive["']""", source)
+
+
+# -- brief 51: the camera lap source, the truth refusal and the shadow lap node ---------------------
+
+
+def _laps_nodes(actions) -> list:
+    return [a for a in actions if getattr(a, "node_package", "") == "racer_laps"]
+
+
+def _described_nodes(m, monkeypatch, **overrides):
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(_context(**overrides))
+    return actions, [_describe(n) for n in actions if hasattr(n, "node_package")]
+
+
+def test_lap_memory_false_is_the_launch_it_was_whatever_the_new_arguments_say(
+    monkeypatch,
+) -> None:
+    """E6: the node list and every parameter of `lap_memory:=false` are the golden of the deskew
+    test, with the camera as `lap_source` as well."""
+    m = _module()
+    base, base_nodes = _described_nodes(m, monkeypatch)
+    assert len(base) == 4
+    assert base_nodes == [
+        (
+            "racer_track_perception",
+            "track_perception_node",
+            [
+                ("backend", "net"),
+                ("bundle_dir", "/b/trackperc"),
+                ("laser_yaw_from_vehicle_params", True),
+            ],
+            [],
+        ),
+        (
+            "racer_planner",
+            "mppi_planner_node",
+            [
+                ("dynamics_bundle", "/b/dyn"),
+                ("laser_yaw_from_vehicle_params", True),
+                ("v_max_mps", 0.5),
+            ],
+            [],
+        ),
+    ]
+    for source in ("start_scan", "map_pose", "camera"):
+        actions, nodes = _described_nodes(m, monkeypatch, lap_source=source)
+        assert nodes == base_nodes and len(actions) == 4, source
+
+
+def test_lap_source_camera_starts_the_lap_node_on_the_camera_source(monkeypatch, tmp_path) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(
+        _context(
+            lap_memory="true",
+            lap_source="camera",
+            lap_counter="false",
+            dynamics_bundle=_bundle(tmp_path, 0.9),
+            v_max_mps="0.8",
+            v_lap1_mps="0.5",
+        )
+    )
+    laps = _laps_nodes(actions)
+    assert len(laps) == 1 and laps[0].node_executable == "lap_memory_node"
+    p = _flat_params(laps[0])
+    assert p["lap_source"] == "camera" and p["lap_mode"] == "v0"
+    assert float(p["v_cap_start_mps"]) == 0.5 and float(p["v_cap_ceiling_mps"]) == 0.8
+    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    q = _flat_params(planner)
+    assert q["use_lap_guidance"] is True and float(q["v_no_guidance_mps"]) == 0.5
+
+
+def test_lap_source_camera_without_a_counter_refuses_with_the_counter_wording(
+    monkeypatch, tmp_path
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    waited = []
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda t=0.0: waited.append(t) or False)
+    ctx = _context(
+        lap_memory="true",
+        lap_source="camera",
+        lap_counter="false",
+        dynamics_bundle=_bundle(tmp_path),
+    )
+    with pytest.raises(RuntimeError, match="no lap_counter_node"):
+        m._make_actions(ctx)
+    assert waited == [m.LAP_COUNTER_WAIT_S]
+    with pytest.raises(RuntimeError) as err:
+        m._make_actions(ctx)
+    assert str(err.value) == m.LAP_COUNTER_REFUSAL  # the wording of require_lap_counter
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda t=0.0: True)
+    assert _laps_nodes(m._make_actions(ctx))
+
+
+def test_lap_source_camera_with_the_counter_started_here_waits_for_it(
+    monkeypatch, tmp_path
+) -> None:
+    """Like require_lap_counter: the planner is not started until the counter is in the graph."""
+    _with_perception_installed(monkeypatch)
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    actions = m._make_actions(
+        _context(
+            lap_memory="true",
+            lap_source="camera",
+            lap_counter="true",
+            dynamics_bundle=_bundle(tmp_path),
+        )
+    )
+    nodes = [a for a in actions if hasattr(a, "node_package")]
+    assert [n.node_executable for n in nodes] == ["track_perception_node", "lap_memory_node"]
+
+
+def test_lap_source_start_scan_does_not_wait_for_the_counter(monkeypatch, tmp_path) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+
+    def boom(*a, **k):
+        raise AssertionError("the graph was probed for a counter")
+
+    monkeypatch.setattr(m, "lap_counter_in_graph", boom)
+    actions = m._make_actions(
+        _context(lap_memory="true", lap_counter="false", dynamics_bundle=_bundle(tmp_path))
+    )
+    assert len(_laps_nodes(actions)) == 1
+
+
+@pytest.mark.parametrize("lap_memory", ["true", "false"])
+def test_lap_source_truth_is_refused_on_the_car(monkeypatch, tmp_path, lap_memory) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    with pytest.raises(RuntimeError, match="no truth"):
+        m._make_actions(
+            _context(lap_memory=lap_memory, lap_source="truth", dynamics_bundle=_bundle(tmp_path))
+        )
+
+
+def test_lap_memory_parameters_still_accept_truth_for_the_sim_runner(tmp_path) -> None:
+    m = _module()
+    params = m.lap_memory_parameters(_bundle(tmp_path, 0.9), 0.8, 0.5, "v0", "truth")
+    assert params["lap_source"] == "truth" and params["v_cap_start_mps"] == 0.5
+    for source in ("camera", "truth"):
+        with pytest.raises(RuntimeError, match="v1"):
+            m.lap_memory_parameters(_bundle(tmp_path, 0.9), 0.8, 0.5, "v1", source)
+
+
+def test_lap_mode_v1_with_the_camera_is_refused(monkeypatch, tmp_path) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
+    with pytest.raises(RuntimeError, match="v1"):
+        m._make_actions(
+            _context(
+                lap_memory="true",
+                lap_mode="v1",
+                lap_source="camera",
+                dynamics_bundle=_bundle(tmp_path),
+            )
+        )
+
+
+def test_the_shadow_lap_node_is_a_second_node_in_observe_that_does_not_stop_the_launch(
+    monkeypatch, tmp_path
+) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
+    common = {
+        "lap_memory": "true",
+        "lap_mode": "v0",
+        "lap_source": "start_scan",
+        "lap_counter": "false",
+        "dynamics_bundle": _bundle(tmp_path, 0.9),
+        "v_max_mps": "0.8",
+    }
+    actions = m._make_actions(_context(lap_shadow="camera", **common))
+    laps = _laps_nodes(actions)
+    assert len(laps) == 2
+    primary, shadow = laps
+    assert "lap_memory_shadow_node" in str(shadow._Node__node_name)
+    assert "lap_memory_shadow_node" not in str(primary._Node__node_name)
+    sp = _flat_params(shadow)
+    assert sp["lap_mode"] == "observe" and sp["lap_source"] == "camera"
+    assert sp["output_prefix"] == "/pnp/lap_shadow"
+    assert sp["output_dir"].endswith("/shadow")
+    assert _flat_params(primary)["lap_mode"] == "v0"
+    assert "output_prefix" not in _flat_params(primary)
+    # the planner and the primary are those of a run with no shadow
+    solo = m._make_actions(_context(**common))
+    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    planner_solo = next(a for a in solo if getattr(a, "node_package", "") == "racer_planner")
+    assert _flat_params(planner) == _flat_params(planner_solo)
+    assert _flat_params(primary) == _flat_params(_laps_nodes(solo)[0])
+    # the primary's exit shuts the launch down, the shadow's only logs
+    assert len(_shutdown_handlers(actions)) == 3
+    watching = [
+        h
+        for h in actions
+        if isinstance(h, RegisterEventHandler)
+        and h.event_handler._OnActionEventBase__action_matcher == shadow
+    ]
+    assert len(watching) == 1 and callable(watching[0].event_handler._OnActionEventBase__on_event)
+
+
+def test_the_shadow_lap_parameters_are_observe_with_their_own_topics(tmp_path) -> None:
+    m = _module()
+    params = m.lap_shadow_parameters(_bundle(tmp_path, 0.9), 0.8, "start_scan", True)
+    assert params["lap_mode"] == "observe" and params["lap_source"] == "start_scan"
+    assert params["output_prefix"] == "/pnp/lap_shadow"
+    # observe: the ceiling is the start cap (the node publishes no guidance at all)
+    assert params["v_cap_start_mps"] == params["v_cap_ceiling_mps"] == 0.8
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"lap_shadow": "camera", "lap_source": "camera"}, "equals lap_source"),
+        ({"lap_shadow": "start_scan", "lap_source": "start_scan"}, "equals lap_source"),
+        ({"lap_shadow": "map_pose", "lap_source": "start_scan"}, "lap_shadow must be"),
+        ({"lap_shadow": "camera", "lap_memory": "false"}, "needs lap_memory"),
+    ],
+)
+def test_lap_shadow_refusals(monkeypatch, tmp_path, kwargs, match) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
+    ctx = {"lap_memory": "true", "lap_counter": "false", "dynamics_bundle": _bundle(tmp_path)}
+    ctx.update(kwargs)
+    with pytest.raises(RuntimeError, match=match):
+        m._make_actions(_context(**ctx))
+
+
+def test_no_shadow_lap_node_by_default(monkeypatch, tmp_path) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(
+        _context(lap_memory="true", lap_counter="false", dynamics_bundle=_bundle(tmp_path))
+    )
+    assert len(_laps_nodes(actions)) == 1
+
+
+def test_the_recorder_regex_takes_the_shadow_lap_topics() -> None:
+    text = (Path(__file__).resolve().parents[1] / "launch" / "car_teleop.launch.py").read_text()
+    assert '|/lap/(event|status)|/pnp/.*)$"' in text  # /pnp/lap_shadow/* is under /pnp/

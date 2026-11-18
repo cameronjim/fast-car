@@ -14,3 +14,6 @@ Run `uv run --group bags python -m racer_eval baseline --bag <bag dir>` there to
 
 `pnp-v0.5-laps-ring.yaml` (SHA-256 `74b1dccd...dc36`) holds the constants of the lap gate v3 attempt: battery B8 (cases R1 to R4, Q1 and Q2 on seeds 61 to 63, the count rule and the class tolerances) and the car gate D8-C0.
 `docs/notes/preregistration-pnp-v0.5-laps-ring.md` holds their rules. It is a new attempt after B7 and changes nothing in the earlier files.
+
+`pnp-v0.5-laps-camera.yaml` (SHA-256 `013cb2f8...807f`) holds the constants of the camera lap source attempt: the source rule of the lap node (`source_rule`), battery B9 (cases U1 to U3 on seeds 71 and 72, the truth oracle and its fault plan), the offline gate D9-B0 and the car gates D9-P0 and D9-C0.
+`docs/notes/preregistration-pnp-v0.5-laps-camera.md` holds their rules. It is a new attempt after B7 and changes nothing in the earlier files; `freeze/b9.json` is written by PR B, before B9 runs.

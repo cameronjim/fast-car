@@ -219,6 +219,20 @@ def test_the_publisher_is_fed_from_the_ground_truth_odometry_callback_not_the_ma
     assert "oracle_status.on_time" not in main_pass.split("previous = sample")[0]
 
 
+def test_the_parser_takes_the_ready_delay_and_inf() -> None:
+    parser = runner.build_parser()
+    base = ["--track", "stadium", "--driver", "pnp"]
+    assert parser.parse_args(base).lap_truth_ready_after_s == 0.0
+    ready = parser.parse_args([*base, "--lap-truth-ready-after-s", "6.0"])
+    assert ready.lap_truth_ready_after_s == 6.0
+    never = parser.parse_args([*base, "--lap-truth-ready-after-s", "inf"])
+    assert math.isinf(never.lap_truth_ready_after_s)
+    with pytest.raises(SystemExit):
+        parser.parse_args([*base, "--lap-truth-ready-after-s", "-1"])
+    with pytest.raises(SystemExit):
+        parser.parse_args([*base, "--lap-truth-ready-after-s", "nan"])
+
+
 def test_the_result_says_start_refused_and_carries_the_refusal() -> None:
     out = runner.refusal_result_keys(
         ("refuse", "source state 'waiting', not 'running'"),

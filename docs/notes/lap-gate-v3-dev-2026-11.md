@@ -411,3 +411,35 @@ the cause (lap 4 closing late under host load in the container) is not found. No
 Why the registered Linux case failed on main: a few early matches decided the latch ("3 and over a quarter")
 and the count of counted matches differs by 1 to 2 between macOS and Linux (38 against 40). The 50e rule
 needs 6 and over 3/4, and the same case shows at most 4 ambiguous of 46 on both platforms.
+
+## Round 6 (brief 50f: displacement is a floor, proof by span, the late laps)
+
+Built as written: the displaced scan is the nearest to `unique_shift_m` among those at least that far back
+(`unique_shift_tol_m` removed; under 0.4 m of travel there is none); proven is not aliased, more unique than
+ambiguous, and 4 unique or 3 unique, none ambiguous, whose first and latest unique matches are at least 0.4 m
+of wheel distance apart (start scan and keyframes). The span is measured over the whole life of the reference,
+so after a lap it is long; a reference with ambiguous matches never takes the span arm. All numbers below are
+measured again at the final head; none is carried over from round 5.
+
+The late laps 2 and 3 and the missing lap 3 of round 5 were one cause, in the gate. At a scan spacing just over
+0.30 m (3.0 m/s with wall-clock jitter) the displaced scan was 0.30 to 0.35 m back and a placed track showed
+30 to 40 percent ambiguous matches: the hold ran to `candidate_ttl_s` (1.7 s late in L1 at 3.03 to 3.3 m/s,
+seeds 1 and 7), or, with a clear majority ambiguous, a lap never closed. Not starvation (scans late by at most
+0.03 s, start delay constant at 0.055 s, docker otherwise idle) and not the node. At 0.4 m and over the placed
+stadium has 0 ambiguous matches at every spacing tested. What remained (3 unique matches on lap 1's approach,
+proof needing 4, hold to the ttl) was lap 1 only, 1.4 s late, in 2 of 30 runs; proof by span removes it.
+
+| check | result at the final head |
+|---|---|
+| M5 (L3 lap test, 3.0 m/s, ros-dev, aarch64) | 60 of 60 green in two loops of 30: four lap events every run, the latest 0.26 s after its crossing, u/a counted every run with a = 0 and `aliased_entries` 0 |
+| A3, A4, A6, C2 | pass (A6 mean 5.1 ms, p99 15.4 ms) |
+| A5, C1 | pass (16 runs, 0 of 192 laps outside; 12 of 12 fresh RD runs). c_OD_cw_11 (stalled, dropped by the rule) shows one release, aliased then proven, reported |
+| M1' | pass: 13 stadium dumps, 2 bags: never aliased, share 0.00 at every scan with 3 ambiguous |
+| M2/M4 | pass: 28 ring dumps aliased 3 to 11 scans later than round 4, never released, never proven at any scan, share over the run 0.95 to 1.00, lap times within 0.03 s of round 4 |
+| M3 | pass |
+| L1 | the 3.12 and 3.22 m/s seed 7 reproduction closes lap 1 on time; (u, a, span) table; no ring (plain, box ccw, four fixtures) proven at any scan |
+
+Gap classes against round 4: the smallest placed unique gap is 0.043 (round 4: 0.040), the largest ring
+ambiguous gap 0.024 (the same); neither moved by 0.005.
+
+Full suites and the Linux run are in the PR description of record (see the final report).

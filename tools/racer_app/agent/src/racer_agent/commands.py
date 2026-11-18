@@ -50,7 +50,10 @@ PNP_MODELS_IN_CONTAINER = "/workspace/data/pnp/models/"
 #: lists; which of them THIS build's launch file declares is read from the file (see
 #: `parse_launch_declarations`), so a mode the launch does not have yet is refused, not sent.
 PNP_LAP_MODES = ("v0", "v1", "observe")
-PNP_LAP_SOURCES = ("start_scan", "map_pose")
+PNP_LAP_SOURCES = ("start_scan", "map_pose", "camera")
+#: Sources pnp.launch.py declares that the app never offers: `truth` is the simulator's line
+#: crossing (brief 51) and the car has no truth. The app's sources are the launch's choices minus this.
+PNP_SIM_ONLY_LAP_SOURCES = frozenset({"truth"})
 #: Planner parameter files the PnP card can pick: plain `*.yaml` files directly under data/pnp (not
 #: under models/), passed as `params_file:=` to pnp.launch.py. The name is checked by NAME_RE.
 PNP_PARAMS_IN_CONTAINER = "/workspace/data/pnp/"

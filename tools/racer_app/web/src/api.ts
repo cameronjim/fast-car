@@ -101,7 +101,7 @@ export interface BagsReply {
 }
 
 export type LapMode = "v0" | "v1" | "observe";
-export type LapSource = "start_scan" | "map_pose";
+export type LapSource = "start_scan" | "map_pose" | "camera";
 
 /** The owner's saved drive settings (the Tune tab), kept on the car. null: the profile's own. */
 export interface Prefs {

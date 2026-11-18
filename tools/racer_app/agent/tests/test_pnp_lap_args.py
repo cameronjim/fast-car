@@ -313,7 +313,9 @@ def test_every_choice_the_app_allows_is_a_declared_choice():
     # is the one allowed mode that may be missing from the launch file.
     assert set(cmd.PNP_LAP_MODES) - {"observe"} <= set(declared["lap_mode"])
     assert set(declared["lap_mode"]) <= set(cmd.PNP_LAP_MODES)
-    assert set(cmd.PNP_LAP_SOURCES) == set(declared["lap_source"])
+    # the app offers every source the launch declares except the declared sim-only ones
+    assert set(cmd.PNP_LAP_SOURCES) == set(declared["lap_source"]) - cmd.PNP_SIM_ONLY_LAP_SOURCES
+    assert not set(cmd.PNP_LAP_SOURCES) & cmd.PNP_SIM_ONLY_LAP_SOURCES
     for name in ("lap_memory", "lap_counter", "require_lap_counter"):
         assert name in declared
 
@@ -529,3 +531,27 @@ def test_prefs_with_the_lap_fields_save_and_a_broken_combination_does_not(pnp_ca
     prefs.pnp.shadow_perception = "x; reboot"
     with pytest.raises(ActionError):
         pnp_car.controller.set_prefs(prefs)
+
+
+@pytest.mark.skipif(not LAUNCH.exists(), reason="repo launch file not present")
+def test_the_sim_only_sources_are_declared_choices_of_the_launch():
+    """SIM_ONLY is part of the contract, not a way to hide a typo: each entry is a launch choice."""
+    declared = cmd.parse_launch_declarations(LAUNCH.read_text())
+    assert cmd.PNP_SIM_ONLY_LAP_SOURCES == {"truth"}
+    assert cmd.PNP_SIM_ONLY_LAP_SOURCES <= set(declared["lap_source"])
+
+
+def test_the_app_refuses_truth_and_sends_camera_when_the_launch_declares_it():
+    with_camera = cmd.parse_launch_declarations(
+        LAUNCH_WITH_OBSERVE.replace(
+            'LAP_SOURCES = ("start_scan", "map_pose")',
+            'LAP_SOURCES = ("start_scan", "map_pose", "camera", "truth")',
+        )
+    )
+    out = build(lap(lap_memory=True, lap_source="camera"), launch=with_camera)
+    assert out.endswith("lap_memory:=true lap_source:=camera")
+    with pytest.raises(cmd.CommandError, match="lap source must be one of"):
+        build(lap(lap_memory=True, lap_source="truth"), launch=with_camera)
+    # a launch without `camera` refuses it as not available in this build
+    with pytest.raises(cmd.CommandError):
+        build(lap(lap_memory=True, lap_source="camera"))

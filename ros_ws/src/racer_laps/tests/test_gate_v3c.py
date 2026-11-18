@@ -112,7 +112,8 @@ def gate_with_scans(spacing: float, n: int = 40) -> tuple[StartScanGate, float]:
     ("spacing", "behind"),
     [
         (0.05, 0.40),
-        (0.13, 0.52),  # 50e: not 0.39: under 0.4 m back the gap is not evidence (round 5)
+        (0.13, 0.52),  # 50f: not 0.39: under 0.4 m back the gap is not evidence (round 5)
+        (0.45, 0.45),
         (0.25, 0.50),
         (0.30, 0.60),
         (0.303, 0.606),  # not 0.303: the knife edge at 3.0 m/s of a 10 Hz scan
@@ -130,20 +131,12 @@ def test_the_displaced_scan_is_the_nearest_to_0_4_m_back_among_those_at_least_0_
     assert now - rec.total_m == pytest.approx(behind, abs=1e-9)
 
 
-def test_in_the_first_0_4_m_the_displaced_scan_is_the_nearest_more_than_0_3_back() -> None:
-    gate, now = gate_with_scans(0.05, n=8)  # 0.35 m of travel: nothing at 0.4 yet
-    rec = gate._displaced(now)
-    assert rec is not None and now - rec.total_m == pytest.approx(0.35, abs=1e-9)
-    gate, now = gate_with_scans(0.05, n=9)  # 0.40 m: now the scan at 0.4
+def test_under_0_4_m_of_travel_there_is_no_displaced_scan() -> None:
+    gate, now = gate_with_scans(0.05, n=8)  # 0.35 m of travel in the buffer
+    assert gate._displaced(now) is None
+    gate, now = gate_with_scans(0.05, n=9)  # 0.40 m
     rec = gate._displaced(now)
     assert rec is not None and now - rec.total_m == pytest.approx(0.40, abs=1e-9)
-
-
-def test_under_0_3_m_of_travel_there_is_no_displaced_scan() -> None:
-    gate, now = gate_with_scans(0.05, n=6)  # 0.25 m of travel in the buffer
-    assert gate._displaced(now) is None
-    gate, now = gate_with_scans(0.05, n=8)  # 0.35 m
-    assert gate._displaced(now) is not None
 
 
 # -- speed ----------------------------------------------------------------------------------------------

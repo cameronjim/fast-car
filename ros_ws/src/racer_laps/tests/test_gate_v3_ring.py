@@ -48,7 +48,6 @@ def roll(
     "kw",
     [
         {"unique_shift_m": -0.1},
-        {"unique_shift_tol_m": -0.1},
         {"unique_same_m": 0.0},
         {"alias_max_share": 1.1},
         {"alias_max_share": -0.1},

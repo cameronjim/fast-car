@@ -170,6 +170,12 @@ class MppiPlannerNode : public rclcpp::Node {
     lg.start_ticks = static_cast<int>(declare_int(
         "start_ticks", 25, 1, 200,
         "Warm start: consecutive on-time ticks (and solves on the real inputs) before moving."));
+    lg.start_steer_hold_ticks = static_cast<int>(declare_int(
+        "start_steer_hold_ticks", lg.start_steer_hold_ticks, 0, 200,
+        "Warm start: on-time ticks the steering holds the gated value before the pre-turn."));
+    lg.start_steer_fraction =
+        declare_double("start_steer_fraction", lg.start_steer_fraction, 0.01, 1.0,
+                       "Warm start: share of the steering rate limit the pre-turn may use.");
     lg.start_tick_gap_s = declare_double("start_tick_gap_s", 0.03, 0.01, 0.2,
                                          "Warm start: largest gap between two counted ticks (s).");
     lg.start_timeout_s = declare_double(

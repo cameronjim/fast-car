@@ -98,5 +98,30 @@ def test_the_design_starting_limit_is_too_loose_on_this_input() -> None:
     (the false line shows a violation share of 0.032 to 0.075, the true line 0.000)."""
     if "strong_max_violation" not in inspect.signature(GateConfig).parameters:
         pytest.skip("gate v1 has no violation limit")
-    laps = replay(strong_max_violation=0.04)
+    if "unique_shift_m" in inspect.signature(GateConfig).parameters:
+        # gate v3's uniqueness test rejects the alias by itself: this evidence is about the
+        # violation limit alone, so the v3 additions are off here
+        laps = replay(strong_max_violation=0.04, ring_enabled=False, unique_shift_m=0.0)
+    else:
+        laps = replay(strong_max_violation=0.04)
     assert laps and laps[0].length_m < LOOP_WHEEL_M - 1.0
+
+
+def test_gate_v3_does_not_place_the_alias_by_the_start_scan_even_with_the_design_limit_of_0_04() -> (
+    None
+):
+    """Gate v3: the uniqueness test calls the alias zone's matches ambiguous, the start scan
+    latches aliased and never places a crossing: with the loose limit (not the registered one) the
+    lap closes by winding, which on a stadium with straights is not the line (brief 50b item 3)."""
+    if "unique_shift_m" not in inspect.signature(GateConfig).parameters:
+        pytest.skip("gate v2.1 has no uniqueness test")
+    laps = replay(strong_max_violation=0.04)
+    assert laps and laps[0].line_source != "start_scan"
+
+
+def test_at_the_registered_0_02_lap_1_of_the_alias_input_closes_at_the_line_by_start_scan() -> None:
+    """The system under test is the registered limit: with it lap 1 of the 5 m straight input
+    closes at the start line by the start scan, as gate v2.1 does (brief 50c)."""
+    laps = replay()
+    assert laps and laps[0].line_source == "start_scan" and not laps[0].missed_gate
+    assert laps[0].length_m == pytest.approx(LOOP_WHEEL_M, abs=0.45)

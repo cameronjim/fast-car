@@ -1,0 +1,75 @@
+schema: pnp-prereg-laps/2
+written: 2026-11-17
+supersedes: nothing        # pnp-v0.5-laps.yaml (B7, D7-S0 FAIL, D7-S1 PASS) and its results stand
+v05_laps_file: evaluation/prereg/pnp-v0.5-laps.yaml
+v05_laps_sha256: 35949c7d86dbdd3c5a3dde11eb0551465ea893b5f26e78dc7de0f1a0890428de
+lap_battery_b8:
+  id: B8
+  seeds: [61, 62, 63]
+  directions: [ccw, cw]
+  laps_judged: 12
+  laps_driven: 13            # the run stops after 13 ground-truth laps
+  lap1_cap_mps: 0.5
+  ceiling: dynamics bundle validity v_max_mps (config/pnp/fixtures/dyn-car-2026-11-12)
+  plant: car-like (as pnp-v0.3.yaml lap_battery), scan noise on
+  lap_source: start_scan
+  lap_node_yaw_gains: as the B7 command (yaw_gain_override 0.9, yaw_gain_override_right 1.01)
+  development:               # run and read without limit; never evidence
+    seeds: [11, 12, 13]
+    cases_read_before: [T, T2, S1, S2, S3, S4, OD, N1, N2, N3, P1, P2, P3, P4]
+    cases:
+      ND: {track: stadium, lane_width_m: 1.0, straight_length_m: 0.3, island_radius_m: 0.5}
+  # An obstacle is a solid box against one wall, as in pnp-v0.4.yaml lap_battery_b5.
+  cases:
+    R1: {class: aliased, track: stadium, lane_width_m: 1.0, straight_length_m: 0.0, island_radius_m: 0.60}
+    R2: {class: aliased, track: stadium, lane_width_m: 1.2, straight_length_m: 0.0, island_radius_m: 0.90}
+    R3: {class: aliased, track: stadium, lane_width_m: 1.2, straight_length_m: 0.0, island_radius_m: 0.55,
+         obstacles: [{at: 0.50, side: outer, protrusion_m: 0.20, length_m: 0.30}]}
+    R4: {class: aliased, track: stadium, lane_width_m: 1.1, straight_length_m: 0.4, island_radius_m: 0.50}
+    Q1: {class: placed, track: stadium, lane_width_m: 1.2, straight_length_m: 3.0, island_radius_m: 0.45}
+    Q2: {class: placed, track: rounded_rect, lane_width_m: 1.1, straight_length_m: 2.5, island_width_m: 1.2, island_radius_m: 0.35}
+  drop_rule: {condition: a, seed: 61, min_laps: 3, either_direction: true,
+              max_dropped: 2, min_aliased_left: 2, min_placed_left: 1}
+  conditions:
+    a: {lap_memory: off, cap_mps: 0.5}
+    b: {lap_memory: off, cap: ceiling}
+    c: {lap_memory: v0}
+  truth: {crossing_0: first_scan_stamp_at_or_after_driving_receipt, reads_system_laps: false}
+  system: {crossing_0: start_scan_stamp}
+  count_rule: {window_end: truth_crossing_12_plus_share_of_truth_lap_12, share: 0.5, required: 12}
+  validity: {max_scan_wait_s: 0.25, max_attempts: 3, invalid_counts_as: failed_to_execute,
+             recording_must_cover_count_window: true}
+  thresholds:
+    placed: {tolerance_s: 0.3, max_single_error_s: 1.0}
+    aliased:                 # the larger of the absolute and the relative number applies
+      tolerance_s: 0.3
+      tolerance_share_of_truth_lap: 0.04
+      max_single_error_s: 1.0
+      max_single_error_share_of_truth_lap: 0.08
+    s0b_min_share_within_tolerance: 0.98
+    s1_min_complete: {of_36: 33, of_30: 28, of_24: 22}
+    s1_complete_laps: 10
+    s1_reach_ratio: 1.05
+    s1_reach_min_runs: {of_36: 33, of_30: 28, of_24: 22}
+    s1_median_r_max: 0.80
+    late_laps: [8, 9, 10]
+d8_c0:
+  mode: observe
+  runs: 2                    # one per direction
+  laps_judged: 10
+  tolerance_s: 0.3           # whatever the line source
+  laps_2_to_10_min_within: 17   # of 18
+  lap1: crossing_offset_within_tolerance_of_median_offset_of_crossings_2_to_10
+  missed_gate_flags_allowed: 0
+  on_scan_p99_max_ms: 80
+  reference: camera_lap_counter
+  reference_backup: phone_video
+  reference_valid_if: count_equals_floor(wheel_distance / median_reference_lap_distance)
+  tool: tools/pnp_session lap-c0
+owner_decisions:
+  given: {date: 2026-11-17, source: claude-docs/owner-decisions-2026-11-16.md, item_8_keyframe_ring_new_attempt: true}
+  asked_not_given:
+    d8_pass_lets_d_v0_drive: null
+    d8_pass_stands_in_for_d3_before_b5_b6: null
+    aliased_class_tolerance_and_count_rule_accepted: null
+    d8_c0_reference_camera_then_video: null

@@ -309,3 +309,20 @@ A variant is the plain donut plus objects. All of these, written on the form
   the receipt no longer matches: check again.
 - Step 6 and Step 7 use different variants (the strict reading of "never driven" in v0.2 5.2).
   Do not call a variant an unseen layout.
+
+## Lap gate v3: D8-C0 (brief 50)
+
+Added with the lap gate v3 attempt; nothing above this heading changed. The step "observe mode, two
+runs of at least 10 laps, one per direction" ends with this command on the two bags, one bag per run:
+
+    cd tools && uv run --all-extras python -m pnp_session lap-c0 --bag <ccw bag> --bag <cw bag> \
+        [--video laps.csv] --out <session dir>/lap_c0.json
+
+It prints three blocks for the same runs: D3-C0 (`laps.d3c0`, unchanged), the D7-C0 rule and D8-C0
+(items (i) to (iv) and, for D8-C0, item (v), the lap node's `on_scan_ms_p99` at most 80 ms). The D8-C0
+block is the gate. The reference is the camera lap counter, or with `--video` the phone video (a CSV
+with the columns `run,lap,lap_time_s,t_cross_s,distance_m`; the run name is the bag's name). A run
+whose reference count is not the wheel distance count is REPEAT: drive it again. The lap node must be
+the freeze commit (`evaluation/prereg/freeze/b8.json`) with `ring_enabled` left at its default.
+`--replay` recomputes the events through the checked-out gate and labels the report REGRESSION, NOT A
+GATE: never use it as the car result.

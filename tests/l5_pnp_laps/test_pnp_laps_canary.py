@@ -224,3 +224,41 @@ def test_the_long_straight_stadium_t2_counts_every_lap_with_the_right_time(tmp_p
     for k, (s, g) in enumerate(zip(system, gt, strict=True), start=1):
         assert abs(s - g) <= LAP_TIME_TOLERANCE_S, f"lap {k}: system {s:.2f} s, truth {g:.2f} s"
     assert result["wall_contacts"] == 0
+
+
+P4_RING = {"lane_width_m": 1.1, "straight_length_m": 0.0, "island_radius_m": 0.40}
+RING_LAPS = 4
+RING_JUDGED = 3
+
+
+def test_the_ring_p4_closes_every_lap_by_winding_and_the_count_rule_holds(tmp_path, capsys):
+    """Brief 50: development case P4 (a round island in a round wall, no straight: a scan does not
+    say where along the lap the car is), ccw, seed 11, condition a, 4 truth laps. Gate v3 counts the
+    judged laps by the registered count rule (system crossings by truth crossing 3 plus half of
+    truth lap 3: exactly 3), each lap is a winding closure and the truth is valid."""
+    result = run_runner(
+        tmp_path,
+        domain=86,
+        mode="off",
+        laps=RING_LAPS,
+        duration_s=400.0,
+        v_max_mps=LAP1_CAP_MPS,
+        track_params=P4_RING,
+    )
+    crossings = result["gt_lap_crossings_registered_s"]
+    laps = result["gt_lap_times_registered_s"]
+    system = [e["t_cross_s"] for e in result["system_lap_events"]]
+    sources = result["lap_status"]["lap_line_sources"]
+    with capsys.disabled():
+        print(
+            f"\nl5_pnp_laps P4 ring ccw D off: truth laps {laps} system laps "
+            f"{[e['lap_time_s'] for e in result['system_lap_events']]} sources {sources} "
+            f"phase observable {result['lap_status'].get('phase_observable')}"
+        )
+    assert len(crossings) >= RING_LAPS, result.get("stopped_because")
+    end = crossings[RING_JUDGED - 1] + 0.5 * laps[RING_JUDGED - 1]
+    assert sum(1 for t in system if t <= end) == RING_JUDGED
+    assert sources[:RING_JUDGED] == ["winding"] * RING_JUDGED
+    assert result["lap_status"]["phase_observable"] is False
+    assert result["wall_contacts"] == 0
+    assert result["truth_valid"] is True

@@ -2,6 +2,7 @@
 
     uv run --project tools python tools/pnp_session_report.py timing --bag <dir> [--out report.json]
     uv run --project tools python tools/pnp_session_report.py laps   --bag <dir>   # D3-C0
+    uv run --project tools python tools/pnp_session_report.py lap-c0 --bag <dir> --bag <dir>
     uv run --project tools python tools/pnp_session_report.py host-facts --out-dir <dir>
     uv run --project tools --extra session python tools/pnp_session_report.py v04 --bag <dir> ...
     uv run --project tools --extra session python tools/pnp_session_report.py variant-form --form <f>
@@ -176,6 +177,28 @@ def laps_markdown(r: dict[str, Any]) -> str:
             lines.append(f"- {x['run_id']} lap {x['lap']}: {x['diff_s']:+.3f} s")
         lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def cmd_lap_c0(args: argparse.Namespace) -> int:
+    """D3-C0, the D7-C0 rule and D8-C0 for the same bags (brief 50): each bag is one run."""
+    from pnp_session import lap_c0
+
+    th = lap_c0.load_thresholds()
+    video = lap_c0.read_video_laps(Path(args.video)) if args.video else None
+    runs = []
+    for bag_path in args.bag:
+        bag = lap_c0.read_bag(Path(bag_path))
+        replayed = lap_c0.replay_bag(Path(bag_path)) if args.replay else None
+        runs.append(lap_c0.run_from_bag(bag, video, replayed))
+    name = "video" if video is not None else "camera"
+    report = lap_c0.build_report(runs, name, th, bool(args.replay), args.rule)
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(report, indent=2, sort_keys=True, default=_json_default) + "\n"
+        )
+    print(lap_c0.markdown(report))
+    verdict = report["d8_c0" if args.rule == "d8" else "d7_c0"]["verdict"]
+    return 0 if verdict == lap_c0.PASS else 1
 
 
 def cmd_host_facts(args: argparse.Namespace, runner: hostfacts.Runner | None = None) -> int:
@@ -353,6 +376,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lp.add_argument("--out", help="write the JSON here")
     lp.set_defaults(func=cmd_laps)
+    lc = sub.add_parser(
+        "lap-c0",
+        help="D3-C0, the D7-C0 rule and D8-C0 of the same bags (one bag per run), brief 50",
+    )
+    lc.add_argument("--bag", action="append", required=True, help="a bag, once per run")
+    lc.add_argument(
+        "--video",
+        help="CSV run,lap,lap_time_s,t_cross_s[,distance_m]: the reference instead of the camera",
+    )
+    lc.add_argument(
+        "--rule", choices=["d7", "d8"], default="d8", help="which block sets the exit code"
+    )
+    lc.add_argument(
+        "--replay",
+        action="store_true",
+        help="recompute the lap events through the checked-out gate: a regression, not a gate",
+    )
+    lc.add_argument("--out", help="write the JSON here")
+    lc.set_defaults(func=cmd_lap_c0)
     h = sub.add_parser("host-facts", help="scheduling policy, CPU governor, load: read only")
     h.add_argument("--out-dir", required=True)
     h.set_defaults(func=cmd_host_facts)

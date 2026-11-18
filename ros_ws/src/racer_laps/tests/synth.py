@@ -27,6 +27,9 @@ class Stadium:
     lane_m: float = 1.0
     island_r_m: float = 0.4
     arc_segments: int = 28
+    #: A solid box against the outer wall: (position as a share of the lap, protrusion, length),
+    #: metres. None: no box. The brief 50 ring with one box.
+    box: tuple[float, float, float] | None = None
 
     @property
     def centre_r_m(self) -> float:
@@ -51,7 +54,23 @@ class Stadium:
                 x0, y0 = pts[i]
                 x1, y1 = pts[(i + 1) % len(pts)]
                 segs.append((x0, y0, x1, y1))
+        if self.box is not None:
+            segs.extend(self._box_segments())
         return np.array(segs, dtype=float)
+
+    def _box_segments(self) -> list[tuple[float, float, float, float]]:
+        assert self.box is not None
+        at, protrusion, length = self.box
+        x, y, yaw, _ = self.pose_at(at * self.length_m)
+        ox, oy = math.sin(yaw), -math.cos(yaw)  # outwards: to the right of the heading
+        px, py = x + ox * 0.5 * self.lane_m, y + oy * 0.5 * self.lane_m
+        tx, ty = math.cos(yaw), math.sin(yaw)
+        h = 0.5 * length
+        a = (px - tx * h, py - ty * h)
+        b = (px + tx * h, py + ty * h)
+        a2 = (a[0] - ox * protrusion, a[1] - oy * protrusion)
+        b2 = (b[0] - ox * protrusion, b[1] - oy * protrusion)
+        return [(*a, *a2), (*a2, *b2), (*b2, *b)]
 
     def pose_at(self, s_m: float, clockwise: bool = False) -> tuple[float, float, float, float]:
         """(x, y, yaw, curvature) of the centre line at arc length s, counter-clockwise from the
@@ -138,13 +157,20 @@ def drive_stadium(
     speed_max_mps: float = math.inf,
     wobble_m: float = 0.0,
     wobble_period_m: float = 3.1,
+    steer_scale: float = 1.0,
+    launch_yaw_rad: float = 0.0,
+    launch_decay_m: float = 1.0,
 ) -> Iterator[Tick]:
     """Events (odom, drive, scan) of a car driving the centre line from arc length `start_s`, in
     time order. The speed is `speed_mps` and rises by `speed_step_per_lap_mps` at every lap
     (capped at `speed_max_mps`). The wheel odometry reads the true speed times `odom_scale` (a
     wheel diameter or slip error). `wobble_m` makes the car weave about the centre line (a
     sinusoid of that amplitude over `wobble_period_m` of path, with the heading that goes with it)
-    as a real run does. Scan payload is (x, y, yaw, scan_stamp); the caller casts the
+    as a real run does. `steer_scale` multiplies the steering the gate reads (a heading gain
+    error: 1.03 makes the gate's heading integrate 3 percent too much). `launch_yaw_rad`: the car
+    starts turned that much against the track tangent and the offset decays over `launch_decay_m`
+    of travel (the attitude change of a standing start; the steering follows the yaw rate that
+    goes with it, so the gate's heading integrates the yaw, not the position angle). Scan payload is (x, y, yaw, scan_stamp); the caller casts the
     scan itself with `scan_at` so tests can tamper with it."""
     del seed
     dt = 1.0 / odom_hz
@@ -155,7 +181,10 @@ def drive_stadium(
     while travelled <= total_m:
         s = start_s + travelled
         x, y, yaw, k = stadium.pose_at(s, clockwise)
-        steer = math.atan(WHEELBASE_M * k)
+        sign = -1.0 if clockwise else 1.0
+        lyaw = sign * launch_yaw_rad * math.exp(-travelled / launch_decay_m)
+        k_yaw = k - lyaw / launch_decay_m  # d(yaw)/ds = k + off'(s), off' = -off / decay
+        steer = math.atan(WHEELBASE_M * k_yaw) * steer_scale
         if wobble_m:
             w = 2.0 * math.pi / wobble_period_m
             off = wobble_m * math.sin(w * s)
@@ -165,6 +194,7 @@ def drive_stadium(
         v = min(
             speed_max_mps, speed_mps + speed_step_per_lap_mps * int(travelled // stadium.length_m)
         )
+        yaw += lyaw
         yield Tick(t0 + t, "drive", (steer,))
         yield Tick(t0 + t, "odom", (v * odom_scale,))
         if t >= next_scan - 1e-9:

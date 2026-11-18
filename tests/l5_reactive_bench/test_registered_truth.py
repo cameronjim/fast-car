@@ -302,3 +302,13 @@ def test_other_drivers_keep_the_single_phase_start() -> None:
         wait_timeout_polls=10,
     )
     assert log[:5] == [n for n, _ in stack()] and log[5:] == ["reset", "clear"]
+
+
+def test_the_truth_says_where_its_recording_ends() -> None:
+    """Brief 50: B8's count window must lie inside the recording, so the truth reports the last
+    odometry stamp (and None for no recording)."""
+    odom = car_odom(99.2, 150.0)
+    out = runner.registered_truth(odom, scans(99.0, 150.0), 100.04, centreline())
+    assert out["truth_last_odom_s"] == pytest.approx(odom[-1][0])
+    empty = runner.registered_truth([], scans(99.0, 150.0), 100.04, centreline())
+    assert empty["truth_last_odom_s"] is None

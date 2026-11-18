@@ -23,7 +23,8 @@ else (a missing key, a value of the wrong type, not a mapping) resets the count.
 further apart than `status_gap_max_s` are not consecutive: the count restarts at the later one. A
 status older than that at decision time resets the count (a lap node that died after one good
 status never gives `start`). A lap node whose `phase` is already `running` refuses at once: the run
-it would gate has started. `start` and `refuse` are final.
+it would gate has started. `start` and `refuse` are final. The deadline wins: a status that arrives after `wait_s` is not
+counted, it ends the wait with a refusal (outside review of brief 51c, finding 8).
 
 Numpy-free, ROS-free, standard library only.
 """
@@ -131,6 +132,14 @@ class StartReadyGate:
             return
         if self._verdict != VERDICT_WAIT:
             return  # final
+        if t_s - self._t0 > self.cfg.wait_s + EPS:
+            # the wait was over before this status arrived: the deadline wins, whatever the count
+            # (a caller that polled late must not turn two late statuses into a start). The late
+            # status is not counted; it still gives the refusal its reason, the freshest one.
+            self._statuses += 1
+            self._last_status = status
+            self._expire(t_s)
+            return
         if t_s < self._last_t:
             self._ignored_non_monotone += 1
             return
@@ -166,12 +175,12 @@ class StartReadyGate:
         if self._count >= self.cfg.ready_statuses_required:
             self._finish(VERDICT_START, "", t_s)
         elif t_s - self._t0 > self.cfg.wait_s + EPS:
-            if self._statuses == 0:
-                reason = REFUSAL_NO_STATUS
-            else:
-                reason = _why_not_ready(self._last_status)
-            self._finish(VERDICT_REFUSE, reason, t_s)
+            self._expire(t_s)
         return self._verdict, self._reason
+
+    def _expire(self, t_s: float) -> None:
+        reason = REFUSAL_NO_STATUS if self._statuses == 0 else _why_not_ready(self._last_status)
+        self._finish(VERDICT_REFUSE, reason, t_s)
 
     def _finish(self, verdict: str, reason: str, t_s: float) -> None:
         self._verdict, self._reason = verdict, reason

@@ -442,4 +442,4 @@ proof needing 4, hold to the ttl) was lap 1 only, 1.4 s late, in 2 of 30 runs; p
 Gap classes against round 4: the smallest placed unique gap is 0.043 (round 4: 0.040), the largest ring
 ambiguous gap 0.024 (the same); neither moved by 0.005.
 
-Full suites and the Linux run are in the PR description of record (see the final report).
+Full suites at the final head: the whole local suite on macOS exit 0 (after merging main); the whole racer_laps suite including the L3 node tests inside ros-dev on Linux aarch64: 609 passed, 3 skipped. The registered long-straight case that failed on main on Linux (lap 7 = 11.446) passes there.

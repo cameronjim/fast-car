@@ -216,6 +216,12 @@ def test_one_lap_event_per_lap_with_start_scan_frame_and_v0_guidance(harness: Ha
     harness.drive_loops(4.2)
     harness.spin(0.3)
     events = list(harness.events)
+    last = harness.statuses[-1]
+    print(  # brief 50e (M5): what the verdict counted, shown even when a later assertion fails
+        f"M5 u={last['life_unique']} a={last['life_ambiguous']} "
+        f"entries={last['aliased_entries']} laps={[e.lap_index for e in events]}",
+        flush=True,
+    )
     assert [e.lap_index for e in events] == [1, 2, 3, 4]
     for e in events:
         assert e.header.frame_id == "start_scan"
@@ -225,7 +231,6 @@ def test_one_lap_event_per_lap_with_start_scan_frame_and_v0_guidance(harness: Ha
     assert [e.clean for e in events] == [True] * 4
     # brief 50e (M5): a placed track at 3 m/s is never taken for a ring, whatever the scan timing
     status = harness.statuses[-1]
-    print(f"M5 u={status['life_unique']} a={status['life_ambiguous']}", flush=True)
     assert status["aliased_entries"] == 0 and status["start_verdict"] == "proven", status
     assert set(status["lap_line_sources"]) == {"start_scan"}
     assert [round(e.v_cap_mps, 2) for e in events] == [0.5, 0.6, 0.7, 0.8]

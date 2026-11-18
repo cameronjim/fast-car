@@ -381,3 +381,33 @@ Gap classes per data set (count and range), the three classes:
 No freeze, no B8. Not merged: finding 2 leaves a registered L1 test red and finding 3 is an L3 flake; M1
 fails on the 5 m stadium (finding 1). `alias_gap` was not tuned because no value in 0.020 to 0.028 changes
 any of the three.
+
+## Round 5 (brief 50e: the verdict is a majority, held, not for good)
+
+Built as written: aliased entered at 6 or more ambiguous and a share over 0.75 of counted matches,
+released at a share of 0.5 or under (`alias_release_share`), proven at 4 unique and more unique than
+ambiguous, no start-scan close and no hold expiry while ambiguous matches are at least the unique ones.
+`alias_min_scans` was not tuned. Both gap constants and the 50d band are unchanged.
+
+| check | result |
+|---|---|
+| A3, A4, A6, C2 | pass (A6 mean 5.1 ms, p99 15.4 ms) |
+| A5, C1 | pass (16 runs; 12 of 12 fresh RD runs, every lap by winding) |
+| M1' | pass: 13 stadium dumps and 2 bags, never aliased, share 0.00 at every scan with 3 ambiguous |
+| M2/M4 | pass: 28 ring dumps, aliased 3 to 11 scans later than round 4, never released, share over the run 0.95 to 1.00, lap times identical to round 4 |
+| M3 | pass |
+| M5 | NOT met: 24 of 30 and 21 of 30 green, the third loop stopped at 12 |
+| Linux (aarch64, ros-dev) | the registered long-straight case (lap 7 = 11.446 on main) passes; full racer_laps suite one failure, a superseded 50b test, fixed |
+
+Margin, with no rule: the largest ambiguous share a placed run shows once 3 are ambiguous is 0.00 on the
+dumps and bags, 0.09 on the 5 m stadium and 0.38 on the L3 stadium; the smallest a ring shows from its entry
+is 0.75 (ND), 1.00 on RD and P4.
+
+M5: every red run is a missing 4th lap (`laps=[1, 2, 3]` or 3 laps in the station set) of the L3 lap test.
+The third loop printed the counts on every run, failures included: `aliased_entries` 0 in all 12, u/a 10/5, 11/5
+and 12/4 on the three red ones. The same test on main fails 7 of 30 in the same way, so it is not the verdict;
+the cause (lap 4 closing late under host load in the container) is not found. Not rerun until green.
+
+Why the registered Linux case failed on main: a few early matches decided the latch ("3 and over a quarter")
+and the count of counted matches differs by 1 to 2 between macOS and Linux (38 against 40). The 50e rule
+needs 6 and over 3/4, and the same case shows at most 4 ambiguous of 46 on both platforms.

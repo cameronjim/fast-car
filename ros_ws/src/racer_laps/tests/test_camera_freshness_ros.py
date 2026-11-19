@@ -74,8 +74,6 @@ class Rig:
                 "rate_hz:=0.0",
                 "-p",
                 "start_speed_mps:=0.0",
-                "-p",
-                "yaw_rate_topic:=",
             ],
             env=env,
             stdout=subprocess.PIPE,
@@ -160,12 +158,17 @@ class Rig:
         return False
 
     def call_reset(self) -> None:
-        assert self.reset.wait_for_service(timeout_sec=20.0)
+        assert self.reset.wait_for_service(timeout_sec=20.0), self.counter_log()
         future = self.reset.call_async(Trigger.Request())
         end = time.monotonic() + 10.0
         while not future.done() and time.monotonic() < end:
             self.spin(0.05)
         assert future.done() and future.result().success
+
+    def counter_log(self) -> str:
+        if self.counter.poll() is None:
+            return "the counter is running"
+        return f"the counter exited {self.counter.returncode}: {self.counter.stdout.read()[-1500:]}"
 
     def close(self) -> None:
         for p in (self.counter, self.lap):

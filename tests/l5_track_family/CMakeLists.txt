@@ -22,6 +22,12 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gap_follow_race_canary test_gap_follow_race_canary.py
     TIMEOUT 900
   )
+  # The 2026-11-16 indoor loop: race-2026-11-12 brakes there once the sim car has the real car's
+  # actuation (and not with the gym plant), race-2026-11-16 laps it with no brake. Five runs of
+  # about half a minute each.
+  ament_add_pytest_test(test_gap_follow_loop_canary test_gap_follow_loop_canary.py
+    TIMEOUT 900
+  )
   # The tracker on the LOCALISED pose (AMCL + EKF, sensor errors on): the configuration of the
   # real car, both directions on two 1 m lane tracks.
   ament_add_pytest_test(test_tracker_localised_canary test_tracker_localised_canary.py

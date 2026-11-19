@@ -339,12 +339,17 @@ class LapMemory:
     # -- an external lap source (camera, truth) ----------------------------------------------
 
     def on_lap_source_status(
-        self, t_arrival_s: float, state: str, laps: int, similarity: float | None
+        self,
+        t_arrival_s: float,
+        state: str,
+        laps: int,
+        similarity: float | None,
+        camera: dict[str, object] | None = None,
     ) -> None:
         """The source's own status with its arrival time (the camera's 1 Hz `/lap/status`): the
         ready decision and liveness only, never a lap."""
         if isinstance(self.gate, ExternalLapGate):
-            self.gate.on_source_status(t_arrival_s, state, laps, similarity)
+            self.gate.on_source_status(t_arrival_s, state, laps, similarity, camera)
 
     def on_lap_source_event(
         self, t_arrival_s: float, lap_no: int, t_cross_s: float

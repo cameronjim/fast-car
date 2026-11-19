@@ -161,6 +161,11 @@ class ExternalLapGate:
         self._dead_lap = False  # a gap above source_stale_s during the lap in progress
         self._ready = False
         self._ready_reason = "no source status yet"
+        # outside review of brief 51c: what the source says of its own camera (a counter that
+        # republishes `running` on a timer says nothing of whether images arrive). Keys of the last
+        # status only; none for a source that does not say (an older counter, a bag).
+        self._cam: dict[str, object] = {}
+        self._seq_prev: int | None = None
         # bookkeeping for the status
         self.confirmed = 0
         self.doubtful: list[dict[str, object]] = []
@@ -241,8 +246,32 @@ class ExternalLapGate:
         return max(0.0, now - self._status_t)
 
     @property
+    def camera_stale(self) -> bool:
+        """The source itself says its camera frames are stale (never true for a source that does
+        not say)."""
+        return self._cam.get("camera_fresh") is False
+
+    @property
     def source_alive(self) -> bool:
-        return self.status_age_s() <= self.cfg.source_stale_s
+        return self.status_age_s() <= self.cfg.source_stale_s and not self.camera_stale
+
+    def _camera_check(self) -> tuple[bool, str]:
+        """The source's own freshness: frames recent, wheel odometry recent, and the frame sequence
+        advanced since the status before. Nothing is asked of a status that carries none of it."""
+        cam = self._cam
+        if cam.get("camera_fresh") is False:
+            age = cam.get("frame_age_s")
+            when = f" (last frame {age:.1f} s ago)" if isinstance(age, float) else ""
+            return False, f"camera frames stale{when}"
+        if cam.get("odom_fresh") is False:
+            return False, "the lap counter's wheel odometry is stale"
+        seq = cam.get("frame_seq")
+        if isinstance(seq, int):
+            if self._seq_prev is None:
+                return False, "no camera frame progress seen yet (one status)"
+            if seq <= self._seq_prev:
+                return False, f"camera frame count not advancing ({seq} after {self._seq_prev})"
+        return True, ""
 
     def _ready_check(self) -> tuple[bool, str]:
         c = self.cfg
@@ -258,7 +287,7 @@ class ExternalLapGate:
         sim = self._status_sim
         if not math.isfinite(sim) or sim < c.ready_similarity_min - EPS:
             return False, f"similarity {sim:.2f} below {c.ready_similarity_min:.2f}"
-        return True, ""
+        return self._camera_check()
 
     @property
     def source_ready_now(self) -> bool:
@@ -283,7 +312,12 @@ class ExternalLapGate:
         self._note_dead()
 
     def on_source_status(
-        self, t_arrival_s: float, state: str, laps: int, similarity: float | None
+        self,
+        t_arrival_s: float,
+        state: str,
+        laps: int,
+        similarity: float | None,
+        camera: dict[str, object] | None = None,
     ) -> None:
         """A source status (the camera's 1 Hz `/lap/status`). Its content is only used for the
         ready decision and its arrival for liveness: never to place a crossing or count a lap."""
@@ -297,6 +331,9 @@ class ExternalLapGate:
         ):
             self._dead_lap = True
         self._now = max(self._now, float(t_arrival_s))
+        previous = self._cam.get("frame_seq")
+        self._seq_prev = previous if isinstance(previous, int) else None
+        self._cam = dict(camera or {})
         self._note_dead()
         self._status_t = float(t_arrival_s)
         self._status_state = str(state)
@@ -306,7 +343,7 @@ class ExternalLapGate:
         )
 
     def _note_dead(self) -> None:
-        if self._started and self.status_age_s() > self.cfg.source_stale_s:
+        if self._started and (self.status_age_s() > self.cfg.source_stale_s or self.camera_stale):
             self._dead_lap = True
 
     def _trace_status(self, t_arrival_s: float) -> None:
@@ -457,7 +494,7 @@ class ExternalLapGate:
             self._reject("duplicate")
             return None
         # the source is alive if it spoke within source_stale_s of this event
-        if self.status_age_s(t_arrival_s) > c.source_stale_s:
+        if self.status_age_s(t_arrival_s) > c.source_stale_s or self.camera_stale:
             self._dead_lap = True
         return self._close(t_cross_s, lap_no)
 
@@ -540,7 +577,7 @@ class ExternalLapGate:
         `overdue_factor` reference lengths with one confirmed lap) or the source is not alive."""
         if not self._started:
             return False
-        if self.status_age_s() > self.cfg.source_stale_s:
+        if self.status_age_s() > self.cfg.source_stale_s or self.camera_stale:
             return True
         return self.station_m > self._uncertain_after_m()
 
@@ -581,6 +618,11 @@ class ExternalLapGate:
             "source_status_age_at_start_s": self._status_age_at_start,
             "source_statuses_before_start": self._statuses_before_start,
             "source_status_gap_max_s": self._status_gap_max,
+            "source_camera_fresh": self._cam.get("camera_fresh"),
+            "source_frame_seq": self._cam.get("frame_seq"),
+            "source_reset_id": self._cam.get("reset_id"),
+            "source_odom_fresh": self._cam.get("odom_fresh"),
+            "source_frame_age_s": self._cam.get("frame_age_s"),
         }
 
 
@@ -603,6 +645,38 @@ def parse_event_json(data: str) -> tuple[int, float] | None:
     if lap is None or cross is None or not math.isfinite(lap) or lap != int(lap):
         return None
     return int(lap), cross
+
+
+def _count(value: object) -> int | None:
+    number = _number(value)
+    if number is None or not math.isfinite(number) or number != int(number):
+        return None
+    return int(number)
+
+
+def parse_status_camera(data: str) -> dict[str, object] | None:
+    """The freshness keys of a camera status (outside review of brief 51c): `camera_fresh` and
+    `odom_fresh` (booleans), `frame_seq`, `reset_id` and `frames_since_reset` (counts),
+    `frame_age_s` (a finite age). Keys that are missing or of the wrong type are left out, so a
+    status from an older counter gives `{}` and is read as before. None when it does not parse."""
+    try:
+        d = json.loads(data)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    out: dict[str, object] = {}
+    for key in ("camera_fresh", "odom_fresh"):
+        if isinstance(d.get(key), bool):
+            out[key] = d[key]
+    for key in ("frame_seq", "reset_id", "frames_since_reset"):
+        count = _count(d.get(key))
+        if count is not None:
+            out[key] = count
+    age = _number(d.get("frame_age_s"))
+    if age is not None and math.isfinite(age):
+        out["frame_age_s"] = age
+    return out
 
 
 def parse_status_json(data: str) -> tuple[str, int, float | None] | None:

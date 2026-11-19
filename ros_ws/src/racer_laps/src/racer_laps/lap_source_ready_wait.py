@@ -53,8 +53,18 @@ class ReadyWaiter:
     """`StartReadyGate` behind JSON messages and a log. `step(t)` returns None while waiting,
     else the exit code."""
 
-    def __init__(self, cfg: StartGateConfig, t0_s: float, log: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        cfg: StartGateConfig,
+        t0_s: float,
+        log: Callable[[str], None],
+        min_reset_id: int | None = None,
+    ) -> None:
         self.gate = StartReadyGate(cfg, t0_s)
+        #: The reset the counter acknowledged (outside review of brief 51c, finding 2): a status
+        #: that carries an older `source_reset_id`, or none, is not a ready status. None: no
+        #: condition (the launch could not learn the id).
+        self.min_reset_id = min_reset_id
         self._log = log
         self._last_reason: str | None = None
         self._last_status: Any = None
@@ -71,6 +81,17 @@ class ReadyWaiter:
         if body is not None and not isinstance(body, dict):
             self.malformed += 1
             body = None
+        if body is not None and self.min_reset_id is not None:
+            rid = body.get("source_reset_id")
+            if isinstance(rid, bool) or not isinstance(rid, int) or rid < self.min_reset_id:
+                body = {
+                    **body,
+                    "source_ready_now": False,
+                    "source_not_ready_reason": (
+                        f"status predates the counter's reset {self.min_reset_id} "
+                        f"(it carries reset {rid})"
+                    ),
+                }
         self._last_status = body
         self.gate.on_status(t_s, body if body is not None else {})
 
@@ -115,10 +136,12 @@ def main(
     rclpy.init(args=argv)
     node = rclpy.create_node("lap_source_ready_wait")
     node.declare_parameter("status_topic", "/pnp/lap/status")
+    node.declare_parameter("min_reset_id", 0)  # 0: none. It can only add a condition.
     topic = str(node.get_parameter("status_topic").value)
+    min_reset_id = int(node.get_parameter("min_reset_id").value) or None
     logger = node.get_logger()
     started = time.monotonic()
-    waiter = ReadyWaiter(gate_config or StartGateConfig(), 0.0, logger.info)
+    waiter = ReadyWaiter(gate_config or StartGateConfig(), 0.0, logger.info, min_reset_id)
 
     def now() -> float:
         return time.monotonic() - started

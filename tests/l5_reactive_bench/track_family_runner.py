@@ -397,17 +397,34 @@ class OracleStatusPublisher:
         self._ready_after_s = ready_after_s
         self._period_s = period_s
         self._due = -math.inf
+        self._samples = 0
         self.first_publish_s: float | None = None
 
+    def camera_keys(self) -> dict:
+        """The camera counter's freshness keys as the oracle can speak them (outside review of
+        brief 51c): the ground-truth samples seen so far are its images, so the sequence advances
+        while the simulator runs, in every phase, and the camera is always fresh."""
+        n = self._samples
+        return {
+            "camera": "fresh",
+            "camera_fresh": True,
+            "frame_seq": n,
+            "frame_age_s": 0.0,
+            "frames_since_reset": n,
+            "reset_id": 1,
+            "odom_age_s": 0.0,
+            "odom_fresh": True,
+        }
+
     def on_time(self, t_s: float, now_s: float, lap_first_status_s: float | None) -> None:
+        self._samples += 1
         if t_s < self._due:
             return
         self._due = t_s + self._period_s
         if self.first_publish_s is None:
             self.first_publish_s = now_s
-        self._publish_fn(
-            oracle_status_at(self._status_fn(), now_s, lap_first_status_s, self._ready_after_s)
-        )
+        body = {**self._status_fn(), **self.camera_keys()}
+        self._publish_fn(oracle_status_at(body, now_s, lap_first_status_s, self._ready_after_s))
 
 
 def refusal_result_keys(

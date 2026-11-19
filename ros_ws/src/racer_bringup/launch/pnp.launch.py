@@ -79,6 +79,7 @@ Options that are measurements, not part of the command path:
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -460,9 +461,11 @@ def camera_status_topic(lap_memory: bool, lap_source: str, lap_shadow: str) -> s
     return None
 
 
-def lap_source_ready_waiter(status_topic: str) -> ExecuteProcess:
+def lap_source_ready_waiter(status_topic: str, min_reset_id: int | None = None) -> ExecuteProcess:
     """The start gate's node: exits 0 when the lap node on `status_topic` has said the source is
-    ready on two consecutive statuses, 3 when it did not within 30 s (racer_laps/start_ready.py)."""
+    ready on two consecutive statuses, 3 when it did not within 30 s (racer_laps/start_ready.py).
+    With `min_reset_id` it ignores every status of an older counter reset."""
+    reset = ["-p", f"min_reset_id:={min_reset_id}"] if min_reset_id else []
     return ExecuteProcess(
         cmd=[
             "ros2",
@@ -472,6 +475,7 @@ def lap_source_ready_waiter(status_topic: str) -> ExecuteProcess:
             "--ros-args",
             "-p",
             f"status_topic:={status_topic}",
+            *reset,
         ],
         output="screen",
     )
@@ -494,8 +498,10 @@ class CameraStartChain:
         self.planner = planner
         self.status_topic = status_topic
         self.reset = reset
+        self._own_waiter = waiter is None
         self.waiter = waiter if waiter is not None else lap_source_ready_waiter(status_topic)
         self.reason: str | None = None
+        self.reset_id: int | None = None
 
     def capture_line(self, text: str) -> None:
         """Remember the waiter's last refusal line (its reason is the lap node's own)."""
@@ -503,6 +509,15 @@ class CameraStartChain:
             index = line.rfind(WAITER_LAST_LINE_PREFIX)
             if index >= 0:
                 self.reason = line[index + len(WAITER_LAST_LINE_PREFIX) :].strip()
+
+    def capture_reset_text(self, text: str) -> None:
+        """The reset call's answer carries `reset_id=N`: the counter's acknowledgement."""
+        found = re.findall(r"reset_id=(\d+)", text)
+        if found:
+            self.reset_id = int(found[-1])
+
+    def _capture_reset(self, event) -> None:
+        self.capture_reset_text(bytes(getattr(event, "text", b"")).decode(errors="replace"))
 
     def _capture(self, event) -> None:
         self.capture_line(bytes(getattr(event, "text", b"")).decode(errors="replace"))
@@ -522,6 +537,13 @@ class CameraStartChain:
                 msg="[pnp.launch.py] lap_counter_node is in the graph: resetting its reference"
             ),
             RegisterEventHandler(
+                OnProcessIO(
+                    target_action=self.reset,
+                    on_stdout=lambda event: self._capture_reset(event),
+                    on_stderr=lambda event: self._capture_reset(event),
+                )
+            ),
+            RegisterEventHandler(
                 OnProcessExit(
                     target_action=self.reset,
                     on_exit=lambda event, context: self.reset_exit(event.returncode),
@@ -533,7 +555,18 @@ class CameraStartChain:
     def reset_exit(self, code: int | None) -> list:
         if code != 0:
             return self.refuse(f"the counter reset failed or timed out (exit code {code})")
-        return self.start_waiter()
+        notes: list = []
+        if self.reset_id is not None and self._own_waiter:
+            # the counter acknowledged reset N: only statuses of reset N or later count
+            self.waiter = lap_source_ready_waiter(self.status_topic, self.reset_id)
+        elif self.reset_id is None:
+            notes.append(
+                LogInfo(
+                    msg="[pnp.launch.py] WARN: the reset call named no reset_id (an older "
+                    "lap_counter_node?): statuses are not tied to this reset"
+                )
+            )
+        return [*notes, *self.start_waiter()]
 
     def start_waiter(self) -> list:
         return [

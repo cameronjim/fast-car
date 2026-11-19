@@ -16,7 +16,12 @@ Publishes
   /lap/event   std_msgs/String  JSON, one per counted lap: lap, lap_time_s, best_lap_s,
                                 peak_similarity, crossing_time_s, distance_m, heading_turns
   /lap/status  std_msgs/String  JSON at status_period_s (1 s): state, similarity, laps, last_lap_s,
-                                best_lap_s, armed, speed_mps, distance_m, heading_turns, odom_seen
+                                best_lap_s, armed, speed_mps, distance_m, heading_turns, odom_seen,
+                                and what it knows of its inputs (outside review of brief 51c):
+                                camera (fresh, stale, no_frames), camera_fresh, frame_seq (advances
+                                only with processed images), frame_age_s, frames_since_reset,
+                                reset_id, odom_age_s, odom_fresh. The status repeats on a timer
+                                whether or not images arrive: these keys tell a dead camera apart.
 Serves
   /lap_counter/reset  std_srvs/Trigger  forget the reference and the count; the next frame
                       becomes the new reference (call it with the car at the start line).
@@ -133,6 +138,12 @@ class LapCounterNode(Node):
             "A bright window still open after this long is closed at its peak.",
         )
         declare(
+            "frame_stale_s",
+            _DEFAULTS.frame_stale_s,
+            "A camera whose last frame, or wheel odometry whose last sample, is older than this "
+            "is reported stale in /lap/status.",
+        )
+        declare(
             "min_reference_std",
             _DEFAULTS.min_reference_std,
             "Refuse a reference frame whose pixel std (0..255) is below this (blank frame).",
@@ -152,6 +163,7 @@ class LapCounterNode(Node):
             blur=bool(get("blur")),
             peak_window_max_s=float(get("peak_window_max_s")),
             min_reference_std=float(get("min_reference_std")),
+            frame_stale_s=float(get("frame_stale_s")),
         )
         cfg.validate()  # bad thresholds are a hard refusal, not a warning
         self._reduction = int(get("decode_reduction"))
@@ -232,12 +244,16 @@ class LapCounterNode(Node):
     def _on_reset(self, _request, response):
         self._counter.reset(capture_next_frame=True)
         response.success = True
-        response.message = "reset: the next frame becomes the reference, laps back to 0"
+        response.message = (
+            "reset: the next frame becomes the reference, laps back to 0 "
+            f"(reset_id={self._counter.reset_id})"
+        )
         self.get_logger().info(response.message)
         return response
 
     def _publish_status(self) -> None:
-        self._status_pub.publish(String(data=_json(self._counter.status())))
+        status = {**self._counter.status(), **self._counter.freshness(self._now_s())}
+        self._status_pub.publish(String(data=_json(status)))
 
     def _log_stats(self) -> None:
         window = max(time.monotonic() - self._last_stats_s, 1e-6)

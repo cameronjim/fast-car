@@ -222,6 +222,9 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:                     6 MB/s per camera, 9 GB in 25 idle minutes on 2026-11-11) and not the raw
 #:                     rgb8 image_raw (about 166 MB/s per camera at 720p60); those stay live for
 #:                     Foxglove, the racer app and the lap counter.
+#:   /safety/cycle     safety_node's per-cycle timing record (racer_msgs/SafetyCycle), published
+#:                     only while safety_cycle_record is true (the default); skipped by the regex
+#:                     when absent. Instrumentation, never an input of the gate
 #:   /gap_follow/status
 #:                     gap_follow_node's 1 Hz JSON: scan-to-command latency (p50, p99, max over the
 #:                     last 200 scans), the CPU cost of each scan's perception half, the speed
@@ -249,7 +252,7 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:   /map              slam_toolbox's map as it grew (mapping:=true), or map_server's latched
 #:                     copy (localization:=true); about 1 Hz, a few hundred kB each
 _RECORDED_TOPIC_REGEX = (
-    r"^(/drive_raw|/drive|/safety/events|/teleop/cmd_vel|/telemetry/.*|/scan"
+    r"^(/drive_raw|/drive|/safety/events|/safety/cycle|/teleop/cmd_vel|/telemetry/.*|/scan"
     r"|/odom/wheel|/telemetry/vesc/.*|/vesc/sensors/core|/vesc/sensors/imu|/vesc/sensors/imu/raw|/park_node/status"
     r"|/gap_follow/status|/tracker/command|/policy/status|/policy/events"
     r"|/camera/[^/]+/record/compressed|/rosout|/parameter_events"
@@ -685,11 +688,29 @@ def generate_launch_description() -> LaunchDescription:
         description="Map yaml for localization:=true (a slam_toolbox save_map output).",
     )
 
+    safety_cycle_record_arg = DeclareLaunchArgument(
+        "safety_cycle_record",
+        default_value="true",
+        description=(
+            "Pass publish_cycle_record to safety_node AT CONSTRUCTION (the node reads it once, "
+            "so `ros2 param set` at runtime cannot create the publisher). With true the node "
+            "publishes a racer_msgs/SafetyCycle on /safety/cycle once per gate cycle, which the "
+            "recorder captures. Instrumentation only: /drive and /safety/events are "
+            "bit-identical either way (racer_safety test/ab)."
+        ),
+    )
     safety_node = Node(
         package="racer_safety",
         executable="safety_node",
         name="safety_node",
         output="screen",
+        parameters=[
+            {
+                "publish_cycle_record": ParameterValue(
+                    LaunchConfiguration("safety_cycle_record"), value_type=bool
+                ),
+            }
+        ],
     )
     pwm_output_node = Node(
         package="racer_drivers",
@@ -818,6 +839,7 @@ def generate_launch_description() -> LaunchDescription:
             throttle_pwmchip_arg,
             throttle_pwm_channel_arg,
             drive_timeout_s_arg,
+            safety_cycle_record_arg,
             record_arg,
             bag_dir_arg,
             bag_storage_arg,

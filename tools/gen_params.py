@@ -41,6 +41,11 @@ import yaml
 DEFAULT_PARAMS_PATH = Path("config/vehicle_params.yaml")
 DEFAULT_SCHEMA_PATH = Path("config/vehicle_params.schema.json")
 
+# The generated C header stores a string in a fixed char array. A string field whose schema gives
+# no maxLength is sized to this many characters, so validation enforces it as the effective maxLength
+# (otherwise a schema-valid value could pass validation and then fail in codegen).
+DEFAULT_STRING_MAX_LENGTH = 63
+
 ROOT_TYPE_NAME = "VehicleParams"
 ROOT_INSTANCE_NAME = "VEHICLE_PARAMS"
 
@@ -68,12 +73,27 @@ def load_schema_file(path: Path) -> dict:
         return json.load(f)
 
 
+def _with_effective_max_lengths(node: Any) -> Any:
+    """A copy of the schema with maxLength DEFAULT_STRING_MAX_LENGTH on every string schema that has
+    none (an `enum` is bounded already)."""
+    if isinstance(node, list):
+        return [_with_effective_max_lengths(n) for n in node]
+    if not isinstance(node, dict):
+        return node
+    out = {k: _with_effective_max_lengths(v) for k, v in node.items()}
+    kinds = out.get("type")
+    kinds = [kinds] if isinstance(kinds, str) else (kinds if isinstance(kinds, list) else [])
+    if "string" in kinds and "maxLength" not in out and "enum" not in out:
+        out["maxLength"] = DEFAULT_STRING_MAX_LENGTH
+    return out
+
+
 def validate_params(params: Any, schema: dict) -> None:
     """Validate `params` against `schema`. Raises ParamsValidationError with a specific,
     single-error message on the first (best-match) violation. Raises nothing on success."""
     validator_cls = jsonschema.validators.validator_for(schema)
     validator_cls.check_schema(schema)
-    validator = validator_cls(schema, format_checker=jsonschema.FormatChecker())
+    validator = validator_cls(_with_effective_max_lengths(schema), format_checker=jsonschema.FormatChecker())
     errors = list(validator.iter_errors(params))
     if not errors:
         return
@@ -185,7 +205,7 @@ def build_registry(schema: dict) -> tuple[dict[str, RecordType], list[str]]:
                 nullable,
                 units,
                 sign_convention,
-                max_length=resolved.get("maxLength", 63),
+                max_length=resolved.get("maxLength", DEFAULT_STRING_MAX_LENGTH),
             )
 
         if kind in ("number", "integer"):

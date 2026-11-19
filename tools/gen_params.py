@@ -93,7 +93,9 @@ def validate_params(params: Any, schema: dict) -> None:
     single-error message on the first (best-match) violation. Raises nothing on success."""
     validator_cls = jsonschema.validators.validator_for(schema)
     validator_cls.check_schema(schema)
-    validator = validator_cls(_with_effective_max_lengths(schema), format_checker=jsonschema.FormatChecker())
+    validator = validator_cls(
+        _with_effective_max_lengths(schema), format_checker=jsonschema.FormatChecker()
+    )
     errors = list(validator.iter_errors(params))
     if not errors:
         return

@@ -242,6 +242,40 @@ def test_nothing_in_the_chain_names_drive(monkeypatch, tmp_path) -> None:
     assert "/drive" not in text and "drive_raw" not in text
 
 
+def test_the_waiter_is_told_the_reset_id_the_counter_acknowledged(monkeypatch, tmp_path) -> None:
+    """Outside review finding 2: reset acknowledged, then fresh frames, then ready, then planner. The
+    reset call's answer carries `reset_id=N`; the waiter ignores every status of an older reset."""
+    m = _module()
+    assert "min_reset_id:=4" in _cmd_text(m.lap_source_ready_waiter("/pnp/lap/status", 4))
+    assert "min_reset_id" not in _cmd_text(m.lap_source_ready_waiter("/pnp/lap/status"))
+    chain = _gate_of(_camera_actions(m, monkeypatch, tmp_path)).chain
+    chain.capture_reset_text(
+        "response:\nstd_srvs.srv.Trigger_Response(success=True, message='reset: the next frame "
+        "becomes the reference, laps back to 0 (reset_id=3)')\n"
+    )
+    out = chain.reset_exit(0)
+    waiter = next(x for x in out if type(x).__name__ == "ExecuteProcess")
+    assert "min_reset_id:=3" in _cmd_text(waiter) and chain.planner not in out
+    assert chain.waiter is waiter
+
+
+def test_a_reset_that_names_no_id_still_waits_and_says_so(monkeypatch, tmp_path) -> None:
+    m = _module()
+    chain = _gate_of(_camera_actions(m, monkeypatch, tmp_path)).chain
+    out = chain.reset_exit(0)
+    waiter = next(x for x in out if type(x).__name__ == "ExecuteProcess")
+    assert "min_reset_id" not in _cmd_text(waiter)
+    assert "WARN" in _text(out) and "reset_id" in _text(out)
+
+
+def test_the_reset_call_output_is_captured_for_its_id(monkeypatch, tmp_path) -> None:
+    m = _module()
+    chain = _gate_of(_camera_actions(m, monkeypatch, tmp_path)).chain
+    out = chain.after_counter()
+    assert any(type(x).__name__ == "RegisterEventHandler" for x in out)
+    assert sum(type(x).__name__ == "RegisterEventHandler" for x in out) >= 2  # exit and output
+
+
 # -- G6: the real launch machinery with a fake lap node -------------------------------------------------
 
 rclpy = pytest.importorskip("rclpy")

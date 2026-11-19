@@ -436,6 +436,23 @@ def test_cpp_render_value_rejects_null_for_non_nullable(schema):
         gen_params._cpp_render_value(shape, None, registry)
 
 
+def test_unbounded_pattern_string_over_the_effective_limit_is_refused_by_validation(
+    full_params, schema
+):
+    # Regression: Hypothesis found schema_version '0.0.' + 60 zeros (64 characters). The schema
+    # gives schema_version a pattern but no maxLength, so validation passed it and codegen then
+    # refused it. Validation and codegen must agree.
+    bad = copy.deepcopy(full_params)
+    bad["meta"]["schema_version"] = "0.0." + "0" * 60
+    assert len(bad["meta"]["schema_version"]) == gen_params.DEFAULT_STRING_MAX_LENGTH + 1
+    with pytest.raises(gen_params.ParamsValidationError, match="maxLength"):
+        gen_params.validate_params(bad, schema)
+    ok = copy.deepcopy(full_params)
+    ok["meta"]["schema_version"] = "0.0." + "0" * 59
+    gen_params.validate_params(ok, schema)
+    gen_params.generate_all(ok, schema)
+
+
 def test_c_header_rejects_string_over_max_length(full_params, schema):
     bad = copy.deepcopy(full_params)
     bad["tires"]["compound_id"] = "x" * 1000
@@ -608,6 +625,10 @@ def _schema_leaf_strategy(node: dict, root: dict):
 
     if "pattern" in resolved:
         strat = st.from_regex(resolved["pattern"], fullmatch=True)
+        if resolved.get("type") == "string":
+            # a string with no maxLength is held to the generator's effective bound
+            limit = resolved.get("maxLength", gen_params.DEFAULT_STRING_MAX_LENGTH)
+            strat = strat.filter(lambda s: len(s) <= limit)
     elif resolved.get("format") == "date":
         strat = st.dates(
             min_value=datetime.date(2000, 1, 1), max_value=datetime.date(2100, 1, 1)
@@ -632,7 +653,7 @@ def _schema_leaf_strategy(node: dict, root: dict):
         # schema validation on almost every draw for a field like this.
         strat = st.sampled_from(resolved["enum"])
     elif kind == "string":
-        max_len = resolved.get("maxLength", 63)
+        max_len = resolved.get("maxLength", gen_params.DEFAULT_STRING_MAX_LENGTH)
         strat = st.text(
             alphabet=st.characters(min_codepoint=97, max_codepoint=122),
             min_size=1,

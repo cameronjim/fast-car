@@ -773,3 +773,56 @@ def test_the_flag_clears_on_a_new_start() -> None:
 def test_status_has_the_keys_before_the_start() -> None:
     s = Rig(start=False).gate.status()
     assert s["reference_suspect"] is False and s["reference_suspect_lap"] is None
+
+
+# -- brief 51c design 4: three status keys that read state and feed nothing -------------------------
+
+
+def test_the_start_diagnostic_keys_exist_before_the_start() -> None:
+    s = Rig(start=False, status_period_s=None, status_at_start=False).gate.status()
+    assert math.isnan(s["source_status_age_at_start_s"])  # type: ignore[arg-type]
+    assert s["source_statuses_before_start"] == 0
+    assert math.isnan(s["source_status_gap_max_s"])  # type: ignore[arg-type]
+
+
+def test_statuses_before_the_start_are_counted_and_the_age_at_the_start_is_kept() -> None:
+    rig = Rig(start=False, status_period_s=None, status_at_start=False)
+    for t in (0.0, 1.0, 2.0):
+        rig.gate.on_source_status(t, "running", 0, 1.0)
+    rig.drive_until(2.4)
+    assert rig.gate.set_start(rig.t)
+    s = rig.gate.status()
+    assert s["source_statuses_before_start"] == 3
+    assert s["source_status_age_at_start_s"] == pytest.approx(0.4, abs=1e-9)
+    # a status after the start is not "before the start" and the age at the start does not move
+    rig.gate.on_source_status(3.0, "running", 0, 1.0)
+    s = rig.gate.status()
+    assert s["source_statuses_before_start"] == 3
+    assert s["source_status_age_at_start_s"] == pytest.approx(0.4, abs=1e-9)
+
+
+def test_a_start_with_no_status_has_an_infinite_age_and_a_zero_count() -> None:
+    rig = Rig(start=False, status_period_s=None, status_at_start=False)
+    rig.drive_until(1.0)
+    assert rig.gate.set_start(rig.t)
+    s = rig.gate.status()
+    assert s["source_statuses_before_start"] == 0
+    assert s["source_status_age_at_start_s"] == math.inf
+
+
+def test_the_largest_gap_between_statuses_since_the_start() -> None:
+    rig = Rig(start=False, status_period_s=None, status_at_start=False)
+    rig.gate.on_source_status(0.0, "running", 0, 1.0)
+    rig.drive_until(0.5)
+    assert rig.gate.set_start(rig.t)
+    for t in (1.0, 3.5, 4.5):
+        rig.gate.on_source_status(t, "running", 0, 1.0)
+    assert rig.gate.status()["source_status_gap_max_s"] == pytest.approx(2.5, abs=1e-9)
+    rig.gate.on_source_status(5.0, "running", 0, 1.0)  # a shorter gap does not lower it
+    assert rig.gate.status()["source_status_gap_max_s"] == pytest.approx(2.5, abs=1e-9)
+
+
+def test_a_non_finite_status_time_moves_no_diagnostic() -> None:
+    rig = Rig(start=False, status_period_s=None, status_at_start=False)
+    rig.gate.on_source_status(math.nan, "running", 0, 1.0)
+    assert rig.gate.status()["source_statuses_before_start"] == 0

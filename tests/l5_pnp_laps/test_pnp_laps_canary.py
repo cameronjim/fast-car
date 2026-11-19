@@ -435,3 +435,67 @@ def test_a_dropped_truth_crossing_makes_the_merged_lap_doubtful_and_the_cap_does
     assert after, series
     assert after[-1] <= system[1]["cap_mps"] + 1e-6, (after[-1], system[1]["cap_mps"])
     assert result["wall_contacts"] == 0
+
+
+def run_truth_ready(tmp_path: Path, domain: int, ready_after_s: str, laps: int, **kw) -> dict:
+    return run_runner(
+        tmp_path,
+        domain=domain,
+        mode="v0",
+        laps=laps,
+        duration_s=400.0,
+        track_params=P1_STADIUM,
+        extra_flags=[
+            "--lap-source",
+            "truth",
+            "--lap-truth-faults-json",
+            "{}",
+            "--lap-truth-ready-after-s",
+            ready_after_s,
+        ],
+        **kw,
+    )
+
+
+def test_d1_a_source_that_is_ready_late_holds_the_planner_and_the_run_starts_ready(
+    tmp_path, capsys
+):
+    """Brief 51c, D1 (the red test of item 3): P1, ccw, seed 11, condition c, the oracle not ready
+    until 6 s after the lap node's first status, which the as-built runner (planner spawned when
+    the lap node answers, DRIVING about 1 s later) turned into a run that started not ready
+    (lap 1 doubtful for `ready` and `alive`, laps 2 and 3 for `ready`, the cap at the lap-1 cap).
+    Now the start gate holds the planner: its first DRIVING report is after the gate's start, the
+    lap node started ready and the judged laps are all confirmed."""
+    result = run_truth_ready(tmp_path, domain=89, ready_after_s="6.0", laps=TRUTH_LAPS)
+    trace = result["start_trace"]
+    status = result["lap_status"]
+    with capsys.disabled():
+        print(f"\nl5_pnp_laps D1 start trace {trace} doubtful {status.get('doubtful_laps')}")
+    assert trace["gate_verdict"] == "start"
+    assert trace["gate_start_s"] is not None and trace["driving_first_s"] > trace["gate_start_s"]
+    assert trace["planner_spawn_s"] >= trace["gate_start_s"]
+    # the oracle said ready 6 s after the lap node's first status: the gate cannot start before
+    assert trace["gate_start_s"] >= trace["lap_node_first_status_s"] + 6.0
+    assert result["source_ready"] is True and status["source_ready"] is True
+    assert status["confirmed_laps"] >= TRUTH_JUDGED
+    assert not [d for d in status["doubtful_laps"] if d["lap"] <= TRUTH_JUDGED]
+    caps = [e["cap_mps"] for e in result["system_lap_events"]]
+    assert caps[0] == pytest.approx(LAP1_CAP_MPS) and max(caps) > caps[0], caps
+
+
+def test_r_a_source_that_is_never_ready_is_refused_and_the_car_never_moves(tmp_path, capsys):
+    """Brief 51c, condition r: the oracle is never ready. The starter refuses within 35 s of sim
+    time of the lap node's first status, the planner process is never created, nothing is
+    published on /drive_raw, the car moves at most 0.05 m, and the refusal names the reason."""
+    result = run_truth_ready(tmp_path, domain=90, ready_after_s="inf", laps=1, check_validity=False)
+    trace = result["start_trace"]
+    refusal = result["start_refusal"]
+    with capsys.disabled():
+        print(f"\nl5_pnp_laps r refusal {refusal} trace {trace}")
+    assert result["stopped_because"] == "start_refused"
+    assert trace["gate_verdict"] == "refuse" and trace["planner_spawn_s"] is None
+    assert refusal["reason"] and refusal["reason"] == trace["gate_reason"]
+    assert refusal["refused_at_s"] - trace["lap_node_first_status_s"] <= 35.0
+    assert result["drive_raw_messages"] == 0
+    assert result["distance_m"] <= 0.05
+    assert result["wall_contacts"] == 0

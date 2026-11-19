@@ -79,6 +79,7 @@ Options that are measurements, not part of the command path:
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -93,7 +94,7 @@ from launch.actions import (
     RegisterEventHandler,
     TimerAction,
 )
-from launch.event_handlers import OnProcessExit
+from launch.event_handlers import OnProcessExit, OnProcessIO
 from launch.events import Shutdown
 from launch.launch_context import LaunchContext
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -130,6 +131,10 @@ LAP_COUNTER_REFUSAL = (
     "refusing to drive: require_lap_counter is true and no lap_counter_node is in the graph"
 )
 LAP_COUNTER_RESET_TIMEOUT_S = 30
+#: The last log line of `racer_laps`' lap_source_ready_wait on a refusal is this and the reason (a
+#: test pins it to the waiter's own constant).
+WAITER_LAST_LINE_PREFIX = "lap source not ready: "
+CAMERA_REFUSAL = "refusing to drive: the camera lap source is not ready:"
 LAP_COUNTER_OPENCV_EXIT = 3
 DESKEW_NODE_NAME = "scan_deskew_node"
 DESKEW_TOPIC = "/pnp/scan_deskewed"
@@ -442,8 +447,169 @@ def lap_counter_reset_action() -> ExecuteProcess:
     )
 
 
-def require_counter_gate(planner: Node, wait_s: float = LAP_COUNTER_GATE_S, clock=time.monotonic):
-    """The action that starts `planner` only once `lap_counter_node` is in the graph.
+def camera_status_topic(lap_memory: bool, lap_source: str, lap_shadow: str) -> str | None:
+    """The status topic of the lap node of this launch that has the camera source (brief 51c): the
+    primary's `/pnp/lap/status` with `lap_source:=camera`, else the shadow's with
+    `lap_shadow:=camera`, else None (no camera lap node: no start gate). Without lap memory there
+    is no lap node at all."""
+    if not lap_memory:
+        return None
+    if lap_source == "camera":
+        return "/pnp/lap/status"
+    if lap_shadow == "camera":
+        return f"{LAP_SHADOW_PREFIX}/status"
+    return None
+
+
+def lap_source_ready_waiter(status_topic: str, min_reset_id: int | None = None) -> ExecuteProcess:
+    """The start gate's node: exits 0 when the lap node on `status_topic` has said the source is
+    ready on two consecutive statuses, 3 when it did not within 30 s (racer_laps/start_ready.py).
+    With `min_reset_id` it ignores every status of an older counter reset."""
+    reset = ["-p", f"min_reset_id:={min_reset_id}"] if min_reset_id else []
+    return ExecuteProcess(
+        cmd=[
+            "ros2",
+            "run",
+            "racer_laps",
+            "lap_source_ready_wait",
+            "--ros-args",
+            "-p",
+            f"status_topic:={status_topic}",
+            *reset,
+        ],
+        output="screen",
+    )
+
+
+class CameraStartChain:
+    """The planner of a launch with a camera lap node starts only at the end of this chain
+    (brief 51c, D10-P0): the counter is in the graph (the caller's gate), the reset call exited 0,
+    `lap_source_ready_wait` exited 0, then the planner. Any other exit is one ERROR line starting
+    "refusing to drive: the camera lap source is not ready:" and a shutdown, the planner never
+    started. A method per step, so that each is a plain function of an exit code."""
+
+    def __init__(
+        self,
+        planner: Node,
+        status_topic: str,
+        reset: ExecuteProcess | None = None,
+        waiter: ExecuteProcess | None = None,
+    ) -> None:
+        self.planner = planner
+        self.status_topic = status_topic
+        self.reset = reset
+        self._own_waiter = waiter is None
+        self.waiter = waiter if waiter is not None else lap_source_ready_waiter(status_topic)
+        self.reason: str | None = None
+        self.reset_id: int | None = None
+
+    def capture_line(self, text: str) -> None:
+        """Remember the waiter's last refusal line (its reason is the lap node's own)."""
+        for line in text.splitlines():
+            index = line.rfind(WAITER_LAST_LINE_PREFIX)
+            if index >= 0:
+                self.reason = line[index + len(WAITER_LAST_LINE_PREFIX) :].strip()
+
+    def capture_reset_text(self, text: str) -> None:
+        """The reset call's answer carries `reset_id=N`: the counter's acknowledgement."""
+        found = re.findall(r"reset_id=(\d+)", text)
+        if found:
+            self.reset_id = int(found[-1])
+
+    def _capture_reset(self, event) -> None:
+        self.capture_reset_text(bytes(getattr(event, "text", b"")).decode(errors="replace"))
+
+    def _capture(self, event) -> None:
+        self.capture_line(bytes(getattr(event, "text", b"")).decode(errors="replace"))
+
+    def refuse(self, reason: str) -> list:
+        return [
+            LogInfo(msg=f"[pnp.launch.py] ERROR: {CAMERA_REFUSAL} {reason}"),
+            EmitEvent(event=Shutdown(reason=f"{CAMERA_REFUSAL} {reason}")),
+        ]
+
+    def after_counter(self) -> list:
+        """The counter is in the graph: the reset call, or the waiter when this launch makes none."""
+        if self.reset is None:
+            return self.start_waiter()
+        return [
+            LogInfo(
+                msg="[pnp.launch.py] lap_counter_node is in the graph: resetting its reference"
+            ),
+            RegisterEventHandler(
+                OnProcessIO(
+                    target_action=self.reset,
+                    on_stdout=lambda event: self._capture_reset(event),
+                    on_stderr=lambda event: self._capture_reset(event),
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=self.reset,
+                    on_exit=lambda event, context: self.reset_exit(event.returncode),
+                )
+            ),
+            self.reset,
+        ]
+
+    def reset_exit(self, code: int | None) -> list:
+        if code != 0:
+            return self.refuse(f"the counter reset failed or timed out (exit code {code})")
+        notes: list = []
+        if self.reset_id is not None and self._own_waiter:
+            # the counter acknowledged reset N: only statuses of reset N or later count
+            self.waiter = lap_source_ready_waiter(self.status_topic, self.reset_id)
+        elif self.reset_id is None:
+            notes.append(
+                LogInfo(
+                    msg="[pnp.launch.py] WARN: the reset call named no reset_id (an older "
+                    "lap_counter_node?): statuses are not tied to this reset"
+                )
+            )
+        return [*notes, *self.start_waiter()]
+
+    def start_waiter(self) -> list:
+        return [
+            LogInfo(
+                msg=f"[pnp.launch.py] waiting for the lap node on {self.status_topic} to say the "
+                "source is ready, the planner is not started yet"
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=self.waiter,
+                    on_exit=lambda event, context: self.waiter_exit(event.returncode),
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessIO(
+                    target_action=self.waiter,
+                    on_stdout=lambda event: self._capture(event),
+                    on_stderr=lambda event: self._capture(event),
+                )
+            ),
+            self.waiter,
+        ]
+
+    def waiter_exit(self, code: int | None) -> list:
+        if code != 0:
+            return self.refuse(
+                self.reason or f"lap_source_ready_wait ended without ready (exit code {code})"
+            )
+        return [
+            LogInfo(msg="[pnp.launch.py] the lap source is ready: starting the planner"),
+            self.planner,
+        ]
+
+
+def require_counter_gate(
+    planner: Node,
+    wait_s: float = LAP_COUNTER_GATE_S,
+    clock=time.monotonic,
+    chain: CameraStartChain | None = None,
+):
+    """The action that starts `planner` only once `lap_counter_node` is in the graph. With a
+    `chain` (a camera lap node, brief 51c) it hands over to `chain.after_counter()` at that point
+    and the planner waits for the rest of the chain.
 
     Polls (a short probe, then a one second timer) for up to `wait_s`; if the counter never
     appears it logs the refusal and shuts the launch down. The planner, the only publisher of
@@ -453,6 +619,8 @@ def require_counter_gate(planner: Node, wait_s: float = LAP_COUNTER_GATE_S, cloc
     def gate(context: LaunchContext):
         started = state.setdefault("t0", clock())
         if lap_counter_in_graph(LAP_COUNTER_GATE_PROBE_S):
+            if chain is not None:
+                return chain.after_counter()
             return [
                 LogInfo(
                     msg="[pnp.launch.py] lap_counter_node is in the graph: starting the planner"
@@ -468,7 +636,9 @@ def require_counter_gate(planner: Node, wait_s: float = LAP_COUNTER_GATE_S, cloc
             TimerAction(period=LAP_COUNTER_GATE_PERIOD_S, actions=[OpaqueFunction(function=gate)])
         ]
 
-    return OpaqueFunction(function=gate)
+    action = OpaqueFunction(function=gate)
+    action.chain = chain  # type: ignore[attr-defined]  # for the tests: the held-back planner
+    return action
 
 
 def _make_actions(context: LaunchContext) -> list:
@@ -507,7 +677,10 @@ def _make_actions(context: LaunchContext) -> list:
             raise RuntimeError("pnp.launch.py: lap_shadow needs lap_memory:=true")
     # D on the camera source depends on the counter being there: the same requirement as
     # require_lap_counter (refusal wording, and the planner waits for the counter)
-    if lap_memory and lap_source == "camera":
+    camera_topic = camera_status_topic(lap_memory, lap_source, lap_shadow)
+    if camera_topic is not None:
+        # brief 51c: a camera lap node (primary or shadow) needs the counter, and the planner
+        # waits for the counter, the reset and the lap node's ready statuses (CameraStartChain)
         require_counter = True
     v_lap1_text = arg("v_lap1_mps")
     v_lap1 = float(v_lap1_text) if v_lap1_text else None
@@ -548,7 +721,7 @@ def _make_actions(context: LaunchContext) -> list:
         for node, name in ((perception, "track_perception_node"), (planner, "mppi_planner_node"))
     ]
     # require_lap_counter with the counter started here: the planner waits for it (gate below)
-    gated = require_counter and lap_counter
+    gated = (require_counter and lap_counter) or camera_topic is not None
     driver = [perception] if gated else [perception, planner]
     actions = [*driver, *stop_all, *[LogInfo(msg=f"[pnp.launch.py] {m}") for m in log]]
     if deskew_node is not None:
@@ -636,9 +809,16 @@ def _make_actions(context: LaunchContext) -> list:
             )
         else:
             actions += lap_counter_actions(require_counter)
-        actions.append(lap_counter_reset_action())
-        if gated:
-            actions.append(require_counter_gate(planner))
+        if camera_topic is None:
+            actions.append(lap_counter_reset_action())
+    chain = None
+    if camera_topic is not None:
+        # the reset call is the chain's second step, not a call at launch
+        chain = CameraStartChain(
+            planner, camera_topic, reset=lap_counter_reset_action() if lap_counter else None
+        )
+    if gated:
+        actions.append(require_counter_gate(planner, chain=chain))
     return actions
 
 

@@ -17,5 +17,6 @@ collect_ignore = (
         "test_gate_v3_properties.py",
         "test_gate_v3e_properties.py",
         "test_lap_length.py",
+        "test_start_ready_properties.py",
     ]
 )

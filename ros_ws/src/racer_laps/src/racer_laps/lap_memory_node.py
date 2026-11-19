@@ -53,6 +53,7 @@ from racer_laps.external_gate import (
     EXTERNAL_SOURCES,
     ExternalConfig,
     parse_event_json,
+    parse_status_camera,
     parse_status_json,
 )
 from racer_laps.gate import GateConfig
@@ -632,7 +633,9 @@ class LapMemoryNode(Node):
             self.get_logger().warn("a lap source status did not parse or lacks a field: dropped")
             return
         state, laps, similarity = parsed
-        self._mem.on_lap_source_status(self._now_s(), state, laps, similarity)
+        self._mem.on_lap_source_status(
+            self._now_s(), state, laps, similarity, parse_status_camera(msg.data)
+        )
         self._log_ready_change()
 
     def _tick(self) -> None:

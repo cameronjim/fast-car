@@ -64,6 +64,9 @@ import pnp_tick_summary as pts
 import reactive_bench_runner as base
 from truth_lap_source import FaultPlan, TruthLapSource
 
+sys.path.insert(0, str(REPO_ROOT / "ros_ws" / "src" / "racer_laps" / "src"))
+from racer_laps.start_ready import StartGateConfig, StartReadyGate
+
 TRACKS = (
     "lane_square",
     "lane_round",
@@ -367,6 +370,132 @@ def registered_truth(
     }
 
 
+def oracle_status_at(
+    base: dict, now_s: float, lap_first_status_s: float | None, ready_after_s: float
+) -> dict:
+    """What the oracle's status says at node time `now_s` (brief 51c): until `ready_after_s`
+    seconds after the runner received the lap node's first status it says `waiting` with a
+    similarity of 0.0 (the rest of the status is the oracle's own); then, and always with a delay
+    of 0, `base` as it is. `inf` never becomes ready. This is how the battery exercises the start
+    gate."""
+    if ready_after_s == 0.0:
+        return base
+    if lap_first_status_s is None or now_s < lap_first_status_s + ready_after_s:
+        return {**base, "state": "waiting", "similarity": 0.0}
+    return base
+
+
+class OracleStatusPublisher:
+    """The oracle's status, once a second of ground-truth time from the first sample it is fed,
+    in every phase of the runner: the runner calls `on_time` from its ground-truth odometry
+    callback, as brief 51 section 4 said (brief 51c: the first build fed it from the main loop,
+    which begins after the planner's first /drive_raw)."""
+
+    def __init__(self, status_fn, publish_fn, ready_after_s: float = 0.0, period_s: float = 1.0):
+        self._status_fn = status_fn
+        self._publish_fn = publish_fn
+        self._ready_after_s = ready_after_s
+        self._period_s = period_s
+        self._due = -math.inf
+        self._samples = 0
+        self.first_publish_s: float | None = None
+
+    def camera_keys(self) -> dict:
+        """The camera counter's freshness keys as the oracle can speak them (outside review of
+        brief 51c): the ground-truth samples seen so far are its images, so the sequence advances
+        while the simulator runs, in every phase, and the camera is always fresh."""
+        n = self._samples
+        return {
+            "camera": "fresh",
+            "camera_fresh": True,
+            "frame_seq": n,
+            "frame_age_s": 0.0,
+            "frames_since_reset": n,
+            "reset_id": 1,
+            "odom_age_s": 0.0,
+            "odom_fresh": True,
+        }
+
+    def on_time(self, t_s: float, now_s: float, lap_first_status_s: float | None) -> None:
+        self._samples += 1
+        if t_s < self._due:
+            return
+        self._due = t_s + self._period_s
+        if self.first_publish_s is None:
+            self.first_publish_s = now_s
+        body = {**self._status_fn(), **self.camera_keys()}
+        self._publish_fn(oracle_status_at(body, now_s, lap_first_status_s, self._ready_after_s))
+
+
+def refusal_result_keys(
+    verdict: tuple[str, str], gate_trace: dict, refused_at_s: float, drive_raw_messages: int
+) -> dict:
+    """The result keys of a run the starter refused (`stopped_because` `start_refused`): the
+    reason, when, the gate's trace and how many messages reached /drive_raw (none, the planner was
+    never started)."""
+    return {
+        "stopped_because": "start_refused",
+        "start_refusal": {"reason": verdict[1], "refused_at_s": refused_at_s, "gate": gate_trace},
+        "drive_raw_messages": int(drive_raw_messages),
+    }
+
+
+class StartRefused(Exception):
+    """The starter refused: the planner was never started (a result, not an error)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def ready_delay(text: str) -> float:
+    """An argparse type: seconds, zero or more, or `inf`."""
+    value = float(text)
+    if math.isnan(value) or value < 0.0:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds, zero or more")
+    return value
+
+
+def _gate_trace(gate_box: list) -> dict:
+    return gate_box[0].trace() if gate_box else {}
+
+
+def _finite_or_none(value: float | None) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def start_trace(
+    lap_node_first_status_s: float | None = None,
+    ready_first_s: float | None = None,
+    gate_start_s: float | None = None,
+    planner_spawn_s: float | None = None,
+    driving_first_s: float | None = None,
+    lap1_start_s: float | None = None,
+    oracle_first_status_s: float | None = None,
+    gate_verdict: str | None = None,
+    gate_reason: str | None = None,
+) -> dict:
+    """The start of a run as the report prints it (brief 51c): when the lap node's first status
+    reached the runner, when one first said `source_ready_now`, when the start gate said start,
+    when the planner was spawned, when its first DRIVING report arrived, when the lap node's lap 1
+    started, when the oracle first published a status (all node time, seconds), and the gate's
+    verdict and reason. None for what did not happen; a non-finite time is None, so the JSON
+    stays valid."""
+    return {
+        "lap_node_first_status_s": _finite_or_none(lap_node_first_status_s),
+        "ready_first_s": _finite_or_none(ready_first_s),
+        "gate_start_s": _finite_or_none(gate_start_s),
+        "planner_spawn_s": _finite_or_none(planner_spawn_s),
+        "driving_first_s": _finite_or_none(driving_first_s),
+        "lap1_start_s": _finite_or_none(lap1_start_s),
+        "oracle_first_status_s": _finite_or_none(oracle_first_status_s),
+        "gate_verdict": gate_verdict,
+        "gate_reason": gate_reason,
+    }
+
+
 def run_startup(
     stack: list[tuple[str, list[str]]],
     two_phase: bool,
@@ -377,7 +506,9 @@ def run_startup(
     after_reset,
     wait_timeout_polls: int,
     lap_ready=None,
-) -> None:
+    start_decide=None,
+    gate_polls: int | None = None,
+) -> tuple[str, str]:
     """The runner's startup order. `spawn(name, command)` starts a node, `ready()` says the
     reset service is there (and what the caller also needs before the reset), `spin()` serves
     the runner's own callbacks for one poll, `reset()` performs the startup reset and returns when
@@ -391,7 +522,15 @@ def run_startup(
     `wait_for_service` served no callback while it waited. Of the rest, the perception and the lap
     node start first and the planner only once the lap node answers (`lap_ready`, when the stack
     has a lap node and the caller gives one), so the lap node never starts lap 1 after the
-    planner's first DRIVING report. Otherwise every node starts at once, as before."""
+    planner's first DRIVING report. Otherwise every node starts at once, as before.
+
+    `start_decide` (brief 51c, lap source `truth`) replaces `lap_ready`: it returns the start
+    rule's `(verdict, reason)` (`racer_laps.start_ready.StartReadyGate`, the rule the car's launch
+    uses); `gate_polls` bounds that wait in polls (default `wait_timeout_polls`; the runner passes a
+    very large number and bounds the wait in wall time instead, since a spin returns at every
+    message and 30 s of simulated time is many thousands of polls). The planner, the only
+    publisher of /drive_raw, is spawned on `start` and never on
+    `refuse`. Returns `("start", "")`, or `("refuse", reason)` with the planner not started."""
     first = [item for item in stack if item[0] in PHASE_ONE_NODES] if two_phase else list(stack)
     later = [item for item in stack if item not in first]
     for name, command in first:
@@ -408,7 +547,18 @@ def run_startup(
     others = [item for item in later if item[0] != PLANNER_NODE]
     for name, command in others:
         spawn(name, command)
-    if planner and lap_ready is not None and any(item[0] == LAP_NODE for item in others):
+    has_lap_node = any(item[0] == LAP_NODE for item in others)
+    if planner and start_decide is not None and has_lap_node:
+        for _ in range(wait_timeout_polls if gate_polls is None else gate_polls):
+            verdict, reason = start_decide()
+            if verdict != "wait":
+                break
+            spin()
+        else:
+            raise RuntimeError("lap_memory_node did not answer before the planner was due")
+        if verdict == "refuse":
+            return verdict, reason
+    elif planner and lap_ready is not None and has_lap_node:
         for _ in range(wait_timeout_polls):
             if lap_ready():
                 break
@@ -417,6 +567,7 @@ def run_startup(
             raise RuntimeError("lap_memory_node did not answer before the planner was due")
     for name, command in planner:
         spawn(name, command)
+    return "start", ""
 
 
 def note_guidance_floor(counters: dict, v_ref_mps: list[float]) -> None:
@@ -888,7 +1039,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
 
     processes: list[tuple[str, subprocess.Popen]] = []
 
+    planner_spawned: list[float] = []  # node time of the planner's spawn (start_trace)
+
     def spawn(name: str, command: list[str]) -> None:
+        if name == PLANNER_NODE:
+            planner_spawned.append(received_s())
         log = (work / f"{name}.log").open("w")
         if name == "localization":
             cmd = command
@@ -949,6 +1104,13 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             y - cg_to_rear * math.sin(yaw),
             yaw,
         )
+        if oracle_status is not None:
+            # the oracle's status, in every phase of the run (brief 51c)
+            oracle_status.on_time(
+                base._stamp_s(msg.header.stamp),
+                received_s(),
+                lap_first_status[0] if lap_first_status else None,
+            )
         if (
             localised
             and len(recording.odom) % 5 == 0
@@ -1058,6 +1220,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     oracle_events: list[dict] = []
     oracle_pubs: dict = {}
     lap_status: dict = {}
+    lap_first_status: list[float] = []  # node time the lap node's first status arrived
+    lap_ready_first: list[float] = []  # node time the first status with source_ready_now arrived
+    oracle_status: OracleStatusPublisher | None = None  # set where the oracle's publishers exist
+    gate_box: list = []  # the start gate (lap source truth), created when the wait begins
+    gate_wall_start: list[float] = []  # wall time the wait began (it is bounded in wall time too)
     # B4 report item: guidance messages with stations, and those whose lowest per station bound
     # sits at the D v1 floor (the floor was the active bound). Counted here, not in the node.
     guidance_floor: dict = {
@@ -1134,6 +1301,13 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             def on_lap_status(m) -> None:
                 lap_status.clear()
                 lap_status.update(json.loads(m.data))
+                now_s = received_s()
+                if gate_box:
+                    gate_box[0].on_status(now_s, lap_status)
+                if not lap_first_status:
+                    lap_first_status.append(now_s)
+                if not lap_ready_first and lap_status.get("source_ready_now") is True:
+                    lap_ready_first.append(now_s)
 
             from sensor_msgs.msg import LaserScan
 
@@ -1162,6 +1336,11 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             if oracle is not None:
                 oracle_pubs["event"] = node.create_publisher(String, TRUTH_EVENT_TOPIC, reliable)
                 oracle_pubs["status"] = node.create_publisher(String, TRUTH_STATUS_TOPIC, reliable)
+                oracle_status = OracleStatusPublisher(
+                    oracle.status,
+                    lambda body: oracle_pubs["status"].publish(String(data=json.dumps(body))),
+                    ready_after_s=args.lap_truth_ready_after_s,
+                )
             node.create_subscription(LapEvent, "/pnp/lap/event", on_lap_event, reliable)
             node.create_subscription(LapGuidance, "/pnp/lap/guidance", on_guidance, reliable)
             node.create_subscription(String, "/pnp/lap/status", on_lap_status, reliable)
@@ -1184,11 +1363,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         msg.pose.covariance[35] = 0.05**2
         initial_pose_pub.publish(msg)
 
-    status_due = [-math.inf]
-
     def publish_oracle(t: float, x: float, y: float, yaw: float) -> None:
-        """Feed the oracle a ground-truth pose and publish what it says (brief 51): the events
-        due, and its status once a second of simulated time."""
+        """Feed the oracle a ground-truth pose and publish the events due (brief 51). Its status
+        is not published here: the odometry callback feeds `oracle_status` (brief 51c)."""
         from std_msgs.msg import String
 
         assert oracle is not None
@@ -1202,9 +1379,6 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 }
             )
             oracle_pubs["event"].publish(String(data=json.dumps(ev.payload)))
-        if t >= status_due[0]:
-            status_due[0] = t + 1.0
-            oracle_pubs["status"].publish(String(data=json.dumps(oracle.status())))
 
     stopped_because = "duration"
     # Brief 48: a pnp run starts the bridge and safety_node, resets the simulator, clears the
@@ -1267,7 +1441,20 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             loc_errors.clear()
             loc_series.clear()
 
-        run_startup(
+        def start_decide() -> tuple[str, str]:
+            """The start gate of brief 51c, fed by the lap status subscription on the node clock;
+            created when the wait begins so that its 30 s count from there."""
+            if not gate_box:
+                gate_box.append(StartReadyGate(StartGateConfig(), received_s()))
+                gate_wall_start.append(time.monotonic())
+            if time.monotonic() - gate_wall_start[0] > base.STARTUP_TIMEOUT_S:
+                raise RuntimeError(
+                    f"lap_memory_node did not answer before the planner was due: the start gate "
+                    f"was undecided after {base.STARTUP_TIMEOUT_S:g} s of wall time"
+                )
+            return gate_box[0].decide(received_s())
+
+        verdict = run_startup(
             stack,
             two_phase,
             spawn,
@@ -1277,7 +1464,13 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             clear_recording,
             polls,
             lap_ready=lambda: bool(lap_status),
+            start_decide=start_decide
+            if args.lap_source == "truth" and oracle is not None
+            else None,
+            gate_polls=10**9,
         )
+        if verdict[0] == "refuse":
+            raise StartRefused(verdict[1])
         if two_phase:
             # the rest of the stack is starting: wait until the planner talks (the single phase
             # start waited for this before the reset) and count the duration and the stall from
@@ -1454,6 +1647,19 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     )
                 )
                 result["startup_reset_done_s"] = reset_done[0] if reset_done else None
+                # brief 51c: the start of the run, so a start failure is explained by the report
+                result["start_trace"] = start_trace(
+                    lap_node_first_status_s=lap_first_status[0] if lap_first_status else None,
+                    ready_first_s=lap_ready_first[0] if lap_ready_first else None,
+                    gate_start_s=_gate_trace(gate_box).get("start_s"),
+                    planner_spawn_s=planner_spawned[0] if planner_spawned else None,
+                    driving_first_s=driving_receipt,
+                    lap1_start_s=lap_status.get("lap1_start_stamp_s"),
+                    oracle_first_status_s=oracle_status.first_publish_s if oracle_status else None,
+                    gate_verdict=_gate_trace(gate_box).get("verdict"),
+                    gate_reason=_gate_trace(gate_box).get("reason"),
+                )
+                result["source_ready"] = lap_status.get("source_ready")
                 result["guidance_cap_series"] = [[round(a, 3), b] for a, b in cap_series]
                 if oracle is not None:
                     result["oracle_events"] = oracle_events
@@ -1499,6 +1705,39 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 loc=np.array(loc_series),
                 events=np.array([e["t_s"] for e in event_details]),
             )
+    except StartRefused as refusal:
+        # not an error: the starter refused and the planner was never started (brief 51c)
+        trace_of_gate = _gate_trace(gate_box)
+        try:
+            result.update(
+                bm.compute_metrics(
+                    recording,
+                    box=box,
+                    walls=synthetic.walls,
+                    lap_tracker=lap_tracker,
+                    wall_thickness_m=synthetic.wall_thickness_m,
+                )
+            )
+        except ValueError as exc:  # the bridge never published: say so, it is an error
+            result["error"] = str(exc)
+        result.update(
+            refusal_result_keys(
+                ("refuse", refusal.reason),
+                trace_of_gate,
+                trace_of_gate.get("refuse_s") or received_s(),
+                len(recording.drive_raw),
+            )
+        )
+        result["start_trace"] = start_trace(
+            lap_node_first_status_s=lap_first_status[0] if lap_first_status else None,
+            ready_first_s=lap_ready_first[0] if lap_ready_first else None,
+            planner_spawn_s=planner_spawned[0] if planner_spawned else None,
+            oracle_first_status_s=oracle_status.first_publish_s if oracle_status else None,
+            gate_verdict=trace_of_gate.get("verdict"),
+            gate_reason=trace_of_gate.get("reason"),
+        )
+        result["start_trace"]["gate"] = trace_of_gate
+        result["lap_status"] = dict(lap_status)
     except RuntimeError as e:
         result["error"] = str(e)
     finally:
@@ -1587,6 +1826,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="{}",
         help="lap source truth: the fault plan (the yaml's lap_battery_b9.fault_plan as JSON: "
         "drop_truth_crossings, false_event, duplicate_truth_crossing); {} is the clean oracle",
+    )
+    parser.add_argument(
+        "--lap-truth-ready-after-s",
+        type=ready_delay,
+        default=0.0,
+        help="lap source truth (brief 51c): until this many seconds of sim time after the runner "
+        "receives the lap node's first status the oracle's status says `waiting`; `inf` never "
+        "becomes ready. 0 (default): as before. How the battery exercises the start gate",
     )
     parser.add_argument(
         "--v-lap1-mps",

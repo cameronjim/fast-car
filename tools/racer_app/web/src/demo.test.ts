@@ -28,7 +28,12 @@ describe("demo fake agent", () => {
   });
 
   it("starts the stack in stages: container, then nodes, then recorder, then ready", async () => {
-    const { car, api } = rig();
+    // The scripted stage delays are held until the test releases them, so a slow runner cannot
+    // let the recorder land before the early status is read.
+    const held: Array<() => void> = [];
+    const sleep = (ms: number) => (ms <= 800 ? Promise.resolve() : new Promise<void>((r) => held.push(r)));
+    const car = new DemoCar(() => Date.now(), sleep, 1);
+    const api = new Api(tokens, car.fetch);
     expect((await api.status()).stack.running).toBe(false);
     const reply = await api.startStack({ lidar: true, vesc: true, mapping: false, localization: false, map: "" });
     expect(reply.ok).toBe(true);
@@ -36,7 +41,8 @@ describe("demo fake agent", () => {
     expect(early.stack.running).toBe(true);
     expect(early.stack.recorder).toBe(false);
     expect(early.checks.ready).toBe(false);
-    await wait(60);
+    held.splice(0).forEach((release) => release());
+    await wait(0);
     const late = await api.status();
     expect(late.stack.recorder).toBe(true);
     expect(late.checks.ready).toBe(true);
@@ -90,6 +96,21 @@ describe("demo fake agent", () => {
       await expect(api.startDrive({ ...base, ...bad } as never)).rejects.toMatchObject({ status: 400 });
     }
     await api.startDrive({ ...base, pnp_lap_memory: true, pnp_lap_mode: "v1", pnp_v_lap1_mps: 0.3, pnp_shadow_perception: "net-2026-11-04" });
+    expect((await api.status()).drive.mode).toBe("pnp");
+  });
+
+  it("the demo agent takes the ratio band with the camera source and refuses it otherwise", async () => {
+    const { car, api } = rig();
+    car.preset("running");
+    const base = { mode: "pnp", pnp_backend: "geometric", pnp_dynamics: "dyn-2026-10-20", pnp_lap_memory: true };
+    for (const bad of [
+      { pnp_lap_length_ratio_min: 0.75, pnp_lap_length_ratio_max: 1.5 },
+      { pnp_lap_source: "camera", pnp_lap_length_ratio_min: 1, pnp_lap_length_ratio_max: 1.5 },
+      { pnp_lap_source: "camera", pnp_lap_length_ratio_min: 0.75, pnp_lap_length_ratio_max: 2 },
+    ]) {
+      await expect(api.startDrive({ ...base, ...bad } as never)).rejects.toMatchObject({ status: 400 });
+    }
+    await api.startDrive({ ...base, pnp_lap_source: "camera", pnp_lap_length_ratio_min: 0.75, pnp_lap_length_ratio_max: 1.5 } as never);
     expect((await api.status()).drive.mode).toBe("pnp");
   });
 

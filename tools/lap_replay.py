@@ -23,6 +23,25 @@ the same clock (columns t_s, speed_mps, x_m, optional yaw_rate_rps; first row is
 no odometry the start gate and the distance gate cannot work, so they are switched off (the run
 starts at the first frame, min_lap_distance_m is 0) and the output says so.
 
+Thumbnails instead of JPEGs. A bag with `/lap/thumb` (sensor_msgs/Image, mono8, the 64 x 48
+thumbnail the counter itself compared) is replayed from it, which is exact; `--thumbs FILE.npz`
+does the same from a file written by `--save-thumbs`. Without thumbnails the recorded camera
+stream is decoded: approximate, because the counter saw the camera's own frames at 12 to 15 per
+second and the record stream has only 5 or 10, and the report says so.
+
+    uv run --project tools --extra vision python tools/lap_replay.py BAG --image-topic \\
+        /camera/usb/record/compressed --t-from 1795406671 --t-to 1795406692 \\
+        --param start_speed_mps=0 --peak-table --save-thumbs thumbs.npz
+
+`--peak-table` prints, per lap crossing, the similarity peak against the standing reference (the
+counter's own) and against a driving reference (the frame at the first crossing), and the
+highest similarity away from any crossing (the alias level), so a threshold can be judged
+against both (fix checklist 2026-11-22, section 3.5). `--lap-length-m` and `--first-crossing-m`
+say where the crossings are; without them the length is estimated from the counted laps.
+`--t-from` and `--t-to` cut the bag to a log-time window (a session bag holds several runs);
+`start_speed_mps=0` makes the first frame of the window the reference, as the launch's reset
+does on the car.
+
 docs/notes/lap-counter-2026-11-12.md has the tuning procedure.
 """
 
@@ -39,6 +58,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 # The counter lives in the ROS package (pure numpy, no ROS needed to import it).
 _PERCEPTION = Path(__file__).resolve().parents[1] / "ros_ws" / "src" / "racer_perception"
 if str(_PERCEPTION) not in sys.path:
@@ -49,6 +70,8 @@ from racer_perception.lap_counter import (
     LapConfig,
     LapCounter,
     LapEvent,
+    make_signature,
+    resize_area,
 )
 from racer_perception.lap_frames import decode_gray
 from racer_perception.throttle import FrameThrottle
@@ -58,6 +81,7 @@ from racer_perception.throttle import FrameThrottle
 PREREG_V04_PATH = Path(__file__).resolve().parents[1] / "evaluation" / "prereg" / "pnp-v0.4.yaml"
 PREREG_V04_SHA256 = "78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63"
 
+THUMB_TOPIC = "/lap/thumb"
 DEFAULT_RATE_HZ = 15.0
 DEFAULT_REDUCTION = 4
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
@@ -66,11 +90,20 @@ CHART_WIDTH = 40
 
 @dataclass(frozen=True)
 class Msg:
-    """One input message on the replay clock. kind: image | odom | yaw."""
+    """One input message on the replay clock. kind: image | thumb | odom | yaw. A thumb carries the
+    counter's own gray thumbnail (a 2-D uint8 array), so it is not decoded and not rate limited."""
 
     kind: str
     t: float
-    data: Any = None  # image: bytes; odom: (speed_mps, x_m or None); yaw: rate_rps
+    data: Any = None  # image: bytes; thumb: 2-D uint8; odom: (speed_mps, x_m or None); yaw: rps
+
+
+@dataclass(frozen=True)
+class FrameSample:
+    t: float
+    signature: Any  # np.ndarray, or None for a blank frame
+    distance_m: float
+    speed_mps: float
 
 
 @dataclass
@@ -88,6 +121,11 @@ class ReplayResult:
     first_t: float | None = None
     last_t: float | None = None
     final_status: dict[str, Any] = field(default_factory=dict)
+    #: Every processed frame (time, signature, path length of the counter's odometry, speed), kept
+    #: when `replay(keep_frames=True)`: what the peak table is made from.
+    frames: list[FrameSample] = field(default_factory=list)
+    #: "image" (decoded JPEGs: approximate) or "thumb" (the counter's own thumbnails: exact).
+    frame_kind: str = "image"
 
 
 # ----------------------------------------------------------------------------- the replay
@@ -99,6 +137,7 @@ def replay(
     rate_hz: float = DEFAULT_RATE_HZ,
     reduction: int = DEFAULT_REDUCTION,
     decode: Callable[[bytes, int], Any] = decode_gray,
+    keep_frames: bool = False,
 ) -> ReplayResult:
     """Run messages (in clock order) through a LapCounter exactly as lap_counter_node would."""
     counter = LapCounter(cfg)
@@ -115,15 +154,28 @@ def replay(
         elif m.kind == "yaw":
             counter.update_yaw_rate(m.t, m.data)
             out.yaw_messages += 1
-        elif m.kind == "image":
+        elif m.kind in ("image", "thumb"):
             out.frames_seen += 1
-            if not throttle.accept(m.t):
-                continue
-            try:
-                gray = decode(m.data, reduction)
-            except Exception:  # noqa: BLE001 - one bad frame must not end a replay
-                out.frames_failed += 1
-                continue
+            if m.kind == "thumb":
+                out.frame_kind = "thumb"
+                gray = m.data
+            else:
+                if not throttle.accept(m.t):
+                    continue
+                try:
+                    gray = decode(m.data, reduction)
+                except Exception:  # noqa: BLE001 - one bad frame must not end a replay
+                    out.frames_failed += 1
+                    continue
+            if keep_frames:
+                out.frames.append(
+                    FrameSample(
+                        m.t,
+                        make_signature(gray, cfg),
+                        counter.distance_m,
+                        counter.speed_mps,
+                    )
+                )
             before = counter.state
             event = counter.update_frame(m.t, gray)
             out.frames_processed += 1
@@ -261,11 +313,24 @@ def list_bag_topics(path: Path) -> dict[str, int]:
     return counts
 
 
+def thumb_from_image(msg: Any) -> np.ndarray | None:
+    """The 2-D uint8 array of a mono8 sensor_msgs/Image, or None when it is not one."""
+    if getattr(msg, "encoding", "mono8") != "mono8":
+        return None
+    h, w, step = int(msg.height), int(msg.width), int(getattr(msg, "step", msg.width))
+    raw = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+    if h <= 0 or w <= 0 or step < w or raw.size < h * step:
+        return None
+    return raw[: h * step].reshape(h, step)[:, :w].copy()
+
+
 def pick_image_topic(counts: dict[str, int], wanted: str | None) -> str:
     if wanted:
         if wanted not in counts:
             raise SystemExit(f"topic {wanted} is not in the bag; it has: {sorted(counts)}")
         return wanted
+    if counts.get(THUMB_TOPIC, 0) > 0:  # the counter's own thumbnails: exact, always preferred
+        return THUMB_TOPIC
     cameras = sorted(t for t in counts if t.startswith("/camera/") and t.endswith("/compressed"))
     if len(cameras) == 1:
         return cameras[0]
@@ -280,7 +345,8 @@ def pick_image_topic(counts: dict[str, int], wanted: str | None) -> str:
 def iter_bag_messages(
     path: Path, image_topic: str, odom_topic: str, yaw_topic: str
 ) -> Iterator[Msg]:
-    """Decode the three topics of an mcap bag, in file (log-time) order. No ROS install needed."""
+    """Decode the three topics of an mcap bag, in file (log-time) order. No ROS install needed.
+    `image_topic` may be THUMB_TOPIC (sensor_msgs/Image, mono8): those become "thumb" messages."""
     from mcap.records import Channel, Message, Schema
     from mcap_ros2.decoder import DecoderFactory
 
@@ -316,7 +382,13 @@ def iter_bag_messages(
                         data.decode_errors += 1
                         continue
                     t = record.log_time / 1e9
-                    if channel.topic == image_topic:
+                    if channel.topic == image_topic and image_topic == THUMB_TOPIC:
+                        thumb = thumb_from_image(msg)
+                        if thumb is None:
+                            data.decode_errors += 1
+                            continue
+                        yield Msg("thumb", t, thumb)
+                    elif channel.topic == image_topic:
                         yield Msg("image", t, bytes(msg.data))
                     elif channel.topic == odom_topic:
                         yield Msg(
@@ -367,6 +439,247 @@ def iter_folder_messages(folder: Path, fps: float, odom_csv: Path | None) -> Ite
             i += 1
         yield Msg("image", t, file.read_bytes())
     yield from odom[i:]
+
+
+def save_thumbs(path: Path, messages: Iterable[Msg], reduction: int = DEFAULT_REDUCTION) -> int:
+    """Write the frames of `messages` as the counter's 64 x 48 thumbnails (area-resized, uint8)
+    with the odometry, as an npz that `--thumbs` replays: t_s, thumbs (N, 48, 64), odom_t_s,
+    odom_speed_mps, odom_x_m (NaN where unknown), yaw_t_s, yaw_rate_rps. Returns the frame count."""
+    cfg = LapConfig()
+    exact = True  # every frame was already a thumbnail of the counter's own
+    ts: list[float] = []
+    thumbs: list[np.ndarray] = []
+    odom: list[tuple[float, float, float]] = []
+    yaw: list[tuple[float, float]] = []
+    for m in messages:
+        if m.kind == "odom":
+            speed, x = m.data
+            odom.append((m.t, speed, math.nan if x is None else x))
+        elif m.kind == "yaw":
+            yaw.append((m.t, m.data))
+        elif m.kind in ("image", "thumb"):
+            try:
+                gray = m.data if m.kind == "thumb" else decode_gray(m.data, reduction)
+            except Exception:  # noqa: BLE001, S112 - an undecodable frame is left out
+                continue
+            exact = exact and m.kind == "thumb"
+            ts.append(m.t)
+            thumbs.append(
+                np.rint(resize_area(gray, cfg.thumb_width_px, cfg.thumb_height_px))
+                .clip(0, 255)
+                .astype(np.uint8)
+            )
+    o = np.array(odom, dtype=np.float64).reshape(-1, 3)
+    y = np.array(yaw, dtype=np.float64).reshape(-1, 2)
+    np.savez_compressed(
+        path,
+        t_s=np.array(ts, dtype=np.float64),
+        thumbs=np.stack(thumbs)
+        if thumbs
+        else np.zeros((0, cfg.thumb_height_px, cfg.thumb_width_px), np.uint8),
+        odom_t_s=o[:, 0],
+        odom_speed_mps=o[:, 1],
+        odom_x_m=o[:, 2],
+        yaw_t_s=y[:, 0],
+        yaw_rate_rps=y[:, 1],
+        exact=np.array(exact),
+    )
+    return len(ts)
+
+
+def thumbs_are_exact(path: Path) -> bool:
+    """Whether the npz holds the counter's own thumbnails (a bag with /lap/thumb) and not ones made
+    from the recorded JPEG stream. A file without the flag is taken as approximate."""
+    with np.load(path) as z:
+        return bool(z["exact"]) if "exact" in z.files else False
+
+
+def iter_thumbs_messages(path: Path) -> Iterator[Msg]:
+    """Messages of an npz written by save_thumbs, merged by time (odometry first on a tie)."""
+    with np.load(path) as z:
+        t, thumbs = z["t_s"], z["thumbs"]
+        ot, ov, ox = z["odom_t_s"], z["odom_speed_mps"], z["odom_x_m"]
+        yt, yr = z["yaw_t_s"], z["yaw_rate_rps"]
+        msgs = [
+            Msg("odom", float(a), (float(b), None if math.isnan(c) else float(c)))
+            for a, b, c in zip(ot, ov, ox, strict=True)
+        ]
+        msgs += [Msg("yaw", float(a), float(b)) for a, b in zip(yt, yr, strict=True)]
+        msgs += [Msg("thumb", float(a), thumbs[i]) for i, a in enumerate(t)]
+    order = {"odom": 0, "yaw": 1, "thumb": 2}
+    msgs.sort(key=lambda m: (m.t, order[m.kind]))
+    yield from msgs
+
+
+# ----------------------------------------------------------------------------- the peak table
+
+#: Conventions of the peak table (fix checklist 2026-11-22, section 9): a true crossing is the best
+#: similarity within this many metres of the expected station; a peak is the highest value within
+#: PEAK_HALF_WIDTH_M of the crossing frame; an off-mark frame is moving, past the first metre and
+#: farther than OFF_MARK_M from every crossing.
+CROSSING_SEARCH_M = 0.7
+PEAK_HALF_WIDTH_M = 0.35
+OFF_MARK_M = 0.6
+MOVING_MPS = 0.3
+
+
+@dataclass
+class Crossing:
+    lap: int
+    t: float
+    station_m: float
+    standing_peak: float
+    driving_peak: float | None  # None for lap 1: its frame is the driving reference
+
+
+@dataclass
+class PeakTable:
+    lap_length_m: float
+    first_station_m: float
+    crossings: list[Crossing]
+    #: reference name -> (highest off-mark similarity, its 99th percentile, off-mark frames)
+    off_mark: dict[str, tuple[float, float, int]]
+    threshold: float
+    t_ref: float = 0.0
+
+    def peaks(self, reference: str) -> list[float]:
+        if reference == "standing":
+            return [c.standing_peak for c in self.crossings]
+        return [c.driving_peak for c in self.crossings if c.driving_peak is not None]
+
+
+def estimate_lap_length(distances: list[float]) -> float | None:
+    """The lap length from the distances of counted laps, folding a lap that spans two or more
+    crossings (a missed one) back to one: each distance is divided by the nearest whole number of
+    laps of the running estimate, which starts at the median of the shorter half. None for no laps."""
+    ds = [d for d in distances if d > 0.0 and math.isfinite(d)]
+    if not ds:
+        return None
+    low = sorted(ds)[: (len(ds) + 1) // 2]  # start from the short laps: a long one is a missed lap
+    length = low[len(low) // 2]
+    for _ in range(3):
+        folded = [d / max(1, round(d / length)) for d in ds]
+        length = sorted(folded)[len(folded) // 2]
+    return length
+
+
+def peak_table(
+    result: ReplayResult, lap_length_m: float | None = None, first_station_m: float | None = None
+) -> PeakTable | None:
+    """True-crossing peaks and the off-mark level against the standing and the driving reference,
+    from `replay(..., keep_frames=True)`. Distances are the counter's odometry from the reference
+    frame. The lap length and the first crossing come from the arguments, else from the counted
+    laps. None when there is no reference frame or no way to place the crossings."""
+    frames = [
+        f
+        for f in result.frames
+        if result.reference_time_s is not None and f.t >= result.reference_time_s
+    ]
+    if len(frames) < 3 or frames[0].signature is None:
+        return None
+    t = np.array([f.t for f in frames])
+    d = np.array([f.distance_m for f in frames]) - frames[0].distance_m
+    v = np.array([f.speed_mps for f in frames])
+    ok = np.array([f.signature is not None for f in frames])
+    sigs = np.stack(
+        [
+            f.signature if f.signature is not None else np.zeros_like(frames[0].signature)
+            for f in frames
+        ]
+    )
+    if lap_length_m is None:
+        lap_length_m = estimate_lap_length([e.distance_m for e in result.events])
+    if first_station_m is None and result.events:
+        j = int(np.argmin(np.abs(t - result.events[0].crossing_time_s)))
+        first_station_m = float(d[j])
+    if lap_length_m is None or first_station_m is None:
+        return None
+    standing = sigs @ sigs[0]
+    cross: list[int] = []
+    expected = first_station_m
+    while expected < d[-1] - 0.3:
+        w = np.nonzero((np.abs(d - expected) < CROSSING_SEARCH_M) & ok)[0]
+        if len(w) == 0:
+            break
+        j = int(w[np.argmax(standing[w])])
+        cross.append(j)
+        expected = float(d[j]) + lap_length_m
+    if not cross:
+        return None
+    driving = sigs @ sigs[cross[0]]
+    near = np.zeros(len(d), dtype=bool)
+    for j in cross:
+        near |= np.abs(d - d[j]) < OFF_MARK_M
+    mask = (v > MOVING_MPS) & (d > 1.0) & ~near & ok
+
+    def peak(sim: np.ndarray, j: int) -> float:
+        sel = (np.abs(d - d[j]) < PEAK_HALF_WIDTH_M) & ok
+        return float(sim[sel].max())
+
+    def off(sim: np.ndarray) -> tuple[float, float, int]:
+        vals = sim[mask]
+        if len(vals) == 0:
+            return (math.nan, math.nan, 0)
+        return (float(vals.max()), float(np.percentile(vals, 99)), len(vals))
+
+    crossings = [
+        Crossing(
+            lap=i + 1,
+            t=float(t[j]),
+            station_m=float(d[j]),
+            standing_peak=peak(standing, j),
+            driving_peak=None if i == 0 else peak(driving, j),
+        )
+        for i, j in enumerate(cross)
+    ]
+    return PeakTable(
+        lap_length_m=lap_length_m,
+        first_station_m=first_station_m,
+        crossings=crossings,
+        off_mark={"standing": off(standing), "driving": off(driving)},
+        threshold=result.cfg.similarity_threshold,
+        t_ref=float(t[0]),
+    )
+
+
+def render_peak_table(table: PeakTable, frame_kind: str, fps: float | None) -> list[str]:
+    kind = (
+        "exact: the counter's own thumbnails"
+        if frame_kind == "thumb"
+        else "APPROXIMATE: decoded from the recorded camera stream"
+        + ("" if fps is None else f" at {fps:.1f} frames/s")
+        + "; the live counter saw other frames, so peaks here are lower bounds"
+    )
+    lines = [
+        (
+            f"peak table ({kind}); crossings every {table.lap_length_m:.2f} m from "
+            f"{table.first_station_m:.2f} m"
+        ),
+        "lap  station_m  t_s (from reference)  standing_peak  driving_peak",
+    ]
+    t0 = table.t_ref
+    for c in table.crossings:
+        drv = "  (reference)" if c.driving_peak is None else f"{c.driving_peak:14.3f}"
+        flag = " <" if c.standing_peak < table.threshold else ""
+        lines.append(
+            f"{c.lap:3d}  {c.station_m:9.2f}  {c.t - t0:.2f}  {c.standing_peak:13.3f}{flag:2s}{drv}"
+        )
+    for name in ("standing", "driving"):
+        peaks = table.peaks(name)
+        if not peaks:
+            continue
+        hi, p99, n = table.off_mark[name]
+        under = sum(1 for p in peaks if p < table.threshold)
+        lines.append(
+            f"{name:8s} reference: true peaks n {len(peaks)}, min {min(peaks):.3f}, median "
+            f"{sorted(peaks)[len(peaks) // 2]:.3f}, max {max(peaks):.3f}; under the threshold "
+            f"{table.threshold:g}: {under}; off-mark highest {hi:.3f}, p99 {p99:.3f} over {n} frames; "
+            f"margin (min true peak minus highest off-mark) {min(peaks) - hi:+.3f}"
+        )
+    lines.append(
+        f"('<' marks a peak under similarity_threshold {table.threshold:g}: a crossing the counter would miss)"
+    )
+    return lines
 
 
 # ----------------------------------------------------------------------------- reporting
@@ -567,24 +880,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--bucket-s", type=float, default=1.0, help="trace row length (1 s)")
     parser.add_argument("--trace-csv", type=Path, help="write every similarity sample here")
+    parser.add_argument(
+        "--thumbs", type=Path, help="an npz of thumbnails (--save-thumbs) instead of a bag"
+    )
+    parser.add_argument("--t-from", type=float, help="bag: first log time (epoch s) to replay")
+    parser.add_argument("--t-to", type=float, help="bag: last log time (epoch s) to replay")
+    parser.add_argument(
+        "--save-thumbs", type=Path, help="write the replayed frames as thumbnails (npz)"
+    )
+    parser.add_argument(
+        "--peak-table",
+        action="store_true",
+        help="true-crossing peaks against the standing and the driving reference, off-mark level",
+    )
+    parser.add_argument("--lap-length-m", type=float, help="peak table: the lap length (m)")
+    parser.add_argument(
+        "--first-crossing-m",
+        type=float,
+        help="peak table: path length from the reference to the first crossing (m)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     window: SplitRun | None = None
+    sources = [args.bag is not None, args.images is not None, args.thumbs is not None]
     if args.split_run:
-        if args.bag is not None or args.images is not None:
-            raise SystemExit("--split-run replaces the bag argument and --images")
+        if any(sources):
+            raise SystemExit("--split-run replaces the bag argument, --images and --thumbs")
         window = load_split_run(args.split_run)
         args.bag = window.bag
-    elif (args.bag is None) == (args.images is None):
+    elif sum(sources) != 1:
         raise SystemExit(
-            "give either a bag or --images FOLDER (or --split-run NAME instead of both)"
+            "give either a bag or --images FOLDER or --thumbs FILE, only one of them "
+            "(or --split-run NAME instead)"
         )
     cfg = parse_params(args.param, LapConfig())
     notes: list[str] = []
-    if args.images is not None:
+    if args.thumbs is not None:
+        if not args.thumbs.is_file():
+            raise SystemExit(f"no such file: {args.thumbs}")
+        source = f"{args.thumbs} (thumbnails)"
+        messages: Iterable[Msg] = iter_thumbs_messages(args.thumbs)
+    elif args.images is not None:
         if not args.images.is_dir():
             raise SystemExit(f"no such folder: {args.images}")
         source = f"{args.images} (images at {args.fps:g} fps)"
@@ -594,7 +933,7 @@ def main(argv: list[str] | None = None) -> int:
                 "no --odom-csv: start gate and distance gate switched off "
                 "(start_speed_mps=0, min_lap_distance_m=0); min_lap_time_s still applies"
             )
-        messages: Iterable[Msg] = iter_folder_messages(args.images, args.fps, args.odom_csv)
+        messages = iter_folder_messages(args.images, args.fps, args.odom_csv)
     else:
         if not args.bag.exists():
             raise SystemExit(f"no such bag: {args.bag}")
@@ -615,14 +954,42 @@ def main(argv: list[str] | None = None) -> int:
                 f"{window.t_from:.3f} to {window.t_to:.3f} of {args.bag.name}"
             )
             messages = clip_messages(messages, window.t_from, window.t_to)
-    result = replay(messages, cfg, args.rate_hz, args.decode_reduction)
+    if args.t_from is not None or args.t_to is not None:
+        lo = -math.inf if args.t_from is None else args.t_from
+        hi = math.inf if args.t_to is None else args.t_to
+        notes.append(f"window: log time {lo:.3f} to {hi:.3f}")
+        messages = clip_messages(messages, lo, hi)
+    if args.save_thumbs:
+        messages = list(messages)
+    result = replay(messages, cfg, args.rate_hz, args.decode_reduction, keep_frames=args.peak_table)
+    if args.thumbs is not None and not thumbs_are_exact(args.thumbs):
+        result.frame_kind = "image"
+        notes.append(
+            "the thumbnails were made from the recorded camera stream: approximate, not the "
+            "counter's own frames"
+        )
     print(format_report(result, source, notes, args.bucket_s))
+    if args.peak_table:
+        table = peak_table(result, args.lap_length_m, args.first_crossing_m)
+        span = (result.last_t or 0.0) - (result.first_t or 0.0)
+        fps = result.frames_processed / span if span > 0 else None
+        print()
+        if table is None:
+            print(
+                "peak table: no crossings could be placed (no reference frame, or no counted lap "
+                "to take the lap length from): give --lap-length-m and --first-crossing-m"
+            )
+        else:
+            print("\n".join(render_peak_table(table, result.frame_kind, fps)))
     if args.reference:
         ref_count, ref_times = load_reference(args.reference)
         print("\n" + "\n".join(reference_report(result.events, ref_count, ref_times)))
     if args.trace_csv:
         write_trace_csv(args.trace_csv, result)
         print(f"\ntrace written to {args.trace_csv}")
+    if args.save_thumbs:
+        n = save_thumbs(args.save_thumbs, messages, args.decode_reduction)
+        print(f"\n{n} thumbnails written to {args.save_thumbs}")
     return 0
 
 

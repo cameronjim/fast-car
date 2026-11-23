@@ -1,0 +1,6 @@
+{
+  "freeze_commit": "1be06e45c347d811e2779f66e54288dbb714eda9",
+  "commit": "1be06e45c347d811e2779f66e54288dbb714eda9",
+  "yaml_sha256": "823f641c8a40337e1a81aaa440d55976585d19984ae2db55f06f0eee1289bdcd",
+  "note": "Gate tightened after commit 1. After the pre-registration was committed (1426c46), brief 51c's outside review (findings 1 and 2) made the lap node's ready predicate stricter: source_ready_now now also needs a fresh camera, fresh wheel odometry at the lap counter and a camera frame sequence that advanced since the status before, and the launch ties the waiter to the counter's acknowledged reset_id; the start gate's deadline also wins over a late ready count. The yaml, source_rule, start_gate constants, thresholds, gate definitions, run counts and scoring are untouched. No registered pass/fail criterion changes: D10-S0 item (1) still asks that the lap node started ready, and the same numbers decide every item. What changed is the implementation of the readiness predicate that item refers to; a status without the new keys is judged as before. Development evidence on this predicate: G3 26 of 26 and G5 60 of 60 started ready through the gate."
+}

@@ -74,6 +74,9 @@ class LapConfig:
     #: A reference whose pixel standard deviation (gray levels, 0..255) is below this is a blank
     #: frame (lens cap, camera starting up): refused, the next frame is tried.
     min_reference_std: float = 2.0
+    #: A camera whose last processed frame is older than this is stale, and so are the wheel
+    #: odometry samples (outside review of brief 51c): `freshness()` says so, `/lap/status` carries it.
+    frame_stale_s: float = 1.0
 
     def validate(self) -> None:
         for f in fields(self):
@@ -93,6 +96,8 @@ class LapConfig:
             raise ValueError("the thumbnail must be at least 4 x 4 pixels")
         if self.min_reference_std < 0.0:
             raise ValueError("min_reference_std must be >= 0")
+        if self.frame_stale_s <= 0.0:
+            raise ValueError("frame_stale_s must be > 0")
 
     @classmethod
     def field_names(cls) -> list[str]:
@@ -178,12 +183,23 @@ def unit_signature(thumb: np.ndarray, min_std: float = 0.0) -> np.ndarray | None
     return v / norm
 
 
-def make_signature(gray: np.ndarray, cfg: LapConfig, min_std: float = 0.0) -> np.ndarray | None:
-    """Gray image of any size -> the vector the similarity is a dot product of."""
-    thumb = resize_area(gray, cfg.thumb_width_px, cfg.thumb_height_px)
+def make_thumb(gray: np.ndarray, cfg: LapConfig) -> np.ndarray:
+    """Gray image of any size -> the thumbnail (float32, before the blur)."""
+    return resize_area(gray, cfg.thumb_width_px, cfg.thumb_height_px)
+
+
+def signature_from_thumb(
+    thumb: np.ndarray, cfg: LapConfig, min_std: float = 0.0
+) -> np.ndarray | None:
+    """Thumbnail -> the vector the similarity is a dot product of."""
     if cfg.blur:
         thumb = blur3(thumb)
     return unit_signature(thumb, min_std)
+
+
+def make_signature(gray: np.ndarray, cfg: LapConfig, min_std: float = 0.0) -> np.ndarray | None:
+    """Gray image of any size -> the vector the similarity is a dot product of."""
+    return signature_from_thumb(make_thumb(gray, cfg), cfg, min_std)
 
 
 # ---------------------------------------------------------------------------------- counter
@@ -202,7 +218,15 @@ class LapCounter:
         self._last_x: float | None = None
         self._last_odom_t: float | None = None
         self._last_yaw_t: float | None = None
+        # what the counter can say about its inputs (freshness()): they survive reset() except
+        # the frames since it
+        self.frame_seq = 0
+        self.last_frame_t: float | None = None
+        self.last_thumb: np.ndarray | None = None
+        self.reset_id = 0
+        self._initialised = False
         self.reset(capture_next_frame=False)
+        self._initialised = True
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -210,6 +234,9 @@ class LapCounter:
         """Forget the reference and every count. The next frame becomes the new reference when
         `capture_next_frame` (the car is at the start line now), else the first frame after the
         car moves does."""
+        if self._initialised:
+            self.reset_id += 1
+        self.frames_since_reset = 0
         self.state = STATE_WAITING
         self._capture_now = capture_next_frame
         self._ref: np.ndarray | None = None
@@ -260,14 +287,19 @@ class LapCounter:
         this frame closed a lap window, else None."""
         if not math.isfinite(t):
             return None
-        sig = make_signature(
-            gray, self.cfg, self.cfg.min_reference_std if self._ref is None else 0.0
+        thumb = make_thumb(gray, self.cfg)
+        self.last_thumb = thumb  # what /lap/thumb publishes (the node reads it, nothing else does)
+        sig = signature_from_thumb(
+            thumb, self.cfg, self.cfg.min_reference_std if self._ref is None else 0.0
         )
         return self.update_signature(t, sig)
 
     def update_signature(self, t: float, sig: np.ndarray | None) -> LapEvent | None:
         """Like update_frame for a signature already made with make_signature."""
         cfg = self.cfg
+        self.frame_seq += 1  # a processed frame: the sequence only moves when images arrive
+        self.frames_since_reset += 1
+        self.last_frame_t = t
         if self.state == STATE_WAITING:
             if not (
                 self._capture_now
@@ -346,6 +378,27 @@ class LapCounter:
         return event
 
     # ------------------------------------------------------------------ reporting
+
+    def freshness(self, now: float) -> dict[str, Any]:
+        """What this counter knows about its own inputs at clock time `now` (JSON-able): the image
+        sequence number (advances only with processed frames), the age of the last frame, whether
+        the camera is fresh (a frame within `frame_stale_s`), the same for the wheel odometry, and
+        the number of resets served. `/lap/status` repeats `running` and a similarity on a timer
+        whether or not images arrive; these keys are what tells a live camera from a dead one."""
+        limit = self.cfg.frame_stale_s
+        frame_age = None if self.last_frame_t is None else max(0.0, now - self.last_frame_t)
+        odom_age = None if self._last_odom_t is None else max(0.0, now - self._last_odom_t)
+        fresh = frame_age is not None and frame_age <= limit
+        return {
+            "camera": "no_frames" if frame_age is None else ("fresh" if fresh else "stale"),
+            "camera_fresh": fresh,
+            "frame_seq": self.frame_seq,
+            "frame_age_s": frame_age,
+            "frames_since_reset": self.frames_since_reset,
+            "reset_id": self.reset_id,
+            "odom_age_s": odom_age,
+            "odom_fresh": odom_age is not None and odom_age <= limit,
+        }
 
     def status(self) -> dict[str, Any]:
         """JSON-able snapshot for /lap/status."""

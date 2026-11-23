@@ -142,6 +142,20 @@ uv run --extra vision python lap_replay.py --images frames/ --fps 15 --odom-csv 
      similarity the trace shows between the line and the rest of the track, and below the
      `similarity_threshold` by a clear margin.
    - Turns far from 1 per lap (oval) in the table are a sign of a missed or a doubled lap.
+5. Peak table and thumbnails (2026-11-22). A session bag holds several runs: cut one with
+   `--t-from`/`--t-to` (log time, epoch seconds; `pnp_session session` prints each run's window),
+   and `--param start_speed_mps=0` so the window's first frame is the reference, as the launch's
+   reset makes it on the car. `--peak-table` then lists, per crossing of the line, the peak
+   against the standing reference (the counter's own) and against a driving reference (the frame
+   at the first crossing), and the highest similarity away from any crossing, so a threshold is
+   judged against both. `--lap-length-m` and `--first-crossing-m` place the crossings, else the
+   lap length comes from the counted laps. From the record stream the numbers are approximate
+   (5 or 10 frames/s against the counter's 12 to 15) and the output says so; a bag with
+   `/lap/thumb` (sensor_msgs/Image, mono8, the counter's own 64 x 48 thumbnail) is replayed from
+   that, exactly. `--save-thumbs out.npz` writes the replayed frames as thumbnails with the
+   odometry and `--thumbs out.npz` replays them: this is how `tools/tests/fixtures/
+   lap_thumbs_2026_11_22_obs3.npz` was made (run 3 of the 2026-11-22 bag, `--t-from 1795406674
+   --t-to 1795406694.5 --param start_speed_mps=0`).
 
 ## What is and is not verified
 
@@ -165,3 +179,19 @@ Per-frame cost on an Apple laptop CPU, 1280x720 JPEG: decode at 1/4 scale 0.9 ms
   `similarity_threshold` or `min_lap_distance_m` does.
 - Rolling-shutter or motion blur at speed at the reference frame (the reference is taken while
   moving, at the first frame over `start_speed_mps`).
+
+## S1 (2026-11-22): true 30 Hz, and what the counter saw
+
+* `FrameThrottle` keeps a phase (frames are due on a fixed grid), so `rate_hz` is the delivered
+  rate for any source at least that fast. Before, "one period since the last accepted frame"
+  delivered about half of a 30 fps source at `rate_hz` 30. The detector and the record nodes use
+  the same throttle and get the same fix.
+* Default `rate_hz` stays 15. `pnp.launch.py` and `cameras.launch.py` take `lap_rate_hz`; the car
+  session passes 30 (`lap_rate_hz:=30`). A counter already in the graph keeps its own rate.
+* New topics, both per processed frame, same stamp (the node clock, the clock of the lap times),
+  both in the recorder regex: `/lap/similarity` (`geometry_msgs/PointStamped`, `point.x` the
+  similarity, published once a reference exists) and `/lap/thumb` (`sensor_msgs/Image` mono8,
+  64 x 48, the thumbnail before the blur: the exact input of `LapCounter`).
+* `decode_reduction` stays 4. Measured on 11-22 record frames upscaled to 1280 x 720 (the full-rate
+  frames were not recorded): reduction 8 saves about 0.2 ms per frame on a Mac and moves the
+  similarity by up to 0.017 (mean 0.005), over the 0.01 allowed. A Jetson timing needs the bench.

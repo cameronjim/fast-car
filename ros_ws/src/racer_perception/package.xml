@@ -26,6 +26,8 @@
   <depend>sensor_msgs</depend>
   <depend>vision_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>builtin_interfaces</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <!-- lap_counter_node (lap_counter.py): numpy for the similarity, OpenCV only to decode JPEGs. -->

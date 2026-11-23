@@ -35,6 +35,9 @@ class World:
     heartbeat: str = "active"
     containers: dict[str, dict] = field(default_factory=dict)
     recorder: bool = True
+    recorder_stuck: bool = False  # the recorder ignores its own SIGINT
+    recorder_close_polls: int = 0  # `docker top` calls it takes to exit after its SIGINT
+    on_recorder_close: object = None  # called when the recorder finishes (writes metadata.yaml)
     drive_label: str | None = None
     ignore_int: bool = False  # a driving launch that needs a TERM
     stack_dies_on_start: bool = False
@@ -101,6 +104,10 @@ class World:
                 "ARGS",
                 "/usr/bin/python3 /opt/ros/humble/bin/ros2 launch racer_bringup car_teleop",
             ]
+            if self.recorder and self.recorder_close_polls > 0 and self._recorder_closing:
+                self.recorder_close_polls -= 1
+                if self.recorder_close_polls == 0:
+                    self._finish_recorder()
             if self.recorder:
                 lines.append("/usr/bin/python3 /opt/ros/humble/bin/ros2 bag record -o x --regex y")
             return (0, "\n".join(lines) + "\n")
@@ -109,6 +116,14 @@ class World:
         if sub == "exec":
             return self._exec(argv)
         return None
+
+    _recorder_closing: bool = False
+
+    def _finish_recorder(self) -> None:
+        self.recorder = False
+        self._recorder_closing = False
+        if callable(self.on_recorder_close):
+            self.on_recorder_close()
 
     def _inspect(self, argv):
         if argv[2] == "-f" and argv[3] == "{{json .Config.Cmd}}":
@@ -180,6 +195,14 @@ class World:
             self.drive_label = m.group(1) if m else "unknown"
             m = re.search(r"exec (ros2 .*?) > /tmp/racer-drive.log", script)
             self.drive_cmd = m.group(1) if m else ""
+            return (0, "")
+        if script == cmd.RECORDER_SIGINT_SCRIPT:
+            self.recorder_signals = getattr(self, "recorder_signals", 0) + 1
+            if self.recorder and not self.recorder_stuck:
+                if self.recorder_close_polls:
+                    self._recorder_closing = True
+                else:
+                    self._finish_recorder()
             return (0, "")
         if script == cmd.DRIVE_STATUS_SCRIPT:
             return (0, f"{APP_DRIVE_PID}\n{self.drive_label}\n") if self.drive_label else (1, "")

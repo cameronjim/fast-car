@@ -46,7 +46,13 @@ from typing import Any
 import numpy as np
 import yaml
 
-from pnp_session.constants import D9_FREEZE_FILE, D9_YAML, D9_YAML_SHA256
+from pnp_session.constants import (
+    D9_FREEZE_FILE,
+    D9_YAML,
+    D9_YAML_SHA256,
+    D10_YAML,
+    D10_YAML_SHA256,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PASS, FAIL, REPEAT, INSUFFICIENT = "PASS", "FAIL", "REPEAT", "INSUFFICIENT"
@@ -108,6 +114,21 @@ def load_prereg(path: Path | None = None, expected: str = D9_YAML_SHA256) -> dic
     out = yaml.safe_load(path.read_text())
     assert isinstance(out, dict)
     return out
+
+
+def load_d10(path: Path | None = None, d9_path: Path | None = None) -> dict[str, Any]:
+    """The thresholds of D10-C0 (brief 51c): the D10 yaml is refused unless its SHA-256 is the
+    registered one and it names the D9 yaml's hash; D10-C0 is `d9_c0` of the D9 yaml (itself read
+    through its own hash), items i to v with the same thresholds, plus item vi. Returns the D9
+    document, which `evaluate_c0` reads."""
+    path = path or REPO_ROOT / D10_YAML
+    actual = _sha256(path)
+    if actual != D10_YAML_SHA256:
+        raise PreregError(f"{path} has SHA-256 {actual}, the registered value is {D10_YAML_SHA256}")
+    doc = yaml.safe_load(path.read_text())
+    if not isinstance(doc, dict) or doc.get("v05_laps_camera_sha256") != D9_YAML_SHA256:
+        raise PreregError(f"{path} does not name the registered D9 yaml hash {D9_YAML_SHA256}")
+    return load_prereg(d9_path)
 
 
 def freeze_state(path: Path | None = None, expected: str = D9_YAML_SHA256) -> tuple[bool, str]:
@@ -541,6 +562,111 @@ def evaluate_c0(bag: BagData, laps_counted: int | None, th: dict[str, Any]) -> d
     return out
 
 
+# -- D10-C0: item vi and the lapref line (brief 51c) ---------------------------------------------------------------
+
+
+def second_ready_status_s(
+    statuses: Sequence[tuple[float, dict[str, Any]]], gap_max_s: float | None = None
+) -> float | None:
+    """The arrival of the second of two consecutive ready statuses of a lap node (the start gate's
+    own reading, `racer_laps.start_ready.says_ready`, and its gap limit), or None when there are
+    no two. A status that does not say ready, or comes after one that says `running`, breaks the
+    run; two ready statuses further apart than the limit are not consecutive."""
+    racer_laps_path()
+    from racer_laps.start_ready import EPS as GATE_EPS
+    from racer_laps.start_ready import StartGateConfig, says_ready
+
+    limit = StartGateConfig().status_gap_max_s if gap_max_s is None else gap_max_s
+    count, last = 0, math.nan
+    for t, body in sorted(statuses, key=lambda x: x[0]):
+        if not says_ready(body):
+            count = 0
+            continue
+        count = count + 1 if count > 0 and t - last <= limit + GATE_EPS else 1
+        last = t
+        if count >= 2:
+            return float(t)
+    return None
+
+
+def evaluate_start_order(bag: BagData, node: NodeTrace) -> dict[str, Any]:
+    """D10-C0 (vi): the first `/pnp/planner/status` of the run is later than the second of two
+    consecutive ready statuses of the camera-source lap node (the start gate worked: the planner
+    was started only after the source was ready)."""
+    label = (
+        "(vi) the first planner status is later than the second of two consecutive ready "
+        "statuses of the camera-source lap node"
+    )
+    planner = bag.streams.planner_arrival if bag.streams is not None else []
+    first = float(min(planner)) if len(planner) else None
+    second = second_ready_status_s(node.statuses)
+    numbers = {
+        "planner_first_status_s": first,
+        "second_ready_status_s": second,
+        "lap_node_statuses": len(node.statuses),
+    }
+    if first is None:
+        return _item(label, INSUFFICIENT, numbers, "no /pnp/planner/status in the bag")
+    if second is None:
+        return _item(
+            label, FAIL, numbers, "the planner ran and the lap node never said ready twice running"
+        )
+    return _item(label, PASS if first > second else FAIL, numbers)
+
+
+def lapref_line(bag: BagData) -> dict[str, Any]:
+    """The period and the autocorrelation peak of `lapref` for each run of the bag. Reported, with
+    no threshold and no effect on a verdict (brief 51c decision 2: the record grows)."""
+    racer_laps_path()
+    out: dict[str, Any] = {"runs": [], "note": "reported, no threshold"}
+    try:
+        from lapref.method import lapref
+    except ImportError as error:
+        out["unavailable"] = f"lapref could not be imported: {error}"
+        return out
+    s = bag.streams
+    try:
+        windows = [(r.run_id, r.start_s, r.end_s) for r in run_windows(bag)]
+    except ImportError as error:
+        windows = []
+        out["unavailable"] = f"the run splitter could not be imported: {error}"
+    if not windows and len(s.odom_arrival):
+        windows = [("whole bag", float(s.odom_arrival[0]), float(s.odom_arrival[-1]))]
+    for run_id, t0, t1 in windows:
+        o = (s.odom_arrival >= t0) & (s.odom_arrival <= t1)
+        d = (s.drive_arrival >= t0) & (s.drive_arrival <= t1)
+        ref = lapref(s.odom_arrival[o], s.odom_v[o], s.drive_arrival[d], s.drive_steer[d])
+        out["runs"].append(
+            {
+                "run": run_id,
+                "laps": int(ref.n_laps),
+                "period_m": float(ref.lap_length_m) if ref.n_laps else None,
+                "autocorr_peak": None if ref.autocorr_peak is None else float(ref.autocorr_peak),
+                "reason": ref.reason,
+            }
+        )
+    return out
+
+
+def evaluate_c0_d10(bag: BagData, laps_counted: int | None, th: dict[str, Any]) -> dict[str, Any]:
+    """D10-C0 of one bag: D9-C0's items (i) to (v) as before, item (vi), and the lapref line."""
+    out = evaluate_c0(bag, laps_counted, th)
+    node = camera_node(bag)
+    out["items"] = [*out["items"], evaluate_start_order(bag, node)]
+    verdicts = [i["verdict"] for i in out["items"]]
+    out["verdict"] = (
+        FAIL
+        if FAIL in verdicts
+        else REPEAT
+        if REPEAT in verdicts
+        else INSUFFICIENT
+        if INSUFFICIENT in verdicts
+        else PASS
+    )
+    out["lapref"] = lapref_line(bag)
+    return out
+
+
 # -- D9-B0 --------------------------------------------------------------------------------------------------------
 
 
@@ -844,11 +970,11 @@ def _n(x: Any, fmt: str = ".2f") -> str:
     return "-" if x is None or (isinstance(x, float) and math.isnan(x)) else format(x, fmt)
 
 
-def markdown_c0(blocks: Sequence[dict[str, Any]]) -> str:
+def markdown_c0(blocks: Sequence[dict[str, Any]], name: str = "D9-C0") -> str:
     lines: list[str] = []
     for b in blocks:
         lines += [
-            f"# D9-C0 {b['bag']}: {b['verdict']}",
+            f"# {name} {b['bag']}: {b['verdict']}",
             "",
             (
                 f"lap node {b['lap_node']}, camera laps {b['camera_laps']}, "
@@ -860,8 +986,23 @@ def markdown_c0(blocks: Sequence[dict[str, Any]]) -> str:
             lines.append(f"- {it['item']}: {it['verdict']} {_short(it['numbers'])}")
             if it["note"]:
                 lines.append(f"  {it['note']}")
+        if "lapref" in b:
+            lines += _lapref_text(b["lapref"])
         lines.append("")
     return "\n".join(lines)
+
+
+def _lapref_text(line: dict[str, Any]) -> list[str]:
+    if "unavailable" in line:
+        return [f"- lapref (reported, no threshold): {line['unavailable']}"]
+    if not line["runs"]:
+        return ["- lapref (reported, no threshold): no run in the bag"]
+    return [
+        f"- lapref (reported, no threshold), run {r['run']}: laps {r['laps']}, period "
+        f"{_n(r['period_m'])} m, autocorrelation peak {_n(r['autocorr_peak'], '.3f')}"
+        + (f" ({r['reason']})" if not r["laps"] and r["reason"] else "")
+        for r in line["runs"]
+    ]
 
 
 def _short(numbers: dict[str, Any]) -> str:
@@ -966,9 +1107,17 @@ def run(
     prereg_path: Path | None = None,
     freeze_path: Path | None = None,
     odom: Any | None = None,
+    d10: bool = False,
 ) -> tuple[dict[str, Any], str, int]:
-    """(report, text, exit code). Raises PreregError, FreezeRequired or NoCameraNode."""
-    th = load_prereg(prereg_path)
+    """(report, text, exit code). Raises PreregError, FreezeRequired or NoCameraNode. `d10` (brief
+    51c): the default per-bag gate is D10-C0, D9-C0's items plus (vi) and the lapref line, with the
+    thresholds read through the D10 yaml's hash; there is no D10-B0."""
+    if d10 and offline:
+        raise PreregError(
+            "there is no D10-B0: D9-B0 stands as scored (brief 51c decision 2); run --offline "
+            "without --d10 for the regression"
+        )
+    th = load_d10() if d10 else load_prereg(prereg_path)
     gate = guard_bags(bags, th, freeze_path)
     names = evaluation_bags(th)
     if any(Path(b).name in names for b in bags) and not offline:
@@ -976,7 +1125,7 @@ def run(
     counts: list[int | None] = list(laps_counted) + [None] * max(0, len(bags) - len(laps_counted))
     report: dict[str, Any] = {
         "schema": "pnp-session-lap-src/1",
-        "prereg_yaml_sha256": D9_YAML_SHA256,
+        "prereg_yaml_sha256": D10_YAML_SHA256 if d10 else D9_YAML_SHA256,
         "bags": [Path(b).name for b in bags],
     }
     text: list[str] = []
@@ -1006,6 +1155,11 @@ def run(
         report.update(label="the lap table of a D run, from the recorded lap node", drive=tables)
         text += [markdown_drive(t) for t in tables]
         return report, "\n".join(text), 0
+    if d10:
+        blocks = [evaluate_c0_d10(d, c, th) for d, c in zip(data, counts, strict=True)]
+        report.update(label="recorded topics: the gate (D10-C0)", d10_c0=blocks)
+        text.append(markdown_c0(blocks, "D10-C0"))
+        return report, "\n".join(text), 0 if all(b["verdict"] == PASS for b in blocks) else 1
     blocks = [evaluate_c0(d, c, th) for d, c in zip(data, counts, strict=True)]
     report.update(label="recorded topics: the gate", d9_c0=blocks)
     text.append(markdown_c0(blocks))

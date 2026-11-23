@@ -314,6 +314,16 @@ export class DemoCar {
       if (cap > Number(b.pnp_v_max_mps ?? 0.5)) return "pnp lap 1 cap cannot exceed the speed cap";
     }
     if (b.pnp_require_lap_counter === true && b.pnp_lap_counter === false) return "require lap counter needs the lap counter on";
+    const lo = b.pnp_lap_length_ratio_min ?? 0;
+    const hi = b.pnp_lap_length_ratio_max ?? 0;
+    if (typeof lo !== "number" || typeof hi !== "number") return "pnp lap length ratios must be numbers";
+    if (lo !== 0 || hi !== 0) {
+      if (!(lo > 0 && lo < 1 && hi > 1 && hi < 2)) return "pnp lap length ratios must be 0 < min < 1 < max < 2";
+      if (source !== "camera") return "pnp lap length ratios apply to lap source camera only";
+    }
+    const rate = b.pnp_lap_rate_hz ?? 0;
+    if (typeof rate !== "number" || !(rate >= 0 && rate <= 30)) return "pnp lap counter rate must be a number from 0 to 30 Hz";
+    if (rate !== 0 && b.pnp_lap_counter === false) return "pnp lap counter rate needs the lap counter on";
     const shadow = b.pnp_shadow_perception;
     if (shadow && shadow === b.pnp_perception) return "the shadow perception bundle cannot be the driving one";
     return null;

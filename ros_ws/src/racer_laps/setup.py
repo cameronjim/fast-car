@@ -21,6 +21,7 @@ setup(
     entry_points={
         "console_scripts": [
             "lap_memory_node = racer_laps.lap_memory_node:main",
+            "lap_source_ready_wait = racer_laps.lap_source_ready_wait:main",
         ],
     },
 )

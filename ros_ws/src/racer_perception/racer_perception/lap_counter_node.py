@@ -15,13 +15,26 @@ Subscribes
 Publishes
   /lap/event   std_msgs/String  JSON, one per counted lap: lap, lap_time_s, best_lap_s,
                                 peak_similarity, crossing_time_s, distance_m, heading_turns
+  /lap/similarity geometry_msgs/PointStamped  one per processed frame once a reference exists:
+                                header.stamp this node's clock (the clock of the lap times),
+                                point.x the cosine similarity, point.y and z 0. (S1, 2026-11-22.)
+  /lap/thumb   sensor_msgs/Image  mono8 64 x 48 (thumb_width_px x thumb_height_px) thumbnail the
+                                similarity was computed on, before the blur, one per processed
+                                frame, same stamp as /lap/similarity. It is the exact input of
+                                LapCounter, so a bag of it replays the counter.
   /lap/status  std_msgs/String  JSON at status_period_s (1 s): state, similarity, laps, last_lap_s,
-                                best_lap_s, armed, speed_mps, distance_m, heading_turns, odom_seen
+                                best_lap_s, armed, speed_mps, distance_m, heading_turns, odom_seen,
+                                and what it knows of its inputs (outside review of brief 51c):
+                                camera (fresh, stale, no_frames), camera_fresh, frame_seq (advances
+                                only with processed images), frame_age_s, frames_since_reset,
+                                reset_id, odom_age_s, odom_fresh. The status repeats on a timer
+                                whether or not images arrive: these keys tell a dead camera apart.
 Serves
   /lap_counter/reset  std_srvs/Trigger  forget the reference and the count; the next frame
                       becomes the new reference (call it with the car at the start line).
 
-Frames are throttled to `rate_hz` (the rest are dropped, newest wins) and decoded at 1/4 scale,
+Frames are throttled to `rate_hz` on a fixed phase (the delivered rate equals rate_hz for a
+source at least that fast; the rest are dropped, newest wins) and decoded at 1/4 scale,
 so the per-frame cost is a reduced JPEG decode plus a few array operations on 64 x 48 pixels. All
 times are this node's ROS clock (use_sim_time works), not image stamps, so a camera restart with
 a jumped stamp cannot confuse the lap times.
@@ -42,14 +55,17 @@ import json
 import sys
 import time
 
+import numpy as np
 import rclpy
+from builtin_interfaces.msg import Time as TimeMsg
+from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 from racer_tools.spin_guard import spin_until_shutdown
 from rcl_interfaces.msg import FloatingPointRange, IntegerRange, ParameterDescriptor
 from rclpy.logging import get_logger
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -66,6 +82,11 @@ _DEFAULTS = LapConfig()
 
 class LapCounterUnavailable(RuntimeError):
     pass
+
+
+def _stamp(t_s: float) -> TimeMsg:
+    ns = round(t_s * 1e9)
+    return TimeMsg(sec=ns // 1_000_000_000, nanosec=ns % 1_000_000_000)
 
 
 def _json(payload: dict) -> str:
@@ -93,8 +114,15 @@ class LapCounterNode(Node):
         declare("yaw_rate_topic", "/odom", "Odometry whose twist.angular.z feeds heading_turns.")
         declare("event_topic", "/lap/event", "JSON String, one per counted lap.")
         declare("status_topic", "/lap/status", "JSON String, every status_period_s.")
+        declare("similarity_topic", "/lap/similarity", "PointStamped, x = similarity per frame.")
+        declare("thumb_topic", "/lap/thumb", "mono8 Image, the thumbnail per processed frame.")
         declare("status_period_s", 1.0, "Seconds between /lap/status messages.")
-        declare("rate_hz", 15.0, "Maximum frames processed per second. <= 0: no limit.")
+        declare(
+            "rate_hz",
+            15.0,
+            "Frames processed per second (a fixed phase, so a source at least this fast "
+            "delivers exactly this). <= 0: no limit.",
+        )
         declare(
             "decode_reduction",
             4,
@@ -133,6 +161,12 @@ class LapCounterNode(Node):
             "A bright window still open after this long is closed at its peak.",
         )
         declare(
+            "frame_stale_s",
+            _DEFAULTS.frame_stale_s,
+            "A camera whose last frame, or wheel odometry whose last sample, is older than this "
+            "is reported stale in /lap/status.",
+        )
+        declare(
             "min_reference_std",
             _DEFAULTS.min_reference_std,
             "Refuse a reference frame whose pixel std (0..255) is below this (blank frame).",
@@ -152,6 +186,7 @@ class LapCounterNode(Node):
             blur=bool(get("blur")),
             peak_window_max_s=float(get("peak_window_max_s")),
             min_reference_std=float(get("min_reference_std")),
+            frame_stale_s=float(get("frame_stale_s")),
         )
         cfg.validate()  # bad thresholds are a hard refusal, not a warning
         self._reduction = int(get("decode_reduction"))
@@ -171,6 +206,10 @@ class LapCounterNode(Node):
         )
         self._event_pub = self.create_publisher(String, str(get("event_topic")), out_qos)
         self._status_pub = self.create_publisher(String, str(get("status_topic")), out_qos)
+        self._similarity_pub = self.create_publisher(
+            PointStamped, str(get("similarity_topic")), out_qos
+        )
+        self._thumb_pub = self.create_publisher(Image, str(get("thumb_topic")), out_qos)
         self.create_subscription(
             CompressedImage, str(get("image_topic")), self._on_image, sensor_qos
         )
@@ -222,6 +261,7 @@ class LapCounterNode(Node):
         self._process_count += 1
         if before != self._counter.state:
             self.get_logger().info("reference captured: counting laps from here")
+        self._publish_frame_record(msg, now)
         if event is not None:
             self._event_pub.publish(String(data=_json(event.to_dict())))
             self.get_logger().info(
@@ -229,15 +269,41 @@ class LapCounterNode(Node):
                 f"similarity {event.peak_similarity:.3f}, {event.distance_m:.2f} m"
             )
 
+    def _publish_frame_record(self, msg: CompressedImage, now_s: float) -> None:
+        """/lap/similarity and /lap/thumb for the frame just processed (recording only)."""
+        stamp = _stamp(now_s)
+        sim = self._counter.similarity
+        if sim is not None:
+            point = PointStamped()
+            point.header.stamp = stamp
+            point.header.frame_id = msg.header.frame_id
+            point.point.x = float(sim)
+            self._similarity_pub.publish(point)
+        thumb = self._counter.last_thumb
+        if thumb is not None:
+            img = Image()
+            img.header.stamp = stamp
+            img.header.frame_id = msg.header.frame_id
+            img.height, img.width = int(thumb.shape[0]), int(thumb.shape[1])
+            img.encoding = "mono8"
+            img.is_bigendian = 0
+            img.step = img.width
+            img.data = np.clip(np.rint(thumb), 0, 255).astype(np.uint8).tobytes()
+            self._thumb_pub.publish(img)
+
     def _on_reset(self, _request, response):
         self._counter.reset(capture_next_frame=True)
         response.success = True
-        response.message = "reset: the next frame becomes the reference, laps back to 0"
+        response.message = (
+            "reset: the next frame becomes the reference, laps back to 0 "
+            f"(reset_id={self._counter.reset_id})"
+        )
         self.get_logger().info(response.message)
         return response
 
     def _publish_status(self) -> None:
-        self._status_pub.publish(String(data=_json(self._counter.status())))
+        status = {**self._counter.status(), **self._counter.freshness(self._now_s())}
+        self._status_pub.publish(String(data=_json(status)))
 
     def _log_stats(self) -> None:
         window = max(time.monotonic() - self._last_stats_s, 1e-6)

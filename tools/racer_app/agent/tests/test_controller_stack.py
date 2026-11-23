@@ -397,3 +397,83 @@ def test_shutdown_mark_survives_an_unwritable_state_dir(env):
     shutil.rmtree(env.settings.state_dir)
     env.settings.state_dir.write_text("not a directory")
     env.controller.shutdown_mark()  # must not raise
+
+
+def _recording_bag(env):
+    bag = env.settings.bags / "2026-11-22T10-00-00_car_teleop"
+    bag.mkdir(parents=True)
+    (bag / "a.mcap").write_bytes(b"x")
+    return bag
+
+
+def test_stop_stack_closes_the_recorder_by_itself_before_the_container_sigint(env):
+    """The launch cuts a recorder off 10 s after its SIGINT; the app signals it alone first."""
+    env.running_car()
+    bag = _recording_bag(env)
+    env.world.recorder_close_polls = 90  # 90 s to write the footer: longer than the launch allows
+    order: list[str] = []
+    env.world.on_recorder_close = lambda: (
+        order.append("recorder closed"),
+        (bag / "metadata.yaml").write_text("x"),
+    )
+    result = env.controller.stop_stack(actor="me")
+    assert env.world.recorder_signals == 1
+    assert env.world.signals == [("car-stack", "INT")]
+    assert sum(env.sleeps) >= 80
+    assert order == ["recorder closed"]
+    assert result["bag_closed"] is True and result["bag"] == bag.name
+    assert "closed" in result["message"]
+    entry = env.last_log()
+    assert entry["ok"] is True and "recorder exited" in entry["detail"]
+
+
+def test_a_recorder_that_ignores_its_sigint_gets_the_whole_timeout_then_the_container_stop(env):
+    env.running_car()
+    bag = _recording_bag(env)
+    env.world.recorder_stuck = True
+    result = env.controller.stop_stack()
+    assert sum(env.sleeps) >= env.settings.stop_timeout_stack_s
+    assert env.world.signals[0] == ("car-stack", "INT")
+    assert result["bag_closed"] is False
+    assert "NOT closed" in result["message"] and bag.name in result["message"]
+    entry = env.last_log()
+    assert entry["ok"] is False and "recorder still running" in entry["detail"]
+
+
+def test_stop_stack_without_a_recorder_does_not_signal_one(env):
+    env.running_car()
+    env.world.recorder = False
+    env.controller.stop_stack()
+    assert getattr(env.world, "recorder_signals", 0) == 0
+
+
+def test_cameras_start_with_the_lap_counters_record_rate_when_the_launch_declares_it(env):
+    launch = env.settings.repo_dir / "ros_ws/src/racer_bringup/launch/cameras.launch.py"
+    launch.parent.mkdir(parents=True, exist_ok=True)
+    launch.write_text('DeclareLaunchArgument("lap_record_rate_hz", default_value="0.0")\n')
+    env.controller.start_cameras()
+    assert run_calls(env)[-1][-1].endswith(
+        "cameras.launch.py usb_device:=/dev/video1 lap_record_rate_hz:=10.0"
+    )
+
+
+def test_cameras_leave_the_record_rate_alone_when_the_launch_lacks_it(env):
+    env.controller.start_cameras()
+    assert "lap_record_rate_hz" not in run_calls(env)[-1][-1]
+
+
+def test_cameras_pass_saved_usb_fps_and_csi_off_when_declared(env):
+    from racer_agent.prefs import Prefs
+
+    launch = env.settings.repo_dir / "ros_ws/src/racer_bringup/launch/cameras.launch.py"
+    launch.parent.mkdir(parents=True, exist_ok=True)
+    launch.write_text('DeclareLaunchArgument("usb_fps")\nDeclareLaunchArgument("csi")\n')
+    env.controller.prefs_store.save(Prefs(camera_usb_fps=30, camera_csi=False))
+    env.controller.start_cameras()
+    assert run_calls(env)[-1][-1].endswith("usb_fps:=30 csi:=false")
+
+
+def test_cameras_default_prefs_send_neither(env):
+    env.controller.start_cameras()
+    last = run_calls(env)[-1][-1]
+    assert "usb_fps" not in last and "csi:=" not in last

@@ -311,6 +311,33 @@ describe("pnpBody lap learning", () => {
   });
 });
 
+describe("the camera lap length ratio band (owner decision 21)", () => {
+  const cam = { ...options, pnp: { ...options.pnp!, lap_sources: ["start_scan", "map_pose", "camera"] } } as Options;
+  const band = { lap_memory: true, lap_source: "camera" as const, lap_length_ratio_min: 0.75, lap_length_ratio_max: 1.5 };
+  const bodyOf = (over: Partial<Prefs["pnp"]>) => JSON.parse(JSON.stringify(pnpBody(pnpPrefs(over), cam)));
+  it("defaults to the registered band and sends nothing", () => {
+    expect(DEFAULT_PREFS.pnp.lap_length_ratio_min).toBe(0);
+    expect(DEFAULT_PREFS.pnp.lap_length_ratio_max).toBe(0);
+    expect(bodyOf({ lap_memory: true, lap_source: "camera" })).not.toHaveProperty("pnp_lap_length_ratio_min");
+  });
+  it("sends both ratios with the camera source", () => {
+    expect(bodyOf(band)).toMatchObject({ pnp_lap_length_ratio_min: 0.75, pnp_lap_length_ratio_max: 1.5, pnp_lap_source: "camera" });
+    expect(pnpSummary({ ...DEFAULT_PREFS, pnp: { ...DEFAULT_PREFS.pnp, ...band } }, cam)).toContain("length 0.75 to 1.5 x reference");
+  });
+  it("does not send them for another source or with lap learning off", () => {
+    expect(bodyOf({ ...band, lap_source: "map_pose" })).not.toHaveProperty("pnp_lap_length_ratio_max");
+    expect(bodyOf({ ...band, lap_memory: false })).not.toHaveProperty("pnp_lap_length_ratio_max");
+  });
+  it("refuses a band that does not straddle one, or a source that is not camera", () => {
+    const e = (over: Partial<Prefs["pnp"]>) => pnpErrors({ ...DEFAULT_PREFS.pnp, ...band, ...over }, cam);
+    expect(e({})).toEqual({});
+    expect(e({ lap_length_ratio_min: 1 }).lap_length_ratio_min).toBe("pnp lap length ratios must be 0 < min < 1 < max < 2");
+    expect(e({ lap_length_ratio_max: 2 }).lap_length_ratio_min).toBe("pnp lap length ratios must be 0 < min < 1 < max < 2");
+    expect(e({ lap_length_ratio_max: 0 }).lap_length_ratio_min).toBe("pnp lap length ratios must be 0 < min < 1 < max < 2");
+    expect(e({ lap_source: "map_pose" }).lap_length_ratio_min).toBe("pnp lap length ratios apply to lap source camera only");
+  });
+});
+
 describe("pnpSummary", () => {
   it("says what will run", () => {
     expect(pnpSummary(pnpPrefs({}), options)).toBe("geometric, cap 0.50, lap learning off, lap counter on");
@@ -320,5 +347,24 @@ describe("pnpSummary", () => {
     expect(pnpSummary(full, options)).toBe("geometric, cap 0.50, D v1 from 0.50, lap counter required, shadow net-a");
     expect(pnpSummary(pnpPrefs({ lap_counter: false }), options)).toContain("lap counter off");
     expect(pnpSummary(pnpPrefs({ ...lapChoicePatch("observe"), lap_source: "map_pose" }), options)).toContain("observe from 0.50, source map_pose");
+  });
+});
+
+describe("the camera lap counter rate", () => {
+  const bodyOf = (over: Partial<Prefs["pnp"]>) => JSON.parse(JSON.stringify(pnpBody(pnpPrefs(over), options)));
+  it("defaults to the launch's own rate and sends nothing", () => {
+    expect(DEFAULT_PREFS.pnp.lap_rate_hz).toBe(0);
+    expect(bodyOf({})).not.toHaveProperty("pnp_lap_rate_hz");
+  });
+  it("sends 30 Hz while the counter is on, and not with it off", () => {
+    expect(bodyOf({ lap_rate_hz: 30 })).toMatchObject({ pnp_lap_rate_hz: 30 });
+    expect(bodyOf({ lap_rate_hz: 30, lap_counter: false })).not.toHaveProperty("pnp_lap_rate_hz");
+    expect(pnpSummary({ ...DEFAULT_PREFS, pnp: { ...DEFAULT_PREFS.pnp, lap_rate_hz: 30 } }, options)).toContain("counter 30 Hz");
+  });
+  it("refuses a rate out of range or with the counter off", () => {
+    const e = (over: Partial<Prefs["pnp"]>) => pnpErrors({ ...DEFAULT_PREFS.pnp, ...over }, options);
+    expect(e({ lap_rate_hz: 30 })).toEqual({});
+    expect(e({ lap_rate_hz: 31 }).lap_rate_hz).toBe("pnp lap counter rate must be a number from 0 to 30 Hz");
+    expect(e({ lap_rate_hz: 30, lap_counter: false }).lap_rate_hz).toBe("pnp lap counter rate needs the lap counter on");
   });
 });

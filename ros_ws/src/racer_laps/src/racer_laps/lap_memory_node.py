@@ -53,6 +53,7 @@ from racer_laps.external_gate import (
     EXTERNAL_SOURCES,
     ExternalConfig,
     parse_event_json,
+    parse_status_camera,
     parse_status_json,
 )
 from racer_laps.gate import GateConfig
@@ -206,6 +207,22 @@ class LapMemoryNode(Node):
             "start-scan gate).",
             0.5,
             200.0,
+        )
+        length_ratio_min = declare(
+            "length_ratio_min",
+            0.0,
+            "camera source: a lap counts if its length is at least this times the reference "
+            "(owner decision 21). 0 with length_ratio_max 0: the registered band.",
+            0.0,
+            1.0,
+        )
+        length_ratio_max = declare(
+            "length_ratio_max",
+            0.0,
+            "camera source: a lap counts if its length is at most this times the reference "
+            "(owner decision 21; below 2, so a double lap stays doubtful). 0: the registered band.",
+            0.0,
+            2.0,
         )
         line_len = declare(
             "start_line_length_m",
@@ -488,7 +505,15 @@ class LapMemoryNode(Node):
             min_filter_half_m=float(min_filter),
             zone_merge=zone_merge,
             gate=gate if lap_source == "start_scan" or external else None,
-            external=ExternalConfig(min_lap_length_m=float(min_len)) if external else None,
+            external=(
+                ExternalConfig(
+                    min_lap_length_m=float(min_len),
+                    length_ratio_min=float(length_ratio_min),
+                    length_ratio_max=float(length_ratio_max),
+                )
+                if external
+                else None
+            ),
         )
         # A bad cap schedule (ceiling below start, ...) raises here and the node exits non-zero.
         self._mem = LapMemory(cfg)
@@ -632,7 +657,9 @@ class LapMemoryNode(Node):
             self.get_logger().warn("a lap source status did not parse or lacks a field: dropped")
             return
         state, laps, similarity = parsed
-        self._mem.on_lap_source_status(self._now_s(), state, laps, similarity)
+        self._mem.on_lap_source_status(
+            self._now_s(), state, laps, similarity, parse_status_camera(msg.data)
+        )
         self._log_ready_change()
 
     def _tick(self) -> None:

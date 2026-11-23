@@ -82,3 +82,10 @@ D8C0_RING_YAML_SHA256 = "74b1dccd0d30910a7e96a45af65a00de62446902380bfb2bae76512
 D9_YAML = "evaluation/prereg/pnp-v0.5-laps-camera.yaml"
 D9_YAML_SHA256 = "013cb2f8bec3ce96d2abf456361c3de93d8f85da48c01900c374287d7473807f"
 D9_FREEZE_FILE = "evaluation/prereg/freeze/b9.json"
+
+#: Brief 51c (the lap source is ready before the planner exists): the second attempt, battery B10,
+#: car gates D10-P0 and D10-C0. `pnp_session lap-src --d10` reads its thresholds through this file
+#: (refused unless its SHA-256 is the registered one), which names the D9 yaml above and the
+#: hash it must have: D10-C0 is D9-C0's items i to v with the same thresholds, plus item vi.
+D10_YAML = "evaluation/prereg/pnp-v0.5-laps-camera-2.yaml"
+D10_YAML_SHA256 = "823f641c8a40337e1a81aaa440d55976585d19984ae2db55f06f0eee1289bdcd"

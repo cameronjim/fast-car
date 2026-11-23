@@ -139,6 +139,22 @@ export function DriveTab() {
             onChange={(next) => c.savePrefs({ ...prefs, record_camera: next })}
             onErrorBadge={toLogs}
           />
+          <Toggle
+            label="CSI camera"
+            checked={prefs.camera_csi}
+            disabled={status.cameras.running || !c.prefsLoaded || !c.agentUp}
+            title="Set before Start car. Off for ML driver runs: less CPU load, the lap counter does not use it."
+            onChange={(next) => c.savePrefs({ ...prefs, camera_csi: next })}
+            onErrorBadge={toLogs}
+          />
+          <Toggle
+            label="USB 30 fps"
+            checked={prefs.camera_usb_fps === 30}
+            disabled={status.cameras.running || !c.prefsLoaded || !c.agentUp}
+            title="Set before Start car. Off is the camera's 60 fps. The lap counter needs at least 30."
+            onChange={(next) => c.savePrefs({ ...prefs, camera_usb_fps: next ? 30 : null })}
+            onErrorBadge={toLogs}
+          />
         </div>
 
         {panel}

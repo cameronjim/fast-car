@@ -74,5 +74,12 @@ def test_cameras_launch_lap_defaults_equal_lapconfig_defaults():
     module = _load(_CAMERAS)
     cfg = LapConfig()
     for param, default, _desc, kind in module.LAP_FORWARDED.values():
-        if kind is float:
+        if kind is float and param == "rate_hz":
+            assert float(default) == 15.0  # the node's own default (S1: the session passes 30)
+        elif kind is float:
             assert float(default) == getattr(cfg, param), param
+
+
+def test_launch_rate_default_is_the_node_default_15_and_not_the_session_value():
+    defaults = _defaults(_load(_LAUNCH).generate_launch_description().entities)
+    assert float(defaults["rate_hz"]) == 15.0  # the session passes 30 (pnp/cameras lap_rate_hz)

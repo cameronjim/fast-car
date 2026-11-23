@@ -55,6 +55,9 @@ class PnpPrefs(_Strict):
     lap_counter: bool = True
     require_lap_counter: bool = False
     shadow_perception: str = ""
+    # Owner decision 21 ratio length check of the camera lap gate; 0 and 0: the registered band.
+    lap_length_ratio_min: float = 0.0
+    lap_length_ratio_max: float = 0.0
 
 
 class TrackerPrefs(_Strict):
@@ -63,6 +66,9 @@ class TrackerPrefs(_Strict):
 
 class Prefs(_Strict):
     record_camera: bool = True
+    # cameras.launch.py usb_fps and csi. None and True send nothing: the launch's own defaults.
+    camera_usb_fps: int | None = Field(default=None, ge=5, le=60)
+    camera_csi: bool = True
     stack: StackPrefs = Field(default_factory=StackPrefs)
     gap_follow: GapFollowPrefs = Field(default_factory=GapFollowPrefs)
     pnp: PnpPrefs = Field(default_factory=PnpPrefs)

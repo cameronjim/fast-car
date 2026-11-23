@@ -22,10 +22,11 @@
 // A K line builds a TickInput the way the node's on_timer does: the latest distance field with
 // its header stamp, the latest track with its header stamp, the latest wheel speed stamped with
 // its ARRIVAL time (the node stamps odometry with now()), no lap guidance. One CSV row per K:
-// every TickOutput field plus now_s. NaN is written "nan". The last three columns are brief 42's:
+// every TickOutput field plus now_s. NaN is written "nan". Then three columns of brief 42:
 // final_sequence (0 mean, 1 fallback, 2 all collide, -1 no solver ran this tick),
 // unchecked_final_collided (the mean collided although a clean sample existed: M-C1) and
-// speed_limiter (PlannerTiming enum).
+// speed_limiter (PlannerTiming enum). Last, track_bridged (1 when the solve drove on the last
+// accepted track instead of an inconsistent new one, fix checklist S2).
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -100,6 +101,11 @@ std::map<std::string, Param> default_params() {
   d("conf_age_zero_s", lg.conf_age_zero_s, 0.0, 5.0);
   d("conf_rise_per_s", lg.conf_rise_per_s, 0.01, 100.0);
   d("freespace_speed_fraction", lg.freespace_speed_fraction, 0.3, 1.0);
+  i("track_bridge", cfg.consistency.enabled ? 1 : 0, 0, 1);
+  d("track_bridge_jump_m", cfg.consistency.max_centre_jump_m, 0.05, 2.0);
+  d("track_bridge_width_ratio", cfg.consistency.min_half_width_ratio, 0.0, 1.0);
+  i("track_bridge_stations", cfg.consistency.compare_stations, 2, 16);
+  d("track_bridge_max_age_s", cfg.consistency.max_hold_age_s, 0.0, 1.0);
   d("control_rate_hz", 50.0, 20.0, 100.0);
   i("horizon_steps", mp.horizon_steps, 5, 100);
   i("samples", mp.samples, kMinSamples, kMaxSamples);
@@ -215,6 +221,11 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   lg.conf_age_zero_s = v("conf_age_zero_s");
   lg.conf_rise_per_s = v("conf_rise_per_s");
   lg.freespace_speed_fraction = v("freespace_speed_fraction");
+  cfg.consistency.enabled = v("track_bridge") != 0.0;
+  cfg.consistency.max_centre_jump_m = v("track_bridge_jump_m");
+  cfg.consistency.min_half_width_ratio = v("track_bridge_width_ratio");
+  cfg.consistency.compare_stations = static_cast<int>(v("track_bridge_stations"));
+  cfg.consistency.max_hold_age_s = v("track_bridge_max_age_s");
   lg.use_lap_guidance = false;
   lg.steer_output_tau_s = v("steer_output_tau_s");
   lg.rate_limit_fraction = v("rate_limit_fraction");
@@ -432,7 +443,7 @@ int main(int argc, char** argv) {
          "freespace_goal_x_m,freespace_goal_y_m,freespace_reach_m,block_reason,recovery_attempts,"
          "elapsed_s,bunched,plan_stale,gap_reset,start_missing,steer_step_rad,steer_allow_rad,"
          "speed_up_step_mps,speed_allow_mps,slew_violation,final_sequence,unchecked_final_collided,"
-         "speed_limiter\n";
+         "speed_limiter,track_bridged\n";
   // The elapsed-time check (design 14.7): between two consecutive publishes the steering may move
   // by at most f * steering_rate * dt and the speed magnitude grow by at most f * max_accel * dt,
   // dt the real time between the two ticks (not clamped to a tick). One row per tick; the first
@@ -578,8 +589,8 @@ int main(int argc, char** argv) {
           << csv_number(steer_allow) << ',' << csv_number(speed_up) << ','
           << csv_number(speed_allow) << ',' << (violation ? 1 : 0) << ','
           << (o.has_final_sequence ? static_cast<int>(o.final_sequence) : -1) << ','
-          << (o.unchecked_final_collided ? 1 : 0) << ',' << static_cast<int>(o.speed_limiter)
-          << '\n';
+          << (o.unchecked_final_collided ? 1 : 0) << ',' << static_cast<int>(o.speed_limiter) << ','
+          << (o.track_bridged ? 1 : 0) << '\n';
       last_published_speed = o.cmd.speed_mps;
       last_published_steering = o.cmd.steering_rad;
     } else {

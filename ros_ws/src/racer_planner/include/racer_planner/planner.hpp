@@ -36,6 +36,7 @@
 #include "racer_planner/mppi.hpp"
 #include "racer_planner/planner_logic.hpp"
 #include "racer_planner/recovery.hpp"
+#include "racer_planner/track_consistency.hpp"
 #include "racer_planner/vehicle_geometry.hpp"
 
 namespace racer_planner {
@@ -48,7 +49,8 @@ struct PlannerConfig {
   SampleBudgetParams budget;
   RecoveryParams recovery;
   DrivabilityParams drivability;
-  int max_samples = 768;  // solver capacity, also the budget's upper bound
+  TrackConsistencyParams consistency;  // the one-frame track bridge (track_consistency.hpp)
+  int max_samples = 768;               // solver capacity, also the budget's upper bound
   double tick_s = 0.02;
 };
 
@@ -106,11 +108,14 @@ struct TickOutput {
   double plan_progress_m = 0.0;
   double plan_min_clearance_m = 0.0;
   double collision_fraction = 0.0;
-  double track_age_s = 0.0;
+  double track_age_s = 0.0;  // of the newest track, whether or not it was used
   double scan_age_s = 0.0;
   int samples = 0;
   bool samples_halved = false;  // the budget halved the sample count after this tick's solve
   double track_confidence = 0.0;
+  // The newest track was inconsistent with the last accepted one (track_consistency.hpp): this
+  // solve used the accepted track instead, and the confidence was judged on it.
+  bool track_bridged = false;
   bool has_freespace_goal = false;
   double freespace_goal_x_m = 0.0;  // base_link now, valid when has_freespace_goal
   double freespace_goal_y_m = 0.0;
@@ -144,6 +149,8 @@ struct SolveReport {
   double solve_time_s = 0.0;
   bool solver_ran = false;
   bool samples_halved = false;
+  bool track_bridged =
+      false;  // this solve bridged a new, inconsistent track frame (see TickOutput)
 };
 
 // What publish() works from. Fixed size, copied under the mutex.
@@ -214,6 +221,10 @@ class Planner {
     return gated_fallback_.load(std::memory_order_relaxed);
   }
   std::uint32_t bunched_ticks() const { return bunched_ticks_.load(std::memory_order_relaxed); }
+  // Track frames bridged so far (track_consistency.hpp); any thread.
+  std::uint32_t bridged_track_frames() const {
+    return bridged_frames_.load(std::memory_order_relaxed);
+  }
 
  private:
   // Published state shared with the solve side: what the commands in flight and the model say.
@@ -253,6 +264,7 @@ class Planner {
   Recovery recovery_;
   bool recovery_was_active_ = false;
   TrackProjector projector_;
+  TrackGate track_gate_;
   double confidence_ = 0.0;
   int horizon_;
   int delay_ticks_;
@@ -302,6 +314,7 @@ class Planner {
   Shared shared_;
 
   std::atomic<std::uint32_t> bunched_ticks_{0};
+  std::atomic<std::uint32_t> bridged_frames_{0};
 };
 
 }  // namespace racer_planner

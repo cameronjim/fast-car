@@ -221,6 +221,25 @@ class MppiPlannerNode : public rclcpp::Node {
     lg.freespace_speed_fraction =
         declare_double("freespace_speed_fraction", lg.freespace_speed_fraction, 0.3, 1.0,
                        "Share of the speed cap kept at track confidence 0.");
+    TrackConsistencyParams& tc = cfg.consistency;
+    tc.enabled = declare_bool("track_bridge", tc.enabled,
+                              "Drive on the last accepted local track for one frame when a new "
+                              "one jumps sideways and narrows against it (fix checklist S2).");
+    tc.max_centre_jump_m =
+        declare_double("track_bridge_jump_m", tc.max_centre_jump_m, 0.05, 2.0,
+                       "A new track station further than this from the accepted centreline is a "
+                       "jump (m).");
+    tc.min_half_width_ratio =
+        declare_double("track_bridge_width_ratio", tc.min_half_width_ratio, 0.0, 1.0,
+                       "A smallest half width under this share of the accepted track's is a "
+                       "collapse; a frame with a jump and a collapse is bridged.");
+    tc.compare_stations = static_cast<int>(
+        declare_int("track_bridge_stations", tc.compare_stations, 2, 16,
+                    "Stations from the start of the new track that are compared."));
+    tc.max_hold_age_s =
+        declare_double("track_bridge_max_age_s", tc.max_hold_age_s, 0.0, 1.0,
+                       "The accepted track stands in for a newer one only while it is at most "
+                       "this old (s).");
     lg.use_lap_guidance = declare_bool(
         "use_lap_guidance", false, "Cap the speed with /pnp/lap/guidance v_cap_mps when fresh.");
     lg.v_no_guidance_mps = declare_double(
@@ -759,12 +778,14 @@ class MppiPlannerNode : public rclcpp::Node {
     if (pin.now_s - gap_log_s_ >= 10.0) {
       if (gap_log_s_ > 0.0) {
         const std::uint32_t bunched = planner_->bunched_ticks();
-        RCLCPP_INFO(
-            get_logger(),
-            "tick gaps over 40 ms in the last 10 s: publish %u, solve %u; bunched ticks: %u",
-            pub_gaps_, solve_gaps_.exchange(0, std::memory_order_relaxed),
-            bunched - bunched_logged_);
+        const std::uint32_t bridged = planner_->bridged_track_frames();
+        RCLCPP_INFO(get_logger(),
+                    "tick gaps over 40 ms in the last 10 s: publish %u, solve %u; bunched ticks: "
+                    "%u; local track frames bridged: %u",
+                    pub_gaps_, solve_gaps_.exchange(0, std::memory_order_relaxed),
+                    bunched - bunched_logged_, bridged - bridged_logged_);
         bunched_logged_ = bunched;
+        bridged_logged_ = bridged;
       }
       pub_gaps_ = 0;
       gap_log_s_ = pin.now_s;
@@ -1064,6 +1085,7 @@ class MppiPlannerNode : public rclcpp::Node {
   std::uint32_t pub_gaps_ = 0;
   std::atomic<std::uint32_t> solve_gaps_{0};
   std::uint32_t bunched_logged_ = 0;
+  std::uint32_t bridged_logged_ = 0;
   std::uint32_t cycle_ = 0;
   bool stale_logged_ = false;
   double start_log_s_ = 0.0;

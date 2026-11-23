@@ -142,6 +142,20 @@ uv run --extra vision python lap_replay.py --images frames/ --fps 15 --odom-csv 
      similarity the trace shows between the line and the rest of the track, and below the
      `similarity_threshold` by a clear margin.
    - Turns far from 1 per lap (oval) in the table are a sign of a missed or a doubled lap.
+5. Peak table and thumbnails (2026-11-22). A session bag holds several runs: cut one with
+   `--t-from`/`--t-to` (log time, epoch seconds; `pnp_session session` prints each run's window),
+   and `--param start_speed_mps=0` so the window's first frame is the reference, as the launch's
+   reset makes it on the car. `--peak-table` then lists, per crossing of the line, the peak
+   against the standing reference (the counter's own) and against a driving reference (the frame
+   at the first crossing), and the highest similarity away from any crossing, so a threshold is
+   judged against both. `--lap-length-m` and `--first-crossing-m` place the crossings, else the
+   lap length comes from the counted laps. From the record stream the numbers are approximate
+   (5 or 10 frames/s against the counter's 12 to 15) and the output says so; a bag with
+   `/lap/thumb` (sensor_msgs/Image, mono8, the counter's own 64 x 48 thumbnail) is replayed from
+   that, exactly. `--save-thumbs out.npz` writes the replayed frames as thumbnails with the
+   odometry and `--thumbs out.npz` replays them: this is how `tools/tests/fixtures/
+   lap_thumbs_2026_11_22_obs3.npz` was made (run 3 of the 2026-11-22 bag, `--t-from 1795406674
+   --t-to 1795406694.5 --param start_speed_mps=0`).
 
 ## What is and is not verified
 

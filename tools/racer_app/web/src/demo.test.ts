@@ -99,6 +99,21 @@ describe("demo fake agent", () => {
     expect((await api.status()).drive.mode).toBe("pnp");
   });
 
+  it("the demo agent takes the ratio band with the camera source and refuses it otherwise", async () => {
+    const { car, api } = rig();
+    car.preset("running");
+    const base = { mode: "pnp", pnp_backend: "geometric", pnp_dynamics: "dyn-2026-10-20", pnp_lap_memory: true };
+    for (const bad of [
+      { pnp_lap_length_ratio_min: 0.75, pnp_lap_length_ratio_max: 1.5 },
+      { pnp_lap_source: "camera", pnp_lap_length_ratio_min: 1, pnp_lap_length_ratio_max: 1.5 },
+      { pnp_lap_source: "camera", pnp_lap_length_ratio_min: 0.75, pnp_lap_length_ratio_max: 2 },
+    ]) {
+      await expect(api.startDrive({ ...base, ...bad } as never)).rejects.toMatchObject({ status: 400 });
+    }
+    await api.startDrive({ ...base, pnp_lap_source: "camera", pnp_lap_length_ratio_min: 0.75, pnp_lap_length_ratio_max: 1.5 } as never);
+    expect((await api.status()).drive.mode).toBe("pnp");
+  });
+
   it("the demo agent refuses a speed cap above the dynamics bundle's validity, like the car", async () => {
     const { car, api } = rig();
     car.preset("running");

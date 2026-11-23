@@ -158,12 +158,13 @@ class Harness:
         msg.plan_min_clearance_m = 0.3
         self.planner_pub.publish(msg)
 
-    def odom(self) -> None:
+    def odom(self, wheel_mps: float = SPEED_MPS, cmd_mps: float = 0.0) -> None:
         msg = Odometry()
         msg.header.stamp = self.node.get_clock().now().to_msg()
-        msg.twist.twist.linear.x = SPEED_MPS
+        msg.twist.twist.linear.x = wheel_mps
         self.odom_pub.publish(msg)
         drive = AckermannDriveStamped()
+        drive.drive.speed = cmd_mps
         drive.drive.steering_angle = STEER
         self.drive_pub.publish(drive)
 
@@ -401,3 +402,42 @@ def test_the_shadow_node_has_no_publisher_on_the_guidance_topics(tmp_path: Path)
         assert h.node.get_publishers_info_by_topic("/pnp/lap_shadow/status")
     finally:
         h.close()
+
+
+def _stand(h: Harness, seconds: float, wheel_mps: float, cmd_mps: float) -> None:
+    """`seconds` of planner DRIVING, camera status, wheel odometry at `wheel_mps` and a gated
+    /drive speed of `cmd_mps` (S6)."""
+    t0 = time.monotonic()
+    next_status = 0.0
+    while time.monotonic() - t0 < seconds:
+        if time.monotonic() - t0 >= next_status:
+            h.camera_status()
+            next_status = time.monotonic() - t0 + 0.5
+        h.planner_driving()
+        h.odom(wheel_mps, cmd_mps)
+        h.spin(0.02)
+
+
+def test_start_unanswered_is_flagged_and_logged(tmp_path: Path) -> None:
+    h = Harness(tmp_path, ("lap_source:=camera", "start_unanswered_s:=1.0"))
+    h.wait_for_node()
+    try:
+        _stand(h, 3.0, wheel_mps=0.0, cmd_mps=1.0)
+        h.spin(1.2)
+        assert h.statuses[-1]["start_unanswered"] is True
+    finally:
+        out = h.close()
+    assert "start_unanswered" in out and "WARN" in out
+
+
+def test_a_car_that_answers_is_not_flagged(tmp_path: Path) -> None:
+    h = Harness(tmp_path, ("lap_source:=camera", "start_unanswered_s:=1.0"))
+    h.wait_for_node()
+    try:
+        _stand(h, 0.5, wheel_mps=0.0, cmd_mps=1.0)  # a short pause under the window
+        _stand(h, 3.0, wheel_mps=1.0, cmd_mps=1.0)
+        h.spin(1.2)
+        assert h.statuses[-1]["start_unanswered"] is False
+    finally:
+        out = h.close()
+    assert "start_unanswered:" not in out

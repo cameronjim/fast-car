@@ -957,6 +957,7 @@ def drive_table(bag: BagData) -> dict[str, Any]:
         "lap_source": st.get("lap_source"),
         "lap_mode": st.get("lap_mode"),
         "source_ready": st.get("source_ready"),
+        "start_unanswered": st.get("start_unanswered"),
         "reference_suspect": st.get("reference_suspect"),
         "reference_suspect_lap": st.get("reference_suspect_lap"),
         "rows": rows,
@@ -1083,7 +1084,8 @@ def markdown_drive(table: dict[str, Any]) -> str:
         (
             f"# drive table {table['bag']} ({table['lap_node']}, source {table['lap_source']}, "
             f"mode {table['lap_mode']}, source_ready {table['source_ready']}, "
-            f"reference_suspect {_suspect_text(table)})"
+            + ("START_UNANSWERED, " if table.get("start_unanswered") else "")
+            + f"reference_suspect {_suspect_text(table)})"
         ),
         "",
         "| lap | verdict | reasons | cap m/s | lap time s | length m | clean |",

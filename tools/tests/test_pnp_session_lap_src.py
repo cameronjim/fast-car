@@ -370,8 +370,18 @@ def test_the_drive_table_shows_verdicts_reasons_caps_and_clean_flags() -> None:
     assert table["rows"][0]["verdict"] == "confirmed" and table["rows"][0]["clean"] is True
     text = lap_src.markdown_drive(table)
     assert "| 3 | doubtful | length,heading |" in text
+    assert "START_UNANSWERED" not in text
     with pytest.raises(lap_src.NoCameraNode):
         lap_src.drive_table(Scenario(node_prefix=None).bag())
+
+
+def test_the_drive_table_surfaces_start_unanswered() -> None:
+    doubtful = [{"lap": 1, "event_lap": 1, "reasons": ["start_unanswered"]}]
+    bag = Scenario(node_prefix="/pnp/lap", node_doubtful=doubtful, node_confirmed=0).bag()
+    table = lap_src.drive_table(bag)
+    assert table["rows"][0]["reasons"] == ["start_unanswered"]
+    table["start_unanswered"] = True
+    assert "START_UNANSWERED" in lap_src.markdown_drive(table)
 
 
 # -- D9-B0 ----------------------------------------------------------------------------------------------

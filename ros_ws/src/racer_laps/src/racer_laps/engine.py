@@ -59,6 +59,8 @@ LAP_MODES = ("v0", "v1", "observe")
 GUIDANCE_SPACING_M = 0.10
 #: A sample of the lap is kept at most this often (the odometry runs at 50 Hz).
 SAMPLE_PERIOD_S = 0.04
+#: S6: a gated speed command at or above this (either direction) is a command to move.
+CMD_MOVING_MPS = 0.1
 RECENT_SAMPLES = 400
 PLANNER_MAX_ARRAY = 128
 
@@ -92,10 +94,15 @@ class LapConfig:
     #: constants with `min_lap_length_m` from this config. `gate` is then only the odometry model
     #: (wheelbase and yaw gain) of the external gate.
     external: ExternalConfig | None = None
+    #: S6: after the start, commands of at least `CMD_MOVING_MPS` sent for this long with no wheel
+    #: motion mark the run `start_unanswered` (mux in manual, motor off, ...). Status and log only.
+    start_unanswered_s: float = 3.0
 
     def __post_init__(self) -> None:
         if self.lap_source not in LAP_SOURCES:
             raise ValueError(f"lap_source must be one of {LAP_SOURCES}, got {self.lap_source!r}")
+        if not (math.isfinite(self.start_unanswered_s) and self.start_unanswered_s > 0.0):
+            raise ValueError("start_unanswered_s must be finite and positive")
         if self.lap_mode not in LAP_MODES:
             raise ValueError(f"lap_mode must be one of {LAP_MODES}, got {self.lap_mode!r}")
         if self.lap_source == "start_scan" and self.gate is None:
@@ -210,6 +217,10 @@ class LapMemory:
         # the last odometry samples (stamp, speed): the start scan's effective time is its header
         # stamp plus half a sweep, so odometry up to 0.05 s older than the scan's arrival is
         # already known when it starts lap 1
+        self._answered = False  # a wheel sample at or above STANDSTILL_MPS (either way) since start
+        self._cmd_moving_since = math.nan  # node clock: when the unanswered command run began
+        self._clock_s = math.nan
+        self.start_unanswered = False
         self._odom_tail: deque[tuple[float, float]] = deque(maxlen=200)
 
     # -- inputs ----------------------------------------------------------------------------
@@ -275,6 +286,8 @@ class LapMemory:
             )
         if not gate.started:
             return
+        if abs(v_mps) >= STANDSTILL_MPS:
+            self._answered = True
         if (
             math.isnan(self._first_motion_t)
             and t_s >= self._lap1_start_t
@@ -299,10 +312,35 @@ class LapMemory:
                 station,
             )
 
-    def on_drive(self, steering_rad: float) -> None:
-        """The gated steering angle from /drive (the heading integral of the gate)."""
+    def on_drive(
+        self, steering_rad: float, speed_mps: float = math.nan, t_s: float = math.nan
+    ) -> None:
+        """The gated steering angle from /drive (the heading integral of the gate). With the gated
+        speed and the node clock it also tracks whether the car answers the commands (S6)."""
         if self.gate is not None:
             self.gate.on_steering(steering_rad)
+        if not (math.isfinite(speed_mps) and math.isfinite(t_s)):
+            return
+        self._clock_s = float(t_s)
+        if abs(speed_mps) >= CMD_MOVING_MPS and self._started and not self._answered:
+            if math.isnan(self._cmd_moving_since):
+                self._cmd_moving_since = float(t_s)
+        else:
+            self._cmd_moving_since = math.nan
+        self._check_unanswered()
+
+    def _check_unanswered(self) -> None:
+        if (
+            self.start_unanswered
+            or self._answered
+            or not self._started
+            or math.isnan(self._cmd_moving_since)
+            or not self._clock_s - self._cmd_moving_since > self.cfg.start_unanswered_s
+        ):
+            return
+        self.start_unanswered = True
+        if isinstance(self.gate, ExternalLapGate):
+            self.gate.note_start_unanswered()
 
     def on_drive_raw(self, speed_mps: float, steering_rad: float) -> None:
         self._cmd_speed = float(speed_mps)
@@ -371,6 +409,9 @@ class LapMemory:
 
     def on_clock(self, t_s: float) -> None:
         """The node's clock tick (a silent source is noticed without any message)."""
+        if math.isfinite(t_s):
+            self._clock_s = float(t_s)
+            self._check_unanswered()
         if isinstance(self.gate, ExternalLapGate):
             self.gate.on_clock(t_s)
 
@@ -703,6 +744,7 @@ class LapMemory:
             out["lap1_start_stamp_s"] = self._lap1_start_t
             out["first_motion_stamp_s"] = self._first_motion_t
             out["launch_dwell_s"] = self.launch_dwell_s
+            out["start_unanswered"] = self.start_unanswered
         return out
 
     def _why_no_lap(self) -> str:

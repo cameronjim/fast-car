@@ -103,6 +103,10 @@ class Raceline:
     source: str  # "repo" or "data"
 
 
+#: Brief 39: the lap counter's camera records at this rate so a bag can be replayed by the counter.
+CAMERA_LAP_RECORD_RATE_HZ = 10.0
+
+
 def _describe_laps(params: dict[str, Any]) -> str:
     """The lap learning choices of a PnP start, for the log line (only what differs from off)."""
     lap = params.get("lap")
@@ -116,6 +120,8 @@ def _describe_laps(params: dict[str, Any]) -> str:
     text += f" lap_counter={'on' if lap['counter'] else 'off'}"
     if lap["require_counter"]:
         text += " require_lap_counter"
+    if lap.get("ratio_min") or lap.get("ratio_max"):
+        text += f" length_ratio={lap['ratio_min']:.2f}..{lap['ratio_max']:.2f}"
     if lap["shadow"]:
         text += f" shadow={lap['shadow']}"
     return text
@@ -568,25 +574,51 @@ class Controller:
         if name is None:
             return ""
         if (self.s.bags / name / "metadata.yaml").is_file():
-            return f"; bag {name} finalized (metadata.yaml present)"
+            return f"; bag {name} closed (finalized, metadata.yaml present)"
         return (
-            f"; bag {name} has NO metadata.yaml: the recorder did not close it "
+            f"; bag {name} NOT closed: it has NO metadata.yaml, the recorder did not finish it "
             "(try `ros2 bag reindex`)"
         )
+
+    def _close_recorder(self) -> str:
+        """SIGINT the bag recorder by itself and give it the whole stack timeout to close.
+
+        `ros2 launch` forwards the container's SIGINT to the recorder but follows it with SIGTERM
+        after the launch's `sigterm_timeout` (10 s) and SIGKILL 10 s later, and closing a
+        multi-GB bag takes longer than that, so the recorder was cut off with no footer and no
+        metadata.yaml (2026-11-22). Signalling it first, alone, and waiting until it is gone means
+        the launch only shuts down after the bag is closed. Returns a short note for the log;
+        never raises, and a recorder that will not exit is left to the container stop."""
+        res = self.runner.run(
+            cmd.exec_bash(self.s.stack_container, cmd.RECORDER_SIGINT_SCRIPT), timeout=15
+        )
+        if not res.ok:
+            return "; recorder SIGINT not delivered"
+        start = self._clock()
+        waited = 0.0
+        while waited < self.s.stop_timeout_stack_s:
+            if not self._recorder_running():
+                return f"; recorder exited {self._clock() - start:.0f} s after its own SIGINT"
+            self._sleep(1.0)
+            waited += 1.0
+        return f"; recorder still running {self.s.stop_timeout_stack_s:.0f} s after its own SIGINT"
 
     def stop_stack(self, actor: str = "") -> dict[str, Any]:
         with self._lock:
             bag = self._recording_bag()
             self._kill_drive()
+            recorder_note = self._close_recorder() if bag else ""
             how, detail = self._stop_container(self.s.stack_container, self.s.stop_timeout_stack_s)
             self._invalidate()
             bag_note = self._bag_finalized(bag) if how != "not present" else ""
+            closed = bool(bag) and "NO metadata" not in bag_note
             ok = how in ("stopped", "not present") and "NO metadata" not in bag_note
-            self._log("stack.stop", ok, actor, detail + bag_note)
+            self._log("stack.stop", ok, actor, detail + recorder_note + bag_note)
             return {
                 "message": f"stack {how}{bag_note}",
                 "bag": bag,
-                "bag_finalized": bool(bag) and "NO metadata" not in bag_note,
+                "bag_closed": closed,
+                "bag_finalized": closed,
             }
 
     def restart_stack(self, flags: cmd.StackFlags | None, actor: str = "") -> dict[str, Any]:
@@ -627,7 +659,15 @@ class Controller:
                     self.runner.run(["docker", "rm", name], timeout=20)
                 record = self.prefs_store.load().record_camera
                 argv = cmd.camera_run_argv(
-                    self.host, self.s.repo_dir, self.s.image, name, usb, record_streams=record
+                    self.host,
+                    self.s.repo_dir,
+                    self.s.image,
+                    name,
+                    usb,
+                    record_streams=record,
+                    lap_record_rate_hz=CAMERA_LAP_RECORD_RATE_HZ
+                    if "lap_record_rate_hz" in self.camera_launch_declarations()
+                    else None,
                 )
                 res = self.runner.run(argv, timeout=120)
                 if not res.ok:
@@ -854,6 +894,17 @@ class Controller:
             reason = ""
         return {"available": not reason, "reason": reason, **status}
 
+    def camera_launch_declarations(self) -> dict[str, tuple[str, ...] | None]:
+        """The argument names cameras.launch.py declares (read, never imported); empty when the
+        file is missing. An argument this build does not declare is not sent."""
+        launch = (
+            self.s.repo_dir / "ros_ws" / "src" / "racer_bringup" / "launch" / "cameras.launch.py"
+        )
+        try:
+            return cmd.parse_launch_declarations(launch.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            return {}
+
     def pnp_launch_declarations(self) -> dict[str, tuple[str, ...] | None]:
         """The argument names and choices pnp.launch.py declares, read from the file on every
         call (never imported). Empty when the file is missing or unreadable."""
@@ -964,6 +1015,8 @@ class Controller:
         pnp_lap_counter: Any = True,
         pnp_require_lap_counter: Any = False,
         pnp_shadow_perception: Any = "",
+        pnp_lap_length_ratio_min: Any = 0.0,
+        pnp_lap_length_ratio_max: Any = 0.0,
         max_speed_mps: float | None = None,
         min_speed_mps: float | None = None,
         a_lat_max_mps2: float | None = None,
@@ -1016,6 +1069,8 @@ class Controller:
                         pnp_lap_counter,
                         pnp_require_lap_counter,
                         pnp_shadow_perception,
+                        pnp_lap_length_ratio_min,
+                        pnp_lap_length_ratio_max,
                     ),
                 )
                 params.update(resolved)
@@ -1296,7 +1351,17 @@ class Controller:
                 )
         else:
             perception = ""
-        v_lap1, lap_memory, lap_mode, lap_source, lap_counter, require_counter, shadow = lap
+        (
+            v_lap1,
+            lap_memory,
+            lap_mode,
+            lap_source,
+            lap_counter,
+            require_counter,
+            shadow,
+            ratio_min,
+            ratio_max,
+        ) = lap
         if shadow and (not isinstance(shadow, str) or shadow not in status["perception"]):
             raise ActionError(
                 f"unknown shadow perception bundle {shadow!r} "
@@ -1311,6 +1376,8 @@ class Controller:
             lap_source=lap_source,
             lap_counter=lap_counter,
             require_lap_counter=require_counter,
+            length_ratio_min=ratio_min,
+            length_ratio_max=ratio_max,
             shadow_container_path=cmd.container_path(self.s.repo_dir, models / shadow)
             if shadow
             else "",
@@ -1349,6 +1416,8 @@ class Controller:
                     "counter": lap_counter,
                     "require_counter": require_counter,
                     "shadow": shadow,
+                    "ratio_min": ratio_min,
+                    "ratio_max": ratio_max,
                 },
             },
         )
@@ -1653,6 +1722,8 @@ class Controller:
                     lap_source=n.lap_source,
                     lap_counter=n.lap_counter,
                     require_lap_counter=n.require_lap_counter,
+                    length_ratio_min=n.lap_length_ratio_min,
+                    length_ratio_max=n.lap_length_ratio_max,
                     shadow_container_path=shadow if n.shadow_perception else "",
                 ),
                 driving if n.backend == "net" and n.perception else "",

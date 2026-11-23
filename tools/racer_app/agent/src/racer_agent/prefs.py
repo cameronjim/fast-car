@@ -55,6 +55,9 @@ class PnpPrefs(_Strict):
     lap_counter: bool = True
     require_lap_counter: bool = False
     shadow_perception: str = ""
+    # Owner decision 21 ratio length check of the camera lap gate; 0 and 0: the registered band.
+    lap_length_ratio_min: float = 0.0
+    lap_length_ratio_max: float = 0.0
 
 
 class TrackerPrefs(_Strict):

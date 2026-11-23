@@ -225,11 +225,15 @@ def camera_run_argv(
     container: str,
     usb_device: str | None,
     record_streams: bool = True,
+    lap_record_rate_hz: float | None = None,
 ) -> list[str]:
     """`docker run -d --name car-camera --runtime nvidia ...`: docker/car/README.md "Cameras".
 
     `record_streams=False` passes cameras.launch.py's own `record_streams:=false`: no
     camera_record_node, so no /camera/<name>/record/compressed for the stack's recorder to take.
+    `lap_record_rate_hz` is passed as cameras.launch.py's own `lap_record_rate_hz:=` (the lap
+    counter's camera records at that rate, so the bag can be replayed by the counter); None leaves
+    the launch's default. It is ignored with `record_streams=False`.
     The live full-rate topics are unchanged, and so is the stack's bag (LiDAR, drive, telemetry,
     rail voltage), which this never touches (CLAUDE.md invariant 5).
     """
@@ -265,6 +269,10 @@ def camera_run_argv(
         launch += f" usb_device:={usb_device}"
     if not record_streams:
         launch += " record_streams:=false"
+    elif lap_record_rate_hz is not None:
+        if not _is_number(lap_record_rate_hz) or not (0.0 < float(lap_record_rate_hz) <= 30.0):
+            raise CommandError("lap record rate must be between 0 and 30 Hz")
+        launch += f" lap_record_rate_hz:={float(lap_record_rate_hz):.1f}"
     argv += [
         "-v",
         f"{repo_dir}:/workspace",
@@ -472,6 +480,9 @@ class PnpLap:
     lap_counter: object = True
     require_lap_counter: object = False
     shadow_container_path: object = ""
+    # Owner decision 21: 0.0 and 0.0 is the registered band (nothing sent).
+    length_ratio_min: object = 0.0
+    length_ratio_max: object = 0.0
 
 
 def parse_launch_declarations(text: str) -> dict[str, tuple[str, ...] | None]:
@@ -555,6 +566,16 @@ def _pnp_lap_args(
         raise CommandError(f"pnp lap source must be one of {list(PNP_LAP_SOURCES)}")
     if not isinstance(lap.shadow_container_path, str):
         raise CommandError("pnp shadow perception bundle must be a bundle name")
+    ratios = (lap.length_ratio_min, lap.length_ratio_max)
+    if not all(_is_number(r) for r in ratios):
+        raise CommandError("pnp lap length ratios must be numbers")
+    r_lo, r_hi = float(lap.length_ratio_min), float(lap.length_ratio_max)  # type: ignore[arg-type]
+    ratio_on = (r_lo, r_hi) != (0.0, 0.0)
+    if ratio_on:
+        if not (0.0 < r_lo < 1.0 < r_hi < 2.0):
+            raise CommandError("pnp lap length ratios must be 0 < min < 1 < max < 2")
+        if lap.lap_source != "camera":
+            raise CommandError("pnp lap length ratios apply to lap source camera only")
 
     mode = lap.lap_mode
     observe = mode == "observe"
@@ -595,6 +616,9 @@ def _pnp_lap_args(
         used.append(("require_lap_counter", "true", None))
     if shadow:
         used.append(("shadow_perception_bundle", shadow, None))
+    if ratio_on:
+        used.append(("lap_length_ratio_min", f"{r_lo:.2f}", None))
+        used.append(("lap_length_ratio_max", f"{r_hi:.2f}", None))
     if launch is not None:
         for arg, _value, choice in used:
             if arg not in launch or (choice is not None and choice not in (launch[arg] or ())):
@@ -827,6 +851,11 @@ def recorder_check_argv(container: str) -> list[str]:
     """`docker top` lists the container's processes from the host, no exec needed."""
     # Newer docker refuses a ps format without a pid column.
     return ["docker", "top", container, "-eo", "pid,args"]
+
+
+#: Signals only the bag recorder inside the stack container. `[r]os2` keeps the pattern from
+#: matching this shell's own command line. The recorder is `ros2 bag record` (a python process).
+RECORDER_SIGINT_SCRIPT = "pkill -INT -f '[r]os2 bag record'"
 
 
 def recorder_running(top_output: str) -> bool:

@@ -185,3 +185,24 @@ are fixed in the planner: F1, a scan with fewer than `min_scan_points` usable po
 (speed 0 within a tick, back to DRIVING through the warm start when good scans return), F2, a
 scan stamp a few ms ahead of the tick reports age 0. In a short fault BLOCKED with block reason 2
 on a scan older than 0.35 s is the end of the cap ramp (fault_checks `ramp_stop`), not a violation.
+
+## The one frame track bridge (fix checklist 2026-11-22, item S2)
+
+On 2026-11-22 the planner braked to zero for one to six ticks 11 times in about 53 laps (BLOCKED,
+block reason 2); before 10 of them one `/pnp/local_track` frame had jumped sideways and narrowed,
+and the next frame was normal again. The planner now compares each new track with the last accepted
+one, moved into the new frame by its own dead reckoning (`racer_planner/track_consistency.hpp`).
+A frame where a station among the first 8 is more than `track_bridge_jump_m` (0.25 m) from the
+accepted centreline AND the smallest half width there is under `track_bridge_width_ratio` (0.75)
+of the accepted one is replaced by the accepted track for its lifetime: never two frames in a row,
+never with an accepted track older than `track_bridge_max_age_s` (0.40 s), never for an invalid
+frame. The scan's collision and clearance costs do not read the track, so an obstacle still
+stops the car. The CLI CSV has a last column, `track_bridged`; `track_bridge=false` turns it off.
+
+`tools/tests/fixtures/pnp_bridge_2026-11-22.npz` holds three blips and one clean stretch of bag
+2026-11-23T03-50-32 (not finalised: `cut_fixture --lenient --bridge-fixture`), and
+`tools/tests/test_pnp_replay_track_bridge.py` replays them: without the bridge two of them brake as
+the car did, with it the planner stays DRIVING at half the cap or more, and on the clean stretch the
+CSV is the same with and without it. Over all five runs of that bag (recorded tracks and ticks,
+dyn-v0.1, open loop) the short BLOCKED episodes while the recorded car drove went from 12 to 4 at
+512 samples and from 15 to 4 at 200 samples; 3.6 percent of driving ticks were bridged.

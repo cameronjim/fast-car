@@ -3,7 +3,7 @@
 // operator new and counts calls while armed; it is its own executable so no other test sees the
 // replacement. Exercises every branch of the output path: on-time ticks, bunched callbacks, late
 // ticks and gap resets, a stale plan, STARTING again after a long stop, silence of each input,
-// an old scan, garbage stamps.
+// a bridged track frame, an old scan, garbage stamps.
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -54,6 +54,12 @@ TEST(PlannerNoAlloc, SolveAndPublishNeverAllocateAfterWarmUp) {
   // the track is built once; only its stamp moves (building one allocates, outside the window)
   LocalTrackData track = good_track(0.0);
   LocalTrackData bent = good_track(0.0, 0.3);
+  // jumps 0.3 m and narrows against `track`: the one frame bridge copies and holds tracks
+  LocalTrackData narrow = good_track(0.0, 0.3);
+  for (int k = 0; k < kTrackStations; ++k) {
+    narrow.half_width_left_m[k] = 0.2;
+    narrow.half_width_right_m[k] = 0.2;
+  }
   std::vector<PointXY> wall;
   for (double y = -1.0; y <= 1.0; y += 0.02) wall.push_back({0.1, y});
   DistanceField wall_field;
@@ -67,6 +73,7 @@ TEST(PlannerNoAlloc, SolveAndPublishNeverAllocateAfterWarmUp) {
                  const LocalTrackData* trk, bool bunch_publish) {
     track.stamp_s = now - 0.1;
     bent.stamp_s = now - 0.1;
+    narrow.stamp_s = now - 0.1;
     TickInput in;
     in.now_s = now;
     in.has_odom = odom;
@@ -120,6 +127,7 @@ TEST(PlannerNoAlloc, SolveAndPublishNeverAllocateAfterWarmUp) {
     const bool scan = i % 131 != 0;
     const double scan_age = i % 53 == 0 ? 0.45 : 0.1;
     const LocalTrackData* trk = i % 61 == 0 ? nullptr : ((i / 20) % 2 == 0 ? &track : &bent);
+    if (i % 23 == 0 && trk == &track) trk = &narrow;  // one inconsistent frame: bridged
     run(t, wall_phase, odom, scan, scan_age, trk, i % 5 == 0);
     switch (out.state) {
       case PlannerState::Driving:
@@ -135,6 +143,7 @@ TEST(PlannerNoAlloc, SolveAndPublishNeverAllocateAfterWarmUp) {
     bunched += out.bunched ? 1 : 0;
   }
   EXPECT_EQ(g_allocations.load(), 0) << "heap allocations in solve or publish after warm up";
+  EXPECT_GT(r.planner.bridged_track_frames(), 10u);
   // the run really went through the branches it is meant to cover
   EXPECT_GT(driving, 500);
   EXPECT_GT(starting, 5);

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -106,68 +107,110 @@ def _stamp(header: Any) -> float:
     return float(header.stamp.sec) + float(header.stamp.nanosec) * 1e-9
 
 
-def extract(bag: Path, topics: tuple[str, ...] = TOPICS) -> Recording:
-    """Read the topics of a bag (a .mcap file, or a directory holding one) through its summary
-    index. Times are returned relative to the first /scan's log time (`t0_log_s`)."""
+def _indexed_messages(file: Path, topics: tuple[str, ...]) -> Iterator[tuple[int, str, Any]]:
+    """(log time ns, topic, decoded message) through the mcap summary index."""
     from mcap.reader import make_reader
     from mcap_ros2.decoder import DecoderFactory
 
+    with file.open("rb") as stream:
+        reader = make_reader(stream, decoder_factories=[DecoderFactory()])
+        for _schema, channel, message, msg in reader.iter_decoded_messages(topics=list(topics)):
+            yield int(message.log_time), channel.topic, msg
+
+
+def _streamed_messages(file: Path, topics: tuple[str, ...]) -> Iterator[tuple[int, str, Any]]:
+    """The same front to back, for a bag that was not finalised (no summary, a truncated tail):
+    chunks are opened without a CRC check and the read stops at the first broken record."""
+    from mcap.records import Channel, Message, Schema
+    from mcap.stream_reader import StreamReader
+    from mcap_ros2.decoder import DecoderFactory
+
+    wanted = set(topics)
+    factory = DecoderFactory()
+    schemas: dict[int, Any] = {}
+    channels: dict[int, Any] = {}
+    decoders: dict[int, Any] = {}
+    with file.open("rb") as stream:
+        reader = StreamReader(stream, skip_magic=False, emit_chunks=False, validate_crcs=False)
+        try:
+            for record in reader.records:
+                if isinstance(record, Schema):
+                    schemas[record.id] = record
+                elif isinstance(record, Channel):
+                    channels[record.id] = record
+                elif isinstance(record, Message):
+                    channel = channels.get(record.channel_id)
+                    if channel is None or channel.topic not in wanted:
+                        continue
+                    decoder = decoders.get(record.channel_id)
+                    if decoder is None:
+                        decoder = factory.decoder_for(
+                            channel.message_encoding, schemas.get(channel.schema_id)
+                        )
+                        decoders[record.channel_id] = decoder
+                    yield int(record.log_time), channel.topic, decoder(record.data)
+        except Exception as error:  # noqa: BLE001 - EndOfFile, a bad length, a truncated chunk
+            log.warning("%s: read stopped at a broken record (%s)", file.name, error)
+
+
+def extract(bag: Path, topics: tuple[str, ...] = TOPICS, lenient: bool = False) -> Recording:
+    """Read the topics of a bag (a .mcap file, or a directory holding one) through its summary
+    index, or front to back with `lenient` (a bag that was not finalised). Times are returned
+    relative to the first /scan's log time (`t0_log_s`)."""
     files = [bag] if bag.is_file() else sorted(bag.glob("*.mcap"))
     if not files:
         raise FileNotFoundError(f"no .mcap file in {bag}")
     cols: dict[str, list[Any]] = {g: [] for g in GROUPS}
     started = time.perf_counter()
     count = 0
+    messages = _streamed_messages if lenient else _indexed_messages
     for file in files:
-        with file.open("rb") as stream:
-            reader = make_reader(stream, decoder_factories=[DecoderFactory()])
-            for _schema, channel, message, msg in reader.iter_decoded_messages(topics=list(topics)):
-                t = message.log_time / 1e9
-                topic = channel.topic
-                count += 1
-                if count % 20000 == 0:
-                    log.info("  %d messages, %.0f s", count, time.perf_counter() - started)
-                if topic == SCAN_TOPIC:
-                    cols["scan"].append(
-                        (
-                            t,
-                            _stamp(msg.header),
-                            msg.angle_min,
-                            msg.angle_increment,
-                            msg.range_min,
-                            msg.range_max,
-                            quantise_ranges(np.asarray(msg.ranges, dtype=np.float32)),
-                        )
+        for log_time_ns, topic, msg in messages(file, topics):
+            t = log_time_ns / 1e9
+            count += 1
+            if count % 20000 == 0:
+                log.info("  %d messages, %.0f s", count, time.perf_counter() - started)
+            if topic == SCAN_TOPIC:
+                cols["scan"].append(
+                    (
+                        t,
+                        _stamp(msg.header),
+                        msg.angle_min,
+                        msg.angle_increment,
+                        msg.range_min,
+                        msg.range_max,
+                        quantise_ranges(np.asarray(msg.ranges, dtype=np.float32)),
                     )
-                elif topic == ODOM_TOPIC:
-                    cols["odom"].append((t, float(msg.twist.twist.linear.x)))
-                elif topic == DRIVE_TOPIC:
-                    cols["drive"].append((t, msg.drive.speed, msg.drive.steering_angle))
-                elif topic == DRIVE_RAW_TOPIC:
-                    cols["draw"].append((t, msg.drive.speed, msg.drive.steering_angle))
-                elif topic == EVENTS_TOPIC:
-                    cols["ev"].append(
-                        (t, int(msg.severity), int(msg.phase), str(msg.source), str(msg.detail))
+                )
+            elif topic == ODOM_TOPIC:
+                cols["odom"].append((t, float(msg.twist.twist.linear.x)))
+            elif topic == DRIVE_TOPIC:
+                cols["drive"].append((t, msg.drive.speed, msg.drive.steering_angle))
+            elif topic == DRIVE_RAW_TOPIC:
+                cols["draw"].append((t, msg.drive.speed, msg.drive.steering_angle))
+            elif topic == EVENTS_TOPIC:
+                cols["ev"].append(
+                    (t, int(msg.severity), int(msg.phase), str(msg.source), str(msg.detail))
+                )
+            elif topic == TRACK_TOPIC:
+                cols["trk"].append(
+                    (
+                        t,
+                        _stamp(msg.header),
+                        np.asarray(msg.x_m, dtype=np.float32),
+                        np.asarray(msg.y_m, dtype=np.float32),
+                        np.asarray(msg.half_width_left_m, dtype=np.float32),
+                        np.asarray(msg.half_width_right_m, dtype=np.float32),
+                        np.asarray(msg.sigma_m, dtype=np.float32),
+                        int(msg.valid_count),
+                        float(msg.boundary_residual_m),
+                        float(msg.intrusion_fraction),
                     )
-                elif topic == TRACK_TOPIC:
-                    cols["trk"].append(
-                        (
-                            t,
-                            _stamp(msg.header),
-                            np.asarray(msg.x_m, dtype=np.float32),
-                            np.asarray(msg.y_m, dtype=np.float32),
-                            np.asarray(msg.half_width_left_m, dtype=np.float32),
-                            np.asarray(msg.half_width_right_m, dtype=np.float32),
-                            np.asarray(msg.sigma_m, dtype=np.float32),
-                            int(msg.valid_count),
-                            float(msg.boundary_residual_m),
-                            float(msg.intrusion_fraction),
-                        )
-                    )
-                elif topic == STATUS_TOPIC:
-                    cols["st"].append((t, *(float(getattr(msg, f)) for f in STATUS_FIELDS)))
-                elif topic == PLAN_TOPIC:
-                    cols["plan"].append((t, len(msg.poses)))
+                )
+            elif topic == STATUS_TOPIC:
+                cols["st"].append((t, *(float(getattr(msg, f)) for f in STATUS_FIELDS)))
+            elif topic == PLAN_TOPIC:
+                cols["plan"].append((t, len(msg.poses)))
     if not cols["scan"]:
         raise ValueError(f"{bag}: no /scan messages")
     t0 = float(cols["scan"][0][0])
@@ -238,9 +281,10 @@ def read_recording(path: Path) -> Recording:
     return rec
 
 
-def load_recording(bag: Path, cache: Path | None) -> Recording:
+def load_recording(bag: Path, cache: Path | None, lenient: bool = False) -> Recording:
     """The bag's recording from its .npz cache when there is one, else read the bag (and write
-    the cache). `bag` may itself be an .npz recording (a test fixture)."""
+    the cache; `lenient` reads a bag that was not finalised, see `extract`). `bag` may itself be
+    an .npz recording (a test fixture)."""
     if bag.suffix == ".npz":
         return read_recording(bag)
     if cache is not None and cache.is_file() and cache.stat().st_mtime >= bag.stat().st_mtime:
@@ -250,7 +294,7 @@ def load_recording(bag: Path, cache: Path | None) -> Recording:
         except ValueError as error:
             log.warning("%s; reading the bag again", error)
     log.info("reading %s (indexed, a few minutes the first time)", bag)
-    rec = extract(bag)
+    rec = extract(bag, lenient=lenient)
     if cache is not None:
         save_recording(rec, cache)
         log.info("cached %s", cache)

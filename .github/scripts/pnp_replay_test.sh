@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs tools/tests/test_pnp_replay.py, test_pnp_replay_schema21.py and test_pnp_replay_faults.py (every fault against the
+# Runs tools/tests/test_pnp_replay.py, test_pnp_replay_schema21.py, test_pnp_replay_track_bridge.py (the one frame
+# track bridge on real 2026-11-22 frames) and test_pnp_replay_faults.py (every fault against the
 # perception core and the planner, on the committed fixture) against the planner_replay_cli that colcon just built, so
 # the end to end planner replay tests run in CI instead of being skipped (tools/pnp_replay.py,
 # docs/notes/pnp-replay.md). Run after ros_build_test.sh, in the same ros-dev container.
@@ -19,4 +20,4 @@ export PNP_REPLAY_REQUIRE_CLI=1
 # reaches the tools/ venv's interpreter and breaks it; the CMake gen_params step unsets it too.
 unset PYTHONPATH
 cd "${ROOT}/tools"
-uv run pytest tests/test_pnp_replay.py tests/test_pnp_replay_faults.py tests/test_pnp_replay_allowance.py tests/test_pnp_replay_schema21.py -v -rs
+uv run pytest tests/test_pnp_replay.py tests/test_pnp_replay_faults.py tests/test_pnp_replay_allowance.py tests/test_pnp_replay_schema21.py tests/test_pnp_replay_track_bridge.py -v -rs

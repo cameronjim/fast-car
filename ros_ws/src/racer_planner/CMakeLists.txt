@@ -39,6 +39,7 @@ add_library(racer_planner_core
   src/sha256.cpp
   src/bundle_loader.cpp
   src/local_track.cpp
+  src/track_consistency.cpp
   src/distance_field.cpp
   src/footprint.cpp
   src/freespace_field.cpp
@@ -110,6 +111,7 @@ if(BUILD_TESTING)
     test/test_sha256.cpp
     test/test_bundle_loader.cpp
     test/test_local_track.cpp
+    test/test_track_consistency.cpp
     test/test_distance_field.cpp
     test/test_footprint.cpp
     test/test_freespace_field.cpp

@@ -50,6 +50,7 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
             return r;
           }(),
           geometry, solver_params(config, dynamics).speed_floor_mps),
+      track_gate_(config.consistency),
       horizon_(std::max(2, config.mppi.horizon_steps)),
       delay_ticks_(std::min(
           25, std::max(0, static_cast<int>(
@@ -178,6 +179,26 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   ego_.push(now, odom_fresh ? in.wheel_speed_mps : est.v, est.delta, acting_now.speed_cmd,
             acting_now.steering_cmd);
 
+  // The one-frame bridge (track_consistency.hpp): a new track frame that jumps and narrows against
+  // the last accepted one is replaced by that accepted track for its lifetime, at most one frame
+  // in a row and only while the accepted track is younger than max_hold_age_s. Everything the
+  // solve takes from the track (confidence, projection) uses the selected one.
+  const LocalTrackData* track = in.track;
+  {
+    Pose2 accepted_in_newest;
+    bool covered = false;
+    if (track_gate_.is_new_frame(in.track) && track_gate_.has_accepted()) {
+      accepted_in_newest =
+          ego_.relative_pose(in.track->stamp_s, track_gate_.accepted_stamp_s(), &covered);
+    }
+    const std::uint32_t before = track_gate_.bridged_frames();
+    track = track_gate_.select(in.track, now, accepted_in_newest, covered);
+    if (track_gate_.bridged_frames() != before) {
+      rep.track_bridged = true;
+      bridged_frames_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
   LogicInputs li;
   li.now_s = now;
   li.has_odom = odom_valid;
@@ -188,13 +209,13 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   li.has_scan = in.has_scan && in.field != nullptr &&
                 in.field->seed_count() >= static_cast<std::size_t>(std::max(0, lg.min_scan_points));
   li.scan_stamp_s = in.scan_stamp_s;
-  if (in.track != nullptr) {
+  if (track != nullptr) {
     li.track.present = true;
-    li.track.stamp_s = in.track->stamp_s;
-    li.track.validity = validate_track(*in.track);
-    li.track.valid_count = in.track->valid_count;
-    li.track.boundary_residual_m = in.track->boundary_residual_m;
-    li.track.intrusion_fraction = in.track->intrusion_fraction;
+    li.track.stamp_s = track->stamp_s;
+    li.track.validity = validate_track(*track);
+    li.track.valid_count = track->valid_count;
+    li.track.boundary_residual_m = track->boundary_residual_m;
+    li.track.intrusion_fraction = track->intrusion_fraction;
   }
   li.has_guidance = in.has_guidance;
   li.guidance_stamp_s = in.guidance_stamp_s;
@@ -209,6 +230,7 @@ SolveReport Planner::solve_impl(const TickInput& in) {
   TickOutput& out = snap.status;
   out.est_speed_mps = est.v;
   out.est_steering_rad = est.delta;
+  out.track_bridged = track_gate_.last_pick() == TrackPick::kBridged;
   auto age_or_neg = [&](bool present, double stamp) {
     const double a = present ? age_s(now, stamp) : -1.0;
     // A stamp a few ms ahead of the tick (a swapped pair of scans) is clock skew, not a negative
@@ -240,8 +262,8 @@ SolveReport Planner::solve_impl(const TickInput& in) {
     double c_raw = track_confidence_raw(li.track, now, lg);
     bool track_ok = false;
     const Pose2 frame_change =
-        in.track != nullptr ? ego_.relative_pose(in.scan_stamp_s, in.track->stamp_s) : Pose2{};
-    if (c_raw > 0.0 && in.track != nullptr) track_ok = projector_.build(*in.track, frame_change);
+        track != nullptr ? ego_.relative_pose(in.scan_stamp_s, track->stamp_s) : Pose2{};
+    if (c_raw > 0.0 && track != nullptr) track_ok = projector_.build(*track, frame_change);
     if (!track_ok) c_raw = 0.0;
     confidence_ = track_confidence(c_raw, confidence_, tick, lg.conf_rise_per_s);
     if (!track_ok) confidence_ = 0.0;

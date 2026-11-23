@@ -298,6 +298,7 @@ def test_similarity_and_thumb_are_published_per_processed_frame_with_the_same_st
 def test_nothing_is_published_for_a_frame_the_throttle_drops_or_that_does_not_decode(make_harness):
     h = make_harness(162, **{**_NO_GATES, "rate_hz": 2.0})
     assert h.connected()
+    h.odom(1.0, 0.0)
     h.spin_for(0.1)
     h.frame(_texture(70), settle_s=0.1)
     h.frame(_texture(71), settle_s=0.0)  # dropped by the 2 Hz throttle

@@ -849,6 +849,7 @@ class MppiPlannerNode : public rclcpp::Node {
         out.has_freespace_goal ? static_cast<float>(out.freespace_reach_m) : nan;
     status_.block_reason = static_cast<uint8_t>(out.block_reason);
     status_.recovery_attempts = static_cast<uint8_t>(std::min(out.recovery_attempts, 255));
+    status_.start_missing = static_cast<uint8_t>(out.start_missing);
     const std::uint32_t id_version = perception_id_version_.load(std::memory_order_acquire);
     if (id_version != status_id_version_) {
       status_id_version_ = id_version;

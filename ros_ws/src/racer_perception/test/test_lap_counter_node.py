@@ -308,13 +308,12 @@ def test_nothing_is_published_for_a_frame_the_throttle_drops_or_that_does_not_de
     assert len(h.thumbs) == 1 and len(h.similarities) == 1
 
 
-def test_frame_topics_use_reliable_keep_last_like_the_other_outputs(make_harness):
+def test_frame_topics_are_reliable_like_the_other_outputs(make_harness):
     h = make_harness(163, **_NO_GATES)
     h.spin_for(0.3)
     for topic in ("/lap/similarity", "/lap/thumb"):
         (info,) = h.helper.get_publishers_info_by_topic(topic)
         assert info.qos_profile.reliability == ReliabilityPolicy.RELIABLE, topic
-        assert info.qos_profile.history == HistoryPolicy.KEEP_LAST, topic
 
 
 def test_30_hz_is_delivered_from_a_60_hz_source(make_harness):

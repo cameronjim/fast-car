@@ -1149,4 +1149,6 @@ def test_no_shadow_lap_node_by_default(monkeypatch, tmp_path) -> None:
 
 def test_the_recorder_regex_takes_the_shadow_lap_topics() -> None:
     text = (Path(__file__).resolve().parents[1] / "launch" / "car_teleop.launch.py").read_text()
-    assert '|/lap/(event|status|similarity|thumb)|/pnp/.*)$"' in text  # /pnp/lap_shadow/* is under /pnp/
+    assert (
+        '|/lap/(event|status|similarity|thumb)|/pnp/.*)$"' in text
+    )  # /pnp/lap_shadow/* is under /pnp/

@@ -183,12 +183,23 @@ def unit_signature(thumb: np.ndarray, min_std: float = 0.0) -> np.ndarray | None
     return v / norm
 
 
-def make_signature(gray: np.ndarray, cfg: LapConfig, min_std: float = 0.0) -> np.ndarray | None:
-    """Gray image of any size -> the vector the similarity is a dot product of."""
-    thumb = resize_area(gray, cfg.thumb_width_px, cfg.thumb_height_px)
+def make_thumb(gray: np.ndarray, cfg: LapConfig) -> np.ndarray:
+    """Gray image of any size -> the thumbnail (float32, before the blur)."""
+    return resize_area(gray, cfg.thumb_width_px, cfg.thumb_height_px)
+
+
+def signature_from_thumb(
+    thumb: np.ndarray, cfg: LapConfig, min_std: float = 0.0
+) -> np.ndarray | None:
+    """Thumbnail -> the vector the similarity is a dot product of."""
     if cfg.blur:
         thumb = blur3(thumb)
     return unit_signature(thumb, min_std)
+
+
+def make_signature(gray: np.ndarray, cfg: LapConfig, min_std: float = 0.0) -> np.ndarray | None:
+    """Gray image of any size -> the vector the similarity is a dot product of."""
+    return signature_from_thumb(make_thumb(gray, cfg), cfg, min_std)
 
 
 # ---------------------------------------------------------------------------------- counter
@@ -211,6 +222,7 @@ class LapCounter:
         # the frames since it
         self.frame_seq = 0
         self.last_frame_t: float | None = None
+        self.last_thumb: np.ndarray | None = None
         self.reset_id = 0
         self._initialised = False
         self.reset(capture_next_frame=False)
@@ -275,8 +287,10 @@ class LapCounter:
         this frame closed a lap window, else None."""
         if not math.isfinite(t):
             return None
-        sig = make_signature(
-            gray, self.cfg, self.cfg.min_reference_std if self._ref is None else 0.0
+        thumb = make_thumb(gray, self.cfg)
+        self.last_thumb = thumb  # what /lap/thumb publishes (the node reads it, nothing else does)
+        sig = signature_from_thumb(
+            thumb, self.cfg, self.cfg.min_reference_std if self._ref is None else 0.0
         )
         return self.update_signature(t, sig)
 

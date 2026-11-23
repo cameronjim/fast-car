@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 
 import lap_replay
@@ -91,9 +93,11 @@ def test_replay_counts_the_laps_a_drive_makes_and_records_the_trace():
 def test_replay_applies_the_frame_rate_limit_like_the_node():
     msgs = drive(1.3)  # 15 fps input
     full = replay(msgs, FAST, rate_hz=0.0, decode=raw_decode)
-    half = replay(msgs, FAST, rate_hz=10.0, decode=raw_decode)  # every second 15 Hz frame
-    assert half.frames_seen == full.frames_seen
-    assert abs(half.frames_processed - full.frames_seen / 2) <= 2
+    limited = replay(msgs, FAST, rate_hz=10.0, decode=raw_decode)
+    assert limited.frames_seen == full.frames_seen
+    # S1: the throttle keeps a phase, so 10 Hz out of 15 fps is 10 of every 15 frames (the old
+    # "period since the last accepted" rule delivered 7.5 Hz here)
+    assert abs(limited.frames_processed - full.frames_seen * 10 / 15) <= 2
 
 
 def test_replay_counts_undecodable_frames_and_keeps_going():
@@ -304,6 +308,25 @@ def _odom_msg(t: float, speed: float, x: float, yaw: float) -> dict:
     }
 
 
+THUMB_DEF = """\
+std_msgs/Header header
+uint32 height
+uint32 width
+string encoding
+uint8 is_bigendian
+uint32 step
+uint8[] data
+================================================================================
+MSG: std_msgs/Header
+builtin_interfaces/Time stamp
+string frame_id
+================================================================================
+MSG: builtin_interfaces/Time
+int32 sec
+uint32 nanosec
+"""
+
+
 def write_bag(
     path: Path,
     msgs: list[Msg],
@@ -319,9 +342,26 @@ def write_bag(
         writer = Writer(stream, chunk_size=64 * 1024)
         image_schema = writer.register_msgdef("sensor_msgs/msg/CompressedImage", IMAGE_DEF)
         odom_schema = writer.register_msgdef("nav_msgs/msg/Odometry", ODOM_DEF)
+        thumb_schema = writer.register_msgdef("sensor_msgs/msg/Image", THUMB_DEF)
         for m in msgs:
             log = round(m.t * 1e9)
-            if m.kind == "image":
+            if m.kind == "thumb":
+                h, w = m.data.shape
+                writer.write_message(
+                    "/lap/thumb",
+                    thumb_schema,
+                    {
+                        "header": {"stamp": _time(0.0), "frame_id": "cam"},
+                        "height": h,
+                        "width": w,
+                        "encoding": "mono8",
+                        "is_bigendian": 0,
+                        "step": w,
+                        "data": list(m.data.tobytes()),
+                    },
+                    log_time=log,
+                )
+            elif m.kind == "image":
                 for topic in image_topics:
                     writer.write_message(
                         topic,
@@ -613,3 +653,242 @@ def test_reference_report_counts_matched_missed_and_false(tmp_path):
 def test_main_split_run_rejects_a_bag_next_to_it():
     with pytest.raises(SystemExit, match="replaces"):
         lap_replay.main(["some.mcap", "--split-run", "L0"])
+
+
+# ------------------------------------------------------------- thumbnails and the peak table
+
+THUMB_CFG = replace(FAST, start_speed_mps=0.0)
+FIXTURE = Path(__file__).parent / "fixtures" / "lap_thumbs_2026_11_22_obs3.npz"
+
+
+def thumb_drive(laps: float, **kw):
+    """The drive as the counter's own thumbnails: the frames are already 64 x 48."""
+    return [
+        Msg("thumb", m.t, raw_decode(m.data, 4)) if m.kind == "image" else m
+        for m in drive(laps, **kw)
+    ]
+
+
+def test_thumbs_replay_like_images_and_are_not_rate_limited():
+    msgs = drive(2.3)
+    thumbs = thumb_drive(2.3)
+    by_image = replay(msgs, FAST, rate_hz=0.0, decode=raw_decode)
+    by_thumb = replay(thumbs, FAST, rate_hz=1.0)  # a 1 Hz limit would drop most images
+    assert by_thumb.frames_processed == by_thumb.frames_seen == by_image.frames_seen
+    assert by_thumb.frame_kind == "thumb" and by_image.frame_kind == "image"
+    assert [e.crossing_time_s for e in by_thumb.events] == [
+        e.crossing_time_s for e in by_image.events
+    ]
+
+
+def test_replay_keeps_frames_only_when_asked():
+    r = replay(thumb_drive(1.3), FAST)
+    assert r.frames == []
+    r = replay(thumb_drive(1.3), FAST, keep_frames=True)
+    assert len(r.frames) == r.frames_processed
+    assert r.frames[-1].distance_m > r.frames[0].distance_m
+    assert float(np.linalg.norm(r.frames[5].signature)) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_estimate_lap_length_folds_missed_laps_and_ignores_a_short_alias():
+    assert lap_replay.estimate_lap_length([]) is None
+    assert lap_replay.estimate_lap_length([0.0, math.nan]) is None
+    assert lap_replay.estimate_lap_length([5.5, 5.6, 5.4]) == pytest.approx(5.5, abs=0.05)
+    assert lap_replay.estimate_lap_length([5.6, 11.0]) == pytest.approx(5.5, abs=0.15)
+    assert lap_replay.estimate_lap_length([4.2, 5.5, 5.5, 11.1, 5.6]) == pytest.approx(5.5, abs=0.1)
+
+
+def test_peak_table_finds_every_crossing_and_the_off_mark_level():
+    result = replay(thumb_drive(4.2), THUMB_CFG, keep_frames=True)
+    table = lap_replay.peak_table(result)
+    assert table is not None
+    assert [c.lap for c in table.crossings] == [1, 2, 3, 4]
+    assert table.lap_length_m == pytest.approx(LOOP_PX / PX_PER_FRAME * 0.0667, rel=0.1)
+    for c in table.crossings:
+        assert c.standing_peak > 0.95
+    assert table.crossings[0].driving_peak is None
+    assert all(c.driving_peak > 0.95 for c in table.crossings[1:])
+    hi, p99, n = table.off_mark["standing"]
+    assert hi < 0.8 and p99 <= hi and n > 20
+    assert table.peaks("standing") == [c.standing_peak for c in table.crossings]
+    assert len(table.peaks("driving")) == 3
+
+
+def test_peak_table_takes_the_lap_length_and_first_crossing_from_the_arguments():
+    result = replay(thumb_drive(3.2), THUMB_CFG, keep_frames=True)
+    auto = lap_replay.peak_table(result)
+    given = lap_replay.peak_table(
+        result, lap_length_m=auto.lap_length_m, first_station_m=auto.first_station_m
+    )
+    assert [c.station_m for c in given.crossings] == pytest.approx(
+        [c.station_m for c in auto.crossings]
+    )
+    # a first crossing placed 3 m before the real one finds the best frame inside 0.7 m of it
+    off = lap_replay.peak_table(result, auto.lap_length_m, auto.first_station_m - 3.0)
+    assert off.crossings[0].standing_peak < 0.8
+
+
+def test_peak_table_is_none_without_a_reference_or_a_way_to_place_crossings():
+    nothing = replay([m for m in thumb_drive(1.3) if m.kind != "odom"], FAST, keep_frames=True)
+    assert lap_replay.peak_table(nothing) is None
+    gated = replay(
+        thumb_drive(1.3),
+        replace(THUMB_CFG, min_lap_time_s=100.0),
+        keep_frames=True,
+    )
+    assert gated.events == [] and lap_replay.peak_table(gated) is None
+    assert lap_replay.peak_table(gated, 5.0, 5.0) is not None
+
+
+def test_render_peak_table_says_exact_or_approximate_and_flags_a_miss():
+    result = replay(thumb_drive(3.2), THUMB_CFG, keep_frames=True)
+    table = lap_replay.peak_table(result)
+    exact = "\n".join(lap_replay.render_peak_table(table, "thumb", None))
+    assert "exact: the counter's own thumbnails" in exact and "APPROXIMATE" not in exact
+    approx = "\n".join(lap_replay.render_peak_table(table, "image", 4.7))
+    assert "APPROXIMATE" in approx and "4.7 frames/s" in approx
+    table.crossings[1].standing_peak = 0.7
+    text = "\n".join(lap_replay.render_peak_table(table, "thumb", None))
+    assert "0.700 <" in text and "under the threshold 0.8: 1" in text
+    assert "(reference)" in text and "margin" in text
+
+
+def test_thumb_from_image_reads_mono8_and_refuses_the_rest():
+    from types import SimpleNamespace
+
+    arr = np.arange(12, dtype=np.uint8)
+    ok = SimpleNamespace(encoding="mono8", height=3, width=3, step=4, data=bytes(arr))
+    assert lap_replay.thumb_from_image(ok).tolist() == [[0, 1, 2], [4, 5, 6], [8, 9, 10]]
+    assert lap_replay.thumb_from_image(SimpleNamespace(**{**vars(ok), "encoding": "rgb8"})) is None
+    assert lap_replay.thumb_from_image(SimpleNamespace(**{**vars(ok), "data": b"\x00" * 5})) is None
+    assert lap_replay.thumb_from_image(SimpleNamespace(**{**vars(ok), "height": 0})) is None
+
+
+def test_a_bag_with_lap_thumb_is_replayed_from_it_exactly(tmp_path, capsys):
+    msgs = thumb_drive(2.3)
+    bag = tmp_path / "thumbs.mcap"
+    write_bag(bag, msgs)
+    counts = lap_replay.list_bag_topics(bag)
+    assert counts["/lap/thumb"] > 0
+    assert lap_replay.pick_image_topic(counts, None) == "/lap/thumb"  # preferred, no camera needed
+    read = list(lap_replay.iter_bag_messages(bag, "/lap/thumb", "/odom/wheel", "/odom"))
+    thumbs = [m for m in read if m.kind == "thumb"]
+    assert len(thumbs) == sum(1 for m in msgs if m.kind == "thumb")
+    assert thumbs[3].data.tolist() == [m for m in msgs if m.kind == "thumb"][3].data.tolist()
+    code = lap_replay.main(
+        [str(bag), "--param", "min_lap_time_s=3", "--param", "min_lap_distance_m=1", "--peak-table"]
+    )
+    out = capsys.readouterr().out
+    assert code == 0 and "exact: the counter's own thumbnails" in out and "laps counted: 2" in out
+
+
+def test_save_thumbs_round_trips_through_the_npz(tmp_path):
+    msgs = thumb_drive(2.3)
+    path = tmp_path / "t.npz"
+    n = lap_replay.save_thumbs(path, msgs)
+    assert n == sum(1 for m in msgs if m.kind == "thumb")
+    assert lap_replay.thumbs_are_exact(path)
+    back = list(lap_replay.iter_thumbs_messages(path))
+    assert [m.t for m in back] == sorted(m.t for m in back)
+    assert {m.kind for m in back} == {"thumb", "odom", "yaw"}
+    a = replay(msgs, FAST)
+    b = replay(back, FAST)
+    assert [e.lap for e in b.events] == [e.lap for e in a.events]
+    assert [e.crossing_time_s for e in b.events] == pytest.approx(
+        [e.crossing_time_s for e in a.events]
+    )
+    assert b.events[0].heading_turns == pytest.approx(a.events[0].heading_turns, abs=0.01)
+
+
+def test_save_thumbs_of_jpeg_frames_is_marked_approximate(tmp_path):
+    cv2 = pytest.importorskip("cv2")
+    world = make_world()
+    _, buf = cv2.imencode(".png", view(world, 0))
+    msgs = [Msg("odom", T0, (1.0, 0.0)), Msg("image", T0, buf.tobytes())]
+    path = tmp_path / "a.npz"
+    assert lap_replay.save_thumbs(path, msgs) == 1
+    assert not lap_replay.thumbs_are_exact(path)
+    first = next(m for m in lap_replay.iter_thumbs_messages(path) if m.kind == "thumb")
+    assert first.data.shape == (VIEW_H, VIEW_W)
+
+
+def test_a_thumbs_file_without_the_exact_flag_is_taken_as_approximate(tmp_path):
+    path = tmp_path / "old.npz"
+    np.savez(path, t_s=np.zeros(0))
+    assert not lap_replay.thumbs_are_exact(path)
+
+
+def test_main_thumbs_window_and_source_errors(tmp_path, capsys):
+    path = tmp_path / "t.npz"
+    lap_replay.save_thumbs(path, thumb_drive(3.2))
+    args = ["--param", "start_speed_mps=0", "--param", "min_lap_time_s=3"]
+    args += ["--param", "min_lap_distance_m=1"]
+    assert lap_replay.main(["--thumbs", str(path), *args]) == 0
+    out = capsys.readouterr().out
+    assert "approximate" not in out and "laps counted: 3" in out
+    # a window that ends after one lap
+    assert lap_replay.main(["--thumbs", str(path), "--t-to", str(T0 + 7.0), *args]) == 0
+    out = capsys.readouterr().out
+    assert "window: log time -inf to" in out and "laps counted: 1" in out
+    with pytest.raises(SystemExit, match="either a bag or"):
+        lap_replay.main(["--thumbs", str(path), "--images", str(tmp_path)])
+    with pytest.raises(SystemExit, match="no such file"):
+        lap_replay.main(["--thumbs", str(tmp_path / "none.npz")])
+    with pytest.raises(SystemExit, match="split-run replaces"):
+        lap_replay.main(["--split-run", "L0", "--thumbs", str(path)])
+
+
+def test_main_peak_table_message_when_it_cannot_place_crossings(tmp_path, capsys):
+    path = tmp_path / "t.npz"
+    lap_replay.save_thumbs(path, thumb_drive(1.3))
+    code = lap_replay.main(
+        ["--thumbs", str(path), "--peak-table", "--param", "start_speed_mps=0"]
+        + ["--param", "min_lap_time_s=100"]
+    )
+    assert code == 0 and "no crossings could be placed" in capsys.readouterr().out
+
+
+def test_main_save_thumbs_writes_what_it_replayed(tmp_path, capsys):
+    src = tmp_path / "src.npz"
+    lap_replay.save_thumbs(src, thumb_drive(2.3))
+    out = tmp_path / "out.npz"
+    code = lap_replay.main(
+        ["--thumbs", str(src), "--t-to", str(T0 + 5.0), "--save-thumbs", str(out)]
+    )
+    assert code == 0 and "thumbnails written to" in capsys.readouterr().out
+    n = sum(1 for m in lap_replay.iter_thumbs_messages(out) if m.kind == "thumb")
+    assert 70 < n < 80  # 5 s at 15 fps
+
+
+# ---- L4: the thumbnails of the 2026-11-22 run 3 (ccw, 1.0 m/s, dim): a golden of the table
+
+
+def test_fixture_thumbs_replay_and_peak_table_match_the_session_numbers(capsys):
+    assert not lap_replay.thumbs_are_exact(FIXTURE)  # made from the record stream (5 fps)
+    result = replay(
+        lap_replay.iter_thumbs_messages(FIXTURE),
+        LapConfig(start_speed_mps=0.0),
+        keep_frames=True,
+    )
+    result.frame_kind = "image"
+    assert result.frames_processed == 97
+    # the counter, as on the car (the launch's reset: the first frame is the reference)
+    assert [e.lap for e in result.events] == [1, 2]
+    assert [e.peak_similarity for e in result.events] == pytest.approx([0.840, 0.937], abs=0.005)
+    assert [e.distance_m for e in result.events] == pytest.approx([5.62, 11.02], abs=0.05)
+    table = lap_replay.peak_table(result)
+    assert table is not None
+    assert table.lap_length_m == pytest.approx(5.6, abs=0.1)
+    assert [c.lap for c in table.crossings] == [1, 2, 3]
+    assert [c.standing_peak for c in table.crossings] == pytest.approx(
+        [0.840, 0.778, 0.937], abs=0.005
+    )
+    assert [c.driving_peak for c in table.crossings[1:]] == pytest.approx([0.700, 0.875], abs=0.005)
+    assert table.off_mark["standing"][0] == pytest.approx(0.736, abs=0.01)
+    assert table.off_mark["driving"][0] == pytest.approx(0.760, abs=0.01)
+    # the middle crossing is a peak under 0.80: the counter missed it (a double lap)
+    assert table.crossings[1].standing_peak < table.threshold
+    # the driving reference does not lift the weakest crossing here (checklist 3.5)
+    assert min(table.peaks("driving")) < min(table.peaks("standing"))
+    text = "\n".join(lap_replay.render_peak_table(table, result.frame_kind, 4.7))
+    assert "APPROXIMATE" in text and "0.778 <" in text

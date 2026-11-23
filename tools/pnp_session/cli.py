@@ -227,6 +227,19 @@ def cmd_lap_src(args: argparse.Namespace) -> int:
     return code
 
 
+def cmd_session(args: argparse.Namespace) -> int:
+    """The checks of a car session read by hand in 2026-11-22, per run (session_checks)."""
+    from pnp_session import session_checks
+
+    report, text = session_checks.run([Path(b) for b in args.bag])
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(report, indent=2, sort_keys=True, default=_json_default) + "\n"
+        )
+    print(text)
+    return 0
+
+
 def cmd_host_facts(args: argparse.Namespace, runner: hostfacts.Runner | None = None) -> int:
     facts = hostfacts.collect(runner or hostfacts.default_runner)
     out_dir = Path(args.out_dir)
@@ -454,6 +467,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ls.add_argument("--out", help="write the JSON here")
     ls.set_defaults(func=cmd_lap_src)
+    se = sub.add_parser(
+        "session",
+        help="per run: lap table, peaks, missed crossings, blips, samples, safety legs (read only)",
+    )
+    se.add_argument("--bag", action="append", required=True, help="a bag, once per bag")
+    se.add_argument("--out", help="write the JSON here")
+    se.set_defaults(func=cmd_session)
     h = sub.add_parser("host-facts", help="scheduling policy, CPU governor, load: read only")
     h.add_argument("--out-dir", required=True)
     h.set_defaults(func=cmd_host_facts)

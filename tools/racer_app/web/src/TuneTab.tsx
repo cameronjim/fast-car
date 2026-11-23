@@ -22,6 +22,7 @@ import {
   pnpSpeedLimit,
   prefsProblems,
   samePrefs,
+  RATIO_BAND,
 } from "./prefs";
 import { Card, ErrorBadge, Icon, Pill, SkeletonCard } from "./ui";
 
@@ -257,18 +258,61 @@ export function TuneTab() {
                 </div>
               </div>
               {pErr.lap_source && <div class="why">{pErr.lap_source}</div>}
+              {n.lap_source === "camera" && (
+                <>
+                  <div class="field">
+                    <span>Lap length check</span>
+                    <div class="seg" role="group" aria-label="ML driver camera lap length check">
+                      {([false, true] as const).map((ratio) => {
+                        const isRatio = n.lap_length_ratio_min !== 0 || n.lap_length_ratio_max !== 0;
+                        return (
+                          <button
+                            key={String(ratio)}
+                            aria-pressed={isRatio === ratio}
+                            onClick={() =>
+                              setPnp(
+                                ratio
+                                  ? { lap_length_ratio_min: RATIO_BAND.min, lap_length_ratio_max: RATIO_BAND.max }
+                                  : { lap_length_ratio_min: 0, lap_length_ratio_max: 0 },
+                              )
+                            }
+                          >
+                            {ratio ? `${RATIO_BAND.min} to ${RATIO_BAND.max} x reference` : "registered band"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {pErr.lap_length_ratio_min && <div class="why">{pErr.lap_length_ratio_min}</div>}
+                </>
+              )}
             </>
           )}
           <div class="field">
             <span>Camera lap counter</span>
             <div class="seg" role="group" aria-label="ML driver camera lap counter">
               {([true, false] as const).map((on) => (
-                <button key={String(on)} aria-pressed={n.lap_counter === on} onClick={() => setPnp({ lap_counter: on, ...(on ? {} : { require_lap_counter: false }) })}>
+                <button key={String(on)} aria-pressed={n.lap_counter === on} onClick={() => setPnp({ lap_counter: on, ...(on ? {} : { require_lap_counter: false, lap_rate_hz: 0 }) })}>
                   {on ? "on" : "off"}
                 </button>
               ))}
             </div>
           </div>
+          {n.lap_counter && (
+            <>
+              <div class="field">
+                <span>Counter rate</span>
+                <div class="seg" role="group" aria-label="ML driver camera lap counter rate">
+                  {([0, 30] as const).map((hz) => (
+                    <button key={hz} aria-pressed={n.lap_rate_hz === hz} onClick={() => setPnp({ lap_rate_hz: hz })}>
+                      {hz === 0 ? "15 Hz (default)" : "30 Hz"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {pErr.lap_rate_hz && <div class="why">{pErr.lap_rate_hz}</div>}
+            </>
+          )}
           <div class="field">
             <span>Require the counter</span>
             <div class="seg" role="group" aria-label="ML driver require lap counter">

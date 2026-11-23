@@ -94,6 +94,12 @@ LAP_FORWARDED = {
         "CompressedImage topic the lap counter watches.",
         str,
     ),
+    "lap_rate_hz": (
+        "rate_hz",
+        "15.0",
+        "Lap counter: frames processed per second (a fixed phase; the car session uses 30).",
+        float,
+    ),
     "lap_similarity_threshold": (
         "similarity_threshold",
         "0.8",

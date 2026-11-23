@@ -188,6 +188,10 @@ FIRST_DRIVE_SPEED_STEP_MPS = 0.18
 #: `--ros-args -p min_speed_mps:=0.57 -p speed_step_mps:=0.18`.
 FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 
+#: Seconds the recorder gets after SIGINT (and again after SIGTERM) to finish closing its bag
+#: before launch escalates. Equal to the racer app's stop_timeout_stack_s.
+_RECORDER_CLOSE_TIMEOUT_S = 600
+
 #: Everything a drive has to be reconstructable from (CLAUDE.md invariant 5). Passed to
 #: `ros2 bag record --regex`, not as a positional topic list, for two reasons: a topic that
 #: does not exist on this run (`/scan` when lidar:=false, the default) is simply not
@@ -248,6 +252,10 @@ FIRST_DRIVE_MIN_SPEED_MPS = 0.57
 #:   /lap/(event|status)
 #:                     lap_counter_node's lap events and 1 Hz state (2026-11-12), when it runs
 #:                     (cameras.launch.py lap_counter:=true). Small JSON Strings.
+#:   /lap/(similarity|thumb)
+#:                     per processed frame (S1, 2026-11-22): the similarity (PointStamped) and the
+#:                     64 x 48 mono8 thumbnail it was computed on (3 kB at up to 30 Hz), so the
+#:                     counter can be replayed exactly from the bag.
 #:   /pnp/...          the Plug-and-Play driver: local track, plan, planner status, lap events
 #:   /map              slam_toolbox's map as it grew (mapping:=true), or map_server's latched
 #:                     copy (localization:=true); about 1 Hz, a few hundred kB each
@@ -258,7 +266,7 @@ _RECORDED_TOPIC_REGEX = (
     r"|/camera/[^/]+/record/compressed|/rosout|/parameter_events"
     r"|/odom|/odom/wheel_twist|/pose|/tf|/tf_static|/map"
     r"|/perception/(objects|target|poses|detections)|/spiderbot/(alert|state|patrol_cmd)"
-    r"|/lap/(event|status)|/pnp/.*)$"
+    r"|/lap/(event|status|similarity|thumb)|/pnp/.*)$"
 )
 
 
@@ -322,9 +330,14 @@ def _bag_actions(context, *args, **kwargs):
         name="rosbag_recorder",
         output="screen",
         # `ros2 bag record` handles SIGINT itself and closes the bag cleanly; SIGTERM would
-        # leave the metadata unwritten, so never escalate faster than the default.
-        sigterm_timeout="10",
-        sigkill_timeout="10",
+        # leave the metadata unwritten, so never escalate faster than the bag can finish
+        # closing. Closing a multi-GB bag takes minutes, and 10 s (the old value) killed the
+        # recorder first whenever the stack was stopped from a terminal or by `docker stop`,
+        # leaving a bag with no metadata.yaml. The same wait as the racer app's own stack stop
+        # (stop_timeout_stack_s, 600 s); a recorder that has exited ends the launch at once, so
+        # a normal stop is not slower.
+        sigterm_timeout=str(_RECORDER_CLOSE_TIMEOUT_S),
+        sigkill_timeout=str(_RECORDER_CLOSE_TIMEOUT_S),
     )
 
     return [

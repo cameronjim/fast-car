@@ -77,7 +77,7 @@ run "tools" report tools
 if want tools; then
 echo "::group::pytest: tools/pnp_session (gate=line90 on the package)"
 if ! (cd tools && uv sync --all-extras --dev &&
-  uv run pytest tests/test_pnp_session.py tests/test_pnp_session_v04.py tests/test_pnp_session_lap_c0.py tests/test_pnp_session_lap_src.py tests/test_pnp_session_lap_src_d10.py tests/test_pnp_cap_schedule.py tests/test_pnp_excitation_plan.py --cov=pnp_session --cov-report=term-missing \
+  uv run pytest tests/test_pnp_session.py tests/test_pnp_session_v04.py tests/test_pnp_session_lap_c0.py tests/test_pnp_session_lap_src.py tests/test_pnp_session_lap_src_d10.py tests/test_pnp_session_checks.py tests/test_pnp_cap_schedule.py tests/test_pnp_excitation_plan.py --cov=pnp_session --cov-report=term-missing \
     --cov-fail-under=90); then
   FAIL=1
 fi

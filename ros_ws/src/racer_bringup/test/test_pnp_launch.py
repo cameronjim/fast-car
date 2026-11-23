@@ -50,6 +50,7 @@ def _context(**overrides: str) -> LaunchContext:
         "lap_length_ratio_min": "0.0",
         "lap_length_ratio_max": "0.0",
         "lap_counter": "false",
+        "lap_rate_hz": "15.0",
         "require_lap_counter": "false",
         "deskew": "false",
         "shadow_perception_bundle": "",
@@ -108,6 +109,7 @@ def test_argument_defaults() -> None:
         "lap_source": "start_scan",
         "lap_shadow": "",
         "lap_counter": "true",
+        "lap_rate_hz": "15.0",
         "require_lap_counter": "false",
         "deskew": "false",
         "shadow_perception_bundle": "",
@@ -475,6 +477,53 @@ def test_the_lap_counter_is_started_and_reset_by_default_and_the_driver_is_untou
     nodes = [a for a in actions if hasattr(a, "node_package")]
     assert [n.node_package for n in nodes] == ["racer_track_perception", "racer_planner"]
     assert len(_shutdown_handlers(actions)) == 2
+
+
+def test_the_lap_rate_is_forwarded_to_the_counter_this_launch_starts(monkeypatch) -> None:
+    _with_perception_installed(monkeypatch)
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    _execute, include, _log, _timer = _types()
+    for given, expected in (("15.0", "15.0"), ("30", "30.0")):
+        actions = m._make_actions(_context(lap_counter="true", lap_rate_hz=given))
+        (inc,) = [a for a in actions if isinstance(a, include)]
+        args = {
+            "".join(getattr(t, "text", str(t)) for t in k): "".join(
+                getattr(t, "text", str(t)) for t in v
+            )
+            for k, v in inc.launch_arguments
+        }
+        assert args == {"rate_hz": expected}
+
+
+def test_a_non_finite_lap_rate_is_refused(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    with pytest.raises(RuntimeError, match="lap_rate_hz"):
+        m._make_actions(_context(lap_counter="true", lap_rate_hz="nan"))
+
+
+def test_a_clean_lap_counter_exit_is_info_not_error(monkeypatch) -> None:
+    _with_perception_installed(monkeypatch)
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: False)
+    _execute, _include, log, _timer = _types()
+    actions = m._make_actions(_context(lap_counter="true"))
+    handlers = [
+        h
+        for h in actions
+        if isinstance(h, RegisterEventHandler)
+        and getattr(h.event_handler, "_OnActionEventBase__action_matcher", None) is None
+    ]
+    on_exit = handlers[0].event_handler._OnActionEventBase__on_event
+    event = types.SimpleNamespace(process_name="lap_counter_node-3", returncode=0)
+    out = on_exit(event, LaunchContext())
+    assert len(out) == 1 and isinstance(out[0], log)
+    text = "".join(getattr(t, "text", str(t)) for t in out[0].msg)
+    assert "ERROR" not in text and "cleanly" in text
+    assert not any(isinstance(x, EmitEvent) for x in out)
 
 
 def test_a_lap_counter_already_in_the_graph_is_not_started_again_but_is_reset(monkeypatch) -> None:
@@ -1100,4 +1149,6 @@ def test_no_shadow_lap_node_by_default(monkeypatch, tmp_path) -> None:
 
 def test_the_recorder_regex_takes_the_shadow_lap_topics() -> None:
     text = (Path(__file__).resolve().parents[1] / "launch" / "car_teleop.launch.py").read_text()
-    assert '|/lap/(event|status)|/pnp/.*)$"' in text  # /pnp/lap_shadow/* is under /pnp/
+    assert (
+        '|/lap/(event|status|similarity|thumb)|/pnp/.*)$"' in text
+    )  # /pnp/lap_shadow/* is under /pnp/

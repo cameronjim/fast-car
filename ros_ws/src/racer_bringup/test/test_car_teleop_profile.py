@@ -136,3 +136,28 @@ def test_recorder_topic_list_includes_safety_cycle_and_keeps_the_rest():
     for topic in ("/safety/cycle", "/safety/events", "/drive", "/drive_raw", "/pnp/plan"):
         assert regex.match(topic), topic
     assert not regex.match("/safety/cycle/extra")
+
+
+def test_recorder_regex_takes_the_lap_similarity_and_thumb_topics_and_stays_anchored():
+    import re
+
+    regex = re.compile(_load_launch_module()._RECORDED_TOPIC_REGEX)
+    for topic in ("/lap/event", "/lap/status", "/lap/similarity", "/lap/thumb"):
+        assert regex.match(topic), topic
+    for topic in ("/lap/thumb/extra", "/lap/other", "/lap/similarity_x"):
+        assert not regex.match(topic), topic
+
+
+def test_recorder_gets_time_to_close_a_large_bag_before_launch_escalates(tmp_path):
+    """sigterm/sigkill of 10 s killed the recorder before a multi-GB bag was finalised (no
+    metadata.yaml). They must be at least the racer app's stop wait, stop_timeout_stack_s."""
+    module = _load_launch_module()
+    assert module._RECORDER_CLOSE_TIMEOUT_S >= 600
+    context = LaunchContext()
+    context.launch_configurations["bag_dir"] = str(tmp_path)
+    context.launch_configurations["bag_storage"] = "sqlite3"
+    actions = module._bag_actions(context)
+    recorder = next(a for a in actions if type(a).__name__ == "ExecuteProcess")
+    for attr in ("_ExecuteLocal__sigterm_timeout", "_ExecuteLocal__sigkill_timeout"):
+        value = "".join(s.perform(context) for s in getattr(recorder, attr))
+        assert float(value) == module._RECORDER_CLOSE_TIMEOUT_S, attr

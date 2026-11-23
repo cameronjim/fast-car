@@ -106,6 +106,10 @@ export type LapSource = "start_scan" | "map_pose" | "camera";
 /** The owner's saved drive settings (the Tune tab), kept on the car. null: the profile's own. */
 export interface Prefs {
   record_camera: boolean;
+  /** cameras.launch.py usb_fps; null: the launch default (60). */
+  camera_usb_fps: number | null;
+  /** Start CSI camera 0; false sends csi:=false. */
+  camera_csi: boolean;
   stack: { mode: "teleop" | "mapping" | "localization"; map: string };
   gap_follow: {
     profile: string;
@@ -129,6 +133,11 @@ export interface Prefs {
     require_lap_counter: boolean;
     /** A perception bundle for the shadow net, or "" for none. */
     shadow_perception: string;
+    /** Owner decision 21: the camera lap gate's length ratio band; 0 and 0 is the registered band. */
+    lap_length_ratio_min: number;
+    lap_length_ratio_max: number;
+    /** pnp.launch.py lap_rate_hz, the camera lap counter's rate; 0 is the launch default (15). */
+    lap_rate_hz: number;
   };
   tracker: { raceline: string };
 }
@@ -314,6 +323,9 @@ export class Api {
     pnp_lap_counter?: boolean;
     pnp_require_lap_counter?: boolean;
     pnp_shadow_perception?: string;
+    pnp_lap_length_ratio_min?: number;
+    pnp_lap_length_ratio_max?: number;
+    pnp_lap_rate_hz?: number;
     max_speed_mps?: number;
     min_speed_mps?: number;
     a_lat_max_mps2?: number;

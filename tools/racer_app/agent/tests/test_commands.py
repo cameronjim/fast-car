@@ -395,3 +395,18 @@ def test_the_signal_script_stops_the_node_a_ros2_run_started(tmp_path):
     finally:
         if parent.poll() is None:
             parent.kill()
+
+
+def test_camera_fps_and_csi_are_sent_only_when_changed(host):
+    base = cmd.camera_run_argv(host, REPO, "car:local", "car-camera", "/dev/video1")[-1]
+    assert "usb_fps" not in base and "csi" not in base
+    argv = cmd.camera_run_argv(
+        host, REPO, "car:local", "car-camera", "/dev/video1", usb_fps=30, csi=False
+    )
+    assert argv[-1].endswith("usb_device:=/dev/video1 usb_fps:=30 csi:=false")
+
+
+@pytest.mark.parametrize("bad", [0, 4, 61, 30.5, True, "30"])
+def test_camera_fps_must_be_a_whole_number_in_range(host, bad):
+    with pytest.raises(cmd.CommandError, match="fps"):
+        cmd.camera_run_argv(host, REPO, "car:local", "car-camera", "/dev/video1", usb_fps=bad)

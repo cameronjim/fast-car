@@ -208,6 +208,15 @@ class LapMemoryNode(Node):
             0.5,
             200.0,
         )
+        start_unanswered_s = declare(
+            "start_unanswered_s",
+            _DEFAULTS.start_unanswered_s,
+            "After the start, gated /drive speed commands of 0.1 m/s or more for this long with no "
+            "wheel motion mark the run start_unanswered (status and a WARN) and every lap of it "
+            "doubtful (camera and truth sources).",
+            0.5,
+            120.0,
+        )
         length_ratio_min = declare(
             "length_ratio_min",
             0.0,
@@ -504,6 +513,7 @@ class LapMemoryNode(Node):
             v_bound_floor_mps=float(bound_floor),
             min_filter_half_m=float(min_filter),
             zone_merge=zone_merge,
+            start_unanswered_s=float(start_unanswered_s),
             gate=gate if lap_source == "start_scan" or external else None,
             external=(
                 ExternalConfig(
@@ -531,6 +541,7 @@ class LapMemoryNode(Node):
 
         self._external = external
         self._ready_logged: bool | None = None
+        self._unanswered_logged = False
         self._suspect_logged = False
         self._save_lap1_map = self._save_lap1_map and not external
         self._tf_buffer = tf2_ros.Buffer()
@@ -599,7 +610,8 @@ class LapMemoryNode(Node):
             self._dump["odom"].append((stamp, float(msg.twist.twist.linear.x)))
 
     def _on_drive(self, msg: AckermannDriveStamped) -> None:
-        self._mem.on_drive(float(msg.drive.steering_angle))
+        self._mem.on_drive(float(msg.drive.steering_angle), float(msg.drive.speed), self._now_s())
+        self._log_unanswered()
         if self._dump_path:
             self._dump["drive"].append(
                 (self.get_clock().now().nanoseconds * 1e-9, float(msg.drive.steering_angle))
@@ -667,6 +679,18 @@ class LapMemoryNode(Node):
         if self._external:
             self._mem.on_clock(self._now_s())
             self._log_ready_change()
+            self._log_unanswered()
+
+    def _log_unanswered(self) -> None:
+        """One WARN when the car has not answered the commands after the start (S6)."""
+        if self._unanswered_logged or not self._mem.start_unanswered:
+            return
+        self._unanswered_logged = True
+        self.get_logger().warn(
+            f"start_unanswered: speed commands sent for over {self._cfg.start_unanswered_s:.1f} s "
+            "after the start and the wheels have not moved (RC mux in manual? motor off?). Every "
+            "lap of this run is doubtful."
+        )
 
     def _log_ready_change(self) -> None:
         """One line whenever `source_ready_now` changes, so the person at the car can wait for it

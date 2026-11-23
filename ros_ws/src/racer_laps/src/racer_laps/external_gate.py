@@ -70,7 +70,15 @@ REJECT_REASONS = (
     "malformed",
 )
 #: Reasons a lap is doubtful.
-DOUBTFUL_REASONS = ("ready", "sequence", "odometry", "alive", "length", "heading")
+DOUBTFUL_REASONS = (
+    "ready",
+    "start_unanswered",
+    "sequence",
+    "odometry",
+    "alive",
+    "length",
+    "heading",
+)
 
 
 @dataclass(frozen=True)
@@ -182,6 +190,7 @@ class ExternalLapGate:
         self._dead_lap = False  # a gap above source_stale_s during the lap in progress
         self._ready = False
         self._ready_reason = "no source status yet"
+        self.start_unanswered = False
         # outside review of brief 51c: what the source says of its own camera (a counter that
         # republishes `running` on a timer says nothing of whether images arrive). Keys of the last
         # status only; none for a source that does not say (an older counter, a bag).
@@ -475,6 +484,11 @@ class ExternalLapGate:
 
     # -- the event --------------------------------------------------------------------------
 
+    def note_start_unanswered(self) -> None:
+        """The car did not move after the start while commands were sent (the engine decides).
+        Latched for the run: every lap of it is doubtful, as a start that was not ready."""
+        self.start_unanswered = True
+
     def note_malformed(self) -> None:
         """A source message that did not parse or lacked a field (counted by the node)."""
         self.rejected["malformed"] += 1
@@ -527,6 +541,8 @@ class ExternalLapGate:
         reasons: list[str] = []
         if not self._ready:
             reasons.append("ready")
+        if self.start_unanswered:
+            reasons.append("start_unanswered")
         if lap_no != self._prev_no + 1:
             reasons.append("sequence")
         if not covered:
@@ -632,6 +648,7 @@ class ExternalLapGate:
             "missed_gate_laps": list(self.missed_laps),
             "line_source": self._source_name,
             "source_ready": self.source_ready,
+            "start_unanswered": self.start_unanswered,
             "source_ready_now": self.source_ready_now,
             "source_not_ready_reason": self.source_not_ready_reason,
             "source_alive": self.source_alive,

@@ -226,6 +226,8 @@ def camera_run_argv(
     usb_device: str | None,
     record_streams: bool = True,
     lap_record_rate_hz: float | None = None,
+    usb_fps: int | None = None,
+    csi: bool = True,
 ) -> list[str]:
     """`docker run -d --name car-camera --runtime nvidia ...`: docker/car/README.md "Cameras".
 
@@ -234,6 +236,9 @@ def camera_run_argv(
     `lap_record_rate_hz` is passed as cameras.launch.py's own `lap_record_rate_hz:=` (the lap
     counter's camera records at that rate, so the bag can be replayed by the counter); None leaves
     the launch's default. It is ignored with `record_streams=False`.
+    `usb_fps` and `csi` are cameras.launch.py's own `usb_fps:=` and `csi:=` (the stall analysis
+    of 2026-11: both cameras at 720p60 with CPU JPEG starve the control loop). None and True leave
+    the launch's defaults (60 fps, CSI on), so the default command is unchanged.
     The live full-rate topics are unchanged, and so is the stack's bag (LiDAR, drive, telemetry,
     rail voltage), which this never touches (CLAUDE.md invariant 5).
     """
@@ -267,6 +272,12 @@ def camera_run_argv(
             raise CommandError(f"not a video device: {usb_device!r}")
         argv += ["--device", usb_device]
         launch += f" usb_device:={usb_device}"
+    if usb_fps is not None:
+        if isinstance(usb_fps, bool) or not isinstance(usb_fps, int) or not (5 <= usb_fps <= 60):
+            raise CommandError("usb camera fps must be a whole number from 5 to 60")
+        launch += f" usb_fps:={usb_fps}"
+    if not csi:
+        launch += " csi:=false"
     if not record_streams:
         launch += " record_streams:=false"
     elif lap_record_rate_hz is not None:

@@ -66,6 +66,9 @@ class TrackerPrefs(_Strict):
 
 class Prefs(_Strict):
     record_camera: bool = True
+    # cameras.launch.py usb_fps and csi. None and True send nothing: the launch's own defaults.
+    camera_usb_fps: int | None = Field(default=None, ge=5, le=60)
+    camera_csi: bool = True
     stack: StackPrefs = Field(default_factory=StackPrefs)
     gap_follow: GapFollowPrefs = Field(default_factory=GapFollowPrefs)
     pnp: PnpPrefs = Field(default_factory=PnpPrefs)

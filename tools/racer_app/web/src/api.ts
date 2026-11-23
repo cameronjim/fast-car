@@ -106,6 +106,10 @@ export type LapSource = "start_scan" | "map_pose" | "camera";
 /** The owner's saved drive settings (the Tune tab), kept on the car. null: the profile's own. */
 export interface Prefs {
   record_camera: boolean;
+  /** cameras.launch.py usb_fps; null: the launch default (60). */
+  camera_usb_fps: number | null;
+  /** Start CSI camera 0; false sends csi:=false. */
+  camera_csi: boolean;
   stack: { mode: "teleop" | "mapping" | "localization"; map: string };
   gap_follow: {
     profile: string;

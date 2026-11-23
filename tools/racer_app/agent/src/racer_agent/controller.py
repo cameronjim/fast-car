@@ -657,7 +657,9 @@ class Controller:
                     raise ActionError("the cameras are already running", 409)
                 if name in states:
                     self.runner.run(["docker", "rm", name], timeout=20)
-                record = self.prefs_store.load().record_camera
+                prefs = self.prefs_store.load()
+                record = prefs.record_camera
+                declared = self.camera_launch_declarations()
                 argv = cmd.camera_run_argv(
                     self.host,
                     self.s.repo_dir,
@@ -666,8 +668,10 @@ class Controller:
                     usb,
                     record_streams=record,
                     lap_record_rate_hz=CAMERA_LAP_RECORD_RATE_HZ
-                    if "lap_record_rate_hz" in self.camera_launch_declarations()
+                    if "lap_record_rate_hz" in declared
                     else None,
+                    usb_fps=prefs.camera_usb_fps if "usb_fps" in declared else None,
+                    csi=prefs.camera_csi or "csi" not in declared,
                 )
                 res = self.runner.run(argv, timeout=120)
                 if not res.ok:
@@ -1749,7 +1753,9 @@ class Controller:
             "prefs.save",
             True,
             actor,
-            f"record camera {'on' if prefs.record_camera else 'off'}",
+            f"record camera {'on' if prefs.record_camera else 'off'}"
+            + (f", usb {prefs.camera_usb_fps} fps" if prefs.camera_usb_fps else "")
+            + ("" if prefs.camera_csi else ", CSI off"),
             params=prefs.model_dump(),
         )
         return {"message": "settings saved", "prefs": prefs.model_dump()}

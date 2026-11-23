@@ -8,6 +8,8 @@ import { selectedBundle, selectedParamsFile, type SpeedBounds } from "./drivePic
 /** The agent's defaults, used until the first GET /api/prefs answers. */
 export const DEFAULT_PREFS: Prefs = {
   record_camera: true,
+  camera_usb_fps: null,
+  camera_csi: true,
   stack: { mode: "teleop", map: "" },
   gap_follow: {
     profile: "lane-2026-10-25",

@@ -460,3 +460,20 @@ def test_cameras_start_with_the_lap_counters_record_rate_when_the_launch_declare
 def test_cameras_leave_the_record_rate_alone_when_the_launch_lacks_it(env):
     env.controller.start_cameras()
     assert "lap_record_rate_hz" not in run_calls(env)[-1][-1]
+
+
+def test_cameras_pass_saved_usb_fps_and_csi_off_when_declared(env):
+    from racer_agent.prefs import Prefs
+
+    launch = env.settings.repo_dir / "ros_ws/src/racer_bringup/launch/cameras.launch.py"
+    launch.parent.mkdir(parents=True, exist_ok=True)
+    launch.write_text('DeclareLaunchArgument("usb_fps")\nDeclareLaunchArgument("csi")\n')
+    env.controller.prefs_store.save(Prefs(camera_usb_fps=30, camera_csi=False))
+    env.controller.start_cameras()
+    assert run_calls(env)[-1][-1].endswith("usb_fps:=30 csi:=false")
+
+
+def test_cameras_default_prefs_send_neither(env):
+    env.controller.start_cameras()
+    last = run_calls(env)[-1][-1]
+    assert "usb_fps" not in last and "csi:=" not in last

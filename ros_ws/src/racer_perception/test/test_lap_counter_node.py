@@ -23,13 +23,14 @@ pytest.importorskip("nav_msgs")
 pytest.importorskip("std_srvs")
 
 import rclpy
+from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 from racer_perception.lap_counter_node import LapCounterNode
 from rclpy.context import Context
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.parameter import Parameter
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -78,6 +79,12 @@ class Harness:
         self.helper.create_subscription(
             String, "/lap/status", lambda m: self.statuses.append(json.loads(m.data)), _RELIABLE
         )
+        self.similarities: list[PointStamped] = []
+        self.thumbs: list[Image] = []
+        self.helper.create_subscription(
+            PointStamped, "/lap/similarity", self.similarities.append, _RELIABLE
+        )
+        self.helper.create_subscription(Image, "/lap/thumb", self.thumbs.append, _RELIABLE)
         self.image_pub = self.helper.create_publisher(CompressedImage, IMAGE_TOPIC, _BEST_EFFORT)
         self.odom_pub = self.helper.create_publisher(Odometry, "/odom/wheel", _BEST_EFFORT)
         self.yaw_pub = self.helper.create_publisher(Odometry, "/odom", _BEST_EFFORT)
@@ -100,6 +107,8 @@ class Harness:
             lambda: (
                 self.image_pub.get_subscription_count() > 0
                 and self.odom_pub.get_subscription_count() > 0
+                and self.node._thumb_pub.get_subscription_count() > 0
+                and self.node._similarity_pub.get_subscription_count() > 0
             )
         )
 
@@ -257,10 +266,77 @@ def test_the_node_only_publishes_the_lap_topics(make_harness):
         name
         for name, _types in h.helper.get_publisher_names_and_types_by_node("lap_counter_node", "/")
     }
-    assert {"/lap/event", "/lap/status"} <= published
+    assert {"/lap/event", "/lap/status", "/lap/similarity", "/lap/thumb"} <= published
     assert "/drive" not in published and "/drive_raw" not in published
 
 
 def test_bad_thresholds_are_a_hard_refusal(make_harness):
     with pytest.raises(ValueError):
         make_harness(139, similarity_threshold=0.5, rearm_threshold=0.9)
+
+
+def test_similarity_and_thumb_are_published_per_processed_frame_with_the_same_stamp(make_harness):
+    h = make_harness(161, **_NO_GATES)
+    assert h.connected()
+    h.odom(1.0, 0.0)
+    h.spin_for(0.1)
+    for seed in (60, 61, 62, 60):
+        h.frame(_texture(seed), settle_s=0.05)
+    assert h.spin_until(lambda: len(h.similarities) >= 4 and len(h.thumbs) >= 4)
+    assert len(h.similarities) == 4 and len(h.thumbs) == 4
+    assert h.similarities[0].point.x == 1.0  # the reference frame
+    assert h.similarities[-1].point.x > 0.95  # the reference view again
+    assert 0.0 <= h.similarities[1].point.x < 0.6
+    for point, thumb in zip(h.similarities, h.thumbs, strict=True):
+        assert point.header.stamp == thumb.header.stamp
+        assert (thumb.width, thumb.height, thumb.encoding, thumb.step) == (64, 48, "mono8", 64)
+        assert len(thumb.data) == 64 * 48
+    stamps = [p.header.stamp.sec + 1e-9 * p.header.stamp.nanosec for p in h.similarities]
+    assert stamps == sorted(stamps) and stamps[-1] > stamps[0]
+
+
+def test_nothing_is_published_for_a_frame_the_throttle_drops_or_that_does_not_decode(make_harness):
+    h = make_harness(162, **{**_NO_GATES, "rate_hz": 2.0})
+    assert h.connected()
+    h.odom(1.0, 0.0)
+    h.spin_for(0.1)
+    h.frame(_texture(70), settle_s=0.1)
+    h.frame(_texture(71), settle_s=0.0)  # dropped by the 2 Hz throttle
+    h.spin_for(0.6)
+    junk = CompressedImage()
+    junk.format = "jpeg"
+    junk.data = b"not-really-a-jpeg"
+    h.image_pub.publish(junk)  # past the throttle, does not decode
+    h.spin_for(0.3)
+    assert len(h.thumbs) == 1 and len(h.similarities) == 1
+
+
+def test_frame_topics_are_reliable_like_the_other_outputs(make_harness):
+    h = make_harness(163, **_NO_GATES)
+    h.spin_for(0.3)
+    for topic in ("/lap/similarity", "/lap/thumb"):
+        (info,) = h.helper.get_publishers_info_by_topic(topic)
+        assert info.qos_profile.reliability == ReliabilityPolicy.RELIABLE, topic
+
+
+def test_30_hz_is_delivered_from_a_60_hz_source(make_harness):
+    h = make_harness(164, **{**_NO_GATES, "rate_hz": 30.0})
+    assert h.connected()
+    h.odom(1.0, 0.0)
+    h.spin_for(0.1)
+    frame = _texture(80)
+    seconds, sent = 4.0, 0
+    start = time.monotonic()
+    while time.monotonic() - start < seconds:
+        due = start + sent / 60.0
+        if time.monotonic() >= due:
+            msg = CompressedImage()
+            msg.format = "jpeg"
+            msg.data = _jpeg(frame)
+            h.image_pub.publish(msg)
+            sent += 1
+        h.executor.spin_once(timeout_sec=0.001)
+    h.spin_for(0.3)
+    rate = len(h.thumbs) / seconds
+    # a loaded CI machine can lose frames, never gain them: 30 is the ceiling, 25 the floor
+    assert 25.0 <= rate <= 30.5, rate

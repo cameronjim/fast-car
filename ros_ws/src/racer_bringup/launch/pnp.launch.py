@@ -79,6 +79,7 @@ Options that are measurements, not part of the command path:
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from pathlib import Path
@@ -414,7 +415,7 @@ def _log_exit(label: str, note: str):
     return handler
 
 
-def lap_counter_actions(require: bool) -> list:
+def lap_counter_actions(require: bool, rate_hz: float = 15.0) -> list:
     """Start the camera lap counter and reset it once. A failure of the counter (OpenCV missing,
     exit code 3, or the package absent) is logged and never stops the driver."""
     from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
@@ -429,13 +430,16 @@ def lap_counter_actions(require: bool) -> list:
             )
         ]
     include = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(str(Path(share) / "launch" / "lap_counter.launch.py"))
+        PythonLaunchDescriptionSource(str(Path(share) / "launch" / "lap_counter.launch.py")),
+        launch_arguments=[("rate_hz", repr(float(rate_hz)))],
     )
 
     def on_exit(event, context):
         if "lap_counter_node" not in getattr(event, "process_name", ""):
             return []
         code = getattr(event, "returncode", None)
+        if code == 0:  # a clean exit (ctrl-c, an orderly shutdown) is not an error
+            return [LogInfo(msg=f"[pnp.launch.py] lap_counter_node exited cleanly (code {code})")]
         why = (
             "OpenCV is missing (install python3-opencv)"
             if code == LAP_COUNTER_OPENCV_EXIT
@@ -682,6 +686,9 @@ def _make_actions(context: LaunchContext) -> list:
     deskew_node = deskew_node_for(arg("params_file")) if deskew_on else None
     lap_counter = _bool(arg("lap_counter"), "lap_counter")
     require_counter = _bool(arg("require_lap_counter"), "require_lap_counter")
+    lap_rate_hz = float(arg("lap_rate_hz"))
+    if not math.isfinite(lap_rate_hz):
+        raise RuntimeError(f"pnp.launch.py: lap_rate_hz must be finite, got {lap_rate_hz}")
     lap_source = arg("lap_source")
     lap_shadow = LaunchConfiguration("lap_shadow", default="").perform(context).strip()
     if lap_source == "truth":
@@ -836,7 +843,7 @@ def _make_actions(context: LaunchContext) -> list:
                 LogInfo(msg="[pnp.launch.py] a lap_counter_node is already running: not started")
             )
         else:
-            actions += lap_counter_actions(require_counter)
+            actions += lap_counter_actions(require_counter, lap_rate_hz)
         if camera_topic is None:
             actions.append(lap_counter_reset_action())
     chain = None
@@ -970,6 +977,16 @@ def generate_launch_description() -> LaunchDescription:
                 description=(
                     "Start the camera lap counter (racer_perception) unless one is already in "
                     "the graph, and reset it once. A measurement, not part of the command path."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "lap_rate_hz",
+                default_value="15.0",
+                description=(
+                    "Frames per second the camera lap counter processes (a fixed phase, so a "
+                    "camera at least this fast delivers exactly this). The car session uses 30. "
+                    "Only for the counter this launch starts; one already in the graph keeps "
+                    "its own."
                 ),
             ),
             DeclareLaunchArgument(

@@ -93,9 +93,11 @@ def test_replay_counts_the_laps_a_drive_makes_and_records_the_trace():
 def test_replay_applies_the_frame_rate_limit_like_the_node():
     msgs = drive(1.3)  # 15 fps input
     full = replay(msgs, FAST, rate_hz=0.0, decode=raw_decode)
-    half = replay(msgs, FAST, rate_hz=10.0, decode=raw_decode)  # every second 15 Hz frame
-    assert half.frames_seen == full.frames_seen
-    assert abs(half.frames_processed - full.frames_seen / 2) <= 2
+    limited = replay(msgs, FAST, rate_hz=10.0, decode=raw_decode)
+    assert limited.frames_seen == full.frames_seen
+    # S1: the throttle keeps a phase, so 10 Hz out of 15 fps is 10 of every 15 frames (the old
+    # "period since the last accepted" rule delivered 7.5 Hz here)
+    assert abs(limited.frames_processed - full.frames_seen * 10 / 15) <= 2
 
 
 def test_replay_counts_undecodable_frames_and_keeps_going():

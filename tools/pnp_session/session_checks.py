@@ -601,7 +601,11 @@ def markdown(doc: dict[str, Any]) -> str:
     for r in doc["runs"]:
         laps = r["laps"]
         lines += [
-            f"## Run {r['run']}: {r['start_s']:.1f} to {r['end_s']:.1f} s ({r['duration_s']:.0f} s)",
+            (
+                f"## Run {r['run']}: {r['start_s']:.1f} to {r['end_s']:.1f} s "
+                f"({r['duration_s']:.0f} s), log time {doc['t0_log_s'] + r['start_s']:.3f} to "
+                f"{doc['t0_log_s'] + r['end_s']:.3f} (for tools/lap_replay.py --t-from, --t-to)"
+            ),
             "",
             (
                 f"Lap source {laps['source']}, mode {laps['mode']}. Camera events "

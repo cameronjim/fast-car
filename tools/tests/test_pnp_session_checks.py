@@ -397,6 +397,7 @@ def test_the_report_text_and_json_of_a_synthetic_bag() -> None:
     doc = sc.analyse(b.data())
     text = sc.markdown(doc)
     assert "## Run 1" in text and "Missed crossings: camera lap 3" in text
+    assert f"log time {T0_NS / 1e9:.3f} to {T0_NS / 1e9 + 60.0:.3f}" in text
     assert "Watchdog and rate_limit engagements:" in text
     assert "Blips: none." in text
     json.dumps(doc)  # serialisable as it is

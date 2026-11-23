@@ -8,6 +8,8 @@ import { selectedBundle, selectedParamsFile, type SpeedBounds } from "./drivePic
 /** The agent's defaults, used until the first GET /api/prefs answers. */
 export const DEFAULT_PREFS: Prefs = {
   record_camera: true,
+  camera_usb_fps: null,
+  camera_csi: true,
   stack: { mode: "teleop", map: "" },
   gap_follow: {
     profile: "lane-2026-10-25",
@@ -29,6 +31,8 @@ export const DEFAULT_PREFS: Prefs = {
     lap_counter: true,
     require_lap_counter: false,
     shadow_perception: "",
+    lap_length_ratio_min: 0,
+    lap_length_ratio_max: 0,
   },
   tracker: { raceline: "" },
 };
@@ -68,7 +72,11 @@ export type PnpField =
   | "lap_mode"
   | "lap_source"
   | "require_lap_counter"
-  | "shadow_perception";
+  | "shadow_perception"
+  | "lap_length_ratio_min";
+
+/** The band owner decision 21 used on the car (2026-11-22): at least 0.75 and at most 1.5 times the reference. */
+export const RATIO_BAND = { min: 0.75, max: 1.5 } as const;
 
 /** The lap learning choice the card shows: off, observe, D v0, D v1. */
 export type LapChoice = "off" | LapMode;
@@ -166,6 +174,16 @@ export function pnpErrors(p: Prefs["pnp"], options: Options | null): FieldErrors
   if (p.require_lap_counter && !p.lap_counter) {
     e.require_lap_counter = "require lap counter needs the lap counter on";
   }
+  const ratioOn = p.lap_length_ratio_min !== 0 || p.lap_length_ratio_max !== 0;
+  if (ratioOn) {
+    const lo = p.lap_length_ratio_min;
+    const hi = p.lap_length_ratio_max;
+    if (!(Number.isFinite(lo) && Number.isFinite(hi) && lo > 0 && lo < 1 && hi > 1 && hi < 2)) {
+      e.lap_length_ratio_min = "pnp lap length ratios must be 0 < min < 1 < max < 2";
+    } else if (!on || p.lap_source !== "camera") {
+      e.lap_length_ratio_min = "pnp lap length ratios apply to lap source camera only";
+    }
+  }
   const driving = drivingPerception(p, options);
   if (p.shadow_perception && driving && p.shadow_perception === driving) {
     e.shadow_perception = "the shadow perception bundle cannot be the driving one";
@@ -206,6 +224,11 @@ export function gapBody(p: Prefs) {
   };
 }
 
+/** The ratio band is sent only with the camera lap source (the launch refuses it otherwise) and when set. */
+function ratioSent(n: Prefs["pnp"]): boolean {
+  return lapChoice(n) !== "off" && n.lap_source === "camera" && (n.lap_length_ratio_min !== 0 || n.lap_length_ratio_max !== 0);
+}
+
 /**
  * What the ML driver (Plug-and-Play) button sends: the saved bundles if still on offer. The lap
  * learning fields are left out while they are at their default, so an unchanged card sends
@@ -230,6 +253,7 @@ export function pnpBody(p: Prefs, options: Options | null) {
     pnp_lap_counter: n.lap_counter ? undefined : false,
     pnp_require_lap_counter: n.require_lap_counter ? true : undefined,
     pnp_shadow_perception: shadow || undefined,
+    ...(ratioSent(n) ? { pnp_lap_length_ratio_min: n.lap_length_ratio_min, pnp_lap_length_ratio_max: n.lap_length_ratio_max } : {}),
   };
 }
 
@@ -287,6 +311,7 @@ export function pnpSummary(p: Prefs, options: Options | null = null): string {
     const label = LAP_CHOICES.find((c) => c.id === choice)?.label ?? choice;
     parts.push(`${label} from ${(n.v_lap1_mps ?? n.v_max_mps).toFixed(2)}`);
     if (n.lap_source !== "start_scan") parts.push(`source ${n.lap_source}`);
+    if (ratioSent(n)) parts.push(`length ${n.lap_length_ratio_min} to ${n.lap_length_ratio_max} x reference`);
   }
   parts.push(n.lap_counter ? (n.require_lap_counter ? "lap counter required" : "lap counter on") : "lap counter off");
   const shadow = pnpBody(p, options).pnp_shadow_perception;

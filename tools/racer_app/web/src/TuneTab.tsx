@@ -22,6 +22,7 @@ import {
   pnpSpeedLimit,
   prefsProblems,
   samePrefs,
+  RATIO_BAND,
 } from "./prefs";
 import { Card, ErrorBadge, Icon, Pill, SkeletonCard } from "./ui";
 
@@ -257,6 +258,34 @@ export function TuneTab() {
                 </div>
               </div>
               {pErr.lap_source && <div class="why">{pErr.lap_source}</div>}
+              {n.lap_source === "camera" && (
+                <>
+                  <div class="field">
+                    <span>Lap length check</span>
+                    <div class="seg" role="group" aria-label="ML driver camera lap length check">
+                      {([false, true] as const).map((ratio) => {
+                        const isRatio = n.lap_length_ratio_min !== 0 || n.lap_length_ratio_max !== 0;
+                        return (
+                          <button
+                            key={String(ratio)}
+                            aria-pressed={isRatio === ratio}
+                            onClick={() =>
+                              setPnp(
+                                ratio
+                                  ? { lap_length_ratio_min: RATIO_BAND.min, lap_length_ratio_max: RATIO_BAND.max }
+                                  : { lap_length_ratio_min: 0, lap_length_ratio_max: 0 },
+                              )
+                            }
+                          >
+                            {ratio ? `${RATIO_BAND.min} to ${RATIO_BAND.max} x reference` : "registered band"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {pErr.lap_length_ratio_min && <div class="why">{pErr.lap_length_ratio_min}</div>}
+                </>
+              )}
             </>
           )}
           <div class="field">

@@ -102,6 +102,8 @@ def test_argument_defaults() -> None:
         "laser_yaw_from_vehicle_params": "true",
         "lap_memory": "false",
         "v_lap1_mps": "",
+        "lap_length_ratio_min": "0.0",
+        "lap_length_ratio_max": "0.0",
         "lap_mode": "v0",
         "lap_source": "start_scan",
         "lap_shadow": "",

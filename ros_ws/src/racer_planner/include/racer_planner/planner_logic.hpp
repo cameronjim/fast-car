@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 #include "racer_planner/dynamics_model.hpp"
 #include "racer_planner/local_track.hpp"
@@ -349,23 +350,37 @@ struct SampleBudgetParams {
   int min_samples = 128;
   double halve_over_s = 0.015;
   double restore_under_s = 0.006;
-  int restore_after_ticks = 25;
+  // Decisions look at the last `window` solves: halve when at least `halve_count` of them were over
+  // `halve_over_s`, restore (by a quarter) when at least `restore_count` were under
+  // `restore_under_s`. A single late solve is a scheduling outlier and changes nothing.
+  int window = 25;
+  int halve_count = 3;
+  int restore_count = 20;
 };
 
-// Halves the sample count after a slow solve and restores it gradually after fast ones.
+// Halves the sample count under sustained slow solves and restores it gradually under fast ones.
+// The window is cleared whenever the count changes, so the next decision rests on solves taken at
+// the new count.
 class SampleBudget {
  public:
   explicit SampleBudget(const SampleBudgetParams& p);
   int current() const { return current_; }
   // Feed the latest solve time. Returns the sample count for the next tick. `halved` (optional)
-  // is set true on the tick the count was halved.
+  // is set true on the tick the count was halved. The count only falls on a solve over the halve
+  // limit and only rises on a solve under the restore limit, so it never grows while over budget.
   int update(double solve_time_s, bool* halved);
 
  private:
+  enum Kind : unsigned char { kMid = 0, kOver = 1, kUnder = 2 };
+  void clear_window();
   SampleBudgetParams p_;
   int floor_;
   int current_;
-  int fast_ticks_ = 0;
+  std::vector<unsigned char> ring_;
+  int head_ = 0;
+  int filled_ = 0;
+  int over_ = 0;
+  int under_ = 0;
 };
 
 }  // namespace racer_planner

@@ -124,6 +124,7 @@ if(BUILD_TESTING)
     test/test_lap_profile.cpp
     test/test_mppi_costs.cpp
     test/test_planner_logic.cpp
+    test/test_sample_budget.cpp
     test/test_planner_properties.cpp
     test/test_planner_timing.cpp
     test/test_planner_timing_properties.cpp

@@ -156,6 +156,9 @@ std::map<std::string, Param> default_params() {
   i("recover_max_attempts", cfg.recovery.recover_max_attempts, 1, 20);
   d("solve_halve_over_ms", 15.0, 1.0, 200.0);
   d("solve_restore_under_ms", 6.0, 0.5, 200.0);
+  i("solve_window", bg.window, 1, 500);
+  i("solve_halve_count", bg.halve_count, 1, 500);
+  i("solve_restore_count", bg.restore_count, 1, 500);
   d("laser_yaw_from_vehicle_params", 1.0, 0.0, 1.0);
   d("laser_yaw_offset_rad", 0.0, -M_PI, M_PI);
   (void)bg;
@@ -277,6 +280,9 @@ PlannerConfig config_from(const std::map<std::string, Param>& params) {
   mp.speed_floor_margin_mps = v("speed_floor_margin_mps");
   cfg.budget.halve_over_s = v("solve_halve_over_ms") * 1e-3;
   cfg.budget.restore_under_s = v("solve_restore_under_ms") * 1e-3;
+  cfg.budget.window = static_cast<int>(v("solve_window"));
+  cfg.budget.halve_count = static_cast<int>(v("solve_halve_count"));
+  cfg.budget.restore_count = static_cast<int>(v("solve_restore_count"));
   return cfg;
 }
 

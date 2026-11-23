@@ -149,6 +149,7 @@ struct SolveReport {
   double solve_time_s = 0.0;
   bool solver_ran = false;
   bool samples_halved = false;
+  int samples = 0;  // the count the budget set for the next solve (0 when no solve ran)
   bool track_bridged =
       false;  // this solve bridged a new, inconsistent track frame (see TickOutput)
 };

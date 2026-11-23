@@ -365,6 +365,16 @@ class MppiPlannerNode : public rclcpp::Node {
         declare_double("solve_restore_under_ms", 6.0, 0.5, 200.0,
                        "Solves faster than this restore the sample count gradually (ms).") *
         1e-3;
+    cfg.budget.window = static_cast<int>(
+        declare_int("solve_window", cfg.budget.window, 1, 500,
+                    "Number of recent solves the sample budget looks at."));
+    cfg.budget.halve_count = static_cast<int>(
+        declare_int("solve_halve_count", cfg.budget.halve_count, 1, 500,
+                    "This many solves over solve_halve_over_ms in the window halve the count."));
+    cfg.budget.restore_count = static_cast<int>(
+        declare_int("solve_restore_count", cfg.budget.restore_count, 1, 500,
+                    "This many solves under solve_restore_under_ms in the window restore the "
+                    "sample count by a quarter."));
     const bool yaw_from_params =
         declare_bool("laser_yaw_from_vehicle_params", true,
                      "true (the car): LiDAR yaw from vehicle_params. false: SIMULATOR AND "
@@ -753,10 +763,12 @@ class MppiPlannerNode : public rclcpp::Node {
       have_driving_ = true;
       driving_since_s_ = in.now_s;
     }
-    if (rep.samples_halved && !halved_logged_) {
-      halved_logged_ = true;
-      RCLCPP_WARN(get_logger(), "a solve took %.1f ms, over the budget; the sample count is halved",
-                  rep.solve_time_s * 1e3);
+    if (rep.samples > 0 && rep.samples != logged_samples_) {
+      if (logged_samples_ != 0) {
+        RCLCPP_WARN(get_logger(), "sample count %d -> %d (last solve %.1f ms)", logged_samples_,
+                    rep.samples, rep.solve_time_s * 1e3);
+      }
+      logged_samples_ = rep.samples;
     }
     if (++solve_cycle_ % 5 == 0) publish_plan(now());
   }
@@ -1050,7 +1062,7 @@ class MppiPlannerNode : public rclcpp::Node {
   double guidance_timeout_s_ = 2.0;
   double last_solve_tick_s_ = 0.0;
   std::uint32_t solve_cycle_ = 0;
-  bool halved_logged_ = false;
+  int logged_samples_ = 0;  // the sample count last logged; every change is logged
   bool have_driving_ = false;  // solve thread: the first Driving solve has happened
   double driving_since_s_ = 0.0;
   std::vector<std::pair<double, double>> stalls_;  // (time since first Driving, stall) pairs

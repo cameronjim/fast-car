@@ -180,9 +180,7 @@ def test_the_suspect_flag_changes_no_verdict_cap_or_reference(
                 rig.drive_until(arrival)
                 r = rig.mem.on_lap_source_event(arrival, number, cross)
                 if r is not None:
-                    out.append(
-                        (r.missed_gate, r.clean, r.stored, r.length_m)
-                    )
+                    out.append((r.missed_gate, r.clean, r.stored, r.length_m))
             rig2 = Rig()
             t = 0.0
             for i, length in enumerate(lengths):
@@ -225,7 +223,7 @@ def test_the_start_diagnostic_keys_change_no_verdict_reason_cap_or_reference(
                 r = rig.mem.on_lap_source_event(arrival, number, cross)
                 if r is not None:
                     out.append(
-                        (r.missed_gate, r.clean, r.stored, r.length_m)
+                        (r.missed_gate, r.clean, r.stored, r.cap_mps, r.next_cap_mps, r.length_m)
                     )
             g = rig.mem.gate
             assert g is not None

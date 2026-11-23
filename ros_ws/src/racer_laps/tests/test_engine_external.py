@@ -8,9 +8,8 @@ import math
 
 import pytest
 from external_support import DT, LAP_M, EngineRig, memory, odom_model, steering_for
-from racer_laps.engine import LAP_SOURCES, LapConfig, LapMemory
+from racer_laps.engine import LAP_SOURCES, STATE_BLOCKED, LapConfig, LapMemory
 from racer_laps.external_gate import ExternalConfig, ExternalLapGate
-from racer_laps.engine import STATE_BLOCKED
 from racer_laps.lap_record import STATE_DRIVING
 
 CAP0 = 0.5

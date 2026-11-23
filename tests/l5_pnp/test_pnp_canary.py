@@ -165,7 +165,8 @@ def test_pnp_laps_the_track_through_the_real_command_path(
             f"rate_limit_events {result['rate_limit_events']} "
             f"wall_contacts {result['wall_contacts']} "
             f"min_clearance_m {result['min_body_clearance_m']} "
-            f"planner_states {result['planner_states']}"
+            f"planner_states {result['planner_states']} "
+            f"start_missing {result.get('start_missing')}"
         )
 
     def judge(result):
@@ -282,7 +283,8 @@ def test_pnp_laps_with_the_car_like_plant(track, reverse, perception, tmp_path, 
             f"rate_limit_events {result['rate_limit_events']} "
             f"wall_contacts {result['wall_contacts']} "
             f"min_clearance_m {result['min_body_clearance_m']} "
-            f"planner_states {result['planner_states']}"
+            f"planner_states {result['planner_states']} "
+            f"start_missing {result.get('start_missing')}"
         )
 
     def judge(result):
@@ -360,7 +362,8 @@ def test_pnp_laps_with_a_contract_2_planner_bundle(reverse, tmp_path, capsys):
             f"safety_brakes {result['safety_brakes']} wall_contacts {result['wall_contacts']} "
             f"rate_limit_events {result['rate_limit_events']} "
             f"min_clearance_m {result['min_body_clearance_m']} "
-            f"planner_states {result['planner_states']}"
+            f"planner_states {result['planner_states']} "
+            f"start_missing {result.get('start_missing')}"
         )
 
     def judge(result):

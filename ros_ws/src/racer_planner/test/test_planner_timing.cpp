@@ -519,6 +519,83 @@ TEST(PlannerStart, ALateTickRestartsTheCount) {
   EXPECT_EQ(r.planner.bunched_ticks(), 0u);
 }
 
+// The L5 canary's car-like stadium (CI runs 44109939513 and 44146287926, reproduced 2026-11-18):
+// on simulated time the bridge advances /clock in whole 10 ms env steps while the planner's timers
+// run on the wall clock, so on-time ticks read 10, 20 or 30 ms apart on the node clock. The node
+// clock is integer nanoseconds and reaches the planner as double seconds (rclcpp Time::seconds()).
+// A gap of exactly 30 ms is within start_tick_gap_s, but `now - last` in double seconds comes out
+// as 0.030000000000001137 for many pairs of times and failed `<= 0.03`, restarting the warm start
+// count about every 8 ticks: STARTING for the whole run, speed 0, no safety event.
+namespace {
+double node_clock_s(long long ns) { return static_cast<double>(ns) / 1e9; }
+}  // namespace
+
+TEST(TickGapWithin, ComparesAtTheNodeClockResolution) {
+  // 13.30 - 13.27 in double seconds is 0.030000000000001137: exactly 30 ms on the node clock
+  const double gap = node_clock_s(13'300'000'000LL) - node_clock_s(13'270'000'000LL);
+  ASSERT_GT(gap, 0.03);
+  EXPECT_TRUE(tick_gap_within(gap, 0.03));
+  EXPECT_TRUE(tick_gap_within(0.03, 0.03));
+  EXPECT_TRUE(tick_gap_within(node_clock_s(29'999'999LL), 0.03));
+  EXPECT_FALSE(
+      tick_gap_within(node_clock_s(13'300'000'001LL) - node_clock_s(13'270'000'000LL), 0.03));
+  EXPECT_TRUE(tick_gap_within(0.0, 0.03));
+  EXPECT_FALSE(tick_gap_within(0.06, 0.03));
+  EXPECT_FALSE(tick_gap_within(1e300, 0.03));
+  EXPECT_TRUE(tick_gap_within(-1e300, 0.03));
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(tick_gap_within(nan, 0.03));
+  EXPECT_FALSE(tick_gap_within(inf, 0.03));
+  EXPECT_FALSE(tick_gap_within(0.01, nan));
+}
+
+TEST(PlannerStart, OnTimeTicksOnATenMillisecondSimClockLeaveStarting) {
+  Rig r;
+  // The gaps of the stalled run's trace, on time on average (20 ms), sim time from about 13 s.
+  const long long pattern_ms[] = {20, 30, 10, 20, 20, 30, 10, 30, 10, 20};
+  long long ns = 13'240'000'000LL;
+  int first_driving = -1;
+  for (int i = 0; i < 100 && first_driving < 0; ++i) {
+    const TickOutput out = r.tick(node_clock_s(ns));
+    if (out.state == PlannerState::Starting) {
+      EXPECT_EQ(out.cmd.speed_mps, 0.0) << "tick " << i;
+    }
+    if (out.state == PlannerState::Driving) first_driving = i;
+    ns += pattern_ms[i % 10] * 1'000'000LL;
+  }
+  // 25 counted publish ticks, and 25 real solves: a callback 10 ms after the last solve is a
+  // bunched one (under half a tick) that neither counts nor restarts the count, 3 in every 10
+  // here, so the solver count reaches 25 by about tick 36
+  EXPECT_GE(first_driving, 25);
+  EXPECT_LE(first_driving, 40);
+}
+
+TEST(PlannerStart, GapsOfExactlyThirtyMillisecondsCountAndOneNanosecondMoreDoesNot) {
+  {
+    Rig r;
+    long long ns = 13'240'000'000LL;
+    int first_driving = -1;
+    for (int i = 0; i < 60 && first_driving < 0; ++i) {
+      if (r.tick(node_clock_s(ns)).state == PlannerState::Driving) first_driving = i;
+      ns += 30'000'000LL;
+    }
+    EXPECT_GE(first_driving, 25);
+    EXPECT_LE(first_driving, 28);
+  }
+  {
+    Rig r;
+    long long ns = 13'240'000'000LL;
+    TickOutput out;
+    for (int i = 0; i < 60; ++i) {
+      out = r.tick(node_clock_s(ns));
+      ns += 30'000'001LL;
+    }
+    EXPECT_EQ(out.state, PlannerState::Starting);
+    EXPECT_EQ(out.start_missing, StartMissing::TickTiming);
+  }
+}
+
 TEST(PlannerStart, MissingScanOdomAndTrackHoldAndAreReported) {
   {
     Rig r;

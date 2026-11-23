@@ -239,6 +239,13 @@ Command slew_limit(const Command& wanted, const Command& previous, double elapse
 // NaN age, the last beyond the end, linear in between.
 Control interpolate_plan(const Control* seq, int n, double dt_s, double age_s);
 
+// True when gap_s, the difference of two node clock readings in seconds, is at most limit_s. The
+// node clock counts integer nanoseconds and reaches the planner as double seconds, so a gap of
+// exactly 30 ms on a sim clock that steps in 10 ms can read 0.030000000000001137. Both sides are
+// compared at the clock's resolution (rounded to whole nanoseconds), never with a wider margin.
+// A non finite value is not within.
+bool tick_gap_within(double gap_s, double limit_s);
+
 // Why STARTING has not ended yet, first missing condition in this order.
 enum class StartMissing : std::uint8_t {
   None = 0,

@@ -146,7 +146,7 @@ SolveReport Planner::solve_impl(const TickInput& in) {
         rep.state = last_solve_state_;
         return rep;
       } else {
-        gap_ok = raw_cb <= cfg_.logic.start_tick_gap_s;
+        gap_ok = tick_gap_within(raw_cb, cfg_.logic.start_tick_gap_s);
       }
     }
   }
@@ -541,7 +541,7 @@ TickOutput Planner::publish_impl(const PublishInput& in) {
     }
   }
   // Consecutive callbacks within start_tick_gap_s of the previous one (a bunched one counts).
-  publish_good_ticks_ = (have_last_publish_ && raw_any <= lg.start_tick_gap_s)
+  publish_good_ticks_ = (have_last_publish_ && tick_gap_within(raw_any, lg.start_tick_gap_s))
                             ? std::min(publish_good_ticks_ + 1, 1000000)
                             : 0;
   if (have_last_publish_ && raw_real < 0.5 * tick) {

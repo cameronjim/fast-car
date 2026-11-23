@@ -682,7 +682,7 @@ def write_event_trace(args, work: Path, trace: dict, t_first: float) -> None:
     """With RACER_EVENT_TRACE_DIR set, writes <dir>/<case>.json.gz: /drive_raw and /drive as
     [stamp, received, steering, speed], /safety/events as [stamp, received, source, phase,
     severity, detail] (the rate_limit detail carries the gate's dt) and the planner status as
-    [stamp, received, state], all in seconds with t_first (the first odometry) given so a time can
+    [stamp, received, state, start_missing], all in seconds with t_first (the first odometry) given so a time can
     be read the way the result's safety_events are. Diagnostics only: nothing here is asserted,
     and without the variable nothing is written. The case name is the pytest temp directory the
     runner was started under (one per test case)."""
@@ -1240,10 +1240,19 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     planner_status: list[tuple[float, int]] = []
     planner_ticks: list[pts.Tick] = []
 
+    # While STARTING, the planner's first missing warm start condition (PlannerStatus.start_missing)
+    # per tick, counted by value: a run that never leaves STARTING says which condition held it.
+    start_missing: list[int] = []
+
     def on_planner_status(msg) -> None:
         planner_states.append(msg.state)
         planner_status.append((base._stamp_s(msg.header.stamp), msg.state))
-        trace["planner"].append((base._stamp_s(msg.header.stamp), received_s(), int(msg.state)))
+        missing = int(getattr(msg, "start_missing", 0))
+        if msg.state == 0:
+            start_missing.append(missing)
+        trace["planner"].append(
+            (base._stamp_s(msg.header.stamp), received_s(), int(msg.state), missing)
+        )
 
     if args.driver == "pnp":
         from racer_pnp_msgs.msg import LapEvent, LapGuidance, PlannerStatus
@@ -1595,6 +1604,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         if args.driver == "pnp":
             result["planner_states"] = {
                 str(s): planner_states.count(s) for s in set(planner_states)
+            }
+            result["start_missing"] = {
+                str(m): start_missing.count(m) for m in sorted(set(start_missing))
             }
             # Every /safety/events PHASE_ENGAGE with SEVERITY_BRAKE, whatever gate raised it.
             result["safety_brakes"] = sum(1 for e in recording.events if e[2] == 0 and e[3] == 2)

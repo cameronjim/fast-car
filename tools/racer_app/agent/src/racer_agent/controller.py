@@ -122,6 +122,8 @@ def _describe_laps(params: dict[str, Any]) -> str:
         text += " require_lap_counter"
     if lap.get("ratio_min") or lap.get("ratio_max"):
         text += f" length_ratio={lap['ratio_min']:.2f}..{lap['ratio_max']:.2f}"
+    if lap.get("rate_hz"):
+        text += f" lap_rate_hz={lap['rate_hz']:g}"
     if lap["shadow"]:
         text += f" shadow={lap['shadow']}"
     return text
@@ -1021,6 +1023,7 @@ class Controller:
         pnp_shadow_perception: Any = "",
         pnp_lap_length_ratio_min: Any = 0.0,
         pnp_lap_length_ratio_max: Any = 0.0,
+        pnp_lap_rate_hz: Any = 0.0,
         max_speed_mps: float | None = None,
         min_speed_mps: float | None = None,
         a_lat_max_mps2: float | None = None,
@@ -1075,6 +1078,7 @@ class Controller:
                         pnp_shadow_perception,
                         pnp_lap_length_ratio_min,
                         pnp_lap_length_ratio_max,
+                        pnp_lap_rate_hz,
                     ),
                 )
                 params.update(resolved)
@@ -1365,6 +1369,7 @@ class Controller:
             shadow,
             ratio_min,
             ratio_max,
+            rate_hz,
         ) = lap
         if shadow and (not isinstance(shadow, str) or shadow not in status["perception"]):
             raise ActionError(
@@ -1382,6 +1387,7 @@ class Controller:
             require_lap_counter=require_counter,
             length_ratio_min=ratio_min,
             length_ratio_max=ratio_max,
+            rate_hz=rate_hz,
             shadow_container_path=cmd.container_path(self.s.repo_dir, models / shadow)
             if shadow
             else "",
@@ -1422,6 +1428,7 @@ class Controller:
                     "shadow": shadow,
                     "ratio_min": ratio_min,
                     "ratio_max": ratio_max,
+                    "rate_hz": rate_hz,
                 },
             },
         )
@@ -1728,6 +1735,7 @@ class Controller:
                     require_lap_counter=n.require_lap_counter,
                     length_ratio_min=n.lap_length_ratio_min,
                     length_ratio_max=n.lap_length_ratio_max,
+                    rate_hz=n.lap_rate_hz,
                     shadow_container_path=shadow if n.shadow_perception else "",
                 ),
                 driving if n.backend == "net" and n.perception else "",

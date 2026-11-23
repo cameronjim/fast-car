@@ -33,6 +33,7 @@ export const DEFAULT_PREFS: Prefs = {
     shadow_perception: "",
     lap_length_ratio_min: 0,
     lap_length_ratio_max: 0,
+    lap_rate_hz: 0,
   },
   tracker: { raceline: "" },
 };
@@ -73,7 +74,8 @@ export type PnpField =
   | "lap_source"
   | "require_lap_counter"
   | "shadow_perception"
-  | "lap_length_ratio_min";
+  | "lap_length_ratio_min"
+  | "lap_rate_hz";
 
 /** The band owner decision 21 used on the car (2026-11-22): at least 0.75 and at most 1.5 times the reference. */
 export const RATIO_BAND = { min: 0.75, max: 1.5 } as const;
@@ -174,6 +176,11 @@ export function pnpErrors(p: Prefs["pnp"], options: Options | null): FieldErrors
   if (p.require_lap_counter && !p.lap_counter) {
     e.require_lap_counter = "require lap counter needs the lap counter on";
   }
+  if (!Number.isFinite(p.lap_rate_hz) || p.lap_rate_hz < 0 || p.lap_rate_hz > 30) {
+    e.lap_rate_hz = "pnp lap counter rate must be a number from 0 to 30 Hz";
+  } else if (p.lap_rate_hz !== 0 && !p.lap_counter) {
+    e.lap_rate_hz = "pnp lap counter rate needs the lap counter on";
+  }
   const ratioOn = p.lap_length_ratio_min !== 0 || p.lap_length_ratio_max !== 0;
   if (ratioOn) {
     const lo = p.lap_length_ratio_min;
@@ -253,6 +260,7 @@ export function pnpBody(p: Prefs, options: Options | null) {
     pnp_lap_counter: n.lap_counter ? undefined : false,
     pnp_require_lap_counter: n.require_lap_counter ? true : undefined,
     pnp_shadow_perception: shadow || undefined,
+    pnp_lap_rate_hz: n.lap_counter && n.lap_rate_hz !== 0 ? n.lap_rate_hz : undefined,
     ...(ratioSent(n) ? { pnp_lap_length_ratio_min: n.lap_length_ratio_min, pnp_lap_length_ratio_max: n.lap_length_ratio_max } : {}),
   };
 }
@@ -314,6 +322,7 @@ export function pnpSummary(p: Prefs, options: Options | null = null): string {
     if (ratioSent(n)) parts.push(`length ${n.lap_length_ratio_min} to ${n.lap_length_ratio_max} x reference`);
   }
   parts.push(n.lap_counter ? (n.require_lap_counter ? "lap counter required" : "lap counter on") : "lap counter off");
+  if (n.lap_counter && n.lap_rate_hz !== 0) parts.push(`counter ${n.lap_rate_hz} Hz`);
   const shadow = pnpBody(p, options).pnp_shadow_perception;
   if (shadow) parts.push(`shadow ${shadow}`);
   return parts.join(", ");

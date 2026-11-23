@@ -136,3 +136,13 @@ def test_recorder_topic_list_includes_safety_cycle_and_keeps_the_rest():
     for topic in ("/safety/cycle", "/safety/events", "/drive", "/drive_raw", "/pnp/plan"):
         assert regex.match(topic), topic
     assert not regex.match("/safety/cycle/extra")
+
+
+def test_recorder_regex_takes_the_lap_similarity_and_thumb_topics_and_stays_anchored():
+    import re
+
+    regex = re.compile(_load_launch_module()._RECORDED_TOPIC_REGEX)
+    for topic in ("/lap/event", "/lap/status", "/lap/similarity", "/lap/thumb"):
+        assert regex.match(topic), topic
+    for topic in ("/lap/thumb/extra", "/lap/other", "/lap/similarity_x"):
+        assert not regex.match(topic), topic

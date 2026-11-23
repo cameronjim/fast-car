@@ -390,14 +390,24 @@ def test_cameras_lap_counter_forwards_its_thresholds_with_types():
         lap_rearm_threshold="0.4",
         lap_min_lap_time_s="12.0",
         lap_min_lap_distance_m="7.5",
+        lap_rate_hz="30.0",
     )
     assert _node_parameters(node, context) == {
         "image_topic": "/camera/csi0/image_raw/compressed",
+        "rate_hz": 30.0,
         "similarity_threshold": 0.9,
         "rearm_threshold": 0.4,
         "min_lap_time_s": 12.0,
         "min_lap_distance_m": 7.5,
     }
+
+
+def test_cameras_lap_rate_default_is_the_node_default_and_the_session_value_is_an_argument():
+    module = _load("cameras.launch.py")
+    assert module.LAP_FORWARDED["lap_rate_hz"][:2] == ("rate_hz", "15.0")
+    entities = module.generate_launch_description().entities
+    context = _context(**_defaults(entities))  # every argument at its default
+    assert _node_parameters(_lap_node(entities), context)["rate_hz"] == 15.0
 
 
 def _record_nodes(entities) -> dict[str, Node]:

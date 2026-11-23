@@ -555,3 +555,71 @@ def test_the_app_refuses_truth_and_sends_camera_when_the_launch_declares_it():
     # a launch without `camera` refuses it as not available in this build
     with pytest.raises(cmd.CommandError):
         build(lap(lap_memory=True, lap_source="camera"))
+
+
+# -- owner decision 21: the ratio length check of the camera lap gate ----------------------------
+
+DECL_RATIO = cmd.parse_launch_declarations(
+    LAUNCH_WITH_OBSERVE.replace(
+        '"lap_source", default_value="start_scan", choices=list(LAP_SOURCES)),',
+        '"lap_source", default_value="start_scan", choices=list(LAP_SOURCES)),\n'
+        '        DeclareLaunchArgument("lap_length_ratio_min", default_value="0.0"),\n'
+        '        DeclareLaunchArgument("lap_length_ratio_max", default_value="0.0"),',
+    ).replace('"map_pose")', '"map_pose", "camera")')
+)
+CAMERA_RATIO = {"lap_source": "camera", "length_ratio_min": 0.75, "length_ratio_max": 1.5}
+
+
+def test_the_ratio_arguments_are_sent_with_the_camera_source():
+    out = build(lap(lap_mode="observe", **CAMERA_RATIO), launch=DECL_RATIO)
+    assert out.endswith(" lap_source:=camera lap_length_ratio_min:=0.75 lap_length_ratio_max:=1.50")
+
+
+def test_the_registered_band_sends_no_ratio_argument():
+    out = build(lap(lap_source="camera", lap_mode="observe"), launch=DECL_RATIO)
+    assert "ratio" not in out
+
+
+@pytest.mark.parametrize(
+    ("lo", "hi"), [(1.0, 1.5), (0.75, 1.0), (0.0, 1.5), (0.75, 0.0), (0.75, 2.0), (-1, 1.5)]
+)
+def test_a_ratio_band_must_straddle_one_and_stay_below_two(lo, hi):
+    with pytest.raises(cmd.CommandError, match="0 < min < 1 < max < 2"):
+        build(lap(lap_source="camera", length_ratio_min=lo, length_ratio_max=hi), launch=DECL_RATIO)
+
+
+def test_ratios_need_the_camera_source():
+    with pytest.raises(cmd.CommandError, match="camera only"):
+        build(lap(length_ratio_min=0.75, length_ratio_max=1.5), launch=DECL_RATIO)
+
+
+def test_ratios_must_be_numbers():
+    with pytest.raises(cmd.CommandError, match="must be numbers"):
+        build(lap(lap_source="camera", length_ratio_min="0.75", length_ratio_max=1.5))
+
+
+def test_ratios_are_refused_when_this_build_does_not_declare_them():
+    with pytest.raises(cmd.CommandError, match="lap_length_ratio_min is not available"):
+        no_ratio = {k: v for k, v in DECL_RATIO.items() if "ratio" not in k}
+        build(lap(**CAMERA_RATIO), launch=no_ratio)
+
+
+def test_the_real_launch_declares_the_ratio_arguments_the_app_sends():
+    declared = cmd.parse_launch_declarations(LAUNCH.read_text())
+    assert {"lap_length_ratio_min", "lap_length_ratio_max"} <= set(declared)
+    assert "camera" in (declared["lap_source"] or ())
+
+
+def test_a_speed_cap_of_1_3_is_inside_the_range_and_the_validity_check():
+    out = build(None, pnp_v_max_mps=1.3, pnp_dynamics_v_max_mps=1.3)
+    assert out.endswith("v_max_mps:=1.30")
+    with pytest.raises(cmd.CommandError, match="too fast"):
+        build(None, pnp_v_max_mps=1.31, pnp_dynamics_v_max_mps=1.3)
+
+
+def test_ratio_prefs_default_to_the_registered_band():
+    prefs = Prefs.model_validate(
+        {"pnp": {"lap_source": "camera", "lap_length_ratio_min": 0.75, "lap_length_ratio_max": 1.5}}
+    )
+    assert prefs.pnp.lap_length_ratio_max == 1.5
+    assert Prefs().pnp.lap_length_ratio_min == 0.0

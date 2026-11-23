@@ -88,6 +88,22 @@ describe("Api", () => {
     expect(init.headers.Authorization).toBe("Bearer t");
   });
 
+  it("sends the camera lap ratio band and a 1.3 speed cap as given", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(reply(200, { ok: true, message: "pnp:geometric started" }));
+    const body = {
+      mode: "pnp",
+      pnp_backend: "geometric",
+      pnp_dynamics: "dyn-v0-2026-11-12",
+      pnp_v_max_mps: 1.3,
+      pnp_lap_memory: true,
+      pnp_lap_source: "camera" as const,
+      pnp_lap_length_ratio_min: 0.75,
+      pnp_lap_length_ratio_max: 1.5,
+    };
+    await new Api(memoryTokens("t"), fetchImpl).startDrive(body);
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual(body);
+  });
+
   it("sends the lap learning fields as given and nothing else", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(reply(200, { ok: true, message: "pnp:geometric started" }));
     const body = {

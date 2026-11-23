@@ -292,12 +292,27 @@ export function TuneTab() {
             <span>Camera lap counter</span>
             <div class="seg" role="group" aria-label="ML driver camera lap counter">
               {([true, false] as const).map((on) => (
-                <button key={String(on)} aria-pressed={n.lap_counter === on} onClick={() => setPnp({ lap_counter: on, ...(on ? {} : { require_lap_counter: false }) })}>
+                <button key={String(on)} aria-pressed={n.lap_counter === on} onClick={() => setPnp({ lap_counter: on, ...(on ? {} : { require_lap_counter: false, lap_rate_hz: 0 }) })}>
                   {on ? "on" : "off"}
                 </button>
               ))}
             </div>
           </div>
+          {n.lap_counter && (
+            <>
+              <div class="field">
+                <span>Counter rate</span>
+                <div class="seg" role="group" aria-label="ML driver camera lap counter rate">
+                  {([0, 30] as const).map((hz) => (
+                    <button key={hz} aria-pressed={n.lap_rate_hz === hz} onClick={() => setPnp({ lap_rate_hz: hz })}>
+                      {hz === 0 ? "15 Hz (default)" : "30 Hz"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {pErr.lap_rate_hz && <div class="why">{pErr.lap_rate_hz}</div>}
+            </>
+          )}
           <div class="field">
             <span>Require the counter</span>
             <div class="seg" role="group" aria-label="ML driver require lap counter">

@@ -623,3 +623,35 @@ def test_ratio_prefs_default_to_the_registered_band():
     )
     assert prefs.pnp.lap_length_ratio_max == 1.5
     assert Prefs().pnp.lap_length_ratio_min == 0.0
+
+
+# -- the camera lap counter rate (pnp.launch.py lap_rate_hz) -------------------------------------
+
+DECL_RATE = {**DECL_RATIO, "lap_rate_hz": None}
+
+
+def test_the_rate_is_sent_only_when_set_and_declared():
+    assert "lap_rate_hz" not in build(lap(), launch=DECL_RATE)
+    assert build(lap(rate_hz=30), launch=DECL_RATE).endswith(" lap_rate_hz:=30")
+    assert build(lap(rate_hz=7.5), launch=DECL_RATE).endswith(" lap_rate_hz:=7.5")
+    with pytest.raises(cmd.CommandError, match="lap_rate_hz is not available"):
+        build(lap(rate_hz=30), launch=DECL_RATIO)
+
+
+@pytest.mark.parametrize("bad", [-1, 31, "30", True, float("nan")])
+def test_a_bad_rate_is_refused(bad):
+    with pytest.raises(cmd.CommandError, match="rate"):
+        build(lap(rate_hz=bad), launch=DECL_RATE)
+
+
+def test_a_rate_needs_the_counter_on():
+    with pytest.raises(cmd.CommandError, match="needs the lap counter on"):
+        build(lap(rate_hz=30, lap_counter=False), launch=DECL_RATE)
+
+
+def test_the_real_launch_declares_lap_rate_hz_and_the_pref_defaults_to_none_sent():
+    assert "lap_rate_hz" in cmd.parse_launch_declarations(LAUNCH.read_text())
+    assert Prefs().pnp.lap_rate_hz == 0.0
+    assert Prefs.model_validate({"pnp": {"lap_rate_hz": 30}}).pnp.lap_rate_hz == 30
+    with pytest.raises(ValueError):
+        Prefs.model_validate({"pnp": {"lap_rate_hz": 31}})

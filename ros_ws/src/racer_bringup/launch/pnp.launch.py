@@ -322,11 +322,14 @@ def lap_memory_parameters(
     v_lap1_mps: float | None = None,
     lap_mode: str = "v0",
     lap_source: str = "start_scan",
+    length_ratio: tuple[float, float] = (0.0, 0.0),
 ) -> dict:
     """Parameters of racer_laps' lap_memory_node. The cap starts at `v_lap1_mps` (default
     `v_max_mps`) and can rise to, never above, the lower of `v_max_mps` and the dynamics
     bundle's validity range. Refuses `v_lap1_mps` above `v_max_mps` and `lap_mode:=v1` with the
-    map-pose source."""
+    map-pose source. `length_ratio` (min, max), owner decision 21: the camera gate's length check
+    as a ratio of the reference; (0, 0) is the registered band and adds no parameter."""
+    ratio = _length_ratio_params(length_ratio, lap_source)
     if lap_source not in LAP_SOURCES:
         raise RuntimeError(f"pnp.launch.py: lap_source must be one of {list(LAP_SOURCES)}")
     if lap_mode not in LAP_MODES:
@@ -344,6 +347,7 @@ def lap_memory_parameters(
             "v_cap_start_mps": ceiling,
             "lap_mode": lap_mode,
             "lap_source": lap_source,
+            **ratio,
         }
     lap1 = float(v_max_mps) if v_lap1_mps is None else float(v_lap1_mps)
     if lap1 > float(v_max_mps):
@@ -357,7 +361,26 @@ def lap_memory_parameters(
         "v_cap_start_mps": min(lap1, ceiling),
         "lap_mode": lap_mode,
         "lap_source": lap_source,
+        **ratio,
     }
+
+
+def _length_ratio_params(length_ratio: tuple[float, float], lap_source: str) -> dict:
+    """The lap node's `length_ratio_min/max`, or nothing for the registered band (0, 0). Refuses
+    a ratio that would accept a double lap or reject the reference itself, and a ratio with a
+    source other than the camera or the sim truth (the scan gate has its own band)."""
+    lo, hi = float(length_ratio[0]), float(length_ratio[1])
+    if (lo, hi) == (0.0, 0.0):
+        return {}
+    if not (0.0 < lo < 1.0 < hi < 2.0):
+        raise RuntimeError(
+            f"pnp.launch.py: lap_length_ratio_min/max must be 0 < min < 1 < max < 2, got {lo}, {hi}"
+        )
+    if lap_source not in ("camera", "truth"):
+        raise RuntimeError(
+            "pnp.launch.py: lap_length_ratio_min/max apply to lap_source:=camera or truth only"
+        )
+    return {"length_ratio_min": lo, "length_ratio_max": hi}
 
 
 def lap_shadow_parameters(
@@ -688,7 +711,12 @@ def _make_actions(context: LaunchContext) -> list:
     log: list[str] = []
     if lap_memory:
         lap_params = lap_memory_parameters(
-            arg("dynamics_bundle"), v_max, v_lap1, arg("lap_mode"), lap_source
+            arg("dynamics_bundle"),
+            v_max,
+            v_lap1,
+            arg("lap_mode"),
+            lap_source,
+            (float(arg("lap_length_ratio_min")), float(arg("lap_length_ratio_max"))),
         )
         if arg("lap_mode") == "observe":
             # the planner is launched exactly as with lap_memory:=false: fixed cap, no guidance
@@ -859,6 +887,23 @@ def generate_launch_description() -> LaunchDescription:
                     "Cap of lap 1 in m/s: the lap memory's start cap and the planner's "
                     "v_no_guidance_mps. Empty: equal to v_max_mps. Refused above v_max_mps "
                     "with lap_memory:=true."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "lap_length_ratio_min",
+                default_value="0.0",
+                description=(
+                    "Owner decision 21: with lap_source:=camera a lap counts if its wheel length "
+                    "is at least this times the reference. 0 with lap_length_ratio_max 0: the "
+                    "registered band (0.5 m or 8 percent). The car run of 2026-11-22 used 0.75."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "lap_length_ratio_max",
+                default_value="0.0",
+                description=(
+                    "Owner decision 21: at most this times the reference (below 2, so a missed "
+                    "crossing, a double lap, stays doubtful). 0: the registered band."
                 ),
             ),
             DeclareLaunchArgument(

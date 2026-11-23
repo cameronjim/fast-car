@@ -47,6 +47,8 @@ def _context(**overrides: str) -> LaunchContext:
         "v_lap1_mps": "",
         "lap_mode": "v0",
         "lap_source": "start_scan",
+        "lap_length_ratio_min": "0.0",
+        "lap_length_ratio_max": "0.0",
         "lap_counter": "false",
         "require_lap_counter": "false",
         "deskew": "false",
@@ -100,6 +102,8 @@ def test_argument_defaults() -> None:
         "laser_yaw_from_vehicle_params": "true",
         "lap_memory": "false",
         "v_lap1_mps": "",
+        "lap_length_ratio_min": "0.0",
+        "lap_length_ratio_max": "0.0",
         "lap_mode": "v0",
         "lap_source": "start_scan",
         "lap_shadow": "",
@@ -884,6 +888,43 @@ def test_lap_source_camera_starts_the_lap_node_on_the_camera_source(monkeypatch,
     planner = _planner_of(actions)
     q = _flat_params(planner)
     assert q["use_lap_guidance"] is True and float(q["v_no_guidance_mps"]) == 0.5
+
+
+def test_lap_length_ratio_reaches_the_camera_lap_node(monkeypatch, tmp_path) -> None:
+    """Owner decision 21: the ratio arguments become the lap node's length_ratio_min/max; the
+    defaults (0, 0) add no parameter, so the registered band is untouched."""
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
+    base = {
+        "lap_memory": "true",
+        "lap_source": "camera",
+        "lap_counter": "false",
+        "dynamics_bundle": _bundle(tmp_path, 1.3),
+        "v_max_mps": "1.3",
+        "v_lap1_mps": "0.5",
+    }
+    p = _flat_params(_laps_nodes(m._make_actions(_context(**base)))[0])
+    assert "length_ratio_min" not in p and "length_ratio_max" not in p
+    ctx = _context(**base, lap_length_ratio_min="0.75", lap_length_ratio_max="1.5")
+    p = _flat_params(_laps_nodes(m._make_actions(ctx))[0])
+    assert float(p["length_ratio_min"]) == 0.75 and float(p["length_ratio_max"]) == 1.5
+    assert float(p["v_cap_ceiling_mps"]) == 1.3
+
+
+@pytest.mark.parametrize(
+    ("ratio", "source", "match"),
+    [
+        ((0.75, 2.0), "camera", "0 < min < 1 < max < 2"),
+        ((1.0, 1.5), "camera", "0 < min < 1 < max < 2"),
+        ((0.75, 0.0), "camera", "0 < min < 1 < max < 2"),
+        ((0.75, 1.5), "start_scan", "camera or truth only"),
+    ],
+)
+def test_lap_length_ratio_refusals(tmp_path, ratio, source, match) -> None:
+    m = _module()
+    with pytest.raises(RuntimeError, match=match):
+        m.lap_memory_parameters(_bundle(tmp_path, 1.5), 0.8, 0.5, "v0", source, ratio)
 
 
 def test_lap_source_camera_without_a_counter_refuses_with_the_counter_wording(

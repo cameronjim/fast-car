@@ -826,3 +826,71 @@ def test_a_non_finite_status_time_moves_no_diagnostic() -> None:
     rig = Rig(start=False, status_period_s=None, status_at_start=False)
     rig.gate.on_source_status(math.nan, "running", 0, 1.0)
     assert rig.gate.status()["source_statuses_before_start"] == 0
+
+
+# -- owner decision 21: the length check as a ratio of the reference -----------------------------
+
+RATIO = ExternalConfig(length_ratio_min=0.75, length_ratio_max=1.5)
+
+RATIO_CASES = [
+    # name, lap 1 length (reference), lap 2 length, length accepted? (the rig drives one circle,
+    # so a lap far from the reference also fails `heading`; only the length verdict is asked)
+    # the car on 2026-11-22: 6.2 m laps at 0.6 m/s, 5.3 m at 0.9 m/s (the band rejected it)
+    ("the faster, shorter line of the car", 6.2, 5.32, True),
+    ("lower edge (0.75)", 6.0, 4.5, True),
+    ("lower edge, epsilon under", 6.0, 4.5 - 2 * EPS, False),
+    ("upper edge (1.5)", 6.0, 9.0, True),
+    ("upper edge, epsilon over", 6.0, 9.0 + 2 * EPS, False),
+    ("a double lap (a missed crossing)", 5.5, 11.0, False),
+    ("a double lap of the shorter line", 6.2, 2 * 5.3, False),
+    ("half a lap", 6.0, 3.0, False),
+    ("still at least min_lap_length_m", 3.6, 2.9, False),
+]
+
+
+@pytest.mark.parametrize(("name", "l1", "l2", "accepted"), RATIO_CASES)
+def test_length_ratio_rule(name: str, l1: float, l2: float, accepted: bool) -> None:
+    rig = Rig(lap_m=l1, cfg=RATIO)
+    assert not rig.event(l1, 1).missed  # type: ignore[union-attr]
+    c = rig.event(l1 + l2, 2)
+    assert c is not None
+    reasons = reasons_of(rig) if c.missed else []
+    assert ("length" not in reasons) is accepted, (name, reasons)
+
+
+def test_the_registered_band_is_unchanged_by_default() -> None:
+    """The defaults keep the band: the car's faster lap is doubtful without the ratio."""
+    assert not ExternalConfig().length_ratio
+    rig = Rig(lap_m=6.2)
+    assert not rig.event(6.2, 1).missed  # type: ignore[union-attr]
+    c = rig.event(6.2 + 5.32, 2)
+    assert c is not None and c.missed and reasons_of(rig) == ["length"]
+
+
+def test_with_the_ratio_a_faster_line_enters_the_reference() -> None:
+    rig = Rig(lap_m=6.2, cfg=RATIO)
+    total = 0.0
+    for i, length in enumerate([6.2, 6.1, 5.6, 5.3, 5.3, 5.3, 5.3], start=1):
+        total += length
+        c = rig.event(total, i)
+        assert c is not None and not c.missed, i
+    assert rig.gate.l_ref_m == pytest.approx(5.3)
+
+
+def test_overdue_with_the_ratio_at_its_upper_end() -> None:
+    rig = Rig(cfg=RATIO)
+    rig.event(LAP_M, 1)
+    rig.event(2 * LAP_M, 2)
+    rig.drive_to_total(2 * LAP_M + 1.5 * LAP_M - 0.1)
+    assert not rig.gate.poll_uncertain()
+    rig.drive_to_total(2 * LAP_M + 1.5 * LAP_M + 0.05)
+    assert rig.gate.poll_uncertain()
+
+
+@pytest.mark.parametrize(
+    ("lo", "hi"),
+    [(0.75, 0.0), (0.0, 1.5), (1.0, 1.5), (0.75, 1.0), (0.75, 2.0), (-0.1, 1.5), (math.nan, 1.5)],
+)
+def test_the_ratio_refuses_nonsense(lo: float, hi: float) -> None:
+    with pytest.raises(ValueError):
+        ExternalConfig(length_ratio_min=lo, length_ratio_max=hi)

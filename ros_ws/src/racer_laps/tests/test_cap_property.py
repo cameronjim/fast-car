@@ -46,3 +46,25 @@ def test_rise_after_an_unclean_lap_needs_two_clean_laps(outcomes: list[bool]) ->
             since_unclean += 1
             if since_unclean == 1:
                 assert after <= before + 1e-12
+
+
+@settings(max_examples=300, deadline=None)
+@given(outcomes=st.lists(st.sampled_from(["clean", "unclean", "hold"]), max_size=80))
+def test_a_held_lap_never_moves_the_cap_and_a_doubtful_one_never_raises_it(
+    outcomes: list[str],
+) -> None:
+    """Owner decision 24: a qualifying camera-only doubtful lap never lowers the cap; any
+    doubtful lap (held or not) never raises it; and a hold leaves the future untouched."""
+    sched = CapSchedule(0.5, 0.1, 5.0)
+    without_holds = CapSchedule(0.5, 0.1, 5.0)
+    for o in outcomes:
+        before = sched.cap_mps
+        after = sched.finish_lap(o == "clean", hold=o == "hold")
+        if o == "hold":
+            assert after == before
+        else:
+            without_holds.finish_lap(o == "clean")
+            if o == "unclean":
+                assert after <= before + EPS
+        # holds are invisible: the cap is the one the schedule has without them
+        assert after == without_holds.cap_mps

@@ -348,6 +348,7 @@ SolveReport Planner::solve_impl(const TickInput& in) {
       solver_.set_samples(budget_.update(out.solve_time_s, &halved));
       out.samples_halved = halved;
       rep.samples_halved = halved;
+      rep.samples = solver_.samples();
     }
     if (sh.starting) {
       // Warm start: the solver runs on the real inputs, its output is discarded except for the

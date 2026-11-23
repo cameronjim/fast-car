@@ -607,66 +607,112 @@ TEST(Float32Within, NeverOutsideTheBounds) {
   EXPECT_EQ(float32_within(INFINITY, -1.0, 1.0), 0.0f);
 }
 
-TEST(SampleBudget, HalvesAfterASlowSolveDownToTheFloor) {
-  SampleBudgetParams p;  // max 768, floor 128, halve over 15 ms
-  SampleBudget b(p);
-  EXPECT_EQ(b.current(), 768);
-  bool halved = false;
-  EXPECT_EQ(b.update(0.016, &halved), 384);
-  EXPECT_TRUE(halved);
-  EXPECT_EQ(b.update(0.020, &halved), 192);
-  EXPECT_EQ(b.update(0.020, &halved), 128);  // 96 clamps to the floor
-  EXPECT_TRUE(halved);
-  EXPECT_EQ(b.update(0.020, &halved), 128);  // already at the floor
-  EXPECT_FALSE(halved);
+// The car's budget: 512 samples, floor 128, over 15 ms, under 6 ms, 3 of 25 / 20 of 25.
+SampleBudgetParams car_budget() {
+  SampleBudgetParams p;
+  p.max_samples = 512;
+  return p;
 }
 
-TEST(SampleBudget, ExactlyAtTheLimitDoesNotHalve) {
-  SampleBudget b(SampleBudgetParams{});
+TEST(SampleBudget, OneLateSolveKeepsTheCountAndTwoDoNotEither) {
+  SampleBudget b(car_budget());
   bool halved = true;
-  EXPECT_EQ(b.update(0.015, &halved), 768);
+  EXPECT_EQ(b.update(0.040, &halved), 512);
+  EXPECT_FALSE(halved);
+  for (int i = 0; i < 10; ++i) EXPECT_EQ(b.update(0.003, &halved), 512);
+  EXPECT_EQ(b.update(0.020, &halved), 512);  // the second late one in the window
+  EXPECT_FALSE(halved);
+  for (int i = 0; i < 100; ++i) EXPECT_EQ(b.update(0.003, &halved), 512);
+}
+
+TEST(SampleBudget, ThreeLateSolvesInTheWindowHalveAndTheWindowIsClearedAfter) {
+  SampleBudget b(car_budget());
+  bool halved = false;
+  b.update(0.020, &halved);
+  for (int i = 0; i < 10; ++i) b.update(0.003, &halved);
+  b.update(0.020, &halved);
+  for (int i = 0; i < 10; ++i) b.update(0.003, &halved);
+  EXPECT_FALSE(halved);
+  EXPECT_EQ(b.update(0.020, &halved), 256);  // 3 late in the last 25
+  EXPECT_TRUE(halved);
+  // Cleared: the three late solves do not halve again on the next one.
+  EXPECT_EQ(b.update(0.020, &halved), 256);
+  EXPECT_FALSE(halved);
+  EXPECT_EQ(b.update(0.020, &halved), 256);
+  EXPECT_FALSE(halved);
+  EXPECT_EQ(b.update(0.020, &halved), 128);  // a fresh three
+  EXPECT_TRUE(halved);
+}
+
+TEST(SampleBudget, LateSolvesFurtherApartThanTheWindowNeverHalve) {
+  SampleBudget b(car_budget());
+  // One late solve every 13 ticks: never more than 2 inside any 25.
+  for (int k = 0; k < 40; ++k) {
+    b.update(0.030, nullptr);
+    for (int i = 0; i < 12; ++i) b.update(0.003, nullptr);
+  }
+  EXPECT_EQ(b.current(), 512);
+}
+
+TEST(SampleBudget, SustainedOverloadHalvesToTheFloorAndStays) {
+  SampleBudget b(car_budget());
+  for (int i = 0; i < 100; ++i) b.update(0.020, nullptr);
+  EXPECT_EQ(b.current(), 128);
+}
+
+TEST(SampleBudget, ExactlyAtTheLimitDoesNotCount) {
+  SampleBudget b(car_budget());
+  bool halved = true;
+  for (int i = 0; i < 50; ++i) b.update(0.015, &halved);
+  EXPECT_EQ(b.current(), 512);
   EXPECT_FALSE(halved);
 }
 
-TEST(SampleBudget, RestoresGraduallyAfterFastSolves) {
-  SampleBudgetParams p;
-  p.restore_after_ticks = 5;
-  SampleBudget b(p);
-  b.update(0.02, nullptr);
-  b.update(0.02, nullptr);
-  ASSERT_EQ(b.current(), 192);
-  int prev = b.current();
-  for (int i = 0; i < 4; ++i) EXPECT_EQ(b.update(0.003, nullptr), prev);  // not yet
+TEST(SampleBudget, TwentyFastOfTwentyFiveRestoreGradually) {
+  SampleBudget b(car_budget());
+  for (int i = 0; i < 100; ++i) b.update(0.020, nullptr);
+  ASSERT_EQ(b.current(), 128);
+  // 5 mid-band solves do not matter; 19 fast ones are not enough, the 20th restores.
+  for (int i = 0; i < 5; ++i) b.update(0.010, nullptr);
+  for (int i = 0; i < 19; ++i) EXPECT_EQ(b.update(0.003, nullptr), 128);
   const int after = b.update(0.003, nullptr);
-  EXPECT_GT(after, prev);
-  EXPECT_LT(after, 768);  // gradual, not a jump back
-  for (int i = 0; i < 200; ++i) b.update(0.003, nullptr);
-  EXPECT_EQ(b.current(), 768);
+  EXPECT_GT(after, 128);
+  EXPECT_LT(after, 512);  // gradual
+  for (int i = 0; i < 2000; ++i) b.update(0.003, nullptr);
+  EXPECT_EQ(b.current(), 512);
 }
 
-TEST(SampleBudget, ASolveInTheMiddleBandResetsTheRestoreCount) {
-  SampleBudgetParams p;
-  p.restore_after_ticks = 3;
+TEST(SampleBudget, TooManyMidBandSolvesBlockTheRestore) {
+  SampleBudget b(car_budget());
+  b.update(0.020, nullptr);
+  b.update(0.020, nullptr);
+  b.update(0.020, nullptr);
+  ASSERT_EQ(b.current(), 256);
+  // 1 mid in every 4 leaves 75 percent fast: under 20 of 25 never reached once 6 are mid.
+  for (int i = 0; i < 400; ++i) b.update(i % 4 == 0 ? 0.010 : 0.003, nullptr);
+  EXPECT_EQ(b.current(), 256);
+}
+
+TEST(SampleBudget, ParametersAreClampedToAValidWindow) {
+  SampleBudgetParams p = car_budget();
+  p.window = 4;
+  p.halve_count = 9;  // more than the window: clamps to the window
+  p.restore_count = 0;
   SampleBudget b(p);
-  b.update(0.02, nullptr);
-  ASSERT_EQ(b.current(), 384);
-  b.update(0.003, nullptr);
-  b.update(0.003, nullptr);
-  b.update(0.010, nullptr);  // between 6 and 15 ms
-  b.update(0.003, nullptr);
-  b.update(0.003, nullptr);
-  EXPECT_EQ(b.current(), 384);
-  b.update(0.003, nullptr);
-  EXPECT_GT(b.current(), 384);
+  for (int i = 0; i < 3; ++i) b.update(0.020, nullptr);
+  EXPECT_EQ(b.current(), 512);
+  b.update(0.020, nullptr);
+  EXPECT_EQ(b.current(), 256);
 }
 
 TEST(SampleBudget, NaNSolveTimeIsIgnoredAndSmallMaxBelowFloor) {
   SampleBudget b(SampleBudgetParams{});
   EXPECT_EQ(b.update(kNaN, nullptr), 768);
+  for (int i = 0; i < 10; ++i) EXPECT_EQ(b.update(kNaN, nullptr), 768);
   SampleBudgetParams p;
   p.max_samples = 100;  // below the 128 floor: never reduced further
   SampleBudget small(p);
-  EXPECT_EQ(small.update(1.0, nullptr), 100);
+  for (int i = 0; i < 10; ++i) EXPECT_EQ(small.update(1.0, nullptr), 100);
 }
 
 TEST(Staleness, AgeAndStaleHelpers) {

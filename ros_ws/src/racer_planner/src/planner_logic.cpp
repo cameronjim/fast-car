@@ -357,24 +357,46 @@ void DrivabilityMonitor::reset() {
 }
 
 SampleBudget::SampleBudget(const SampleBudgetParams& p)
-    : p_(p), floor_(std::min(p.min_samples, p.max_samples)), current_(p.max_samples) {}
+    : p_(p), floor_(std::min(p.min_samples, p.max_samples)), current_(p.max_samples) {
+  p_.window = std::max(1, p_.window);
+  p_.halve_count = std::clamp(p_.halve_count, 1, p_.window);
+  p_.restore_count = std::clamp(p_.restore_count, 1, p_.window);
+  ring_.assign(static_cast<size_t>(p_.window), kMid);
+}
+
+void SampleBudget::clear_window() {
+  std::fill(ring_.begin(), ring_.end(), static_cast<unsigned char>(kMid));
+  head_ = 0;
+  filled_ = 0;
+  over_ = 0;
+  under_ = 0;
+}
 
 int SampleBudget::update(double solve_time_s, bool* halved) {
   if (halved != nullptr) *halved = false;
   if (!std::isfinite(solve_time_s)) return current_;
-  if (solve_time_s > p_.halve_over_s) {
-    fast_ticks_ = 0;
-    if (current_ > floor_) {
-      current_ = std::max(floor_, current_ / 2);
-      if (halved != nullptr) *halved = true;
-    }
-  } else if (solve_time_s < p_.restore_under_s) {
-    if (++fast_ticks_ >= p_.restore_after_ticks && current_ < p_.max_samples) {
-      fast_ticks_ = 0;
-      current_ = std::min(p_.max_samples, std::max(current_ + 1, current_ * 5 / 4));
-    }
+  const Kind kind = solve_time_s > p_.halve_over_s       ? kOver
+                    : solve_time_s < p_.restore_under_s ? kUnder
+                                                         : kMid;
+  unsigned char& slot = ring_[static_cast<size_t>(head_)];
+  if (filled_ == p_.window) {  // drop the oldest
+    if (slot == kOver) --over_;
+    if (slot == kUnder) --under_;
   } else {
-    fast_ticks_ = 0;
+    ++filled_;
+  }
+  slot = kind;
+  if (kind == kOver) ++over_;
+  if (kind == kUnder) ++under_;
+  head_ = (head_ + 1) % p_.window;
+
+  if (kind == kOver && over_ >= p_.halve_count && current_ > floor_) {
+    current_ = std::max(floor_, current_ / 2);
+    if (halved != nullptr) *halved = true;
+    clear_window();
+  } else if (kind == kUnder && under_ >= p_.restore_count && current_ < p_.max_samples) {
+    current_ = std::min(p_.max_samples, std::max(current_ + 1, current_ * 5 / 4));
+    clear_window();
   }
   return current_;
 }

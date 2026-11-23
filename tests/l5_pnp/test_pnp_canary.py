@@ -41,7 +41,7 @@ pytest.importorskip("f1tenth_gym")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "l5_reactive_bench"))
 import starvation
-from starvation import MAX_ATTEMPTS, STARVED_GAP_S
+from starvation import MAX_ATTEMPTS
 
 RUNNER = REPO_ROOT / "tests" / "l5_reactive_bench" / "track_family_runner.py"
 DYNAMICS_BUNDLE = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-nominal-v0"
@@ -501,8 +501,8 @@ def run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domai
         f"{name} lane {params['lane_width_m']} {'cw' if reverse else 'ccw'} {v_max} m/s "
         f"{'with stalls' if stalls else 'no stalls'}"
     )
-    failures: list[str] = []
-    for attempt in range(1, TIMING_MAX_ATTEMPTS + 1):
+
+    def run_once():
         out.unlink(missing_ok=True)
         proc = subprocess.run(
             command, env=dict(os.environ), capture_output=True, text=True, timeout=1500, check=False
@@ -510,28 +510,38 @@ def run_timing_case(track, reverse, v_max, stalls, laps, tmp_path, capsys, domai
         assert out.exists(), proc.stdout[-2000:] + proc.stderr[-2000:]
         result = json.loads(out.read_text())
         assert "error" not in result, result["error"]
-        counts = result.get("safety_event_counts", {})
-        drive = result.get("drive_raw", {})
+        return result
+
+    def report(result):
+        return (
+            f"\nl5_pnp timing {label}: laps {result['laps']} "
+            f"lap_times_s {result['lap_times_s']} wall_contacts {result['wall_contacts']} "
+            f"min_clearance_m {result['min_body_clearance_m']} "
+            f"events {result.get('safety_event_counts', {})} "
+            f"rate_limit_events_whole_run {result['rate_limit_events']} "
+            f"drive_raw {result.get('drive_raw', {})} "
+            f"safety_drive {result.get('safety_drive', {})} "
+            f"planner_states {result['planner_states']}"
+        )
+
+    def judge(result):
+        failures = timing_failures(
+            result,
+            result.get("safety_event_counts", {}),
+            result.get("drive_raw", {}),
+            stalls,
+            laps,
+            accel_allow,
+        )
+        assert not failures, failures
+
+    def say(line):
         with capsys.disabled():
-            print(
-                f"\nl5_pnp timing {label} (attempt {attempt}): laps {result['laps']} "
-                f"lap_times_s {result['lap_times_s']} wall_contacts {result['wall_contacts']} "
-                f"min_clearance_m {result['min_body_clearance_m']} events {counts} "
-                f"rate_limit_events_whole_run {result['rate_limit_events']} drive_raw {drive} "
-                f"planner_states {result['planner_states']}"
-            )
-        failures = timing_failures(result, counts, drive, stalls, laps, accel_allow)
-        starved = drive.get("max_gap_s", 0.0) > STARVED_GAP_S
-        if not failures or not starved or attempt == TIMING_MAX_ATTEMPTS:
-            break
-        with capsys.disabled():
-            print(
-                f"l5_pnp timing {label}: attempt {attempt} failed {failures} and the planner's "
-                f"own /drive_raw had a gap of {drive['max_gap_s']} s (the machine starved the "
-                "process, which is the owner's real-time decision, not a planner timing result): "
-                "run again"
-            )
-    assert not failures, failures
+            print(line)
+
+    # A failing attempt with a gap in the planner's /drive_raw or in safety_node's /drive was starved
+    # by the machine and is run again (starvation.py); the judgement is the same every attempt.
+    result = starvation.run_judged(run_once, judge, report, say, max_attempts=TIMING_MAX_ATTEMPTS)
     assert result["publisher_nodes"] == {
         "/drive_raw": ["mppi_planner_node"],
         "/drive": ["safety_node"],

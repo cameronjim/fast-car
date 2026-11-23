@@ -140,3 +140,15 @@ def test_a_gap_of_four_sim_steps_is_starved_and_three_is_not() -> None:
 def test_a_run_with_one_drive_message_has_no_summary() -> None:
     out = runner.pnp_timing_summary(recording([1.05, 1.07], [1.05]), [(1.07, 1)])
     assert "safety_drive" not in out
+
+
+def test_the_pnp_canary_timing_cases_use_the_shared_rule_not_a_drive_raw_only_one() -> None:
+    """Main run 44459625336: the timing case failed on attempt 1 with watchdog 1 and rate_limit 1 and
+    a clean /drive_raw (max gap 0.0207 s), because that case keyed its rerun on /drive_raw alone and
+    so never saw a stalled safety_node. Every rerun decision lives in starvation.py."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "l5_pnp" / "test_pnp_canary.py").read_text()
+    assert "STARVED_GAP_S" not in source
+    assert 'get("max_gap_s"' not in source
+    assert source.count("starvation.run_judged(") >= 2

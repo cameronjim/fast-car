@@ -80,6 +80,7 @@ class DriveBody(Body):
     pnp_shadow_perception: Any = ""
     pnp_lap_length_ratio_min: Any = 0.0
     pnp_lap_length_ratio_max: Any = 0.0
+    pnp_lap_rate_hz: Any = 0.0
     max_speed_mps: float | None = None
     min_speed_mps: float | None = None
     a_lat_max_mps2: float | None = None

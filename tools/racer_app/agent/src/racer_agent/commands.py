@@ -494,6 +494,8 @@ class PnpLap:
     # Owner decision 21: 0.0 and 0.0 is the registered band (nothing sent).
     length_ratio_min: object = 0.0
     length_ratio_max: object = 0.0
+    # lap_rate_hz of the camera lap counter pnp.launch.py starts; 0.0: the launch default.
+    rate_hz: object = 0.0
 
 
 def parse_launch_declarations(text: str) -> dict[str, tuple[str, ...] | None]:
@@ -588,6 +590,12 @@ def _pnp_lap_args(
         if lap.lap_source != "camera":
             raise CommandError("pnp lap length ratios apply to lap source camera only")
 
+    if not _is_number(lap.rate_hz) or not (0.0 <= float(lap.rate_hz) <= 30.0):  # type: ignore[arg-type]
+        raise CommandError("pnp lap counter rate must be a number from 0 to 30 Hz")
+    rate_hz = float(lap.rate_hz)  # type: ignore[arg-type]
+    if rate_hz and not lap.lap_counter:
+        raise CommandError("pnp lap counter rate needs the lap counter on")
+
     mode = lap.lap_mode
     observe = mode == "observe"
     if mode != "v0" and not lap.lap_memory and not observe:
@@ -627,6 +635,8 @@ def _pnp_lap_args(
         used.append(("require_lap_counter", "true", None))
     if shadow:
         used.append(("shadow_perception_bundle", shadow, None))
+    if rate_hz:
+        used.append(("lap_rate_hz", f"{rate_hz:g}", None))
     if ratio_on:
         used.append(("lap_length_ratio_min", f"{r_lo:.2f}", None))
         used.append(("lap_length_ratio_max", f"{r_hi:.2f}", None))

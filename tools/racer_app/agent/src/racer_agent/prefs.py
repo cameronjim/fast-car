@@ -58,6 +58,8 @@ class PnpPrefs(_Strict):
     # Owner decision 21 ratio length check of the camera lap gate; 0 and 0: the registered band.
     lap_length_ratio_min: float = 0.0
     lap_length_ratio_max: float = 0.0
+    # pnp.launch.py lap_rate_hz (the camera lap counter's rate); 0: the launch default (15).
+    lap_rate_hz: float = Field(default=0.0, ge=0.0, le=30.0)
 
 
 class TrackerPrefs(_Strict):

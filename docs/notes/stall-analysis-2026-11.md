@@ -291,7 +291,10 @@ This is proof per event, not a statistic.
 
 ```python
 from pathlib import Path
-from pnp_session.streamread import iter_stream  # from tools/: PYTHONPATH=. uv run --project . python count.py
+from pnp_session.streamread import (
+    iter_stream,
+)  # from tools/: PYTHONPATH=. uv run --project . python count.py
+
 dts, solves = [], {}
 for _, topic, m in iter_stream(Path("<bag>.mcap"), ["/safety/cycle", "/pnp/planner/timing"]):
     if topic == "/safety/cycle":
@@ -299,7 +302,7 @@ for _, topic, m in iter_stream(Path("<bag>.mcap"), ["/safety/cycle", "/pnp/plann
     elif m.solve_start_s > 0:
         solves[m.solve_start_s] = m.solve_end_s - m.solve_start_s
 for lim in (0.025, 0.030, 0.045, 0.060):
-    print(f">{lim*1e3:.0f} ms: {sum(d > lim for d in dts)} of {len(dts)}")
+    print(f">{lim * 1e3:.0f} ms: {sum(d > lim for d in dts)} of {len(dts)}")
 print("solve wall >10 ms:", sum(s > 0.010 for s in solves.values()), "of", len(solves))
 ```
 

@@ -100,6 +100,13 @@ class ExternalConfig:
     ready_similarity_min: float = 0.90
     #: A crossing newer than the last odometry sample by more than this is doubtful.
     odom_extrapolation_s: float = 0.2
+    #: Owner decision 21 (2026-11-22, not registered): the length check as a ratio of the
+    #: reference, from `length_ratio_min` to `length_ratio_max` times it, in place of the band.
+    #: A faster lap takes a shorter line (car 2026-11-22: 5.3 m at 0.9 m/s, 6.2 m at 0.6 m/s),
+    #: which the band rejected; a missed crossing (a double lap, 2x) is still outside 1.5x.
+    #: Both 0.0 (the default): the registered band, unchanged.
+    length_ratio_min: float = 0.0
+    length_ratio_max: float = 0.0
 
     def __post_init__(self) -> None:
         for name in (
@@ -113,6 +120,8 @@ class ExternalConfig:
             "source_stale_s",
             "ready_similarity_min",
             "odom_extrapolation_s",
+            "length_ratio_min",
+            "length_ratio_max",
         ):
             if not math.isfinite(getattr(self, name)):
                 raise ValueError(f"ExternalConfig.{name} must be finite")
@@ -120,6 +129,18 @@ class ExternalConfig:
             raise ValueError("length_median_laps must be at least 1")
         if self.overdue_factor <= 1.0:
             raise ValueError("overdue_factor must exceed 1")
+        if (self.length_ratio_min, self.length_ratio_max) != (0.0, 0.0) and not (
+            0.0 < self.length_ratio_min < 1.0 < self.length_ratio_max < 2.0
+        ):
+            raise ValueError(
+                "length_ratio_min and length_ratio_max: both 0 (the band), or "
+                "0 < min < 1 < max < 2 (a double lap must stay outside)"
+            )
+
+    @property
+    def length_ratio(self) -> bool:
+        """The length check is the ratio (owner decision 21), not the registered band."""
+        return self.length_ratio_max > 0.0
 
 
 @dataclass
@@ -514,7 +535,12 @@ class ExternalLapGate:
             reasons.append("alive")
         ref = self.l_ref_m
         too_short = length < c.min_lap_length_m - EPS
-        off_band = math.isfinite(ref) and abs(length - ref) > self.band_m() + EPS
+        if c.length_ratio:
+            off_band = math.isfinite(ref) and not (
+                c.length_ratio_min * ref - EPS <= length <= c.length_ratio_max * ref + EPS
+            )
+        else:
+            off_band = math.isfinite(ref) and abs(length - ref) > self.band_m() + EPS
         if too_short or off_band or not math.isfinite(length):
             reasons.append("length")
         if not (abs(abs(heading) - TWO_PI) <= c.heading_slack_rad + EPS):
@@ -568,6 +594,8 @@ class ExternalLapGate:
         if not math.isfinite(ref):
             return math.inf  # never before a reference exists
         if len(self._lengths) >= 2:
+            if self.cfg.length_ratio:
+                return self.cfg.length_ratio_max * ref
             return ref + self.band_m()
         return self.cfg.overdue_factor * ref
 

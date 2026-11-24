@@ -15,7 +15,9 @@ weights.npz keys (all float32 except the integer scalars):
     linear{i}_weight [out, in]         i in 0 .. n_linear - 1
     linear{i}_bias   [out]
 
-The export writes exactly these keys (training/racer_pnp_perception/export.py) and the
+The products are `np.einsum` (numpy's own vectorised loops), not `@`: the car's numpy links the
+reference BLAS, on which these small matrix products were about five times slower (overnight
+2026-11-23, W2). The export writes exactly these keys (training/racer_pnp_perception/export.py) and the
 torch-versus-numpy test checks the two forward passes agree to 1e-5.
 """
 
@@ -57,7 +59,8 @@ class _Conv:
             idx = np.arange(n_out)[:, None] * self.stride + np.arange(self.k)[None, :]
             self._idx[length] = idx
         cols = x[:, idx].transpose(1, 0, 2).reshape(idx.shape[0], self.c_in * self.k)
-        return np.maximum(cols @ self.w2.T + self.b, 0.0).T.astype(np.float32, copy=False)
+        out = np.einsum("ok,lk->ol", self.w2, cols) + self.b[:, None]
+        return np.maximum(out, 0.0, out=out)
 
 
 class CircConv1dV0:
@@ -125,7 +128,7 @@ class CircConv1dV0:
         h = x.reshape(-1)
         last = len(self._linears) - 1
         for i, (w, b) in enumerate(self._linears):
-            h = w @ h + b
+            h = np.einsum("oi,i->o", w, h) + b
             if i < last:
                 h = np.maximum(h, 0.0)
         return h.reshape(OUTPUT_SHAPE).astype(np.float32, copy=False)

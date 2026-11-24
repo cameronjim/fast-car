@@ -8,7 +8,7 @@ import math
 
 import pytest
 from external_support import DT, LAP_M, EngineRig, memory, odom_model, steering_for
-from racer_laps.engine import LAP_SOURCES, LapConfig, LapMemory
+from racer_laps.engine import LAP_SOURCES, STATE_BLOCKED, LapConfig, LapMemory
 from racer_laps.external_gate import ExternalConfig, ExternalLapGate
 from racer_laps.lap_record import STATE_DRIVING
 
@@ -137,30 +137,89 @@ def test_a_confirmed_clean_lap_raises_the_cap_one_step() -> None:
     assert r.heading_rad == pytest.approx(2 * math.pi, abs=1e-6)
 
 
-def test_a_doubtful_lap_lowers_the_cap_is_not_stored_and_two_clean_laps_must_follow() -> None:
+def test_a_camera_only_doubtful_lap_with_a_clean_drive_holds_the_cap_and_the_streak() -> None:
+    """Owner decision 24: sequence here (a skipped event number), a clean drive: no step down,
+    not stored, and the next clean lap rises at once (the streak was kept, no two-clean rule)."""
     rig = EngineRig()
     rig.laps(3)  # caps 0.5 -> 0.6 -> 0.7 -> 0.8
     assert rig.mem.guidance().v_cap_mps == pytest.approx(0.8)
     stored_before = rig.mem.station_set.n_laps
-    bad = rig.event(4 * LAP_M, 6)  # a skipped event number: doubtful
+    bad = rig.event(4 * LAP_M, 6)  # a skipped event number: doubtful by sequence only
     assert bad is not None
+    assert rig.mem.gate.doubtful[-1]["reasons"] == ["sequence"]  # type: ignore[union-attr]
     assert bad.missed_gate and not bad.clean and not bad.stored
     assert rig.mem.station_set.n_laps == stored_before
     assert bad.cap_mps == pytest.approx(0.8)  # the cap it was driven under
-    assert bad.next_cap_mps == pytest.approx(0.7)  # one step down
-    nxt = rig.event(5 * LAP_M, 7)  # the next lap, confirmed and clean: no rise yet
+    assert bad.next_cap_mps == pytest.approx(0.8)  # held, no step down
+    nxt = rig.event(5 * LAP_M, 7)  # confirmed and clean: rises (the held lap did not count)
     assert nxt is not None and nxt.clean and not nxt.missed_gate
-    assert nxt.next_cap_mps == pytest.approx(0.7)
-    nxt2 = rig.event(6 * LAP_M, 8)  # the second clean lap raises it
-    assert nxt2 is not None and nxt2.next_cap_mps == pytest.approx(0.8)
+    assert nxt.next_cap_mps == pytest.approx(0.9)
 
 
-def test_a_doubtful_lap_never_goes_below_the_lap_one_cap() -> None:
+def test_a_held_lap_does_not_count_as_a_clean_lap_toward_a_rise() -> None:
     rig = EngineRig()
-    r = rig.event(LAP_M, 5)  # doubtful at the start
-    assert r is not None and r.missed_gate and r.next_cap_mps == CAP0
-    r = rig.event(2 * LAP_M, 6)
-    assert r is not None and r.next_cap_mps == CAP0
+    rig.laps(2)  # cap 0.7
+    brake = rig.event(3 * LAP_M, 3)
+    assert brake is not None and brake.next_cap_mps == pytest.approx(0.8)
+    rig2 = EngineRig()
+    rig2.laps(3)  # cap 0.8
+    rig2.drive_until(3 * LAP_M + 1.0)
+    rig2.mem.on_safety_event(0, 2, "ttc")  # an unclean lap: step down, needs two clean
+    r = rig2.event(4 * LAP_M, 4)
+    assert r is not None and not r.clean and r.next_cap_mps == pytest.approx(0.7)
+    held = rig2.event(5 * LAP_M, 6)  # sequence only, clean drive: holds at 0.7
+    assert held is not None and held.missed_gate and held.next_cap_mps == pytest.approx(0.7)
+    one = rig2.event(6 * LAP_M, 7)  # the first clean lap since the unclean one: still no rise
+    assert one is not None and one.next_cap_mps == pytest.approx(0.7)
+    two = rig2.event(7 * LAP_M, 8)
+    assert two is not None and two.next_cap_mps == pytest.approx(0.8)
+
+
+def _stepped_down_by(rig: EngineRig, disturb: str) -> float:
+    """Cap after a sequence-doubtful lap that also had `disturb`."""
+    rig.laps(3)  # cap 0.8
+    rig.drive_until(3 * LAP_M + 1.0)
+    if disturb == "brake":
+        rig.mem.on_safety_event(0, 2, "ttc")
+    elif disturb == "reverse_brake":
+        rig.mem.on_safety_event(0, 2, "ttc_reverse")
+    elif disturb == "state":
+        rig.mem.on_planner_status(STATE_BLOCKED, 0.3)
+        rig.mem.on_planner_status(STATE_DRIVING, 0.3)
+    elif disturb == "clearance":
+        rig.mem.on_planner_status(STATE_DRIVING, 0.05)
+        rig.mem.on_planner_status(STATE_DRIVING, 0.3)
+    r = rig.event(4 * LAP_M, 6)
+    assert r is not None and r.missed_gate
+    assert rig.mem.gate.doubtful[-1]["reasons"] == ["sequence"]  # type: ignore[union-attr]
+    return r.next_cap_mps
+
+
+@pytest.mark.parametrize("disturb", ["brake", "reverse_brake", "state", "clearance"])
+def test_a_doubtful_lap_with_a_driving_fault_steps_down(disturb: str) -> None:
+    assert _stepped_down_by(EngineRig(), disturb) == pytest.approx(0.7)
+
+
+def test_a_doubtful_lap_with_any_other_reason_steps_down() -> None:
+    rig = EngineRig()
+    rig.laps(3)  # cap 0.8
+    rig.status_period_s = None  # the camera goes quiet: the lap is doubtful by alive
+    rig.drive_until(rig.t + 3.5)
+    r = rig.event(4 * LAP_M, 4, latency_s=0.0)
+    assert r is not None and r.missed_gate
+    assert "alive" in rig.mem.gate.doubtful[-1]["reasons"]  # type: ignore[union-attr]
+    assert r.next_cap_mps == pytest.approx(0.7)
+
+
+def test_a_camera_only_doubtful_lap_on_a_suspect_reference_steps_down() -> None:
+    """Lap 1 is the only confirmed lap and lap 2 fails length alone: reference_suspect."""
+    rig = EngineRig()
+    rig.laps(1)  # cap 0.6, one confirmed lap
+    r = rig.event(2 * LAP_M + 0.7, 2)  # a long lap: length only
+    assert r is not None and r.missed_gate
+    assert rig.mem.gate.doubtful[-1]["reasons"] == ["length"]  # type: ignore[union-attr]
+    assert rig.mem.gate.reference_suspect  # type: ignore[union-attr]
+    assert r.next_cap_mps == pytest.approx(0.5)
 
 
 def test_a_run_that_started_not_ready_stays_at_the_lap_one_cap() -> None:
@@ -200,10 +259,11 @@ def test_while_overdue_the_guidance_cap_is_the_lap_one_cap() -> None:
     rig.drive_until(3 * LAP_M + LAP_M + 0.7)  # past reference plus band: overdue
     assert rig.mem.guidance().v_cap_mps == CAP0
     assert rig.mem.status()["station_uncertain"] is True
-    # the cap stays down until the next crossing, then the missed lap steps the schedule
+    # the cap stays down until the next crossing; a length-only doubtful lap with a clean drive
+    # then holds the schedule (owner decision 24)
     r = rig.event(4 * LAP_M + 1.0, 4)  # a long lap: doubtful by length
     assert r is not None and r.missed_gate
-    assert rig.mem.guidance().v_cap_mps == pytest.approx(0.7)
+    assert rig.mem.guidance().v_cap_mps == pytest.approx(0.8)
 
 
 def test_a_dead_source_leaves_the_car_at_the_lap_one_cap() -> None:

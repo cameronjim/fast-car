@@ -49,6 +49,9 @@ class LapRecord:
     station_m: FloatArray = field(default_factory=lambda: np.zeros(0))
     #: The lap does not count as a lap (a missed gate): never clean, never stored.
     missed_gate: bool = False
+    #: The drive alone was clean (no obstacle brake, DRIVING throughout, clearance at or above the
+    #: clean limit), whatever the gate said. `clean` is this and not `missed_gate`.
+    drive_clean: bool = False
 
 
 class LapRecorder:
@@ -134,9 +137,10 @@ class LapRecorder:
         """Close the lap, return its record and start an empty one."""
         a = np.array(self._rows, dtype=float).reshape(-1, 10)
         min_clearance = self._min_clearance if self._clearance_seen else math.nan
-        clean = not missed_gate and lap_is_clean(
+        drive_clean = lap_is_clean(
             self._obstacle_brakes, self._non_driving, min_clearance, self.min_clearance_clean_m
         )
+        clean = not missed_gate and drive_clean
         record = LapRecord(
             lap_index=lap_index,
             lap_time_s=float(lap_time_s),
@@ -158,6 +162,7 @@ class LapRecorder:
             obstacle_brake_count=self._obstacle_brakes,
             station_m=a[:, 9],
             missed_gate=missed_gate,
+            drive_clean=drive_clean,
         )
         self._rows = []
         self._brakes = 0

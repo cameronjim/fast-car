@@ -36,6 +36,7 @@
 #include "racer_planner/mppi.hpp"
 #include "racer_planner/planner_logic.hpp"
 #include "racer_planner/recovery.hpp"
+#include "racer_planner/speed_adaptation.hpp"
 #include "racer_planner/track_consistency.hpp"
 #include "racer_planner/vehicle_geometry.hpp"
 
@@ -50,6 +51,7 @@ struct PlannerConfig {
   RecoveryParams recovery;
   DrivabilityParams drivability;
   TrackConsistencyParams consistency;  // the one-frame track bridge (track_consistency.hpp)
+  SpeedAdaptationParams adaptation;    // online speed correction (speed_adaptation.hpp), off
   int max_samples = 768;               // solver capacity, also the budget's upper bound
   double tick_s = 0.02;
 };
@@ -222,6 +224,10 @@ class Planner {
     return gated_fallback_.load(std::memory_order_relaxed);
   }
   std::uint32_t bunched_ticks() const { return bunched_ticks_.load(std::memory_order_relaxed); }
+  // Online speed adaptation (speed_adaptation.hpp). The status is solve thread only; a reset may
+  // be requested from any thread and takes effect at the next solve.
+  SpeedAdaptationStatus adaptation_status() const { return adapt_.status(); }
+  void request_adaptation_reset() { adapt_reset_.store(true, std::memory_order_relaxed); }
   // Track frames bridged so far (track_consistency.hpp); any thread.
   std::uint32_t bridged_track_frames() const {
     return bridged_frames_.load(std::memory_order_relaxed);
@@ -241,6 +247,7 @@ class Planner {
   SolveReport solve_fault(const TickInput& in);
   TickOutput publish_impl(const PublishInput& in);
   void advance_model(const Command& published, int steps, const Command& before);
+  void adapt_speed(const TickInput& in, bool odom_fresh, double delta, const Control& acting);
   void apply_gated(const PublishInput& in, double now);
   void store_snapshot(const PlanSnapshot& s);
   static bool is_moving_state(PlannerState s) {
@@ -276,6 +283,19 @@ class Planner {
   int solve_good_ticks_ = 0;
   Pose2 ego_pose_;
   bool plan_valid_ = false;
+  // Online speed adaptation: the estimator, the shadow models at the control tick (one with the
+  // current correction, one without), and the open comparison window.
+  SpeedAdaptation adapt_;
+  DynamicsModel model_adapt_;
+  DynamicsModel model_adapt_raw_;
+  bool adapt_win_ = false;
+  double adapt_t0_ = 0.0;
+  double adapt_v0_ = 0.0;
+  double adapt_last_t_ = 0.0;
+  State adapt_shadow_;
+  double adapt_sens_[2] = {0.0, 0.0};
+  bool adapt_fwd_ = true;
+  Control adapt_u_;
 
   // -- publish side only --------------------------------------------------------------------
   Command last_published_;
@@ -316,6 +336,7 @@ class Planner {
 
   std::atomic<std::uint32_t> bunched_ticks_{0};
   std::atomic<std::uint32_t> bridged_frames_{0};
+  std::atomic<bool> adapt_reset_{false};
 };
 
 }  // namespace racer_planner

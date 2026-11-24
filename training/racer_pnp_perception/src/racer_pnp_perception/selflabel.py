@@ -61,7 +61,7 @@ from racer_track_perception.vehicle import LiveVehicle, find_repo_root, load_liv
 from scipy.spatial import cKDTree
 
 from racer_pnp_perception.eval_bags import clearance_deficit
-from racer_pnp_perception.split import Segment, Split, load_split
+from racer_pnp_perception.split import SPLIT_SHA256, Segment, Split, load_split
 
 log = logging.getLogger(__name__)
 
@@ -1003,10 +1003,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--split", type=Path, default=None, help="pre-registered split YAML (see split.py)"
     )
+    parser.add_argument(
+        "--split-sha256",
+        default=None,
+        help="the digest a split other than pnp-v0.2 was stated with (default: the v0.2 one)",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     live = load_live_vehicle()
-    split = load_split(args.split) if args.split is not None else None
+    split = (
+        load_split(args.split, expected_sha256=args.split_sha256 or SPLIT_SHA256)
+        if args.split is not None
+        else None
+    )
     manifest: dict[str, Any] = {"git_sha": git_sha(), "bags": {}}
     for bag in args.bags:
         if split is not None and split.bags.get(bag.name) is None:

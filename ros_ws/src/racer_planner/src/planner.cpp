@@ -54,7 +54,10 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
       horizon_(std::max(2, config.mppi.horizon_steps)),
       delay_ticks_(std::min(
           25, std::max(0, static_cast<int>(
-                              std::lround(dynamics.nominal.command_delay_s / config.tick_s))))) {
+                              std::lround(dynamics.nominal.command_delay_s / config.tick_s))))),
+      adapt_(config.adaptation),
+      model_adapt_(dynamics, geometry, config.tick_s),
+      model_adapt_raw_(dynamics, geometry, config.tick_s) {
   if (horizon_ > kMaxPlanSteps) {
     throw std::invalid_argument("racer_planner: horizon_steps above kMaxPlanSteps");
   }
@@ -128,6 +131,70 @@ SolveReport Planner::solve_fault(const TickInput& in) {
   return r;
 }
 
+void Planner::adapt_speed(const TickInput& in, bool odom_fresh, double delta,
+                          const Control& acting) {
+  if (adapt_reset_.exchange(false, std::memory_order_relaxed)) {
+    adapt_.reset();
+    adapt_win_ = false;
+    model_adapt_.set_speed_correction(adapt_.correction());
+  }
+  if (!odom_fresh) {
+    adapt_win_ = false;  // a gap in the odometry drops the open window
+  } else if (!adapt_win_ || in.odom_stamp_s > adapt_last_t_) {
+    const double v = in.wheel_speed_mps;
+    if (adapt_win_) {
+      // Advance the shadow over the samples since the last one under the command that acted,
+      // with the sensitivities of its speed: S <- dF/dv * S + dF/d(bias, gain).
+      const double tick = model_adapt_.dt();
+      const int n = std::clamp(
+          static_cast<int>(std::lround((in.odom_stamp_s - adapt_last_t_) / tick)), 1, 10);
+      const NominalParams& nom = model_adapt_.params().nominal;
+      const double target = std::fabs(adapt_u_.speed_cmd) < nom.speed_deadband_mps
+                                ? 0.0
+                                : nom.speed_gain * adapt_u_.speed_cmd;
+      constexpr double kEps = 1e-4;
+      for (int i = 0; i < n; ++i) {
+        const State next = model_adapt_.step(adapt_shadow_, adapt_u_);
+        State bumped = adapt_shadow_;
+        bumped.v += kEps;
+        const double f_v = (model_adapt_.step(bumped, adapt_u_).v - next.v) / kEps;
+        double f_b = 0.0, f_g = 0.0;
+        if (target > 0.0) {
+          f_b = tick;
+          f_g = model_adapt_raw_.step(adapt_shadow_, adapt_u_).v - adapt_shadow_.v;
+        }
+        adapt_sens_[0] = f_v * adapt_sens_[0] + f_b;
+        adapt_sens_[1] = f_v * adapt_sens_[1] + f_g;
+        adapt_shadow_ = next;
+      }
+      adapt_fwd_ = adapt_fwd_ && adapt_u_.speed_cmd > 0.0 && target > 0.0;
+      adapt_u_ = acting;
+      adapt_last_t_ = in.odom_stamp_s;
+      const double span = in.odom_stamp_s - adapt_t0_;
+      if (span >= adapt_.params().window_s - 1e-9) {
+        adapt_.update(adapt_sens_[0], adapt_sens_[1], v - adapt_shadow_.v, adapt_v0_, span,
+                      adapt_fwd_);
+        model_adapt_.set_speed_correction(adapt_.correction());
+        adapt_win_ = false;
+      }
+    }
+    if (!adapt_win_) {
+      adapt_win_ = true;
+      adapt_t0_ = adapt_last_t_ = in.odom_stamp_s;
+      adapt_v0_ = v;
+      adapt_shadow_ = State{};
+      adapt_shadow_.v = v;
+      adapt_shadow_.delta = delta;
+      adapt_sens_[0] = adapt_sens_[1] = 0.0;
+      adapt_fwd_ = true;
+      adapt_u_ = acting;
+    }
+  }
+  const SpeedCorrection c = adapt_.correction();
+  solver_.set_speed_correction(c);
+  model_roll_.set_speed_correction(c);
+}
+
 SolveReport Planner::solve_impl(const TickInput& in) {
   SolveReport rep;
   const double tick = cfg_.tick_s;
@@ -178,6 +245,7 @@ SolveReport Planner::solve_impl(const TickInput& in) {
                        : Control{sh.last_published.speed_mps, sh.last_published.steering_rad};
   ego_.push(now, odom_fresh ? in.wheel_speed_mps : est.v, est.delta, acting_now.speed_cmd,
             acting_now.steering_cmd);
+  if (cfg_.adaptation.enabled) adapt_speed(in, odom_fresh, est.delta, acting_now);
 
   // The one-frame bridge (track_consistency.hpp): a new track frame that jumps and narrows against
   // the last accepted one is replaced by that accepted track for its lifetime, at most one frame

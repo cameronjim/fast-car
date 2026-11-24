@@ -37,7 +37,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 from racer_laps.cap_schedule import CapSchedule
-from racer_laps.external_gate import EXTERNAL_SOURCES, ExternalConfig, ExternalLapGate
+from racer_laps.external_gate import (
+    CAMERA_ONLY_REASONS,
+    EXTERNAL_SOURCES,
+    ExternalConfig,
+    ExternalLapGate,
+)
 from racer_laps.gate import STANDSTILL_MPS, GateConfig, GateCrossing, StartScanGate
 from racer_laps.lap_detector import LapDetector
 from racer_laps.lap_record import STATE_DRIVING, LapRecord, LapRecorder
@@ -503,7 +508,9 @@ class LapMemory:
                 self._cap_this_lap,
             )
         cap = self._cap_this_lap
-        next_cap = self.schedule.finish_lap(record.clean, crossing.lap_index)
+        next_cap = self.schedule.finish_lap(
+            record.clean, crossing.lap_index, hold=self._holds_cap(crossing, record)
+        )
         stored = self._reconcile_lengths(crossing.lap_index, stored)
         next_cap = self.schedule.cap_mps
         if self.cfg.lap_mode == "observe":
@@ -585,6 +592,18 @@ class LapMemory:
         if self._missed_streak >= 2:
             return "crossing_not_matched_twice"
         return ""
+
+    def _holds_cap(self, crossing: GateCrossing, record: LapRecord) -> bool:
+        """Owner decision 24: a doubtful lap whose reasons are all camera facts (length, heading,
+        sequence), on a run whose reference is not suspect, with a clean drive, holds the cap."""
+        gate = self.gate
+        return bool(
+            crossing.missed
+            and crossing.reasons
+            and set(crossing.reasons) <= CAMERA_ONLY_REASONS
+            and not getattr(gate, "reference_suspect", False)
+            and record.drive_clean
+        )
 
     def _reconcile_lengths(self, lap_index: int, stored: bool) -> bool:
         """After a closure: laps the gate now calls suspect leave the station set and the cap

@@ -300,6 +300,7 @@ struct SimResult {
   int max_consecutive_blocked = 0;
   int ticks_recovering = 0;
   double max_solve_s = 0.0;
+  SpeedAdaptationStatus adaptation;  // the planner's online speed adaptation at the end
 };
 
 enum class TrackMode {
@@ -542,6 +543,7 @@ inline SimResult run_closed_loop(const SimSetup& setup) {
   run.final_speed_mps = car.v;
   run.final_x = car.x;
   run.final_y = car.y;
+  run.adaptation = planner.adaptation_status();
   return run;
 }
 

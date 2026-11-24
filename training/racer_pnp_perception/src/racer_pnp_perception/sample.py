@@ -9,6 +9,7 @@ half width right, log_sigma (unused in the label, zero).
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -147,8 +148,12 @@ def make_sample(
     geometry: ScanGeometry,
     clean: bool = False,
     pose: tuple[float, float, float] | None = None,
+    lidar_dr: bool = False,
 ) -> Sample:
-    """One sample. `clean=True` gives an exact scan: no noise, dropout, gaps, room or motion."""
+    """One sample. `clean=True` gives an exact scan: no noise, dropout, gaps, room or motion.
+    `lidar_dr=True` adds the LiDAR-model randomisation (`nuisance.LidarModel`): the scan is cast
+    from a mount that is slightly off from `mount` (the one preprocessing assumes) and its ranges
+    get scale, bias, far dropout and dark sectors. The label never sees it."""
     pose = pose or draw_pose(lane, world.lane_width_m, rng)
     label = label_for_pose(lane, world.walls, pose)
     nuisance = nz.draw_nuisance(rng, clean=clean)
@@ -157,8 +162,20 @@ def make_sample(
     _, tan0, kappa0 = lane.at(np.array([s0]))
     forward = 1.0 if float(np.dot(tan0[0], [math.cos(pose[2]), math.sin(pose[2])])) >= 0 else -1.0
     motion = nz.motion_for(nuisance, forward * float(kappa0[0]))
-    ranges = lidar_scan(pose, mount, geometry, walls, motion)
+    lidar = nz.draw_lidar_model(rng) if lidar_dr and not clean else nz.IDEAL_LIDAR
+    cast_mount = (
+        dataclasses.replace(
+            mount,
+            yaw_rad=mount.yaw_rad + lidar.yaw_error_rad,
+            x_m=mount.x_m + lidar.x_error_m,
+            y_m=mount.y_m + lidar.y_error_m,
+        )
+        if lidar != nz.IDEAL_LIDAR
+        else mount
+    )
+    ranges = lidar_scan(pose, cast_mount, geometry, walls, motion)
     ranges = nz.perturb_ranges(ranges, geometry.laser_bearings(), mount.yaw_rad, nuisance, rng)
+    ranges = nz.apply_lidar_model(ranges, geometry.laser_bearings() + mount.yaw_rad, lidar, rng)
     return Sample(
         ranges=ranges,
         label=label,

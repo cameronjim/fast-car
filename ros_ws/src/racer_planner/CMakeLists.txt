@@ -31,11 +31,13 @@ find_package(nav_msgs REQUIRED)
 find_package(ackermann_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(racer_pnp_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 # -- ROS-free core: no rclcpp, no generated vehicle_params header (it takes a VehicleGeometry) --
 add_library(racer_planner_core
   src/dynamics_model.cpp
+  src/speed_adaptation.cpp
   src/sha256.cpp
   src/bundle_loader.cpp
   src/local_track.cpp
@@ -87,7 +89,7 @@ add_dependencies(mppi_planner_node racer_planner_generate_vehicle_params)
 target_include_directories(mppi_planner_node PRIVATE "${RACER_GENERATED_DIR}" src)
 target_link_libraries(mppi_planner_node racer_planner_core)
 ament_target_dependencies(mppi_planner_node rclcpp rcl_interfaces sensor_msgs nav_msgs
-  ackermann_msgs geometry_msgs racer_pnp_msgs)
+  ackermann_msgs geometry_msgs racer_pnp_msgs std_msgs)
 
 # -- mppi_bench: solve time on a synthetic corridor ----------------------------------------------
 add_executable(mppi_bench src/mppi_bench.cpp)
@@ -108,6 +110,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_racer_planner_core
     test/test_dynamics_model.cpp
+    test/test_speed_adaptation.cpp
     test/test_sha256.cpp
     test/test_bundle_loader.cpp
     test/test_local_track.cpp
@@ -206,7 +209,8 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   foreach(t test_planner_node_launch test_planner_node_silence_launch test_planner_node_refusal_launch
                  test_planner_node_start_gate_launch test_planner_node_shutdown_launch
-                 test_planner_node_params_file_launch)
+                 test_planner_node_params_file_launch test_planner_node_adaptation_launch
+                 test_planner_node_fast_mlp_launch)
     add_launch_test(test/${t}.py TARGET ${t} TIMEOUT 180)
   endforeach()
 endif()

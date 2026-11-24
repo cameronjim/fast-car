@@ -161,9 +161,10 @@ def test_fault_an_event_dropped_gives_one_doubtful_merged_lap() -> None:
     assert merged.length_m == pytest.approx(10.5, abs=0.3)
     assert [v.confirmed for v in r.verdicts] == [True, True, False, True, True]
     never_rises_at_a_doubtful_lap(r)
-    assert r.verdicts[2].next_cap_mps == pytest.approx(0.6)  # one step down from 0.7
-    # the next lap is confirmed again but, needing two clean laps, does not raise the cap
-    assert r.verdicts[3].next_cap_mps == pytest.approx(0.6)
+    # owner decision 24: length and heading only, a clean drive: the cap is held at 0.7
+    assert r.verdicts[2].next_cap_mps == pytest.approx(0.7)
+    # the held lap kept the clean streak: the next confirmed clean lap rises at once
+    assert r.verdicts[3].next_cap_mps == pytest.approx(0.8)
 
 
 def test_fault_an_event_dropped_with_the_numbers_skipping_is_also_a_sequence_miss() -> None:

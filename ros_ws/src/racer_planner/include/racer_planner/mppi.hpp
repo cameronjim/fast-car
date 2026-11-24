@@ -243,6 +243,9 @@ class MppiSolver {
 
   void reset();  // forget the warm start
 
+  // Online speed correction of the rollout model (speed_adaptation.hpp); zero by default.
+  void set_speed_correction(const SpeedCorrection& c) { model_.set_speed_correction(c); }
+
   // Needs a distance field and either a valid track with confidence above 0 or a valid free-space
   // field (the planner decides "nothing drivable" before calling). Never allocates.
   SolveOutput solve(const SolveInput& in);

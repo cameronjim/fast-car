@@ -27,6 +27,13 @@ if(BUILD_TESTING)
   # pnp.launch.py: the Plug-and-Play driver (perception + MPPI planner): arguments, the recorder
   # guard, bundle refusals, shutdown with either node, and the recorder regex's /pnp/ entry.
   ament_add_pytest_test(test_pnp_launch test/test_pnp_launch.py)
+  # L1 check of brief 52 (rt_sched) in car_teleop.launch.py and pnp.launch.py: the defaults table,
+  # off = today's launch, on = the two chrt prefixes from config/scheduling.yaml, a bad value
+  # refused, the /proc reader on fixture text. Description inspection only.
+  ament_add_pytest_test(test_rt_sched_launch test/test_rt_sched_launch.py)
+  # L3 of the same: rt_sched:=on refuses without FIFO (the ordinary CI container) and runs
+  # safety_node FIFO with --ulimit rtprio (a local run; SKIPPED, not passed, in CI).
+  ament_add_pytest_test(test_rt_sched_l3 test/test_rt_sched_l3.py TIMEOUT 240)
   # L1 check of lidar.launch.py and car_teleop.launch.py's `lidar` argument (roadmap 2.3):
   # launch arguments and defaults, the base_link -> laser transform taken from vehicle_params
   # (and refused on a null mount field), the driver's /scan remap. Description inspection

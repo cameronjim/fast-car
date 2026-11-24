@@ -164,7 +164,9 @@ def test_the_suspect_flag_changes_no_verdict_cap_or_reference(
     plan: list[Action], speed: float, lengths: list[float]
 ) -> None:
     """Brief 51b: the same events with the flag logic present and stubbed out give identical
-    verdicts, reasons, caps and reference length."""
+    verdicts, reasons and reference length. Caps are not compared: since owner decision 24 the
+    cap rule reads the flag (a length-only lap on a suspect reference steps down instead of
+    holding), covered by test_a_camera_only_doubtful_lap_on_a_suspect_reference_steps_down."""
     from racer_laps.external_gate import ExternalLapGate
 
     def run_events(stub: bool) -> list[object]:
@@ -178,9 +180,7 @@ def test_the_suspect_flag_changes_no_verdict_cap_or_reference(
                 rig.drive_until(arrival)
                 r = rig.mem.on_lap_source_event(arrival, number, cross)
                 if r is not None:
-                    out.append(
-                        (r.missed_gate, r.clean, r.stored, r.cap_mps, r.next_cap_mps, r.length_m)
-                    )
+                    out.append((r.missed_gate, r.clean, r.stored, r.length_m))
             rig2 = Rig()
             t = 0.0
             for i, length in enumerate(lengths):

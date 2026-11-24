@@ -15,6 +15,15 @@ from racer_agent.rosstate import RosState
 from racer_agent.runner import FakeRunner
 
 TOKEN = "test-token-123"
+_REAL_CONFIG = Path(__file__).resolve().parents[4] / "config"
+
+
+def copy_scheduling(repo: Path) -> None:
+    """The repo's own scheduling loader and file (brief 52): stack_run_argv reads the ulimit from
+    them, as the real agent reads them from the checkout it runs from."""
+    (repo / "config").mkdir(parents=True, exist_ok=True)
+    for name in ("scheduling.py", "scheduling.yaml"):
+        (repo / "config" / name).write_text((_REAL_CONFIG / name).read_text())
 
 
 class Env:
@@ -25,6 +34,7 @@ class Env:
         (self.repo / "ros_ws" / "install").mkdir(parents=True)
         (self.repo / "ros_ws" / "install" / "setup.bash").write_text("")
         (self.repo / "config" / "tracks" / "gym_oval").mkdir(parents=True)
+        copy_scheduling(self.repo)
         (self.repo / "config" / "tracks" / "gym_oval" / "raceline.csv").write_text("x,y\n")
         self.world = World(self.repo)
         self.host = make_host(tmp_path, self.world)

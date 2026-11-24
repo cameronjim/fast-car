@@ -499,3 +499,53 @@ def test_r_a_source_that_is_never_ready_is_refused_and_the_car_never_moves(tmp_p
     assert result["drive_raw_messages"] == 0
     assert result["distance_m"] <= 0.05
     assert result["wall_contacts"] == 0
+
+
+#: Brief 53: the D v1 candidate of M-D1b (the candidate rule's pick, recorded in
+#: evaluation/prereg/freeze/b11.json with its tuned values once frozen).
+DV1_CANDIDATE = "K3"
+
+
+def test_dv1_the_candidate_on_the_truth_source_drives_3_laps_without_contact(tmp_path, capsys):
+    """Brief 53 L5 canary: development case P1, ccw, seed 11, D v1 with the candidate's switches
+    (battery_b11.condition_flags, the frozen tuned values when the freeze file exists) on the truth
+    source through the start gate, 3 laps: 0 contacts, the laps confirmed, the bound published,
+    the speed command never above the lap-1 cap on lap 1 or the ceiling."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import battery_b11 as bat
+    import lap_battery_b11 as b11
+
+    const = b11.load_constants()
+    freeze = REPO_ROOT / "evaluation" / "prereg" / "freeze" / "b11.json"
+    tuned = json.loads(freeze.read_text())["tuned_values"] if freeze.exists() else None
+    cand = json.loads(freeze.read_text())["candidate"] if freeze.exists() else DV1_CANDIDATE
+    flags = bat.condition_flags(const, cand, ceiling_mps(), 0.0, tuned=tuned)
+    i = flags.index("--lap-source")
+    extra = flags[i:]  # the source, the ready delay and the switches
+    result = run_runner(
+        tmp_path,
+        domain=91,
+        mode="v1",
+        laps=3,
+        duration_s=300.0,
+        track_params=P1_STADIUM,
+        extra_flags=extra,
+    )
+    status = result["lap_status"]
+    with capsys.disabled():
+        print(
+            f"\nl5_pnp_laps D v1 {cand}: truth {result['gt_lap_times_registered_s']} caps "
+            f"{[e['cap_mps'] for e in result['system_lap_events']]} contacts {result['wall_contacts']} "
+            f"commands {result.get('max_cmd_speed_by_lap_mps')}"
+        )
+    assert result["wall_contacts"] == 0
+    assert len(result["gt_lap_times_registered_s"]) >= 3
+    assert status["lap_mode"] == "v1" and status["source_ready"] is True
+    assert not [d for d in status["doubtful_laps"] if d["lap"] <= 3]
+    assert result["guidance_floor"]["messages_with_stations"] > 0
+    assert result["max_cmd_speed_by_lap_mps"][0] <= LAP1_CAP_MPS + 0.01
+    assert result["max_cmd_speed_mps"] <= ceiling_mps() + 0.01
+    assert result["publisher_nodes"] == {
+        "/drive_raw": ["mppi_planner_node"],
+        "/drive": ["safety_node"],
+    }

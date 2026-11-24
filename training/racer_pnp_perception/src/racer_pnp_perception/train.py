@@ -93,10 +93,11 @@ def train(
     scale_probability: float = 1.0,
     fold: str | None = None,
     device: str = "cpu",
+    split_sha256: str | None = None,
 ) -> dict[str, Any]:
     import torch
 
-    from racer_pnp_perception.split import DEFAULT_SPLIT_PATH, load_split
+    from racer_pnp_perception.split import DEFAULT_SPLIT_PATH, SPLIT_SHA256, load_split
 
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
@@ -106,7 +107,9 @@ def train(
     real_val: real.RealSet | None = None
     real_info: dict[str, Any] = {}
     if real_paths:
-        split = load_split(split_path or DEFAULT_SPLIT_PATH)
+        split = load_split(
+            split_path or DEFAULT_SPLIT_PATH, expected_sha256=split_sha256 or SPLIT_SHA256
+        )
         everything = real.load_real(list(real_paths), split)
         fold_info: dict[str, Any] = {}
         if fold is not None:
@@ -294,6 +297,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--real", type=Path, nargs="+", default=None)
     parser.add_argument("--real-fraction", type=float, default=0.0)
     parser.add_argument("--split", type=Path, default=None)
+    parser.add_argument(
+        "--split-sha256",
+        default=None,
+        help="the digest a split other than pnp-v0.2 was stated with (default: the v0.2 one)",
+    )
     parser.add_argument("--init", type=Path, default=None)
     parser.add_argument(
         "--scale-aug", action="store_true", help="isotropic scale augmentation of real samples"
@@ -334,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             args.scale_probability,
             args.fold,
             args.device,
+            args.split_sha256,
         )
         return result["history"]
 

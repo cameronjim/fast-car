@@ -667,7 +667,14 @@ def dev_table(runs) -> list[str]:
             )
 
         late = [r.late_brakes_per_lap for r in rs if not math.isnan(r.late_brakes_per_lap)]
-        stalls = sum(1 for r in rs if not ((r.extras.get("longest_stop_s") or 99) <= 5.0))
+        stalls = sum(
+            1
+            for r in rs
+            if not (
+                isinstance(r.extras.get("longest_stop_s"), (int, float))
+                and r.extras["longest_stop_s"] <= 5.0
+            )
+        )
         out.append(
             f"| {cond} | {len(rs)} | {sum(r.contacts for r in rs)} | "
             f"{sum(1 for r in rs if r.error or r.laps < 12)} | {stalls} | "

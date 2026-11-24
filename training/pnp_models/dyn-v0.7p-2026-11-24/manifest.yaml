@@ -1,0 +1,68 @@
+bundle_schema_version: 1.1.0
+kind: dynamics
+model_id: dyn-v0.7p-2026-11-24
+created_utc: '2026-11-24T05:41:35Z'
+git_sha: b688123b3fc1b6e6a5d2860611762df85c3dd946
+training_config_sha256: f46f88d92b632f64b9b9ec18f9377d4e39d827a81fed7158ef8b73cb1d9f065b
+vehicle_params: {schema_version: 0.17.0, sysid_session_id: none-preliminary}
+payload:
+- {file: residual_mlp.f32, sha256: 4b8a8ad4b83d22063bbbc1f98b8a5aa037480cc93a9bc602ef7e9c584a2c2049}
+- {file: golden_rollouts.csv, sha256: 0520eee359827f97f3d0a5a6c643d6ca74593931a6774ae656786a10bcd3c9f2}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9482438088762631, speed_deadband_mps: 0.22, speed_tau_s: 0.22460632746810144,
+    accel_max_mps2: 2.0, decel_max_mps2: 0.6731081096112491, steer_gain_left: 0.9166243626015708,
+    steer_gain_right: 1.0114633713998802, steer_offset_rad: 0.015222998571431204,
+    steer_tau_s: 0.02787697420940658, command_delay_s: 0.0, understeer_s2_per_m2: 0.10938200992093731}
+  residual:
+    enabled: true
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers:
+    - [4, 32]
+    - [32, 32]
+    - [32, 2]
+    activation: tanh
+    input_mean: [0.7668248529274481, -0.026143647977752777, 0.799193931196649, -0.024115960012330524]
+    input_std: [0.28306284399977955, 0.3801358646796407, 0.2922473112129149, 0.3945447198602406]
+    output_scale: [0.3963251475817024, 0.10655195340648428]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['development split d0c93e45c85898c834d24ae317f15e476cb479153a1f3e02f6981fb263892be3
+    (training/pnp_models/dyn-v0.7p-2026-11-24/dev-split.yaml), truth T2', bag 2026-11-16T02-18-54_car_teleop,
+  bag 2026-11-16T02-29-27_car_teleop, bag 2026-11-16T22-38-47_car_teleop, bag 2026-11-16T22-45-39_car_teleop,
+  bag 2026-11-16T23-04-09_car_teleop, bag 2026-11-23T03-50-32_car_teleop, bag 2026-11-24T04-36-54_car_teleop]
+metrics:
+  status: prototype, unregistered (owner decision 29); not a gate result
+  shipping: {config: multi_step_from_one_capped_wd1e-2, seed: 1}
+  validation_P1_m: {proto: 0.07346072788070666, dyn-v0.1: 0.10117244888632802}
+  dev_heldout_1s:
+  - {group: all, model: dyn-v0.1, windows: 712, P1: 0.11255, Y1: 0.09783, S1: 0.08841,
+    P1_ratio: 1.0, Y1_ratio: 1.0, S1_ratio: 1.0}
+  - {group: all, model: proto, windows: 712, P1: 0.0877, Y1: 0.06694, S1: 0.07321,
+    P1_ratio: 0.7792, Y1_ratio: 0.6842, S1_ratio: 0.8281}
+  - {group: cw, model: dyn-v0.1, windows: 283, P1: 0.13321, Y1: 0.09923, S1: 0.09716,
+    P1_ratio: 1.0, Y1_ratio: 1.0, S1_ratio: 1.0}
+  - {group: cw, model: proto, windows: 283, P1: 0.10457, Y1: 0.07009, S1: 0.08282,
+    P1_ratio: 0.785, Y1_ratio: 0.7064, S1_ratio: 0.8525}
+  - {group: ccw, model: dyn-v0.1, windows: 429, P1: 0.08501, Y1: 0.09596, S1: 0.07673,
+    P1_ratio: 1.0, Y1_ratio: 1.0, S1_ratio: 1.0}
+  - {group: ccw, model: proto, windows: 429, P1: 0.06519, Y1: 0.06273, S1: 0.06039,
+    P1_ratio: 0.7668, Y1_ratio: 0.6537, S1_ratio: 0.787}
+  - {group: session 2026-11-15 (bags 2026-11-16), model: dyn-v0.1, windows: 566, P1: 0.11623,
+    Y1: 0.10465, S1: 0.09483, P1_ratio: 1.0, Y1_ratio: 1.0, S1_ratio: 1.0}
+  - {group: session 2026-11-15 (bags 2026-11-16), model: proto, windows: 566, P1: 0.08883,
+    Y1: 0.07013, S1: 0.07732, P1_ratio: 0.7643, Y1_ratio: 0.6701, S1_ratio: 0.8153}
+  - {group: session 2026-11-23 (bag 2026-11-24), model: dyn-v0.1, windows: 146, P1: 0.11383,
+    Y1: 0.08564, S1: 0.05451, P1_ratio: 1.0, Y1_ratio: 1.0, S1_ratio: 1.0}
+  - {group: session 2026-11-23 (bag 2026-11-24), model: proto, windows: 146, P1: 0.09126,
+    Y1: 0.04734, S1: 0.05353, P1_ratio: 0.8018, Y1_ratio: 0.5528, S1_ratio: 0.9819}
+  - {group: start >= 1.0 m/s, model: dyn-v0.1, windows: 219, P1: 0.17141, Y1: 0.10382,
+    S1: 0.11479, P1_ratio: 1.0, Y1_ratio: 1.0, S1_ratio: 1.0}
+  - {group: start >= 1.0 m/s, model: proto, windows: 219, P1: 0.13885, Y1: 0.07788,
+    S1: 0.08211, P1_ratio: 0.81, Y1_ratio: 0.7502, S1_ratio: 0.7153}
+  P1_ratio_bootstrap: {ratio: 0.77915087783079, lo: 0.72832646731651, hi: 0.8294145999839935,
+    resamples: 2000, blocks: 63, seed: 0, empty_stratum_share: 0.0005714285714285715}

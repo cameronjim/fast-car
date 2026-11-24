@@ -1,8 +1,95 @@
 #include "racer_planner/dynamics_model.hpp"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 
 namespace racer_planner {
+
+namespace {
+
+// Packed layout of the 4 -> 32 -> 32 -> 2 weights for DynamicsModel::mlp(). The bundle's layout
+// (the Python reference's) is W1 [32,4], b1, W2 [32,32], b2, W3 [2,32], b3, row major; the hidden
+// layers are stored transposed here (W1^T [4,32], W2^T [32,32]) so a layer is "acc[i] += w[j][i] *
+// x[j]" over the 32 units i, which vectorises, while each unit still sums b[i] + w[i][0] x[0] +
+// w[i][1] x[1] + ... in the bundle's order (the same operations as the plain loop).
+constexpr int kOffW1 = 0;
+constexpr int kOffB1 = kOffW1 + kMlpHidden * kMlpIn;
+constexpr int kOffW2 = kOffB1 + kMlpHidden;
+constexpr int kOffB2 = kOffW2 + kMlpHidden * kMlpHidden;
+constexpr int kOffW3 = kOffB2 + kMlpHidden;
+constexpr int kOffB3 = kOffW3 + kMlpOut * kMlpHidden;
+static_assert(kOffB3 + kMlpOut == kMlpWeightCount, "packed layout covers every weight");
+
+void pack_mlp_weights(const std::vector<double>& w, std::array<double, kMlpWeightCount>* out) {
+  if (static_cast<int>(w.size()) != kMlpWeightCount) return;
+  double* p = out->data();
+  for (int i = 0; i < kMlpHidden; ++i)
+    for (int j = 0; j < kMlpIn; ++j) p[kOffW1 + j * kMlpHidden + i] = w[kOffW1 + i * kMlpIn + j];
+  for (int i = 0; i < kMlpHidden; ++i)
+    for (int j = 0; j < kMlpHidden; ++j)
+      p[kOffW2 + j * kMlpHidden + i] = w[kOffW2 + i * kMlpHidden + j];
+  for (int i = 0; i < kMlpHidden; ++i) p[kOffB1 + i] = w[kOffB1 + i];
+  for (int i = 0; i < kMlpHidden; ++i) p[kOffB2 + i] = w[kOffB2 + i];
+  for (int k = kOffW3; k < kMlpWeightCount; ++k) p[k] = w[k];  // W3 and b3 as they are
+}
+
+// The fast mode's tanh (DynamicsParams::fast_mlp) of each of the n entries of a, in place,
+// branch free so the loop vectorises:
+// tanh|x| = 1 - 2 / (exp(2|x|) + 1) with the sign of x put back. exp(y) for y in [0, 40] is
+// 2^k * exp(r), k = round(y / ln 2), |r| <= ln2 / 2, with a degree 13 Taylor polynomial (its
+// truncation error is below 1e-17 relative) and 2^k built from the exponent bits. The absolute
+// error against std::tanh is a few 1e-16 for every input (test_dynamics_model checks 1e-12).
+// 2|x| above 40 is held at 40, where 1 - 2 / (e^40 + 1) is 1 in double, so saturation is exact
+// (and tanh(+-inf) = +-1). A NaN stays NaN.
+inline void tanh_inplace(double* a, int n) {
+  constexpr double kLog2e = 1.4426950408889634;
+  constexpr double kLn2Hi = 6.93147180369123816490e-01;  // fdlibm's split of ln 2
+  constexpr double kLn2Lo = 1.90821492927058770002e-10;
+  constexpr double kShift = 4503599627370496.0 + 1023.0;  // 2^52 + exponent bias
+  for (int i = 0; i < n; ++i) {
+    const double x = a[i];
+    double y = 2.0 * std::fabs(x);
+    y = std::fmin(y, 40.0);  // a NaN becomes 40 here and is put back at the end
+    const double k = std::floor(y * kLog2e + 0.5);
+    const double r = (y - k * kLn2Hi) - k * kLn2Lo;
+    double p = 1.0 / 6227020800.0;  // 1/13!
+    p = p * r + 1.0 / 479001600.0;
+    p = p * r + 1.0 / 39916800.0;
+    p = p * r + 1.0 / 3628800.0;
+    p = p * r + 1.0 / 362880.0;
+    p = p * r + 1.0 / 40320.0;
+    p = p * r + 1.0 / 5040.0;
+    p = p * r + 1.0 / 720.0;
+    p = p * r + 1.0 / 120.0;
+    p = p * r + 1.0 / 24.0;
+    p = p * r + 1.0 / 6.0;
+    p = p * r + 0.5;
+    p = p * r + 1.0;
+    p = p * r + 1.0;
+    // 2^k: k + 1023 lands in the low mantissa bits of kShift + k (0 <= k <= 58), shifted up into
+    // the exponent field.
+    const double t = k + kShift;
+    std::uint64_t bits;
+    std::memcpy(&bits, &t, sizeof bits);
+    bits <<= 52;
+    double scale;
+    std::memcpy(&scale, &bits, sizeof scale);
+    const double e = p * scale;
+    const double th = std::copysign(1.0 - 2.0 / (e + 1.0), x);
+    // A NaN input passes through, selected with integer masks: a comparison and a ternary here
+    // make GCC branch and the loop no longer vectorises.
+    std::uint64_t xb, tb;
+    std::memcpy(&xb, &x, sizeof xb);
+    std::memcpy(&tb, &th, sizeof tb);
+    const std::uint64_t nan =
+        0 - static_cast<std::uint64_t>((xb & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL);
+    tb = (tb & ~nan) | (xb & nan);
+    std::memcpy(&a[i], &tb, sizeof tb);
+  }
+}
+
+}  // namespace
 
 DynamicsModel::DynamicsModel(const DynamicsParams& params, const VehicleGeometry& geometry,
                              double dt_s)
@@ -19,9 +106,12 @@ DynamicsModel::DynamicsModel(const DynamicsParams& params, const VehicleGeometry
       residual_enabled_(params.residual.enabled &&
                         static_cast<int>(params.residual.weights.size()) == kMlpWeightCount),
       ground_enabled_(params.step_contract == 2 && params.ground.enabled &&
-                      static_cast<int>(params.ground.weights.size()) == kMlpWeightCount),
-      h1_{},
-      h2_{} {}
+                      static_cast<int>(params.ground.weights.size()) == kMlpWeightCount) {
+  // Packed whenever the weights are there (residual() may be called on a model whose step has the
+  // block off); pack_mlp_weights leaves zeros for a missing block.
+  pack_mlp_weights(params_.residual.weights, &residual_packed_);
+  pack_mlp_weights(params_.ground.weights, &ground_packed_);
+}
 
 namespace {
 
@@ -54,27 +144,61 @@ double DynamicsModel::table_alpha(double delta, double v) const {
          wi * (1 - wj) * at(i1, j0) + wi * wj * at(i1, j1);
 }
 
-void DynamicsModel::mlp(const double* weights, const double in[kMlpIn], double out[kMlpOut]) const {
-  const double* w1 = weights;
-  const double* b1 = w1 + kMlpHidden * kMlpIn;
-  const double* w2 = b1 + kMlpHidden;
-  const double* b2 = w2 + kMlpHidden * kMlpHidden;
-  const double* w3 = b2 + kMlpHidden;
-  const double* b3 = w3 + kMlpOut * kMlpHidden;
-  for (int i = 0; i < kMlpHidden; ++i) {
-    double acc = b1[i];
-    for (int j = 0; j < kMlpIn; ++j) acc += w1[i * kMlpIn + j] * in[j];
-    h1_[i] = std::tanh(acc);
+template <bool kFast>
+void DynamicsModel::mlp(const double* packed, const double in[kMlpIn], double out[kMlpOut]) {
+  alignas(16) double h1[kMlpHidden];
+  alignas(16) double h2[kMlpHidden];
+  const double* w1t = packed + kOffW1;
+  const double* b1 = packed + kOffB1;
+  const double* w2t = packed + kOffW2;
+  const double* b2 = packed + kOffB2;
+  const double* w3 = packed + kOffW3;
+  const double* b3 = packed + kOffB3;
+  for (int i = 0; i < kMlpHidden; ++i) h1[i] = b1[i];
+  for (int j = 0; j < kMlpIn; ++j) {
+    const double xj = in[j];
+    const double* wj = w1t + j * kMlpHidden;
+    for (int i = 0; i < kMlpHidden; ++i) h1[i] += wj[i] * xj;
   }
-  for (int i = 0; i < kMlpHidden; ++i) {
-    double acc = b2[i];
-    for (int j = 0; j < kMlpHidden; ++j) acc += w2[i * kMlpHidden + j] * h1_[j];
-    h2_[i] = std::tanh(acc);
+  if (kFast) {
+    tanh_inplace(h1, kMlpHidden);
+  } else {
+    for (int i = 0; i < kMlpHidden; ++i) h1[i] = std::tanh(h1[i]);
+  }
+  for (int i = 0; i < kMlpHidden; ++i) h2[i] = b2[i];
+  for (int j = 0; j < kMlpHidden; ++j) {
+    const double hj = h1[j];
+    const double* wj = w2t + j * kMlpHidden;
+    for (int i = 0; i < kMlpHidden; ++i) h2[i] += wj[i] * hj;
+  }
+  if (kFast) {
+    tanh_inplace(h2, kMlpHidden);
+  } else {
+    for (int i = 0; i < kMlpHidden; ++i) h2[i] = std::tanh(h2[i]);
   }
   for (int i = 0; i < kMlpOut; ++i) {
-    double acc = b3[i];
-    for (int j = 0; j < kMlpHidden; ++j) acc += w3[i * kMlpHidden + j] * h2_[j];
-    out[i] = acc;
+    const double* wi = w3 + i * kMlpHidden;
+    if (kFast) {
+      // Four interleaved partial sums (j mod 4) instead of one chain of 32 dependent adds: a
+      // different rounding order, a few 1e-16 apart, like the tanh above.
+      double acc[4] = {0.0, 0.0, 0.0, 0.0};
+      for (int j = 0; j < kMlpHidden; j += 4)
+        for (int k = 0; k < 4; ++k) acc[k] += wi[j + k] * h2[j + k];
+      out[i] = b3[i] + ((acc[0] + acc[1]) + (acc[2] + acc[3]));
+    } else {
+      double acc = b3[i];
+      for (int j = 0; j < kMlpHidden; ++j) acc += wi[j] * h2[j];
+      out[i] = acc;
+    }
+  }
+}
+
+void DynamicsModel::run_mlp(const double* packed, const double in[kMlpIn],
+                            double out[kMlpOut]) const {
+  if (params_.fast_mlp) {
+    mlp<true>(packed, in, out);
+  } else {
+    mlp<false>(packed, in, out);
   }
 }
 
@@ -94,7 +218,7 @@ void DynamicsModel::ground_factors(double v, double delta, double speed_cmd, dou
                                (speed_cmd - gm.input_mean[2]) / gm.input_std[2],
                                (steering_cmd - gm.input_mean[3]) / gm.input_std[3]};
     double m[kMlpOut];
-    mlp(gm.weights.data(), in, m);
+    run_mlp(ground_packed_.data(), in, m);
     a = clamp_double(a + gm.d_alpha_max * std::tanh(m[0]), gm.alpha_min, gm.alpha_max);
     r = gm.rho_max * std::tanh(m[1]);
   }
@@ -112,7 +236,8 @@ State DynamicsModel::step_ground(const State& s, const Control& u, double cos_ya
   const double d_delta = clamp_double(a_d_ * (delta_target - s.delta), -rate_dt_, rate_dt_);
   const double target =
       std::fabs(u.speed_cmd) < n.speed_deadband_mps ? 0.0 : n.speed_gain * u.speed_cmd;
-  const double dv = clamp_double(a_v_ * (target - s.v), -decel_dt_, accel_dt_);
+  double dv = clamp_double(a_v_ * (target - s.v), -decel_dt_, accel_dt_);
+  if (correction_active_ && target > 0.0) dv = dv * (1.0 + correction_.gain) + correction_bias_dt_;
   // Ground motion: both corrections multiply the wheel speed, so a standing car neither moves nor
   // turns whatever the table or the weights say.
   double alpha, rho;
@@ -139,27 +264,9 @@ void DynamicsModel::residual(double v, double delta, double speed_cmd, double st
                              (delta - r.input_mean[1]) / r.input_std[1],
                              (speed_cmd - r.input_mean[2]) / r.input_std[2],
                              (steering_cmd - r.input_mean[3]) / r.input_std[3]};
-  const double* w1 = r.weights.data();
-  const double* b1 = w1 + kMlpHidden * kMlpIn;
-  const double* w2 = b1 + kMlpHidden;
-  const double* b2 = w2 + kMlpHidden * kMlpHidden;
-  const double* w3 = b2 + kMlpHidden;
-  const double* b3 = w3 + kMlpOut * kMlpHidden;
-  for (int i = 0; i < kMlpHidden; ++i) {
-    double acc = b1[i];
-    for (int j = 0; j < kMlpIn; ++j) acc += w1[i * kMlpIn + j] * in[j];
-    h1_[i] = std::tanh(acc);
-  }
-  for (int i = 0; i < kMlpHidden; ++i) {
-    double acc = b2[i];
-    for (int j = 0; j < kMlpHidden; ++j) acc += w2[i * kMlpHidden + j] * h1_[j];
-    h2_[i] = std::tanh(acc);
-  }
-  for (int i = 0; i < kMlpOut; ++i) {
-    double acc = b3[i];
-    for (int j = 0; j < kMlpHidden; ++j) acc += w3[i * kMlpHidden + j] * h2_[j];
-    out[i] = r.output_scale[i] * acc;
-  }
+  double raw[kMlpOut];
+  run_mlp(residual_packed_.data(), in, raw);
+  for (int i = 0; i < kMlpOut; ++i) out[i] = r.output_scale[i] * raw[i];
 }
 
 }  // namespace racer_planner

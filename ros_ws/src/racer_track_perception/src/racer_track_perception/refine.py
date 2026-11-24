@@ -100,38 +100,58 @@ def _clean_points(points: object) -> NDArray[np.float64]:
     return pts[np.isfinite(pts).all(axis=1)]
 
 
-def _refine_station(
+def _refine_stations(
     c: NDArray[np.float64],
     t: NDArray[np.float64],
-    hl_net: float,
-    hr_net: float,
+    hl_net: NDArray[np.float64],
+    hr_net: NDArray[np.float64],
     pts: NDArray[np.float64],
     cfg: RefineConfig,
-) -> tuple[NDArray[np.float64], float, float, bool]:
-    """(new centre, left half width, right half width, whether the scan supported the station)
-    for one station at `c` with unit heading `t`."""
-    rel = pts - c
-    along = rel @ t
-    lat = -rel[:, 0] * t[1] + rel[:, 1] * t[0]
-    dist = np.hypot(rel[:, 0], rel[:, 1])
+) -> tuple[NDArray[np.float64], bool]:
+    """All stations at once: [n, 4] rows (centre x, centre y, left half width, right half width)
+    for the stations at `c` [n, 2] with unit headings `t` [n, 2], and whether the scan supported
+    any of them. The geometry of every station against every point is computed in one batch
+    ([n, P] arrays, the per-scan cost on the car); the wall rules of `_walls` then run per
+    station on two scalars each. Same arithmetic, element by element, as one station at a time."""
+    n = len(c)
+    rx = pts[None, :, 0] - c[:, 0, None]
+    ry = pts[None, :, 1] - c[:, 1, None]
+    tx, ty = t[:, 0, None], t[:, 1, None]
+    along = rx * tx + ry * ty
+    lat = -rx * ty + ry * tx
+    dist = np.hypot(rx, ry)
     near = (np.abs(along) <= cfg.window_m) & (dist <= cfg.feeler_max_m)
-    nl = geometric._nearest(dist, near & (lat > 0.0))
-    nr = geometric._nearest(dist, near & (lat < 0.0))
-    if nl is None and nr is None:
-        return c, hl_net, hr_net, False
-    c_new, hl, hr = _walls(c, t, hl_net, hr_net, pts, dist, nl, nr, cfg)
-    if not cfg.clearance_cap:
-        return c_new, hl, hr, True
-    rel = pts - c_new
-    d_new = np.hypot(rel[:, 0], rel[:, 1])
-    lat_new = -rel[:, 0] * t[1] + rel[:, 1] * t[0]
-    left = d_new[lat_new >= 0.0]
-    right = d_new[lat_new <= 0.0]
-    if len(left):
-        hl = min(hl, float(left.min()))
-    if len(right):
-        hr = min(hr, float(right.min()))
-    return c_new, hl, hr, True
+    left_d = np.where(near & (lat > 0.0), dist, np.inf)
+    right_d = np.where(near & (lat < 0.0), dist, np.inf)
+    il = np.argmin(left_d, axis=1)
+    ir = np.argmin(right_d, axis=1)
+    rows = np.arange(n)
+    dl = left_d[rows, il]
+    dr = right_d[rows, ir]
+    out = np.empty((n, 4), dtype=np.float64)
+    out[:, 0:2] = c
+    out[:, 2] = hl_net
+    out[:, 3] = hr_net
+    hit = np.isfinite(dl) | np.isfinite(dr)
+    if not hit.any():
+        return out, False
+    for i in np.flatnonzero(hit):
+        nl = (int(il[i]), float(dl[i])) if math.isfinite(dl[i]) else None
+        nr = (int(ir[i]), float(dr[i])) if math.isfinite(dr[i]) else None
+        c_new, hl, hr = _walls(c[i], t[i], float(hl_net[i]), float(hr_net[i]), pts, nl, nr, cfg)
+        out[i] = (c_new[0], c_new[1], hl, hr)
+    if cfg.clearance_cap:
+        k = np.flatnonzero(hit)
+        rx = pts[None, :, 0] - out[k, 0, None]
+        ry = pts[None, :, 1] - out[k, 1, None]
+        tx, ty = t[k, 0, None], t[k, 1, None]
+        d_new = np.hypot(rx, ry)
+        lat_new = -rx * ty + ry * tx
+        cap_l = np.where(lat_new >= 0.0, d_new, np.inf).min(axis=1)
+        cap_r = np.where(lat_new <= 0.0, d_new, np.inf).min(axis=1)
+        out[k, 2] = np.minimum(out[k, 2], cap_l)
+        out[k, 3] = np.minimum(out[k, 3], cap_r)
+    return out, True
 
 
 def _walls(
@@ -140,7 +160,6 @@ def _walls(
     hl_net: float,
     hr_net: float,
     pts: NDArray[np.float64],
-    dist: NDArray[np.float64],
     nl: tuple[int, float] | None,
     nr: tuple[int, float] | None,
     cfg: RefineConfig,
@@ -259,14 +278,7 @@ def refine_track(
         hr = track.half_width_right_m[:n].astype(np.float64)
         sg = track.sigma_m[:n].astype(np.float64)
         tan = selfcheck._tangents(x, y)
-        new = np.zeros((n, 4), dtype=np.float64)
-        supported = False
-        for i in range(n):
-            c, left, right, hit = _refine_station(
-                np.array([x[i], y[i]]), tan[i], float(hl[i]), float(hr[i]), pts, cfg
-            )
-            new[i] = (c[0], c[1], left, right)
-            supported = supported or hit
+        new, supported = _refine_stations(np.stack([x, y], axis=1), tan, hl, hr, pts, cfg)
         if not supported:
             return _copy(track)
         resampled = _resample(new[:, 0], new[:, 1], new[:, 2], new[:, 3], sg)

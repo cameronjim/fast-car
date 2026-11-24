@@ -365,7 +365,7 @@ std::optional<Refusal> verify_golden_rollouts(const DynamicsParams& params,
 }
 
 LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeometry& geometry,
-                                double requested_v_max_mps) {
+                                double requested_v_max_mps, bool fast_mlp) {
   LoadResult result;
   RefusalCode stage = RefusalCode::ManifestInvalid;  // code for an unexpected parse error
   try {
@@ -583,7 +583,8 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
         params.residual.weights[i] = f;
       }
     }
-    // 9. GoldenRolloutMismatch
+    // 9. GoldenRolloutMismatch, with the forward pass the node will run
+    params.fast_mlp = fast_mlp;
     double worst = 0.0;
     const auto golden = verify_golden_rollouts(params, geometry, dir + golden_file, &worst);
     if (golden.has_value()) throw RefusalError{*golden};

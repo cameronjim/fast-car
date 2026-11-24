@@ -1,0 +1,9 @@
+# Real-time scheduling of the two control-loop processes (claude-docs/briefs-v0.5/52-rt-scheduling.md).
+# This is the only place these numbers are written. Scheduling is not a vehicle parameter, so
+# vehicle_params.yaml does not carry it. Read by config/scheduling.py (the loader and its checks).
+# Used only when a launch is started with `rt_sched:=on` (default off).
+schema_version: 1
+rt:
+  rtprio_ulimit: 50              # --ulimit rtprio on car-stack
+  safety_node: {policy: fifo, priority: 50}
+  mppi_planner_node: {policy: fifo, priority: 40}

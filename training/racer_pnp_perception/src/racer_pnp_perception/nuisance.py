@@ -164,3 +164,89 @@ def perturb_ranges(
     out[drop & as_inf] = np.inf
     out[drop & ~as_inf] = np.nan
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# LiDAR-model randomisation (trackperc-v3, `dataset --lidar-dr`). Off by default: a sample drawn
+# without it consumes no random numbers here, so every earlier dataset stays reproducible.
+# ---------------------------------------------------------------------------------------------
+
+MOUNT_YAW_ERROR_RAD = math.radians(1.5)
+MOUNT_XY_ERROR_M = 0.015
+RANGE_SCALE_ERROR = 0.015
+RANGE_BIAS_M = 0.02
+FAR_DROPOUT_MAX = 0.4
+FAR_DROPOUT_PROBABILITY = 0.5
+FAR_DROPOUT_RANGE_M = 6.0
+DARK_PROBABILITY = 0.4
+MAX_DARK_SECTORS = 3
+DARK_WIDTH_RAD = (math.radians(5.0), math.radians(35.0))
+DARK_RANGE_M = (0.8, 3.0)
+
+
+@dataclass(frozen=True)
+class LidarModel:
+    """What a different unit, a different mount or a different room does to the LiDAR: the scan
+    is cast from a mount that is off by (yaw, x, y) from the one preprocessing assumes, ranges are
+    scaled and biased, far returns drop out more (quadratic in range up to `far_dropout` at 6 m),
+    and dark sectors (low-reflectivity walls) return nothing beyond their range."""
+
+    yaw_error_rad: float
+    x_error_m: float
+    y_error_m: float
+    range_scale: float
+    range_bias_m: float
+    far_dropout: float
+    # (vehicle bearing of the centre, width, range beyond which nothing returns)
+    dark_sectors: tuple[tuple[float, float, float], ...]
+
+
+IDEAL_LIDAR = LidarModel(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, ())
+
+
+def draw_lidar_model(rng: np.random.Generator) -> LidarModel:
+    n_dark = int(rng.integers(1, MAX_DARK_SECTORS + 1)) if rng.uniform() < DARK_PROBABILITY else 0
+    return LidarModel(
+        yaw_error_rad=float(rng.uniform(-MOUNT_YAW_ERROR_RAD, MOUNT_YAW_ERROR_RAD)),
+        x_error_m=float(rng.uniform(-MOUNT_XY_ERROR_M, MOUNT_XY_ERROR_M)),
+        y_error_m=float(rng.uniform(-MOUNT_XY_ERROR_M, MOUNT_XY_ERROR_M)),
+        range_scale=1.0 + float(rng.uniform(-RANGE_SCALE_ERROR, RANGE_SCALE_ERROR)),
+        range_bias_m=float(rng.uniform(-RANGE_BIAS_M, RANGE_BIAS_M)),
+        far_dropout=(
+            float(rng.uniform(0.0, FAR_DROPOUT_MAX))
+            if rng.uniform() < FAR_DROPOUT_PROBABILITY
+            else 0.0
+        ),
+        dark_sectors=tuple(
+            (
+                float(rng.uniform(-math.pi, math.pi)),
+                float(rng.uniform(*DARK_WIDTH_RAD)),
+                float(rng.uniform(*DARK_RANGE_M)),
+            )
+            for _ in range(n_dark)
+        ),
+    )
+
+
+def apply_lidar_model(
+    ranges: NDArray[np.float64],
+    vehicle_bearings: NDArray[np.float64],
+    model: LidarModel,
+    rng: np.random.Generator,
+) -> NDArray[np.float64]:
+    """Scale, bias, far dropout and dark sectors on cast ranges (NaN and inf stay as they are; a
+    lost return becomes NaN). IDEAL_LIDAR returns the ranges unchanged and draws nothing."""
+    out = np.array(ranges, dtype=np.float64)
+    if model == IDEAL_LIDAR:
+        return out
+    finite = np.isfinite(out)
+    out[finite] = out[finite] * model.range_scale + model.range_bias_m
+    lost = np.zeros(out.shape, dtype=bool)
+    if model.far_dropout > 0.0:
+        frac = np.clip(np.where(finite, out, 0.0) / FAR_DROPOUT_RANGE_M, 0.0, 1.0)
+        lost |= finite & (rng.uniform(size=out.shape) < model.far_dropout * frac * frac)
+    for centre, width, reach in model.dark_sectors:
+        delta = np.abs(np.mod(vehicle_bearings - centre + math.pi, 2 * math.pi) - math.pi)
+        lost |= finite & (delta <= width / 2.0) & (out > reach)
+    out[lost] = np.nan
+    return out

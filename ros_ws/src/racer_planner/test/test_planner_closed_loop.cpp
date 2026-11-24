@@ -4,6 +4,7 @@
 // slower speed lag and the command delay. v_max is 0.6. Seeded and deterministic.
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <functional>
 #include <iostream>
 
@@ -101,6 +102,36 @@ TEST(PlannerClosedLoop, WallAcrossTheCorridorStopsBeforeIt) {
       << "final state " << static_cast<int>(r.final_state);
   EXPECT_GT(r.final_x, 1.0) << "it should have driven toward the wall first";
   EXPECT_LT(r.final_x, 2.5);
+}
+
+// Online speed adaptation on (prototype switch dynamics_adaptation): on a plant much slower to
+// respond than the planner's model the stadium laps are as good as with it off, the estimate is
+// finite, inside its limits, and says the car accelerates slower than the model (gain below 0).
+TEST(PlannerClosedLoop, StadiumTwoLapsWithSpeedAdaptationOnASlowPlant) {
+  const World w = stadium();
+  for (bool adapt : {false, true}) {
+    SimSetup s = base_setup(w);
+    s.start_x = 1.0;
+    s.max_time_s = 60.0;
+    s.plant_speed_lag_factor = 1.6;
+    s.config.adaptation.enabled = adapt;
+    const double two_laps = 2.0 * w.perimeter;
+    s.done = [two_laps](double, double, double progress) { return progress >= two_laps; };
+    const SimResult r = run_closed_loop(s);
+    report(adapt ? "stadium, slow plant, adaptation on" : "stadium, slow plant, adaptation off", r);
+    expect_good_run(r);
+    EXPECT_EQ(r.adaptation.enabled, adapt);
+    if (adapt) {
+      EXPECT_GT(r.adaptation.updates, 30u);  // one per 0.5 s window while driving
+      EXPECT_TRUE(std::isfinite(r.adaptation.bias_mps2));
+      EXPECT_LE(std::fabs(r.adaptation.bias_mps2), s.config.adaptation.bias_max_mps2);
+      EXPECT_LE(std::fabs(r.adaptation.gain), s.config.adaptation.gain_max);
+      EXPECT_LT(r.adaptation.gain, 0.0);
+    } else {
+      EXPECT_EQ(r.adaptation.updates, 0u);
+      EXPECT_EQ(r.adaptation.gain, 0.0);
+    }
+  }
 }
 
 // The noise seeds change the run, not the verdict.

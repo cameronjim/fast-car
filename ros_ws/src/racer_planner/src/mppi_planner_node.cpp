@@ -12,6 +12,10 @@
 //                          state, so safety_node's watchdog only fires when this node dies.
 //   -> /pnp/planner/status PlannerStatus, reliable, keep last 50, every tick.
 //   -> /pnp/plan           nav_msgs/Path in base_link, reliable, keep last 5, every fifth solve.
+//   -> /pnp/dynamics/adaptation  std_msgs/Float64MultiArray, every fifth solve, ONLY with
+//                          dynamics_adaptation true: [enabled, bias_mps2, gain, updates, skipped,
+//                          resets, at_limit, last_error_mps2] (speed_adaptation.hpp).
+//   /pnp/dynamics/adaptation_reset  std_msgs/Empty: zero the adaptation at the next solve.
 //
 // NEVER /drive: racer_safety/safety_node is the sole publisher of /drive (CLAUDE.md invariant 1).
 //
@@ -52,6 +56,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <sstream>
+#include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -375,6 +381,17 @@ class MppiPlannerNode : public rclcpp::Node {
         declare_int("solve_restore_count", cfg.budget.restore_count, 1, 500,
                     "This many solves under solve_restore_under_ms in the window restore the "
                     "sample count by a quarter."));
+    SpeedAdaptationParams& ad = cfg.adaptation;
+    ad.enabled = declare_bool(
+        "dynamics_adaptation", false,
+        "PROTOTYPE (owner decision 29): online bias and gain correction of the model's speed "
+        "channel from the wheel speed (speed_adaptation.hpp). false: the model is the bundle's.");
+    ad.forgetting = declare_double("adaptation_forgetting", ad.forgetting, 0.9, 1.0,
+                                   "Recursive least squares forgetting factor per update.");
+    ad.bias_max_mps2 = declare_double("adaptation_bias_max_mps2", ad.bias_max_mps2, 0.0, 1.0,
+                                      "Hard limit of |bias| of the speed correction (m/s^2).");
+    ad.gain_max = declare_double("adaptation_gain_max", ad.gain_max, 0.0, 0.5,
+                                 "Hard limit of |gain| of the speed correction.");
     const bool yaw_from_params =
         declare_bool("laser_yaw_from_vehicle_params", true,
                      "true (the car): LiDAR yaw from vehicle_params. false: SIMULATOR AND "
@@ -494,6 +511,21 @@ class MppiPlannerNode : public rclcpp::Node {
     status_pub_ = create_publisher<PlannerStatusMsg>("/pnp/planner/status", reliable_50);
     plan_pub_ = create_publisher<nav_msgs::msg::Path>("/pnp/plan", reliable_5);
     timing_pub_ = create_publisher<PlannerTimingMsg>("/pnp/planner/timing", reliable_50);
+    if (cfg.adaptation.enabled) {
+      adapt_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/pnp/dynamics/adaptation",
+                                                                      reliable_10);
+      adapt_reset_sub_ = create_subscription<std_msgs::msg::Empty>(
+          "/pnp/dynamics/adaptation_reset", reliable_10,
+          [this](const std_msgs::msg::Empty::SharedPtr) {
+            planner_->request_adaptation_reset();
+            RCLCPP_INFO(get_logger(), "dynamics adaptation reset requested");
+          },
+          command_opts);
+      RCLCPP_WARN(get_logger(),
+                  "dynamics_adaptation ON (prototype): speed correction |bias| <= %.2f m/s^2, "
+                  "|gain| <= %.2f, forgetting %.4f",
+                  cfg.adaptation.bias_max_mps2, cfg.adaptation.gain_max, cfg.adaptation.forgetting);
+    }
     const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(tick_s_));
     solve_timer_ = create_wall_timer(period, std::bind(&MppiPlannerNode::on_solve_timer, this),
@@ -770,7 +802,24 @@ class MppiPlannerNode : public rclcpp::Node {
       }
       logged_samples_ = rep.samples;
     }
-    if (++solve_cycle_ % 5 == 0) publish_plan(now());
+    if (++solve_cycle_ % 5 == 0) {
+      publish_plan(now());
+      if (adapt_pub_) publish_adaptation();
+    }
+  }
+
+  void publish_adaptation() {
+    const SpeedAdaptationStatus a = planner_->adaptation_status();
+    std_msgs::msg::Float64MultiArray m;
+    m.data = {a.enabled ? 1.0 : 0.0,
+              a.bias_mps2,
+              a.gain,
+              static_cast<double>(a.updates),
+              static_cast<double>(a.skipped),
+              static_cast<double>(a.resets),
+              a.at_limit ? 1.0 : 0.0,
+              a.last_error_mps2};
+    adapt_pub_->publish(m);
   }
 
   // The 50 Hz output: the latest plan snapshot through the output shaping. No solve here.
@@ -1027,6 +1076,8 @@ class MppiPlannerNode : public rclcpp::Node {
   rclcpp::Publisher<PlannerStatusMsg>::SharedPtr status_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr plan_pub_;
   rclcpp::Publisher<PlannerTimingMsg>::SharedPtr timing_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr adapt_pub_;  // null when off
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr adapt_reset_sub_;
   rclcpp::TimerBase::SharedPtr solve_timer_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 

@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdint>
 
 #include "racer_planner/dynamics_model.hpp"
 
@@ -290,4 +291,61 @@ TEST(DynamicsModel, DisabledResidualIsIgnoredEvenWithWeights) {
   const State b = without.step(State{0, 0, 0, 0.5, 0.1}, Control{0.7, 0.2});
   EXPECT_EQ(a.v, b.v);
   EXPECT_EQ(a.yaw, b.yaw);
+}
+
+// The residual's hidden tanh is computed as (e - 1) / (e + 1) for speed: it must equal a plain
+// std::tanh forward pass to rounding, for inputs from tiny to saturating, and pass a NaN on.
+TEST(DynamicsModel, ResidualEqualsAStdTanhForwardPass) {
+  DynamicsParams p = nominal();
+  p.residual.enabled = true;
+  p.residual.input_mean = {0.5, 0.0, 0.6, 0.0};
+  p.residual.input_std = {0.4, 0.2, 0.4, 0.2};
+  p.residual.output_scale = {0.7, 0.3};
+  p.residual.weights.resize(kMlpWeightCount);
+  std::uint32_t state = 12345u;
+  for (double& w : p.residual.weights) {
+    state = state * 1664525u + 1013904223u;
+    w = (static_cast<double>(state) / 4294967296.0 - 0.5) * 6.0;  // large weights: saturation
+  }
+  const DynamicsModel m(p, synthetic(), 0.1);
+  auto reference = [&](const double in4[4], double out[2]) {
+    const auto& r = p.residual;
+    const double* w1 = r.weights.data();
+    const double* b1 = w1 + kMlpHidden * kMlpIn;
+    const double* w2 = b1 + kMlpHidden;
+    const double* b2 = w2 + kMlpHidden * kMlpHidden;
+    const double* w3 = b2 + kMlpHidden;
+    const double* b3 = w3 + kMlpOut * kMlpHidden;
+    double x[4], h1[kMlpHidden], h2[kMlpHidden];
+    for (int j = 0; j < 4; ++j) x[j] = (in4[j] - r.input_mean[j]) / r.input_std[j];
+    for (int i = 0; i < kMlpHidden; ++i) {
+      double a = b1[i];
+      for (int j = 0; j < kMlpIn; ++j) a += w1[i * kMlpIn + j] * x[j];
+      h1[i] = std::tanh(a);
+    }
+    for (int i = 0; i < kMlpHidden; ++i) {
+      double a = b2[i];
+      for (int j = 0; j < kMlpHidden; ++j) a += w2[i * kMlpHidden + j] * h1[j];
+      h2[i] = std::tanh(a);
+    }
+    for (int i = 0; i < kMlpOut; ++i) {
+      double a = b3[i];
+      for (int j = 0; j < kMlpHidden; ++j) a += w3[i * kMlpHidden + j] * h2[j];
+      out[i] = r.output_scale[i] * a;
+    }
+  };
+  for (double scale : {1e-9, 1e-3, 0.1, 1.0, 10.0, 1e3}) {
+    for (int k = 0; k < 50; ++k) {
+      const double in4[4] = {scale * std::sin(1.0 + k), scale * std::cos(2.0 * k),
+                             scale * std::sin(0.3 * k), scale * std::cos(0.7 + k)};
+      double got[2], want[2];
+      m.residual(in4[0], in4[1], in4[2], in4[3], got);
+      reference(in4, want);
+      EXPECT_NEAR(got[0], want[0], 1e-12);
+      EXPECT_NEAR(got[1], want[1], 1e-12);
+    }
+  }
+  double out[2];
+  m.residual(std::nan(""), 0.0, 0.0, 0.0, out);
+  EXPECT_TRUE(std::isnan(out[0]) && std::isnan(out[1]));
 }

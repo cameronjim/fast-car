@@ -114,10 +114,12 @@ def test_argument_defaults() -> None:
         "deskew": "false",
         "shadow_perception_bundle": "",
         "rt_sched": "off",
+        "dynamics_adaptation": "false",
         "params_file": "",
     }
     assert declared["rt_sched"].choices == ["off", "on"]
     assert declared["deskew"].choices == ["true", "false"]
+    assert declared["dynamics_adaptation"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
     assert declared["lap_source"].choices == ["start_scan", "map_pose", "camera", "truth"]
@@ -278,6 +280,35 @@ def _bundle(tmp_path: Path, v_max: float = 0.9) -> str:
         f"io:\n  validity: {{v_min_mps: 0.0, v_max_mps: {v_max}}}\n"
     )
     return str(tmp_path)
+
+
+def test_dynamics_adaptation_is_off_by_default_and_adds_nothing(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    for ctx in (_context(), _context(dynamics_adaptation="false")):
+        planner = next(
+            a for a in m._make_actions(ctx) if getattr(a, "node_package", "") == "racer_planner"
+        )
+        assert m.ADAPTATION_PARAM not in _flat_params(planner)
+
+
+def test_dynamics_adaptation_true_switches_the_planner_parameter_on(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(_context(dynamics_adaptation="true"))
+    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    assert _flat_params(planner)[m.ADAPTATION_PARAM] is True
+    perception = next(
+        a for a in actions if getattr(a, "node_package", "") == "racer_track_perception"
+    )
+    assert m.ADAPTATION_PARAM not in _flat_params(perception)
+
+
+def test_dynamics_adaptation_bad_value_is_refused(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    with pytest.raises(RuntimeError):
+        m._make_actions(_context(dynamics_adaptation="yes"))
 
 
 def test_lap_memory_is_off_by_default(monkeypatch) -> None:

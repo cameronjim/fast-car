@@ -112,7 +112,8 @@ State DynamicsModel::step_ground(const State& s, const Control& u, double cos_ya
   const double d_delta = clamp_double(a_d_ * (delta_target - s.delta), -rate_dt_, rate_dt_);
   const double target =
       std::fabs(u.speed_cmd) < n.speed_deadband_mps ? 0.0 : n.speed_gain * u.speed_cmd;
-  const double dv = clamp_double(a_v_ * (target - s.v), -decel_dt_, accel_dt_);
+  double dv = clamp_double(a_v_ * (target - s.v), -decel_dt_, accel_dt_);
+  if (correction_active_ && target > 0.0) dv = dv * (1.0 + correction_.gain) + correction_bias_dt_;
   // Ground motion: both corrections multiply the wheel speed, so a standing car neither moves nor
   // turns whatever the table or the weights say.
   double alpha, rho;

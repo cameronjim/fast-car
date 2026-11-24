@@ -54,7 +54,9 @@ Planner::Planner(const PlannerConfig& config, const DynamicsParams& dynamics,
       horizon_(std::max(2, config.mppi.horizon_steps)),
       delay_ticks_(std::min(
           25, std::max(0, static_cast<int>(
-                              std::lround(dynamics.nominal.command_delay_s / config.tick_s))))) {
+                              std::lround(dynamics.nominal.command_delay_s / config.tick_s))))),
+      adapt_(config.adaptation),
+      model_adapt_(dynamics, geometry, dynamics.dt_s) {
   if (horizon_ > kMaxPlanSteps) {
     throw std::invalid_argument("racer_planner: horizon_steps above kMaxPlanSteps");
   }
@@ -128,6 +130,42 @@ SolveReport Planner::solve_fault(const TickInput& in) {
   return r;
 }
 
+void Planner::adapt_speed(const TickInput& in, bool odom_fresh, double delta,
+                          const Control& acting) {
+  if (adapt_reset_.exchange(false, std::memory_order_relaxed)) {
+    adapt_.reset();
+    adapt_have_prev_ = false;
+  }
+  if (odom_fresh && adapt_have_prev_ && in.odom_stamp_s > adapt_prev_t_) {
+    // The model's acceleration over the interval from the previous measured speed under the
+    // command that acted then, against the measured one.
+    State s;
+    s.v = adapt_prev_v_;
+    s.delta = adapt_prev_delta_;
+    const State next = model_adapt_.step(s, adapt_prev_u_);
+    const double a_pred = (next.v - adapt_prev_v_) / model_adapt_.dt();
+    const double dt = in.odom_stamp_s - adapt_prev_t_;
+    const double a_meas = (in.wheel_speed_mps - adapt_prev_v_) / dt;
+    const double deadband = model_adapt_.params().nominal.speed_deadband_mps;
+    adapt_.update(a_pred, a_meas, adapt_prev_v_, dt,
+                  adapt_prev_u_.speed_cmd > 0.0 && adapt_prev_u_.speed_cmd >= deadband);
+  }
+  if (odom_fresh) {
+    if (!adapt_have_prev_ || in.odom_stamp_s > adapt_prev_t_) {
+      adapt_have_prev_ = true;
+      adapt_prev_t_ = in.odom_stamp_s;
+      adapt_prev_v_ = in.wheel_speed_mps;
+      adapt_prev_delta_ = delta;
+      adapt_prev_u_ = acting;
+    }
+  } else {
+    adapt_have_prev_ = false;  // a gap in the odometry: start a new interval chain
+  }
+  const SpeedCorrection c = adapt_.correction();
+  solver_.set_speed_correction(c);
+  model_roll_.set_speed_correction(c);
+}
+
 SolveReport Planner::solve_impl(const TickInput& in) {
   SolveReport rep;
   const double tick = cfg_.tick_s;
@@ -178,6 +216,7 @@ SolveReport Planner::solve_impl(const TickInput& in) {
                        : Control{sh.last_published.speed_mps, sh.last_published.steering_rad};
   ego_.push(now, odom_fresh ? in.wheel_speed_mps : est.v, est.delta, acting_now.speed_cmd,
             acting_now.steering_cmd);
+  if (cfg_.adaptation.enabled) adapt_speed(in, odom_fresh, est.delta, acting_now);
 
   // The one-frame bridge (track_consistency.hpp): a new track frame that jumps and narrows against
   // the last accepted one is replaced by that accepted track for its lifetime, at most one frame

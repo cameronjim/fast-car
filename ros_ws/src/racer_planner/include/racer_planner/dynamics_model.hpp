@@ -29,6 +29,7 @@
 #include <cmath>
 #include <vector>
 
+#include "racer_planner/speed_adaptation.hpp"
 #include "racer_planner/vehicle_geometry.hpp"
 
 namespace racer_planner {
@@ -154,6 +155,8 @@ class DynamicsModel {
       dv += r[0] * dt_;
       yaw_rate += r[1];
     }
+    if (correction_active_ && target > 0.0)
+      dv = dv * (1.0 + correction_.gain) + correction_bias_dt_;
     State out;
     out.x = s.x + s.v * cos_yaw * dt_;
     out.y = s.y + s.v * sin_yaw * dt_;
@@ -197,6 +200,19 @@ class DynamicsModel {
 
   bool has_ground_motion() const { return ground_enabled_; }
 
+  // Online speed correction (speed_adaptation.hpp): dv <- dv * (1 + gain) + bias * dt while the
+  // speed target is above 0, in both step contracts. A zero correction (the default, and always
+  // when dynamics_adaptation is off) leaves the step bit for bit as the bundle's, so the golden
+  // rollouts and every user that never sets one are unchanged. Not thread safe: set it from the
+  // thread that steps this instance.
+  void set_speed_correction(const SpeedCorrection& c) {
+    const bool finite = std::isfinite(c.bias_mps2) && std::isfinite(c.gain);
+    correction_ = finite ? c : SpeedCorrection{};
+    correction_bias_dt_ = correction_.bias_mps2 * dt_;
+    correction_active_ = correction_.bias_mps2 != 0.0 || correction_.gain != 0.0;
+  }
+  const SpeedCorrection& speed_correction() const { return correction_; }
+
   // Contract 2: alpha (ground distance per wheel distance) and rho (relative yaw correction) of a
   // state and the command acting on it. Contract 1: alpha = 1, rho = 0. Not thread safe when the
   // learned block is on (scratch space), like residual().
@@ -235,6 +251,9 @@ class DynamicsModel {
   double rate_dt_, accel_dt_, decel_dt_;
   bool residual_enabled_;
   bool ground_enabled_;
+  SpeedCorrection correction_{};
+  double correction_bias_dt_ = 0.0;
+  bool correction_active_ = false;
   mutable std::array<double, kMlpHidden> h1_;
   mutable std::array<double, kMlpHidden> h2_;
 };

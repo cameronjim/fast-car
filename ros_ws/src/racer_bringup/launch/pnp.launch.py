@@ -44,6 +44,14 @@ Refusals (a launch that does not start is the safe outcome):
   node that refuses its bundle leaves nothing running; safety_node's watchdog then brakes on the
   silent /drive_raw.
 
+Prototype switch (owner decision 29, default off):
+
+* `dynamics_adaptation` (default false): the planner's online speed correction
+  (racer_planner/speed_adaptation.hpp): a bounded bias and gain on the model's speed channel,
+  fitted at run time from /odom/wheel, status on `/pnp/dynamics/adaptation`, reset by an empty
+  message on `/pnp/dynamics/adaptation_reset`. With false the planner gets no extra parameter and
+  runs exactly as before. Independent of which `dynamics_bundle` is loaded.
+
 Options that are measurements, not part of the command path:
 
 * `lap_memory` (default false) adds racer_laps' lap_memory_node (`lap_source:=start_scan|map_pose|
@@ -241,6 +249,15 @@ def parameters_for(
         "laser_yaw_from_vehicle_params": laser_yaw_from_vehicle_params,
     }
     return perception, planner
+
+
+ADAPTATION_PARAM = "dynamics_adaptation"
+
+
+def adaptation_parameters(enabled: bool) -> dict:
+    """Planner parameters of the online speed adaptation: none when off, so a launch without it
+    starts the planner exactly as before."""
+    return {ADAPTATION_PARAM: True} if enabled else {}
 
 
 def deskew_parameters() -> dict:
@@ -698,6 +715,8 @@ def _make_actions(context: LaunchContext) -> list:
         v_max,
         _bool(arg("laser_yaw_from_vehicle_params"), "laser_yaw_from_vehicle_params"),
     )
+    adaptation = LaunchConfiguration(ADAPTATION_PARAM, default="false").perform(context).strip()
+    planner_params.update(adaptation_parameters(_bool(adaptation, ADAPTATION_PARAM)))
     lap_memory = _bool(arg("lap_memory"), "lap_memory")
     deskew_on = _bool(arg("deskew"), "deskew")
     scan_remapping = DESKEW_REMAPPING if deskew_on else None
@@ -1058,6 +1077,15 @@ def generate_launch_description() -> LaunchDescription:
                     "launch REFUSES to start (no fallback to SCHED_OTHER) when the policy is not "
                     "granted, so the stack container needs --ulimit rtprio=<n>. off (default): "
                     "the planner starts exactly as before, and the launch only logs its policy."
+                ),
+            ),
+            DeclareLaunchArgument(
+                ADAPTATION_PARAM,
+                default_value="false",
+                choices=["true", "false"],
+                description=(
+                    "PROTOTYPE: online bias and gain correction of the dynamics model's speed "
+                    "channel from the wheel speed (default off: the planner is unchanged)."
                 ),
             ),
             DeclareLaunchArgument(

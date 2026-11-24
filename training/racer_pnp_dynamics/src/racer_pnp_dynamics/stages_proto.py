@@ -247,9 +247,20 @@ def dev_eval_cmd(args) -> int:  # pragma: no cover - real data
     for c in frozen.candidates:
         if c.config.name == frozen.shipping.config.name:
             models[f"proto seed {c.seed}"] = c.residual
-    errs = {
-        n: contract1_window_errors(es, v01, fvehicle, r, HORIZONS_S) for n, r in models.items()
-    }
+    errs = {n: contract1_window_errors(es, v01, fvehicle, r, HORIZONS_S) for n, r in models.items()}
+    # The online speed adaptation, replayed causally along each run (adaptation.py).
+    from . import adaptation
+
+    adapt_info = {}
+    for name, res in (("dyn-v0.1", None), ("proto", frozen.shipping.residual)):
+        corr = adaptation.window_corrections(es, v01, fvehicle, res)
+        errs[f"{name} + adaptation"] = adaptation.corrected_window_errors(
+            es, v01, fvehicle, res, corr, HORIZONS_S
+        )
+        adapt_info[name] = {
+            "bias_mps2_p5_p50_p95": np.percentile(corr[:, 0], [5, 50, 95]).round(4).tolist(),
+            "gain_p5_p50_p95": np.percentile(corr[:, 1], [5, 50, 95]).round(4).tolist(),
+        }
     session = np.array([proto_session(es.runs[i].name) for i in es.run_idx])
     groups = {
         "all": np.ones(len(es), dtype=bool),
@@ -276,6 +287,7 @@ def dev_eval_cmd(args) -> int:  # pragma: no cover - real data
         "rows": rows,
         "P1_ratio_bootstrap": boot,
         "residual_output_saturation": saturation(frozen.shipping.residual, es, v01, fvehicle),
+        "adaptation_corrections_at_window_starts": adapt_info,
     }
     (args.cache / f"{proto.MODEL_ID}-dev.json").write_text(json.dumps(out, indent=2, default=float))
     print(proto.render_rows(rows))
@@ -321,11 +333,17 @@ def export_cmd(args) -> int:  # pragma: no cover - real data
     created = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     split_text = (pointer_dir(root) / "dev-split.yaml").read_text()
     cfg_sha = export.config_sha256(
-        {"split": export.sha256_text(split_text), "git": sha, "configs": [c.name for c in _configs()]}
+        {
+            "split": export.sha256_text(split_text),
+            "git": sha,
+            "configs": [c.name for c in _configs()],
+        }
     )
     data = [
-        f"development split {export.sha256_text(split_text)} (training/pnp_models/"
-        f"{proto.MODEL_ID}/dev-split.yaml), truth T2",
+        (
+            f"development split {export.sha256_text(split_text)} (training/pnp_models/"
+            f"{proto.MODEL_ID}/dev-split.yaml), truth T2"
+        ),
         *[f"bag {b}" for b in sorted(BAG_DIRS)],
     ]
     metrics = {

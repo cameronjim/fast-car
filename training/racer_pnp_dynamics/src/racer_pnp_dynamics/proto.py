@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 import numpy as np
 
@@ -68,9 +69,7 @@ class RunPart:
 
 
 def run_used(row: Mapping[str, float]) -> bool:
-    return (
-        float(row["duration_s"]) >= MIN_RUN_S and float(row["wheel_distance_m"]) >= MIN_WHEEL_M
-    )
+    return float(row["duration_s"]) >= MIN_RUN_S and float(row["wheel_distance_m"]) >= MIN_WHEEL_M
 
 
 def parts_of_run(bag: str, row: Mapping[str, float]) -> list[RunPart]:
@@ -90,7 +89,10 @@ def parts_of_run(bag: str, row: Mapping[str, float]) -> list[RunPart]:
     if fit_end <= start:
         return []
     val_start = fit_end - VAL_SHARE * (fit_end - start)
-    out = [RunPart(bag, run_id, TRAIN, start, val_start), RunPart(bag, run_id, VAL, val_start, fit_end)]
+    out = [
+        RunPart(bag, run_id, TRAIN, start, val_start),
+        RunPart(bag, run_id, VAL, val_start, fit_end),
+    ]
     if dev is not None:
         out.append(dev)
     return out
@@ -117,7 +119,7 @@ def check_roles(parts: Sequence[RunPart]) -> None:
         by_run.setdefault((p.bag, p.run_id), []).append(p)
     for key, ps in by_run.items():
         ps = sorted(ps, key=lambda q: q.t_from_s)
-        for a, b in zip(ps, ps[1:], strict=False):
+        for a, b in pairwise(ps):
             if b.t_from_s < a.t_to_s - 1e-9:
                 raise ValueError(f"{key}: parts {a.role} and {b.role} overlap")
 
@@ -127,9 +129,11 @@ def split_document(parts: Sequence[RunPart], first_scan: Mapping[str, float]) ->
     lines = [
         f"model_id: {MODEL_ID}",
         "kind: development split (unregistered, owner decision 29)",
-        f"rule: {{min_run_s: {MIN_RUN_S}, min_wheel_m: {MIN_WHEEL_M}, dev_share: {DEV_SHARE}, "
-        f"guard_s: {GUARD_S}, val_share: {VAL_SHARE}, protected_train_share: "
-        f"{PROTECTED_TRAIN_SHARE}}}",
+        (
+            f"rule: {{min_run_s: {MIN_RUN_S}, min_wheel_m: {MIN_WHEEL_M}, dev_share: {DEV_SHARE}, "
+            f"guard_s: {GUARD_S}, val_share: {VAL_SHARE}, protected_train_share: "
+            f"{PROTECTED_TRAIN_SHARE}}}"
+        ),
         "protected_bags: [" + ", ".join(sorted(PROTECTED_BAGS)) + "]",
         "bags:",
     ]

@@ -10,7 +10,9 @@ import { Field } from "./modes";
 import {
   A_LAT_RANGE,
   GAP_NODE_DEFAULTS,
+  DV1_VARIANTS,
   LAP_CHOICES,
+  bundleLabel,
   gapErrors,
   lapChoice,
   lapChoicePatch,
@@ -21,6 +23,7 @@ import {
   pnpErrors,
   pnpSpeedLimit,
   prefsProblems,
+  prototypePatch,
   samePrefs,
   RATIO_BAND,
 } from "./prefs";
@@ -160,6 +163,13 @@ export function TuneTab() {
 
         <Card title="ML driver" icon="chip" tools={reset("pnp")}>
           {!pnp?.available && <div class="why">Unavailable: {pnp?.reason ?? "loading"}</div>}
+          <div class="field">
+            <span>Preset</span>
+            <div class="seg" role="group" aria-label="ML driver preset">
+              <button onClick={() => setPnp(prototypePatch(options))}>Prototype (all learned parts)</button>
+            </div>
+          </div>
+          <div class="sub">Net perception, dyn-v0.7p with fast MLP, D v1 K3 on the camera source, the session 2 lap settings. Development runs: keep the speed cap, owner on the kill switch.</div>
           <NumRow
             label="Speed cap"
             unit="m/s"
@@ -202,7 +212,7 @@ export function TuneTab() {
             <Field label="Net bundle">
               <select value={n.perception} onChange={(e) => setPnp({ perception: e.currentTarget.value })} aria-label="ML driver perception bundle">
                 <option value="">{pnp?.perception.length === 1 ? `auto (${pnp.perception[0]})` : "choose"}</option>
-                {pnp?.perception.map((x) => <option key={x} value={x}>{x}</option>)}
+                {pnp?.perception.map((x) => <option key={x} value={x}>{bundleLabel(x)}</option>)}
               </select>
             </Field>
           )}
@@ -212,6 +222,24 @@ export function TuneTab() {
               {(pnp?.params_files ?? []).map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
           </Field>
+          {(
+            [
+              ["dynamics_fast_mlp", "Fast MLP", "ML driver fast MLP"],
+              ["dynamics_adaptation", "Adaptation", "ML driver dynamics adaptation"],
+              ["rt_sched", "RT scheduling", "ML driver rt_sched"],
+            ] as const
+          ).map(([key, label, aria]) => (
+            <div class="field" key={key}>
+              <span>{label}</span>
+              <div class="seg" role="group" aria-label={aria}>
+                {([false, true] as const).map((on) => (
+                  <button key={String(on)} aria-pressed={n[key] === on} onClick={() => setPnp({ [key]: on })}>
+                    {on ? "on" : "off"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
           <div class="field">
             <span>Lap learning</span>
             <div class="seg" role="group" aria-label="ML driver lap learning">
@@ -220,7 +248,7 @@ export function TuneTab() {
                   key={c.id}
                   aria-pressed={lap === c.id}
                   disabled={c.id !== "off" && !lapModeOffered(options, c.id)}
-                  onClick={() => setPnp({ ...lapChoicePatch(c.id), ...(c.id === "v1" ? { lap_source: "start_scan" as const } : {}), ...(c.id === "off" ? { v_lap1_mps: null } : {}) })}
+                  onClick={() => setPnp({ ...lapChoicePatch(c.id), ...(c.id === "v1" && n.lap_source === "map_pose" ? { lap_source: "start_scan" as const } : {}), ...(c.id === "off" ? { v_lap1_mps: null } : {}), ...(c.id !== "v1" ? { dv1_variant: "registered" as const } : {}) })}
                 >
                   {c.label}
                 </button>
@@ -249,7 +277,7 @@ export function TuneTab() {
                     <button
                       key={s}
                       aria-pressed={n.lap_source === s}
-                      disabled={(s !== "start_scan" && lap === "v1") || !lapSourceOffered(options, s)}
+                      disabled={(s === "map_pose" && lap === "v1") || !lapSourceOffered(options, s)}
                       onClick={() => setPnp({ lap_source: s })}
                     >
                       {s}
@@ -258,6 +286,22 @@ export function TuneTab() {
                 </div>
               </div>
               {pErr.lap_source && <div class="why">{pErr.lap_source}</div>}
+              {lap === "v1" && (
+                <>
+                  <div class="field">
+                    <span>D v1 variant</span>
+                    <div class="seg" role="group" aria-label="ML driver D v1 variant">
+                      {DV1_VARIANTS.map((v) => (
+                        <button key={v} aria-pressed={n.dv1_variant === v} onClick={() => setPnp({ dv1_variant: v })}>
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {n.dv1_variant === "K3" && <div class="sub">K3 was unsafe in sim (B11): start with the speed cap, owner on the kill switch.</div>}
+                  {pErr.dv1_variant && <div class="why">{pErr.dv1_variant}</div>}
+                </>
+              )}
               {n.lap_source === "camera" && (
                 <>
                   <div class="field">
@@ -327,7 +371,7 @@ export function TuneTab() {
           <Field label="Shadow net">
             <select value={n.shadow_perception} onChange={(e) => setPnp({ shadow_perception: e.currentTarget.value })} aria-label="ML driver shadow net bundle">
               <option value="">none</option>
-              {(pnp?.perception ?? []).map((x) => <option key={x} value={x}>{x}</option>)}
+              {(pnp?.perception ?? []).map((x) => <option key={x} value={x}>{bundleLabel(x)}</option>)}
             </select>
           </Field>
           {pErr.shadow_perception && <div class="why">{pErr.shadow_perception}</div>}

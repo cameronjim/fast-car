@@ -660,3 +660,107 @@ def test_the_real_launch_declares_lap_rate_hz_and_the_pref_defaults_to_none_sent
     assert Prefs.model_validate({"pnp": {"lap_rate_hz": 30}}).pnp.lap_rate_hz == 30
     with pytest.raises(ValueError):
         Prefs.model_validate({"pnp": {"lap_rate_hz": 31}})
+
+
+# -- prototype switches (owner decision 29): D v1 variant, fast MLP, adaptation, rt_sched ---------
+
+REAL = cmd.parse_launch_declarations(LAUNCH.read_text())
+V1 = {"lap_memory": True, "lap_mode": "v1", "lap_source": "camera"}
+
+
+def test_the_prototype_switches_send_nothing_at_their_defaults():
+    assert build(lap(), launch=REAL) == MAIN_GEOMETRIC
+    assert build(lap(**V1, dv1_variant="registered"), launch=REAL) == build(lap(**V1), launch=REAL)
+
+
+def test_the_real_launch_declares_every_prototype_switch_the_app_sends():
+    assert REAL["dv1_variant"] == ("registered", "K1", "K2", "K3")
+    assert REAL["rt_sched"] == ("off", "on")
+    for name in ("dynamics_fast_mlp", "dynamics_adaptation", "profile"):
+        assert name in REAL
+
+
+@pytest.mark.parametrize("variant", ["K1", "K2", "K3"])
+def test_a_dv1_variant_is_sent_with_lap_mode_v1(variant):
+    assert build(lap(**V1, dv1_variant=variant), launch=REAL).endswith(f" dv1_variant:={variant}")
+
+
+@pytest.mark.parametrize("bad", ["K4", "k3", "", None, 3, True])
+def test_a_bad_dv1_variant_is_refused(bad):
+    with pytest.raises(cmd.CommandError, match="D v1 variant"):
+        build(lap(**V1, dv1_variant=bad), launch=REAL)
+
+
+@pytest.mark.parametrize("mode", ["v0", "observe"])
+def test_a_dv1_variant_needs_lap_mode_v1(mode):
+    with pytest.raises(cmd.CommandError, match="needs lap mode v1"):
+        build(lap(lap_memory=True, lap_mode=mode, dv1_variant="K3"), launch=REAL)
+
+
+def test_the_boolean_switches_are_sent_as_the_launch_spells_them():
+    out = build(lap(dynamics_fast_mlp=True, dynamics_adaptation=True, rt_sched=True), launch=REAL)
+    assert " dynamics_fast_mlp:=true" in out
+    assert " dynamics_adaptation:=true" in out
+    assert out.endswith(" rt_sched:=on")
+    assert "rt_sched" not in build(lap(), launch=REAL)
+
+
+@pytest.mark.parametrize("field", ["dynamics_fast_mlp", "dynamics_adaptation", "rt_sched"])
+@pytest.mark.parametrize("bad", ["true", 1, None])
+def test_a_non_boolean_switch_is_refused(field, bad):
+    with pytest.raises(cmd.CommandError, match="must be true or false"):
+        build(lap(**{field: bad}), launch=REAL)
+
+
+def test_a_switch_this_build_does_not_declare_is_refused():
+    with pytest.raises(cmd.CommandError, match="dynamics_fast_mlp is not available"):
+        build(lap(dynamics_fast_mlp=True), launch=DECL_RATE)
+    with pytest.raises(cmd.CommandError, match="rt_sched=on is not available"):
+        build(lap(rt_sched=True), launch=DECL_RATE)
+
+
+def test_the_full_prototype_request_builds_and_never_sends_the_profile_arg():
+    out = cmd.ros_cmd_for(
+        "pnp",
+        pnp_perception_container_path=PNP + "trackperc-v2-2026-11-14",
+        pnp_dynamics_container_path=PNP + "dyn-v0.7p-2026-11-24",
+        pnp_backend="net",
+        pnp_v_max_mps=1.3,
+        pnp_lap=lap(
+            v_lap1_mps=0.5,
+            lap_memory=True,
+            lap_mode="v1",
+            lap_source="camera",
+            rate_hz=30,
+            length_ratio_min=0.75,
+            length_ratio_max=1.5,
+            dv1_variant="K3",
+            dynamics_fast_mlp=True,
+        ),
+        pnp_launch=REAL,
+    )
+    for part in (
+        "backend:=net",
+        "v_max_mps:=1.30",
+        "dynamics_bundle:=/workspace/data/pnp/models/dyn-v0.7p-2026-11-24",
+        "lap_mode:=v1",
+        "lap_source:=camera",
+        "dv1_variant:=K3",
+        "dynamics_fast_mlp:=true",
+        "lap_rate_hz:=30",
+    ):
+        assert part in out
+    assert "profile:=" not in out and "dynamics_adaptation" not in out
+
+
+def test_the_prefs_default_the_switches_off_and_reject_a_bad_variant():
+    p = Prefs().pnp
+    assert (p.dv1_variant, p.dynamics_fast_mlp, p.dynamics_adaptation, p.rt_sched) == (
+        "registered",
+        False,
+        False,
+        False,
+    )
+    assert Prefs.model_validate({"pnp": {"dv1_variant": "K3"}}).pnp.dv1_variant == "K3"
+    with pytest.raises(ValueError):
+        Prefs.model_validate({"pnp": {"dv1_variant": "K9"}})

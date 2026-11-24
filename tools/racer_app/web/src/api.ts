@@ -101,6 +101,8 @@ export interface BagsReply {
 }
 
 export type LapMode = "v0" | "v1" | "observe";
+/** pnp.launch.py dv1_variant: the registered D v1 or a brief 53 candidate (development runs). */
+export type Dv1Variant = "registered" | "K1" | "K2" | "K3";
 export type LapSource = "start_scan" | "map_pose" | "camera";
 
 /** The owner's saved drive settings (the Tune tab), kept on the car. null: the profile's own. */
@@ -138,6 +140,11 @@ export interface Prefs {
     lap_length_ratio_max: number;
     /** pnp.launch.py lap_rate_hz, the camera lap counter's rate; 0 is the launch default (15). */
     lap_rate_hz: number;
+    /** Prototype switches (owner decision 29), all off by default: nothing is sent while off. */
+    dv1_variant: Dv1Variant;
+    dynamics_fast_mlp: boolean;
+    dynamics_adaptation: boolean;
+    rt_sched: boolean;
   };
   tracker: { raceline: string };
 }
@@ -326,6 +333,10 @@ export class Api {
     pnp_lap_length_ratio_min?: number;
     pnp_lap_length_ratio_max?: number;
     pnp_lap_rate_hz?: number;
+    pnp_dv1_variant?: Dv1Variant;
+    pnp_dynamics_fast_mlp?: boolean;
+    pnp_dynamics_adaptation?: boolean;
+    pnp_rt_sched?: boolean;
     max_speed_mps?: number;
     min_speed_mps?: number;
     a_lat_max_mps2?: number;

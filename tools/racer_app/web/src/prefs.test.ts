@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Options, Prefs, Status } from "./api";
 import {
+  CANDIDATE_BUNDLES,
   DEFAULT_PREFS,
+  PROTOTYPE,
+  bundleLabel,
   gapBody,
   gapErrors,
   gapSummary,
@@ -16,6 +19,7 @@ import {
   pnpSummary,
   pnpWhy,
   prefsProblems,
+  prototypePatch,
   samePrefs,
   stackBody,
   trackerBody,
@@ -367,5 +371,74 @@ describe("the camera lap counter rate", () => {
     expect(e({ lap_rate_hz: 30 })).toEqual({});
     expect(e({ lap_rate_hz: 31 }).lap_rate_hz).toBe("pnp lap counter rate must be a number from 0 to 30 Hz");
     expect(e({ lap_rate_hz: 30, lap_counter: false }).lap_rate_hz).toBe("pnp lap counter rate needs the lap counter on");
+  });
+});
+
+describe("prototype switches (owner decision 29)", () => {
+  const camera = { ...options, pnp: { ...options.pnp!, lap_sources: ["start_scan", "map_pose", "camera"] } } as unknown as Options;
+  const withP = (over: Partial<Prefs["pnp"]>): Prefs => prefs({ pnp: { ...DEFAULT_PREFS.pnp, dynamics: "dyn-a", ...over } });
+  const e = (over: Partial<Prefs["pnp"]>) => pnpErrors({ ...DEFAULT_PREFS.pnp, ...over }, camera);
+  const v1 = { lap_memory: true, lap_mode: "v1" as const, lap_source: "camera" as const };
+
+  it("send nothing while off", () => {
+    const b = pnpBody(withP({}), options);
+    for (const k of ["pnp_dv1_variant", "pnp_dynamics_fast_mlp", "pnp_dynamics_adaptation", "pnp_rt_sched"]) {
+      expect(b).not.toHaveProperty(k, expect.anything());
+    }
+    expect(DEFAULT_PREFS.pnp).toMatchObject({ dv1_variant: "registered", dynamics_fast_mlp: false, dynamics_adaptation: false, rt_sched: false });
+  });
+  it("send each switch when on", () => {
+    expect(pnpBody(withP({ ...v1, dv1_variant: "K3" }), options)).toMatchObject({ pnp_dv1_variant: "K3", pnp_lap_mode: "v1", pnp_lap_source: "camera" });
+    expect(pnpBody(withP({ dynamics_fast_mlp: true, dynamics_adaptation: true, rt_sched: true }), options)).toMatchObject({
+      pnp_dynamics_fast_mlp: true,
+      pnp_dynamics_adaptation: true,
+      pnp_rt_sched: true,
+    });
+  });
+  it("refuse a D v1 variant outside lap mode v1, with the agent's words", () => {
+    expect(e({ dv1_variant: "K3" }).dv1_variant).toBe("pnp D v1 variant needs lap mode v1");
+    expect(e({ lap_memory: true, lap_mode: "v0", dv1_variant: "K1" }).dv1_variant).toBe("pnp D v1 variant needs lap mode v1");
+    expect(e({ ...v1, dv1_variant: "K3" })).toEqual({});
+    expect(e({ ...v1, dv1_variant: "K9" as never }).dv1_variant).toContain("must be one of");
+  });
+  it("show up in the summary", () => {
+    const s = pnpSummary(withP({ ...v1, dv1_variant: "K3", dynamics_fast_mlp: true, rt_sched: true }), options);
+    expect(s).toContain("variant K3");
+    expect(s).toContain("fast MLP");
+    expect(s).toContain("rt_sched");
+  });
+  it("preset sets every learned part and leaves adaptation and rt_sched off", () => {
+    const p = prototypePatch(options);
+    expect(p).toMatchObject({
+      backend: "net",
+      perception: PROTOTYPE.perception,
+      dynamics: PROTOTYPE.dynamics,
+      v_max_mps: 1.3,
+      v_lap1_mps: 0.5,
+      lap_memory: true,
+      lap_mode: "v1",
+      lap_source: "camera",
+      lap_rate_hz: 30,
+      lap_length_ratio_min: 0.75,
+      lap_length_ratio_max: 1.5,
+      dv1_variant: "K3",
+      dynamics_fast_mlp: true,
+      dynamics_adaptation: false,
+      rt_sched: false,
+    });
+    expect(pnpErrors({ ...DEFAULT_PREFS.pnp, ...p }, camera)).toEqual({});
+  });
+  it("preset keeps the cap under the dynamics bundle's validity", () => {
+    const limited = {
+      ...options,
+      pnp: { ...options.pnp!, dynamics: [PROTOTYPE.dynamics], dynamics_v_max_mps: { [PROTOTYPE.dynamics]: 1.0 } },
+    } as unknown as Options;
+    expect(prototypePatch(limited).v_max_mps).toBe(1.0);
+    expect(pnpErrors({ ...DEFAULT_PREFS.pnp, ...prototypePatch(limited) }, limited).v_max_mps).toBeUndefined();
+  });
+  it("marks the v3 perception bundle as a candidate, not v2", () => {
+    expect(CANDIDATE_BUNDLES).toContain("trackperc-v3-2026-11-23");
+    expect(bundleLabel("trackperc-v3-2026-11-23")).toBe("trackperc-v3-2026-11-23 (candidate)");
+    expect(bundleLabel(PROTOTYPE.perception)).toBe(PROTOTYPE.perception);
   });
 });

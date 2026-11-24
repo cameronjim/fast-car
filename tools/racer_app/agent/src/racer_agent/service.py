@@ -81,6 +81,10 @@ class DriveBody(Body):
     pnp_lap_length_ratio_min: Any = 0.0
     pnp_lap_length_ratio_max: Any = 0.0
     pnp_lap_rate_hz: Any = 0.0
+    pnp_dv1_variant: Any = "registered"
+    pnp_dynamics_fast_mlp: Any = False
+    pnp_dynamics_adaptation: Any = False
+    pnp_rt_sched: Any = False
     max_speed_mps: float | None = None
     min_speed_mps: float | None = None
     a_lat_max_mps2: float | None = None

@@ -72,6 +72,25 @@ struct MppiParams {
   // 0.06 over); the quadratic hinge trades against the cost-to-go, so no weight makes a literal
   // step in the bound exact for a car with a speed lag.
   double w_trust = 2500.0;
+  // Brief 53 switches (brief 44 section 1). Every default reproduces the behaviour before them.
+  // lap_reward_mode: kReplace (default, registered D v1) lets the profile's cost-to-go replace the
+  // progress term; kKeepProgress keeps the planner's own progress term, ignores the cost-to-go and
+  // keeps the speed trust region.
+  enum class LapRewardMode : std::uint8_t { kReplace = 0, kKeepProgress = 1 };
+  LapRewardMode lap_reward_mode = LapRewardMode::kReplace;
+  // lap_station_mode: kPath (default) advances the lap station inside a rollout by the wheel
+  // distance of the rollout; kTrack by the projected track progress while the track is in use
+  // (the wheel distance since the last projection is added between projections), by the wheel
+  // distance otherwise.
+  enum class LapStationMode : std::uint8_t { kPath = 0, kTrack = 1 };
+  LapStationMode lap_station_mode = LapStationMode::kPath;
+  // terminal_curvature_bound (default off): while the track is in use, a terminal penalty
+  // c * w_curvature_bound * max(0, v_end - v_allow(s_end))^2, added to the terminal term, where
+  // v_allow(s) is the lowest over the visible stations s_j >= s of
+  // sqrt(a / kappa_j + 2 * stop_decel * (s_j - s)) and a is curvature_bound_a_lat_mps2. No memory.
+  bool terminal_curvature_bound = false;
+  double curvature_bound_a_lat_mps2 = 2.0;
+  double w_curvature_bound = 200.0;
   // Check the final sequence (the smoothed weighted mean) for collision and fall back to the best
   // evaluated collision-free sample of the chosen class when it fails (claude-docs/13 17.4.1).
   // false is the behaviour of main f5db7f1 and exists only so planner_replay_cli can measure M-C1
@@ -257,6 +276,11 @@ class MppiSolver {
     double gate_travel_m = 0.0;   // sanitised SolveInput::gate_travel_since_scan_m
     double gate_ttc_ref_s = 0.0;  // gate_ttc_margin * ttc_warning_s
     double gate_clear_ref_m = 0.0;
+    bool lap_track_station = false;  // lap_station_mode kTrack with the track in use
+    bool use_curv = false;           // terminal_curvature_bound with the track in use
+    int curv_n = 0;
+    double curv_s[kTrackStations] = {};   // arc length of the visible stations
+    double curv_v2[kTrackStations] = {};  // a_lat / kappa at each, m^2/s^2 (large on a straight)
   };
   Ctx make_ctx(const SolveInput& in) const;
   double evaluate(const SolveInput& in, const Ctx& ctx, const Control* u, CostBreakdown* bd,

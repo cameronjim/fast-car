@@ -42,7 +42,7 @@ from racer_laps.gate import STANDSTILL_MPS, GateConfig, GateCrossing, StartScanG
 from racer_laps.lap_detector import LapDetector
 from racer_laps.lap_record import STATE_DRIVING, LapRecord, LapRecorder
 from racer_laps.safe_set import SafeSet
-from racer_laps.station_set import StationSet
+from racer_laps.station_set import VALUE_PROFILE_MODES, ZONE_FLOOR_MODES, StationSet
 
 #: racer_msgs/SafetyEvent constants.
 SEVERITY_BRAKE = 2
@@ -97,6 +97,19 @@ class LapConfig:
     #: S6: after the start, commands of at least `CMD_MOVING_MPS` sent for this long with no wheel
     #: motion mark the run `start_unanswered` (mux in manual, motor off, ...). Status and log only.
     start_unanswered_s: float = 3.0
+    #: Brief 53 switches (brief 44 section 1); every default is the behaviour before them.
+    #: `freeze_after_first_clean_lap`: Q comes from the first stored lap only (D v1).
+    value_profile_mode: str = "update"
+    #: The bound is the lowest over station +- min(rate * station, cap) (D v1).
+    station_uncertainty: bool = False
+    station_uncertainty_rate: float = 0.02
+    station_uncertainty_cap_m: float = 0.5
+    #: Drop the stored laps and go back to the lap-1 cap on a changed configuration.
+    reset_on_change: bool = False
+    #: reset_on_change: a lap length this share off the reference counts as out of its band.
+    reset_length_share: float = 0.08
+    #: `cap_wins` (owner decision 5): no caution zone bound is lifted to the floor (D v1).
+    zone_floor_mode: str = "floor_wins"
 
     def __post_init__(self) -> None:
         if self.lap_source not in LAP_SOURCES:
@@ -114,10 +127,23 @@ class LapConfig:
                 f"lap_source {self.lap_source} needs a GateConfig (wheelbase and yaw gain of "
                 "the odometry model, from vehicle_params)"
             )
+        if self.value_profile_mode not in VALUE_PROFILE_MODES:
+            raise ValueError(f"value_profile_mode must be one of {VALUE_PROFILE_MODES}")
+        if self.zone_floor_mode not in ZONE_FLOOR_MODES:
+            raise ValueError(f"zone_floor_mode must be one of {ZONE_FLOOR_MODES}")
+        if not (
+            self.station_uncertainty_rate >= 0.0
+            and self.station_uncertainty_cap_m >= 0.0
+            and 0.0 < self.reset_length_share < 1.0
+        ):
+            raise ValueError("station uncertainty rate and cap >= 0, reset_length_share in (0, 1)")
         if self.lap_mode == "v1":
-            if self.lap_source != "start_scan":
+            # indexed by station: the start-scan source, or (brief 53, sim only) the truth oracle,
+            # whose station is the wheel distance since the last accepted event. The camera stays
+            # refused until D v1 passes its gate and the single implementer integrates it.
+            if self.lap_source not in ("start_scan", "truth"):
                 raise ValueError(
-                    "lap_mode v1 needs lap_source start_scan (it is indexed by station)"
+                    "lap_mode v1 needs lap_source start_scan or (sim) truth (it is indexed by station)"
                 )
             n = round(self.guidance_horizon_m / GUIDANCE_SPACING_M) + 1
             if not 2 <= n <= PLANNER_MAX_ARRAY:
@@ -180,7 +206,13 @@ class LapMemory:
             caution_laps=cfg.caution_laps,
             floor_mps=cfg.v_bound_floor_mps,
             zone_merge=cfg.zone_merge,
+            value_profile_mode=cfg.value_profile_mode,
+            zone_floor_mode=cfg.zone_floor_mode,
         )
+        #: reset_on_change: every reset as (lap in progress, reason), and the trigger streaks.
+        self.resets: list[tuple[int, str]] = []
+        self._length_out_streak = 0
+        self._missed_streak = 0
         self._handled_suspect: set[int] = set()
         self.gate: StartScanGate | ExternalLapGate | None = (
             StartScanGate(cfg.gate) if cfg.lap_source == "start_scan" and cfg.gate else None
@@ -256,6 +288,8 @@ class LapMemory:
         self._recorder.note_brake(obstacle)
         if obstacle:
             self._note_zone("brake")
+            if self.cfg.reset_on_change and self._bound_above_lap1_here():
+                self.reset("brake_where_bound_above_lap1_cap")
         else:
             self._timing_events += 1
 
@@ -474,6 +508,13 @@ class LapMemory:
         next_cap = self.schedule.cap_mps
         if self.cfg.lap_mode == "observe":
             next_cap = self.cfg.v_cap_start_mps
+        if self.cfg.reset_on_change and crossing.lap_index >= 2:
+            why = self._reset_triggers(crossing)
+            if why:
+                # logged on the lap just closed; the next lap starts from the lap-1 cap
+                self.reset(why, lap=crossing.lap_index)
+                next_cap = self.schedule.cap_mps
+                stored = False
         self.station_set.expire_zones(crossing.lap_index + 1)
         self._lap_t0 = crossing.t_cross_s
         self._recent.clear()
@@ -504,6 +545,46 @@ class LapMemory:
             launch_dwell_s=self.launch_dwell_s if crossing.lap_index == 1 else 0.0,
             line_source=crossing.line_source,
         )
+
+    # -- reset on a changed configuration (brief 53) -----------------------------------------
+
+    def reset(self, reason: str, lap: int | None = None) -> None:
+        """Drop the stored laps and go back to the lap-1 cap (D v0: the schedule restarts). The
+        reference length, zones and lap count stay. Logged in `resets` and the status."""
+        self.station_set.clear_laps()
+        self.schedule = CapSchedule(
+            self.cfg.v_cap_start_mps, self.cfg.v_cap_step_mps, self.cfg.v_cap_ceiling_mps
+        )
+        self._length_out_streak = 0
+        self._missed_streak = 0
+        self.resets.append((self.lap_in_progress if lap is None else int(lap), str(reason)))
+        self._cap_this_lap = self._driven_cap()
+
+    def _bound_above_lap1_here(self) -> bool:
+        gate = self.gate
+        if self.cfg.lap_mode != "v1" or gate is None or not gate.started:
+            return False
+        if self.station_set.n_laps < 1:
+            return False
+        b = self.station_set.v_bound(gate.station_m, self.lap_in_progress, self.cfg.explore_dv_mps)
+        return bool(math.isfinite(float(b[0])) and float(b[0]) > self.cfg.v_cap_start_mps + 1e-9)
+
+    def _reset_triggers(self, crossing: GateCrossing) -> str:
+        """After a closure: the reason to reset, or "" (two laps running out of the length band,
+        or two missed or doubtful crossings running)."""
+        ref = self.station_set.l_ref_m
+        out = (
+            math.isfinite(ref)
+            and math.isfinite(crossing.length_m)
+            and abs(crossing.length_m - ref) > self.cfg.reset_length_share * ref
+        )
+        self._length_out_streak = self._length_out_streak + 1 if out else 0
+        self._missed_streak = self._missed_streak + 1 if crossing.missed else 0
+        if self._length_out_streak >= 2:
+            return "length_out_of_band_twice"
+        if self._missed_streak >= 2:
+            return "crossing_not_matched_twice"
+        return ""
 
     def _reconcile_lengths(self, lap_index: int, stored: bool) -> bool:
         """After a closure: laps the gate now calls suspect leave the station set and the cap
@@ -690,6 +771,11 @@ class LapMemory:
                 self.lap_in_progress,
                 self.cfg.explore_dv_mps,
                 GUIDANCE_SPACING_M,
+                uncertainty=(
+                    (self.cfg.station_uncertainty_rate, self.cfg.station_uncertainty_cap_m)
+                    if self.cfg.station_uncertainty
+                    else None
+                ),
             )
             if s.shape[0] < 2:
                 return empty
@@ -745,6 +831,8 @@ class LapMemory:
             out["first_motion_stamp_s"] = self._first_motion_t
             out["launch_dwell_s"] = self.launch_dwell_s
             out["start_unanswered"] = self.start_unanswered
+            if self.cfg.reset_on_change:
+                out["resets"] = [{"lap": lap, "reason": why} for lap, why in self.resets]
         return out
 
     def _why_no_lap(self) -> str:

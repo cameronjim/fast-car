@@ -100,10 +100,15 @@ def test_a_camera_config_needs_the_odometry_model() -> None:
         LapConfig(lap_source="camera")
 
 
-@pytest.mark.parametrize("source", ["camera", "truth"])
-def test_lap_mode_v1_is_refused_with_an_external_source(source: str) -> None:
+def test_lap_mode_v1_is_refused_with_the_camera_source() -> None:
     with pytest.raises(ValueError):
-        LapConfig(lap_source=source, lap_mode="v1", gate=odom_model())
+        LapConfig(lap_source="camera", lap_mode="v1", gate=odom_model())
+
+
+def test_lap_mode_v1_is_allowed_with_the_sim_truth_source() -> None:
+    # brief 53: D v1 runs on the sim truth oracle (changed expectation: refused before)
+    cfg = LapConfig(lap_source="truth", lap_mode="v1", gate=odom_model())
+    assert isinstance(LapMemory(cfg).gate, ExternalLapGate)
 
 
 def test_external_config_is_used_when_given() -> None:

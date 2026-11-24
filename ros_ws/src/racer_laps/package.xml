@@ -21,6 +21,7 @@
   <depend>sensor_msgs</depend>
   <depend>racer_tools</depend>
   <depend>std_msgs</depend>
+  <exec_depend>std_srvs</exec_depend>
   <depend>tf2_ros_py</depend>
   <depend>racer_msgs</depend>
   <depend>racer_pnp_msgs</depend>

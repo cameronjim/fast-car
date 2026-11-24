@@ -96,8 +96,19 @@ MppiSolver::Ctx MppiSolver::make_ctx(const SolveInput& in) const {
     ctx.gate_ttc_ref_s = p_.gate_ttc_margin * in.gate->limits().ttc_warning_s;
     ctx.gate_clear_ref_m = p_.gate_clear_margin * in.gate->limits().min_forward_clearance_m;
   }
+  if (ctx.use_track && p_.terminal_curvature_bound && p_.curvature_bound_a_lat_mps2 > 0.0) {
+    ctx.use_curv = true;
+    ctx.curv_n = std::min(in.track->station_count(), kTrackStations);
+    for (int i = 0; i < ctx.curv_n; ++i) {
+      ctx.curv_s[i] = in.track->station_s(i);
+      const double k = in.track->curvature(i);
+      ctx.curv_v2[i] = k > 1e-6 ? p_.curvature_bound_a_lat_mps2 / k : 1e12;
+    }
+  }
   if (in.lap != nullptr && in.lap->active && in.lap->n >= kLapProfileMinStations) {
     ctx.use_lap = true;
+    ctx.lap_track_station =
+        ctx.use_track && p_.lap_station_mode == MppiParams::LapStationMode::kTrack;
     const double since = std::isfinite(in.lap_station_now_m) ? in.lap_station_now_m : 0.0;
     ctx.lap_s_now = in.lap->s0_m + since;
     ctx.lap_q_now = in.lap->q_at(ctx.lap_s_now);
@@ -119,6 +130,10 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   // For a contract 1 bundle alpha is 1 and both distances below are the same number.
   double path_m = 0.0;  // GROUND distance travelled by the scored steps so far (obstacles, gate)
   double lap_path_m = 0.0;  // WHEEL distance of the same steps (the lap station counts this)
+  // lap_station_mode kTrack: lap station = track progress at the last projection plus the wheel
+  // distance since it (equal to lap_path_m until the first projection).
+  double lap_track_base_m = 0.0;
+  double lap_path_at_proj_m = 0.0;
   double alpha_step = 1.0;  // ground distance per wheel distance of the last step
   double s_end = ctx.s_start;
   double min_clear = 1e9;
@@ -177,6 +192,10 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
     if (project) {
       pr = in.track->project(s.x, s.y, &hint);
       s_end = pr.s;
+      if (ctx.lap_track_station) {
+        lap_track_base_m = s_end - ctx.s_start;
+        lap_path_at_proj_m = lap_path_m;
+      }
     }
     if (clearance < p_.d_hard_m) {
       collided = true;  // progress is frozen at this step, the rest of the rollout is not scored
@@ -189,7 +208,9 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
       j_clear += e * e * dt;
     }
     if (ctx.use_lap) {
-      const double over = s.v - in.lap->v_bound_at(ctx.lap_s_now + lap_path_m);
+      const double lap_step_m =
+          ctx.lap_track_station ? lap_track_base_m + (lap_path_m - lap_path_at_proj_m) : lap_path_m;
+      const double over = s.v - in.lap->v_bound_at(ctx.lap_s_now + lap_step_m);
       if (over > 0.0) j_trust += over * over * dt;
     }
     if (project) {
@@ -221,12 +242,16 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   o.lap_trust = 0.0;
   o.lap_terminal = 0.0;
   if (ctx.use_lap) {
-    // The cost-to-go replaces the progress term: seconds of the best lap gained, in metres at the
-    // cap in force.
     o.lap_trust = p_.w_trust * j_trust;
-    const double q_end = in.lap->q_at(ctx.lap_s_now + lap_path_m);
-    o.lap_terminal = -p_.w_progress * std::max(0.0, in.v_cap_mps) * (ctx.lap_q_now - q_end);
-    o.progress = 0.0;
+    if (p_.lap_reward_mode == MppiParams::LapRewardMode::kReplace) {
+      // The cost-to-go replaces the progress term: seconds of the best lap gained, in metres at
+      // the cap in force.
+      const double lap_end_m =
+          ctx.lap_track_station ? lap_track_base_m + (lap_path_m - lap_path_at_proj_m) : lap_path_m;
+      const double q_end = in.lap->q_at(ctx.lap_s_now + lap_end_m);
+      o.lap_terminal = -p_.w_progress * std::max(0.0, in.v_cap_mps) * (ctx.lap_q_now - q_end);
+      o.progress = 0.0;
+    }
   }
   o.collision = collided ? p_.c_collision : 0.0;
   o.clearance = p_.w_clear * j_clear;
@@ -241,6 +266,18 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
     const double v_ground_end = alpha_step * s.v;  // the stopping distance is on the ground
     const double need = v_ground_end * v_ground_end / (2.0 * stop_decel_mps2_) - sight;
     if (need > 0.0) terminal = p_.w_term * need * need;
+    if (ctx.use_curv) {
+      // The speed the car may have at s_end and still slow to sqrt(a / kappa) at every visible
+      // station ahead with the stop deceleration.
+      double v2_allow = 1e12;
+      for (int i = 0; i < ctx.curv_n; ++i) {
+        const double ahead = ctx.curv_s[i] - s_end;
+        if (ahead < 0.0) continue;
+        v2_allow = std::min(v2_allow, ctx.curv_v2[i] + 2.0 * stop_decel_mps2_ * ahead);
+      }
+      const double excess = v_ground_end - std::sqrt(v2_allow);
+      if (excess > 0.0) terminal += c * p_.w_curvature_bound * excess * excess;
+    }
   }
   o.terminal = terminal;
   o.total = o.progress + o.collision + o.clearance + o.boundary + o.lateral + o.smoothness +

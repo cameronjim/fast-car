@@ -37,3 +37,32 @@ to need memory". A run that cannot execute after 3 attempts counts as failed. Re
 threshold: the ratios to b and t, the sum of laps 2 to 10, laps to reach the ceiling, resets.
 After B11 the W cases and seeds 91, 92 are spent. D-S0, D-S1, D3-S0, D3-S2(d) stay FAIL.
 
+
+## Addendum 1: D11-S4, the sum of laps 2 to 10 (owner decision 28 item 2)
+
+Written 2026-11-23 by the implementer, before any D v1 code, any M-D1b run and any B11 run.
+Constants: `evaluation/prereg/pnp-v0.6-laps-dv1-addendum-1.yaml`. Nothing above changes: every
+threshold, run, case, seed, pairing, the drop rule and the registered outcome stand as written.
+
+- **D11-S4, D v1 learns faster than D v0.** On the k runs of B11 and their paired c runs (no
+  new run), the sum of the truth lap times of laps 2 to 10 per run. All of:
+  1. Median over pairs of sum(k) / sum(c) at most 0.95.
+  2. No pair above 1.03. A pair where either run lacks one of laps 2 to 10 counts as above 1.03.
+  3. D11-S0, D11-S1, D11-S2 items 1, 2, 4, 5, 6, 7 and 8, and D11-S3 pass.
+
+Pass: "D v1 learns faster than the schedule in sim at equal safety". Fail on items 1 or 2 only:
+"D v1 does not learn faster than the schedule in sim". S0 or S1 failed, or an item of 3 failed:
+"not judged". The S4 outcome is reported next to the registered outcome, never in its place.
+
+Why 0.95 and 1.03. They are the bars the attempt already uses: 0.95 is the D-S2, D3-S2 and
+D11-S2 item 3 threshold (a 5 percent gain is the smallest the project has registered as worth a
+change), and 1.03 is D11-S2 item 4 (no single pairing much worse). Reusing them keeps the second
+criterion from being tuned to this attempt. It is reachable but not free: D v0 rises one 0.1 m/s
+step per clean lap from 0.5 m/s, so if lap time scaled with 1 / cap until the ceiling, a memory
+that adds `explore_dv_mps` (0.2) per lap would sit near 0.83 and one at the ceiling from lap 2
+lower still, while equal learning gives 1.0. Laps at the ceiling are bounded by the track and the
+planner rather than the cap, so the real gap is smaller; 0.95 asks for a clear part of it. Item 3
+asks for equal safety and no late-lap pair worse than 1.03, so a faster ramp cannot pass by
+paying for it on laps 8 to 10 or in contacts. Item 3 of D11-S2 (late-lap ratio) is not needed for
+S4: D v0 already reaches the ceiling control on late laps (B10), and decision 28 asks whether
+learning speed alone is a gain.

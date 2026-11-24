@@ -365,9 +365,9 @@ class MppiPlannerNode : public rclcpp::Node {
         declare_double("solve_restore_under_ms", 6.0, 0.5, 200.0,
                        "Solves faster than this restore the sample count gradually (ms).") *
         1e-3;
-    cfg.budget.window = static_cast<int>(
-        declare_int("solve_window", cfg.budget.window, 1, 500,
-                    "Number of recent solves the sample budget looks at."));
+    cfg.budget.window =
+        static_cast<int>(declare_int("solve_window", cfg.budget.window, 1, 500,
+                                     "Number of recent solves the sample budget looks at."));
     cfg.budget.halve_count = static_cast<int>(
         declare_int("solve_halve_count", cfg.budget.halve_count, 1, 500,
                     "This many solves over solve_halve_over_ms in the window halve the count."));
@@ -1062,7 +1062,7 @@ class MppiPlannerNode : public rclcpp::Node {
   double guidance_timeout_s_ = 2.0;
   double last_solve_tick_s_ = 0.0;
   std::uint32_t solve_cycle_ = 0;
-  int logged_samples_ = 0;  // the sample count last logged; every change is logged
+  int logged_samples_ = 0;     // the sample count last logged; every change is logged
   bool have_driving_ = false;  // solve thread: the first Driving solve has happened
   double driving_since_s_ = 0.0;
   std::vector<std::pair<double, double>> stalls_;  // (time since first Driving, stall) pairs

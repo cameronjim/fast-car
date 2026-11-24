@@ -52,11 +52,15 @@ def test_output_is_well_formed_for_any_input(geo, net, ext, append) -> None:
 @SETTINGS
 @given(geo=tracks(), net=tracks(), ext=st.floats(0.0, 0.2))
 def test_every_rebuilt_edge_point_lies_on_the_tracers_edge_polyline(geo, net, ext) -> None:
-    out = fuse_v2.fuse_track_v2(geo, net, fuse_v2.FuseV2Config(edge_end_extension_m=ext, append_far=False))
+    out = fuse_v2.fuse_track_v2(
+        geo, net, fuse_v2.FuseV2Config(edge_end_extension_m=ext, append_far=False)
+    )
     ng, n = geo.valid_count, out.valid_count
     if ng < 2 or n < 2:
         return
-    if np.array_equal(out.x_m[:n], geo.x_m[:n]) and np.array_equal(out.half_width_left_m[:n], geo.half_width_left_m[:n]):
+    if np.array_equal(out.x_m[:n], geo.x_m[:n]) and np.array_equal(
+        out.half_width_left_m[:n], geo.half_width_left_m[:n]
+    ):
         # the tracer's own track (a fallback): its edges are its own
         return
     g_left, g_right = edge_polylines(geo)

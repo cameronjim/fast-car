@@ -8,10 +8,9 @@ import math
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from racer_pnp_perception import corridor
 from racer_track_perception import fuse_v2
 from racer_track_perception import track as tr
-
-from racer_pnp_perception import corridor
 
 SETTINGS = settings(
     max_examples=200,

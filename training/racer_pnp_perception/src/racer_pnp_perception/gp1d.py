@@ -129,9 +129,15 @@ def check_thresholds(doc: dict[str, Any]) -> None:
     same("margin mean excess", m["max_mean_excess"], slope_select.MARGIN_MAX_MEAN)
     same("margin p99 loss", m["max_p99_loss"], slope_select.MARGIN_MAX_P99)
     same("margin p99 excess", m["max_p99_excess"], slope_select.MARGIN_MAX_P99)
-    same("development benefit", t["development_benefit"]["max_ratio_on_every_labelled_development_set"], DEV_BENEFIT_MAX_RATIO)
+    same(
+        "development benefit",
+        t["development_benefit"]["max_ratio_on_every_labelled_development_set"],
+        DEV_BENEFIT_MAX_RATIO,
+    )
     if wrong:
-        raise PreregMismatch("the constants file differs from the coded thresholds: " + "; ".join(wrong))
+        raise PreregMismatch(
+            "the constants file differs from the coded thresholds: " + "; ".join(wrong)
+        )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -163,7 +169,7 @@ def assert_bag_allowed(name: str, purpose: str) -> None:
     if name > LATEST_OPENABLE_BAG and not name.startswith(LATEST_OPENABLE_BAG):
         raise DataRoleRefused(f"{name} was recorded after 2026-11-22: opened by nobody")
     if purpose == "development":
-        if name.startswith(FRESH_14_PREFIX) or name.startswith(HELDOUT_22_BAG):
+        if name.startswith((FRESH_14_PREFIX, HELDOUT_22_BAG)):
             raise DataRoleRefused(f"{name} is a held-out set, not development data")
     elif purpose == "heldout":
         if not (name.startswith(FRESH_14_PREFIX) or name == HELDOUT_22_BAG):

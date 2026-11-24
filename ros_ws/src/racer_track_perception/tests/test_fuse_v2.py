@@ -3,6 +3,7 @@ ray cast (`fused-v2`, brief 55)."""
 
 from __future__ import annotations
 
+import itertools
 import math
 
 import numpy as np
@@ -47,7 +48,7 @@ def edge_polylines(geo: tr.LocalTrackData) -> tuple[np.ndarray, np.ndarray]:
 
 def dist_to_polyline(p: np.ndarray, poly: np.ndarray) -> float:
     best = math.inf
-    for a, b in zip(poly[:-1], poly[1:], strict=True):
+    for a, b in itertools.pairwise(poly):
         e = b - a
         t = float(np.clip(np.dot(p - a, e) / max(float(np.dot(e, e)), 1e-18), 0.0, 1.0))
         best = min(best, float(np.hypot(*(p - (a + t * e)))))
@@ -188,7 +189,9 @@ def test_spacing_contract_of_the_output() -> None:
     geo = curved(16, bend=0.3)
     net = curved(16, bend=0.3)
     net.y_m[:] += 0.08
-    out = fuse_v2.fuse_track_v2(geo, net, fuse_v2.FuseV2Config(edge_end_extension_m=0.2, append_far=False))
+    out = fuse_v2.fuse_track_v2(
+        geo, net, fuse_v2.FuseV2Config(edge_end_extension_m=0.2, append_far=False)
+    )
     n = out.valid_count
     d = np.hypot(np.diff(out.x_m[:n].astype(float)), np.diff(out.y_m[:n].astype(float)))
     # stations lie on a polyline and are 0.20 m apart along it; the chord of a bend is shorter

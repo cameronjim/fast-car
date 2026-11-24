@@ -50,7 +50,9 @@ from racer_pnp_perception.scoring import scan_centreline_errors
 log = logging.getLogger(__name__)
 
 CACHE_ROOT = Path("/Users/cameronjim/code/car-data/pnp/cache/fused-v2")
-FULL_WEIGHTS = Path("/Users/cameronjim/code/car-data/pnp/models/trackperc-v2-2026-11-14/weights.npz")
+FULL_WEIGHTS = Path(
+    "/Users/cameronjim/code/car-data/pnp/models/trackperc-v2-2026-11-14/weights.npz"
+)
 RUN_F1 = Path("/Users/cameronjim/code/car-data/pnp/runs-v2/F1/seed0")
 RUN_F2 = Path("/Users/cameronjim/code/car-data/pnp/runs-v2/F2/seed1")
 SIM_N = 1500
@@ -88,9 +90,9 @@ def tracks_for_scan(
 
 
 def pack(t: tr.LocalTrackData) -> np.ndarray:
-    return np.stack(
-        [t.x_m, t.y_m, t.half_width_left_m, t.half_width_right_m, t.sigma_m]
-    ).astype(np.float32)
+    return np.stack([t.x_m, t.y_m, t.half_width_left_m, t.half_width_right_m, t.sigma_m]).astype(
+        np.float32
+    )
 
 
 def unpack(a: np.ndarray, n: int) -> tr.LocalTrackData:
@@ -191,8 +193,14 @@ def build(args: argparse.Namespace) -> int:
     from racer_pnp_perception import dataset
     from racer_pnp_perception.internal_val import net_from_run
     from racer_pnp_perception.raycast import ScanGeometry
-    from racer_pnp_perception.split import ROLE_HELDOUT, ROLE_HELDOUT_LAYOUT, ROLE_TRAIN
-    from racer_pnp_perception.split import load_folds, load_split, parse_split
+    from racer_pnp_perception.split import (
+        ROLE_HELDOUT,
+        ROLE_HELDOUT_LAYOUT,
+        ROLE_TRAIN,
+        load_folds,
+        load_split,
+        parse_split,
+    )
 
     live = load_live_vehicle()
     split = load_split()
@@ -215,12 +223,16 @@ def build(args: argparse.Namespace) -> int:
         for bag in bags:
             capture_bag_rows(args.bags_root / bag, args.labels, split, roles, p, live, col)
         col.save(out)
-        log.info("%s: %d scans, %d labelled", name, len(col.geo), sum(v > 0 for v in col.label_valid))
+        log.info(
+            "%s: %d scans, %d labelled", name, len(col.geo), sum(v > 0 for v in col.label_valid)
+        )
 
     heldout_bags = sorted(
         b for b, e in split.bags.items() if any(s.role == ROLE_HELDOUT for s in e.segments)
     )
-    layout_bags = sorted(b for b, e in split.bags.items() if e.whole_bag_role == ROLE_HELDOUT_LAYOUT)
+    layout_bags = sorted(
+        b for b, e in split.bags.items() if e.whole_bag_role == ROLE_HELDOUT_LAYOUT
+    )
     train_bags = sorted(
         b
         for b, e in split.bags.items()
@@ -254,7 +266,13 @@ def build(args: argparse.Namespace) -> int:
         col = Collector()
         for bag in gp1d.DEV_2026_11_16:
             capture_bag_rows(
-                args.bags_root / bag, labels_1116, split_1116, {ROLE_TRAIN: "dev"}, p_full, live, col
+                args.bags_root / bag,
+                labels_1116,
+                split_1116,
+                {ROLE_TRAIN: "dev"},
+                p_full,
+                live,
+                col,
             )
         col.save(out)
         log.info("dev-2026-11-16: %d scans", len(col.geo))
@@ -342,9 +360,7 @@ def evaluate(
             res = list(ex.map(_task, tasks, chunksize=1))
     else:
         res = [_task(t) for t in tasks]
-    return [
-        dict(res[k * len(ALL_SETS) : (k + 1) * len(ALL_SETS)]) for k in range(len(cfgs))
-    ]
+    return [dict(res[k * len(ALL_SETS) : (k + 1) * len(ALL_SETS)]) for k in range(len(cfgs))]
 
 
 def meets_margin_all(per_set: dict[str, dict[str, Any]]) -> bool:
@@ -463,7 +479,13 @@ def verify(args: argparse.Namespace) -> int:
         ok, mean_ratio = score(per)
         benefit = gp1d.meets_benefit(ratios(per))
         rows.append(
-            {"config": c, "sets": per, "meets_margin": ok, "meets_benefit": benefit, "mean_ratio": mean_ratio}
+            {
+                "config": c,
+                "sets": per,
+                "meets_margin": ok,
+                "meets_benefit": benefit,
+                "mean_ratio": mean_ratio,
+            }
         )
         if ok and benefit and mean_ratio < best_mean:
             best_mean, chosen = mean_ratio, c

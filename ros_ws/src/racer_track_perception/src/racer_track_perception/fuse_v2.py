@@ -181,7 +181,9 @@ def fuse_track_v2(
     return fuse_track_v2_with_outcome(geo, net, cfg)[0]
 
 
-def _fuse_v2(geo: tr.LocalTrackData, net: tr.LocalTrackData, cfg: FuseV2Config) -> tr.LocalTrackData:
+def _fuse_v2(
+    geo: tr.LocalTrackData, net: tr.LocalTrackData, cfg: FuseV2Config
+) -> tr.LocalTrackData:
     ng = int(geo.valid_count)
     if ng < 2:
         return fuse._copy(geo)  # no polyline, no normal: the tracer's station as it is

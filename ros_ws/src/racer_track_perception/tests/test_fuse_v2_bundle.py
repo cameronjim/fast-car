@@ -12,7 +12,6 @@ from bundle_fixture import write_bundle
 from racer_track_perception import bundle as bd
 from racer_track_perception import core, fuse, fuse_v2, geometric, preprocess, refine, selfcheck
 from racer_track_perception import errors as er
-from racer_track_perception.runtime import CircConv1dV0
 from racer_track_perception.vehicle import LiveVehicle
 from scan_fixture import SCAN, corridor_ranges
 from test_fuse_bundle import FIELDS, KIND, fused_arch, perceiver
@@ -89,8 +88,13 @@ def test_a_v1_bundle_with_a_v2_config_is_refused(tmp_path: Path, live: LiveVehic
 def _main_path(p: core.TrackPerceiver, live: LiveVehicle, refined: bool) -> Any:
     ranges = corridor_ranges(live)
     tensor, points = preprocess.scan_to_tensor_and_points(
-        ranges, SCAN["angle_min"], SCAN["angle_increment"], SCAN["range_min"], SCAN["range_max"],
-        live.mount, live.body,
+        ranges,
+        SCAN["angle_min"],
+        SCAN["angle_increment"],
+        SCAN["range_min"],
+        SCAN["range_max"],
+        live.mount,
+        live.body,
     )
     assert p.net is not None
     track = core.net_output_to_track(p.net.forward(tensor), p.sigma_max_m)
@@ -120,8 +124,13 @@ def test_the_v1_path_is_bit_identical_to_main(tmp_path: Path, live: LiveVehicle)
     assert type(p.fuse_cfg) is fuse.FuseConfig
     got = p.process(corridor_ranges(live), **SCAN)
     tensor, points = preprocess.scan_to_tensor_and_points(
-        corridor_ranges(live), SCAN["angle_min"], SCAN["angle_increment"], SCAN["range_min"],
-        SCAN["range_max"], live.mount, live.body,
+        corridor_ranges(live),
+        SCAN["angle_min"],
+        SCAN["angle_increment"],
+        SCAN["range_min"],
+        SCAN["range_max"],
+        live.mount,
+        live.body,
     )
     assert p.net is not None
     net_track = refine.refine_track(
@@ -151,8 +160,13 @@ def test_a_v2_bundle_runs_tracer_net_refinement_and_fusion_v2(
     ranges = corridor_ranges(live)
     got = p.process(ranges, **SCAN)
     tensor, points = preprocess.scan_to_tensor_and_points(
-        ranges, SCAN["angle_min"], SCAN["angle_increment"], SCAN["range_min"], SCAN["range_max"],
-        live.mount, live.body,
+        ranges,
+        SCAN["angle_min"],
+        SCAN["angle_increment"],
+        SCAN["range_min"],
+        SCAN["range_max"],
+        live.mount,
+        live.body,
     )
     assert p.net is not None
     net_track = refine.refine_track(

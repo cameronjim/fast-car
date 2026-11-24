@@ -134,9 +134,7 @@ def test_outcome_order() -> None:
     assert gp1d.combine_outcomes({"14": [1], "22": []}, [], k_ok) == gp1d.OUTCOME_UNDECIDED
     assert gp1d.combine_outcomes({"14": [2], "22": [3]}, [], k_ok) == gp1d.OUTCOME_NO_BETTER
     assert gp1d.combine_outcomes({"14": [], "22": [3]}, [], k_ok) == gp1d.OUTCOME_NO_BETTER
-    assert (
-        gp1d.combine_outcomes(both_ok, [], {"14": True, "22": False}) == gp1d.OUTCOME_K_NOT_KEPT
-    )
+    assert gp1d.combine_outcomes(both_ok, [], {"14": True, "22": False}) == gp1d.OUTCOME_K_NOT_KEPT
     # one set passes everything, the other fails an item other than 2 and 3
     assert gp1d.combine_outcomes({"14": [], "22": [5]}, [], k_ok) == gp1d.OUTCOME_ONE_SET
     assert gp1d.combine_outcomes({"14": [], "22": [4]}, [], k_ok) == gp1d.OUTCOME_ONE_SET
@@ -159,7 +157,10 @@ def test_thresholds_are_read_from_the_yaml_and_match_gp1c() -> None:
     assert doc["gate_k"]["max_mean_loss"] == gp1c.K_MAX_MEAN
     assert doc["gate_k"]["max_p99_loss"] == gp1c.K_MAX_P99
     assert doc["gate"]["item_2"]["max_ec_ratio"] == gp1.ITEM2_MAX_RATIO
-    assert doc["gate"]["item_8_canary"]["max_median_lap_ratio_to_geometric"] == gp1c.CANARY_MAX_LAP_RATIO
+    assert (
+        doc["gate"]["item_8_canary"]["max_median_lap_ratio_to_geometric"]
+        == gp1c.CANARY_MAX_LAP_RATIO
+    )
 
 
 def test_load_prereg_refuses_another_digest_and_other_thresholds(tmp_path: Path) -> None:

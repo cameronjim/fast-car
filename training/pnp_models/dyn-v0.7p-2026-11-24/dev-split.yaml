@@ -1,0 +1,87 @@
+model_id: dyn-v0.7p-2026-11-24
+kind: development split (unregistered, owner decision 29)
+rule: {min_run_s: 15.0, min_wheel_m: 1.0, dev_share: 0.25, guard_s: 2.0, val_share: 0.15, protected_train_share: 0.55}
+protected_bags: [2026-11-23T03-50-32_car_teleop]
+bags:
+  2026-11-16T02-18-54_car_teleop:
+    first_scan_log_time_s: 1794795539.170227
+    parts:
+      - {run: R0, role: train, t_from_s: 276.129, t_to_s: 347.042}
+      - {run: R0, role: val, t_from_s: 347.042, t_to_s: 359.556}
+      - {run: R0, role: dev, t_from_s: 361.556, t_to_s: 390.032}
+  2026-11-16T22-38-47_car_teleop:
+    first_scan_log_time_s: 1794868732.895304
+    parts:
+      - {run: R0, role: train, t_from_s: 40.433, t_to_s: 113.326}
+      - {run: R0, role: val, t_from_s: 113.326, t_to_s: 126.189}
+      - {run: R0, role: dev, t_from_s: 128.189, t_to_s: 157.441}
+  2026-11-16T22-45-39_car_teleop:
+    first_scan_log_time_s: 1794869142.978630
+    parts:
+      - {run: R1, role: train, t_from_s: 262.524, t_to_s: 326.125}
+      - {run: R1, role: val, t_from_s: 326.125, t_to_s: 337.349}
+      - {run: R1, role: dev, t_from_s: 339.349, t_to_s: 364.958}
+      - {run: R2, role: train, t_from_s: 439.281, t_to_s: 458.034}
+      - {run: R2, role: val, t_from_s: 458.034, t_to_s: 461.343}
+      - {run: R2, role: dev, t_from_s: 463.343, t_to_s: 471.364}
+      - {run: R3, role: train, t_from_s: 612.616, t_to_s: 641.107}
+      - {run: R3, role: val, t_from_s: 641.107, t_to_s: 646.134}
+      - {run: R3, role: dev, t_from_s: 648.134, t_to_s: 659.974}
+      - {run: R4, role: train, t_from_s: 733.714, t_to_s: 758.776}
+      - {run: R4, role: val, t_from_s: 758.776, t_to_s: 763.199}
+      - {run: R4, role: dev, t_from_s: 765.199, t_to_s: 775.694}
+      - {run: R5, role: train, t_from_s: 844.788, t_to_s: 857.371}
+      - {run: R5, role: val, t_from_s: 857.371, t_to_s: 859.592}
+      - {run: R5, role: dev, t_from_s: 861.592, t_to_s: 867.193}
+      - {run: R6, role: train, t_from_s: 967.188, t_to_s: 1005.703}
+      - {run: R6, role: val, t_from_s: 1005.703, t_to_s: 1012.500}
+      - {run: R6, role: dev, t_from_s: 1014.500, t_to_s: 1030.271}
+  2026-11-16T23-04-09_car_teleop:
+    first_scan_log_time_s: 1794870253.533206
+    parts:
+      - {run: R0, role: train, t_from_s: 68.336, t_to_s: 131.423}
+      - {run: R0, role: val, t_from_s: 131.423, t_to_s: 142.557}
+      - {run: R0, role: dev, t_from_s: 144.557, t_to_s: 169.963}
+      - {run: R1, role: train, t_from_s: 357.879, t_to_s: 376.862}
+      - {run: R1, role: val, t_from_s: 376.862, t_to_s: 380.212}
+      - {run: R1, role: dev, t_from_s: 382.212, t_to_s: 390.323}
+      - {run: R2, role: train, t_from_s: 401.659, t_to_s: 431.067}
+      - {run: R2, role: val, t_from_s: 431.067, t_to_s: 436.256}
+      - {run: R2, role: dev, t_from_s: 438.256, t_to_s: 450.455}
+      - {run: R3, role: train, t_from_s: 502.341, t_to_s: 528.627}
+      - {run: R3, role: val, t_from_s: 528.627, t_to_s: 533.266}
+      - {run: R3, role: dev, t_from_s: 535.266, t_to_s: 546.241}
+      - {run: R4, role: train, t_from_s: 563.788, t_to_s: 576.756}
+      - {run: R4, role: val, t_from_s: 576.756, t_to_s: 579.045}
+      - {run: R4, role: dev, t_from_s: 581.045, t_to_s: 586.797}
+      - {run: R5, role: train, t_from_s: 603.058, t_to_s: 642.127}
+      - {run: R5, role: val, t_from_s: 642.127, t_to_s: 649.021}
+      - {run: R5, role: dev, t_from_s: 651.021, t_to_s: 667.009}
+  2026-11-23T03-50-32_car_teleop:
+    first_scan_log_time_s: 1795405836.425764
+    parts:
+      - {run: R0, role: train, t_from_s: 405.925, t_to_s: 438.727}
+      - {run: R0, role: val, t_from_s: 438.727, t_to_s: 444.516}
+      - {run: R1, role: train, t_from_s: 594.530, t_to_s: 643.590}
+      - {run: R1, role: val, t_from_s: 643.590, t_to_s: 652.247}
+      - {run: R2, role: train, t_from_s: 838.055, t_to_s: 874.450}
+      - {run: R2, role: val, t_from_s: 874.450, t_to_s: 880.872}
+      - {run: R3, role: train, t_from_s: 1048.207, t_to_s: 1076.501}
+      - {run: R3, role: val, t_from_s: 1076.501, t_to_s: 1081.494}
+      - {run: R4, role: train, t_from_s: 1199.674, t_to_s: 1293.393}
+      - {run: R4, role: val, t_from_s: 1293.393, t_to_s: 1309.931}
+  2026-11-24T04-36-54_car_teleop:
+    first_scan_log_time_s: 1795495017.970514
+    parts:
+      - {run: R0, role: train, t_from_s: 43.032, t_to_s: 69.881}
+      - {run: R0, role: val, t_from_s: 69.881, t_to_s: 74.620}
+      - {run: R0, role: dev, t_from_s: 76.620, t_to_s: 87.815}
+      - {run: R1, role: train, t_from_s: 202.106, t_to_s: 324.742}
+      - {run: R1, role: val, t_from_s: 324.742, t_to_s: 346.384}
+      - {run: R1, role: dev, t_from_s: 348.384, t_to_s: 397.143}
+      - {run: R2, role: train, t_from_s: 671.222, t_to_s: 762.611}
+      - {run: R2, role: val, t_from_s: 762.611, t_to_s: 778.739}
+      - {run: R2, role: dev, t_from_s: 780.739, t_to_s: 817.244}
+      - {run: R3, role: train, t_from_s: 967.843, t_to_s: 1049.457}
+      - {run: R3, role: val, t_from_s: 1049.457, t_to_s: 1063.860}
+      - {run: R3, role: dev, t_from_s: 1065.860, t_to_s: 1098.532}

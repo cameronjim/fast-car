@@ -7,8 +7,10 @@ consumer rebuilds from the output (first n stations). Every vertex of F lies on 
 property asserted first), so F is the polygon through points of the boundary of G. G minus F is then
 (a) the part of G beyond the cross-section of the last output station and before the first one, and
 (b) the slivers between each edge polyline and its chord between consecutive output stations. For a
-corridor of constant width w along a gentle bend, (a) is at most (ng - n + 1) / (ng - 1) of G (one
-station spacing for the trimmed start, one for the end, each worth 1 / (ng - 1)), and (b) is at most
+corridor of constant width w along a gentle bend, (a) is at most (1 + max(ng - n, 0)) / (ng - 1) of G
+(the start may be trimmed by up to one station spacing, the point of the shifted centre nearest
+base_link, and each station the output lacks of the tracer's ng costs one more; stations the
+extension adds beyond ng cover nothing of G), each worth 1 / (ng - 1), and (b) is at most
 the sagitta of a chord of 0.2 m on a bend of at most 0.4 rad/m, s = 0.2^2 * 0.4 / 8 = 2 mm per edge
 over a corridor of at least 0.6 m: 2 * 0.002 / 0.6 < 0.007, doubled by the shift of the normals to
 0.014. The test allows 0.03 (`training/racer_pnp_perception/tests/test_fuse_v2_coverage.py`, which can

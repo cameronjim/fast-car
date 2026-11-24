@@ -55,5 +55,5 @@ def test_coverage_loss_obeys_the_derived_bound(pair) -> None:
     out = fuse_v2.fuse_track_v2(geo, net, cfg)
     ng, n = geo.valid_count, out.valid_count
     result = corridor.compare(geo, out)
-    bound = max(ng - n + 1, 0) / (ng - 1) + SLIVER
+    bound = (1 + max(ng - n, 0)) / (ng - 1) + SLIVER
     assert result["loss"] <= bound

@@ -20,17 +20,35 @@ def host(tmp_path: Path):
     return make_host(tmp_path, World(tmp_path))
 
 
-def test_stack_command_matches_the_runbook_flag_for_flag(host):
-    argv = cmd.stack_run_argv(host, REPO, "car:local", "car-stack", cmd.StackFlags())
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """A checkout with the repo's real config/scheduling.py and scheduling.yaml (brief 52)."""
+    from conftest import copy_scheduling
+
+    path = tmp_path / "car"
+    copy_scheduling(path)
+    return path
+
+
+def real_ulimit() -> int:
+    import yaml
+
+    doc = yaml.safe_load((REPO_ROOT / "config" / "scheduling.yaml").read_text())
+    return doc["rt"]["rtprio_ulimit"]
+
+
+def test_stack_command_matches_the_runbook_flag_for_flag(host, repo):
+    argv = cmd.stack_run_argv(host, repo, "car:local", "car-stack", cmd.StackFlags())
     assert argv == [
         "docker", "run", "-d", "--name", "car-stack", "--network", "host",
         "--user", "1000:1000",
+        "--ulimit", f"rtprio={real_ulimit()}",
         "--group-add", "997", "--group-add", "20",
         "--device", "/dev/ttyUSB0", "--device", "/dev/ttyTHS1",
         "-e", "HOME=/tmp",
         "-v", "/sys/devices/platform/bus@0/3280000.pwm:/sys/devices/platform/bus@0/3280000.pwm",
         "-v", "/sys/devices/platform/bus@0/32c0000.pwm:/sys/devices/platform/bus@0/32c0000.pwm",
-        "-v", "/home/racer/car:/workspace", "-w", "/workspace/ros_ws",
+        "-v", f"{repo}:/workspace", "-w", "/workspace/ros_ws",
         "car:local", "bash", "-lc",
         (
             "source /opt/ros/humble/setup.bash && source install/setup.bash && "
@@ -39,22 +57,57 @@ def test_stack_command_matches_the_runbook_flag_for_flag(host):
     ]  # fmt: skip
 
 
-def test_stack_never_gets_privileged_or_nvidia_runtime(host):
-    argv = cmd.stack_run_argv(host, REPO, "car:local", "car-stack", cmd.StackFlags())
+def test_stack_never_gets_privileged_or_nvidia_runtime(host, repo):
+    argv = cmd.stack_run_argv(host, repo, "car:local", "car-stack", cmd.StackFlags())
     assert "--privileged" not in argv and "--runtime" not in argv
 
 
-def test_missing_devices_are_left_off_when_flag_is_false(host):
+def test_stack_grants_the_yaml_rtprio_limit_and_nothing_else(host, repo):
+    # brief 52: a limit, not a capability (no --cap-add, no --privileged)
+    argv = cmd.stack_run_argv(host, repo, "car:local", "car-stack", cmd.StackFlags())
+    assert argv[argv.index("--ulimit") + 1] == f"rtprio={real_ulimit()}"
+    assert "--cap-add" not in argv and "--privileged" not in argv
+
+
+def test_the_ulimit_follows_the_file(host, repo):
+    (repo / "config" / "scheduling.yaml").write_text(
+        (repo / "config" / "scheduling.yaml")
+        .read_text()
+        .replace(f"rtprio_ulimit: {real_ulimit()}", "rtprio_ulimit: 77")
+    )
+    argv = cmd.stack_run_argv(host, repo, "car:local", "car-stack", cmd.StackFlags())
+    assert "rtprio=77" in argv
+
+
+@pytest.mark.parametrize("what", ["no_yaml", "no_loader", "bad_yaml"])
+def test_a_missing_or_bad_scheduling_file_refuses_the_stack(host, repo, what):
+    if what == "no_yaml":
+        (repo / "config" / "scheduling.yaml").unlink()
+    elif what == "no_loader":
+        (repo / "config" / "scheduling.py").unlink()
+    else:
+        (repo / "config" / "scheduling.yaml").write_text("schema_version: 1\nrt: {}\n")
+    with pytest.raises(cmd.CommandError, match="scheduling"):
+        cmd.stack_run_argv(host, repo, "car:local", "car-stack", cmd.StackFlags())
+
+
+def test_camera_and_perception_commands_carry_no_ulimit(host):
+    assert "--ulimit" not in cmd.camera_run_argv(
+        host, REPO, "car:local", "car-camera", "/dev/video1"
+    )
+
+
+def test_missing_devices_are_left_off_when_flag_is_false(host, repo):
     flags = cmd.StackFlags(lidar=False, vesc=True)
-    argv = cmd.stack_run_argv(host, REPO, "car:local", "car-stack", flags)
+    argv = cmd.stack_run_argv(host, repo, "car:local", "car-stack", flags)
     assert "/dev/ttyUSB0" not in argv and "/dev/ttyTHS1" in argv
     assert argv[-1].endswith("lidar:=false vesc:=true")
 
 
-def test_group_adds_skip_groups_that_do_not_exist(tmp_path):
+def test_group_adds_skip_groups_that_do_not_exist(tmp_path, repo):
     host = make_host(tmp_path, World(tmp_path))
     host._group_lookup = lambda name: None
-    argv = cmd.stack_run_argv(host, REPO, "car:local", "car-stack", cmd.StackFlags())
+    argv = cmd.stack_run_argv(host, repo, "car:local", "car-stack", cmd.StackFlags())
     assert "--group-add" not in argv
 
 

@@ -570,6 +570,7 @@ One command, from `~/car` on the Jetson. No `--privileged`, no `-v /sys:/sys`, n
 cd ~/car
 docker run --rm -it --name car-stack --network host \
   --user "$(id -u):$(id -g)" \
+  --ulimit rtprio=50 \
   --group-add "$(getent group gpio | cut -d: -f3)" \
   -e HOME=/tmp \
   -v /sys/devices/platform/bus@0/3280000.pwm:/sys/devices/platform/bus@0/3280000.pwm \
@@ -579,6 +580,11 @@ docker run --rm -it --name car-stack --network host \
     source /opt/ros/humble/setup.bash && source install/setup.bash
     exec ros2 launch racer_bringup car_teleop.launch.py browser_teleop:=true'
 ```
+
+`--ulimit rtprio=50` (brief 52) lets the unprivileged user ask for `SCHED_FIFO` up to that priority
+and nothing else. It is the value of `rt.rtprio_ulimit` in `config/scheduling.yaml` (the app's
+stack start reads it from there). It does nothing unless a launch is started with `rt_sched:=on`
+(default `off`), see the `rt_sched` note below the pnp launch in the session runbook.
 
 Drop `browser_teleop:=true` to come up with no command source at all (the launch file's
 default), which is what you want for a pure neutral check.

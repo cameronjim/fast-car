@@ -113,8 +113,10 @@ def test_argument_defaults() -> None:
         "require_lap_counter": "false",
         "deskew": "false",
         "shadow_perception_bundle": "",
+        "rt_sched": "off",
         "params_file": "",
     }
+    assert declared["rt_sched"].choices == ["off", "on"]
     assert declared["deskew"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]

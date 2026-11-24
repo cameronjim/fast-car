@@ -331,25 +331,127 @@ class Done:
         self.stdout, self.stderr, self.returncode = out, "", code
 
 
+PS_OUT_FIFO = """    TID CLS RTPRIO  NI PSR COMMAND
+   1234  FF     50   -   3 safety_node
+   1235  FF     50   -   2 safety_node
+   1236  FF     50   -   0 dds.udp.0
+"""
+PS_OUT_OTHER = """    TID CLS RTPRIO  NI PSR COMMAND
+   2000  TS      -   0   1 mppi_planner_node
+   2001  TS      -   0   4 solve thread
+"""
+
+
+def _runner_for(seen=None, safety_ps=PS_OUT_FIFO, planner_ps=PS_OUT_OTHER, planner_pid="2000"):
+    def runner(cmd):
+        if seen is not None:
+            seen.append(list(cmd))
+        if cmd[:2] == ["pgrep", "-f"]:
+            return Done((planner_pid if cmd[2] == "mppi_planner_node" else "1234") + "\n")
+        if cmd[:2] == ["ps", "-L"]:
+            return Done(safety_ps if cmd[-1] == "1234" else planner_ps)
+        return Done("ok\n")
+
+    return runner
+
+
 def test_host_facts_run_only_read_only_commands():
     seen: list[list[str]] = []
-
-    def runner(cmd):
-        seen.append(list(cmd))
-        return Done("1234\n" if cmd[0] == "pgrep" else "ok\n")
-
-    facts = hostfacts.collect(runner, governor_files=["/sys/x/scaling_governor"])
-    assert facts["planner_pids"] == [1234]
-    heads = [c[0] for c in seen]
-    assert heads == ["pgrep", "pgrep", "chrt", "cat", "uptime"]  # lookup, then the logged commands
-    chrt = next(c for c in seen if c[0] == "chrt")
-    assert chrt == ["chrt", "-p", "1234"]  # -p only reads; any other option would set a policy
+    facts = hostfacts.collect(_runner_for(seen), governor_files=["/sys/x/scaling_governor"])
+    assert facts["planner_pids"] == [2000] and facts["safety_pids"] == [1234]
+    assert [c[0] for c in seen] == [
+        "pgrep", "pgrep",  # lookups, planner then safety
+        "pgrep", "pgrep",  # (the logged commands start with the same two)
+        "chrt", "ps", "cat",  # planner 2000: policy, threads, limits
+        "chrt", "ps", "cat",  # safety 1234
+        "cat", "cat", "nvpmodel", "cat", "uptime",
+    ]  # fmt: skip
+    # the allow-list, spelled out: nothing can set a policy, a limit or a file
+    allowed = [
+        lambda c: c[:2] == ["pgrep", "-f"] and len(c) == 3,
+        lambda c: c[0] == "chrt" and c[1] == "-p" and c[2].isdigit() and len(c) == 3,
+        lambda c: c[:5] == ["ps", "-L", "-o", "tid,cls,rtprio,ni,psr,comm", "-p"] and len(c) == 6,
+        lambda c: c[0] == "cat" and all(x.startswith(("/proc/", "/sys/")) for x in c[1:]),
+        lambda c: c == ["nvpmodel", "-q"],
+        lambda c: c == ["uptime"],
+    ]
     for c in seen:
-        assert c[0] in {"pgrep", "chrt", "cat", "uptime"}
-        assert not any(
-            x.startswith(">") or x in {"sudo", "-f", "-r", "-o"} for x in c[1:] if c[0] != "pgrep"
-        )
+        assert any(ok(c) for ok in allowed), c
+        assert not any(x.startswith((">", "<", "|", ";", "&")) or x == "sudo" for x in c)
+    cats = [c for c in seen if c[0] == "cat"]
+    assert ["cat", "/proc/2000/limits"] in cats and ["cat", "/proc/1234/limits"] in cats
+    assert ["cat", "/proc/sys/kernel/sched_rt_runtime_us"] in cats
+    assert ["cat", "/sys/devices/system/cpu/online"] in cats
     assert "NOTE" not in hostfacts.format_text(facts)
+
+
+def test_ps_output_is_parsed_for_a_fifo_and_an_other_process():
+    fifo = hostfacts.parse_ps_threads(PS_OUT_FIFO)
+    assert [(t["tid"], t["cls"], t["rtprio"]) for t in fifo] == [
+        (1234, "FF", 50),
+        (1235, "FF", 50),
+        (1236, "FF", 50),
+    ]
+    other = hostfacts.parse_ps_threads(PS_OUT_OTHER)
+    assert [(t["cls"], t["rtprio"]) for t in other] == [("TS", None), ("TS", None)]
+    assert other[1]["comm"] == "solve thread"  # comm keeps its spaces
+    assert hostfacts.parse_ps_threads("") == []
+
+
+def _sched():
+    return hostfacts.load_scheduling()
+
+
+def _fifo(cls_prio, node="x"):
+    return "    TID CLS RTPRIO  NI PSR COMMAND\n" + "".join(
+        f"   {tid}  {cls}  {prio}   -   0 {node}\n" for tid, cls, prio in cls_prio
+    )
+
+
+def test_scheduling_check_as_configured_off_and_not_recorded():
+    sched = _sched()
+    sp, pp = sched.safety_priority, sched.planner_priority
+    on_facts = hostfacts.collect(
+        _runner_for(None, _fifo([(1, "FF", sp), (2, "FF", sp)]), _fifo([(3, "FF", pp)])),
+        governor_files=[],
+    )
+    check = hostfacts.scheduling_check(on_facts, sched, "on")
+    assert check["verdict"] == "as configured" and check["problems"] == []
+    off_facts = hostfacts.collect(_runner_for(None, PS_OUT_OTHER, PS_OUT_OTHER), governor_files=[])
+    assert hostfacts.scheduling_check(off_facts, sched, "off")["verdict"] == "off"
+    assert hostfacts.scheduling_check(None, sched, "on")["verdict"] == "not recorded"
+    assert hostfacts.scheduling_check({}, sched, "off")["verdict"] == "not recorded"
+    assert "FLAG" not in hostfacts.format_check(check)
+
+
+def test_scheduling_check_mismatches():
+    sched = _sched()
+    sp, pp = sched.safety_priority, sched.planner_priority
+    # one thread of the planner left at SCHED_OTHER
+    f = hostfacts.collect(
+        _runner_for(None, _fifo([(1, "FF", sp)]), _fifo([(3, "FF", pp), (4, "TS", "-")])),
+        governor_files=[],
+    )
+    c = hostfacts.scheduling_check(f, sched, "on")
+    assert c["verdict"] == "MISMATCH" and "thread 4 is TS/None" in c["problems"][0]
+    assert hostfacts.format_check(c).startswith("FLAG Scheduling check")
+    # wrong priority on safety
+    f = hostfacts.collect(
+        _runner_for(None, _fifo([(1, "FF", sp - 1)]), _fifo([(3, "FF", pp)])), governor_files=[]
+    )
+    assert hostfacts.scheduling_check(f, sched, "on")["verdict"] == "MISMATCH"
+    # FIFO although the run said off
+    f = hostfacts.collect(
+        _runner_for(None, _fifo([(1, "FF", sp)]), _fifo([(3, "TS", "-")])), governor_files=[]
+    )
+    assert hostfacts.scheduling_check(f, sched, "off")["verdict"] == "MISMATCH"
+    # a process that was not found is never a pass
+    f = hostfacts.collect(
+        _runner_for(None, PS_OUT_FIFO, PS_OUT_OTHER, planner_pid=""), governor_files=[]
+    )
+    assert hostfacts.scheduling_check(f, sched, "on")["verdict"] == "not recorded"
+    with pytest.raises(ValueError):
+        hostfacts.scheduling_check(f, sched, "maybe")
 
 
 def test_host_facts_without_a_planner_process_and_a_failing_command():
@@ -361,6 +463,7 @@ def test_host_facts_without_a_planner_process_and_a_failing_command():
     facts = hostfacts.collect(runner, governor_files=[])
     assert facts["planner_pids"] == [] and "NOTE" in hostfacts.format_text(facts)
     assert facts["entries"][-1]["returncode"] is None
+    assert facts["scheduling"]["safety_node"]["processes"] == {}
 
 
 # ------------------------------------------------------------------------------ the fixture
@@ -679,3 +782,36 @@ def test_the_r2_fixture_runs_the_echo_part_of_the_timing_chain():
     assert 0.0 <= r["share_identified"] <= 1.0
     lat = whatif.latched_from_bag(bag)
     assert len(lat.stamp) == len(bag.drv_stamp)
+
+
+def test_cli_host_facts_and_session_report_the_scheduling_check(tmp_path, monkeypatch, capsys):
+    from pnp_session import session_checks
+
+    sched = hostfacts.load_scheduling()
+    sp, pp = sched.safety_priority, sched.planner_priority
+    monkeypatch.setattr(
+        hostfacts,
+        "default_runner",
+        _runner_for(None, _fifo([(1, "FF", sp)]), _fifo([(3, "FF", pp)])),
+    )
+    out = tmp_path / "h"
+    assert cli.main(["host-facts", "--out-dir", str(out), "--rt-sched", "on"]) == 0
+    facts = json.loads((out / "host_facts.json").read_text())
+    assert facts["scheduling_check"]["verdict"] == "as configured"
+    assert "Scheduling check (rt_sched on): as configured" in (out / "host_facts.txt").read_text()
+
+    monkeypatch.setattr(session_checks, "run", lambda bags: ({"schema": "s", "bags": []}, "text\n"))
+    rep = tmp_path / "r.json"
+    args = ["session", "--bag", "x", "--out", str(rep)]
+    assert cli.main([*args, "--host-facts", str(out / "host_facts.json"), "--rt-sched", "on"]) == 0
+    assert json.loads(rep.read_text())["scheduling_check"]["verdict"] == "as configured"
+    # off while the processes are FIFO: flagged
+    assert cli.main([*args, "--host-facts", str(out / "host_facts.json")]) == 0
+    assert json.loads(rep.read_text())["scheduling_check"]["verdict"] == "MISMATCH"
+    assert "FLAG Scheduling check" in capsys.readouterr().out
+    # no facts file, or an unreadable one: not recorded, never a pass
+    assert cli.main(args) == 0
+    assert json.loads(rep.read_text())["scheduling_check"]["verdict"] == "not recorded"
+    (tmp_path / "bad.json").write_text("{")
+    assert cli.main([*args, "--host-facts", str(tmp_path / "bad.json"), "--rt-sched", "on"]) == 0
+    assert json.loads(rep.read_text())["scheduling_check"]["verdict"] == "not recorded"

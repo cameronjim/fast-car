@@ -79,8 +79,10 @@ Options that are measurements, not part of the command path:
 
 from __future__ import annotations
 
+import importlib.util
 import math
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -101,6 +103,20 @@ from launch.launch_context import LaunchContext
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+_RT_SCHED_FILE = Path(__file__).resolve().with_name("rt_sched.py")
+
+
+def _load_rt_sched():
+    # rt_sched.py (brief 52), loaded by path: launch files are not a package
+    name = "racer_bringup_rt_sched"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, _RT_SCHED_FILE)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
 
 BACKENDS = ("net", "geometric")
 LAP_SOURCES = ("start_scan", "map_pose", "camera", "truth")
@@ -254,6 +270,7 @@ def nodes_for(
     planner_params: dict,
     params_file: str,
     scan_remapping: tuple[str, str] | None = None,
+    planner_prefix: list | None = None,
 ) -> tuple[Node, Node]:
     # A params file comes first so the explicit launch values above it win. `scan_remapping`
     # (deskew:=true) points each node's /scan subscription at /pnp/scan_deskewed; None leaves the
@@ -275,6 +292,7 @@ def nodes_for(
         output="screen",
         parameters=[*base, planner_params],
         remappings=remappings,
+        prefix=planner_prefix,  # None (rt_sched off) leaves the node exactly as it was
     )
     return perception, planner
 
@@ -743,8 +761,14 @@ def _make_actions(context: LaunchContext) -> list:
         raise RuntimeError(RECORDER_REFUSAL)
     if require_counter and not lap_counter and not lap_counter_in_graph(LAP_COUNTER_WAIT_S):
         raise RuntimeError(LAP_COUNTER_REFUSAL)
+    rt = _load_rt_sched()
+    rt_mode = rt.check_mode(LaunchConfiguration("rt_sched", default="off").perform(context))
     perception, planner = nodes_for(
-        perception_params, planner_params, arg("params_file"), scan_remapping
+        perception_params,
+        planner_params,
+        arg("params_file"),
+        scan_remapping,
+        rt.prefix_for("mppi_planner_node") if rt_mode == "on" else None,
     )
     stop_all = [
         RegisterEventHandler(
@@ -759,6 +783,14 @@ def _make_actions(context: LaunchContext) -> list:
     gated = (require_counter and lap_counter) or camera_topic is not None
     driver = [perception] if gated else [perception, planner]
     actions = [*driver, *stop_all, *[LogInfo(msg=f"[pnp.launch.py] {m}") for m in log]]
+    if rt_mode == "on":
+        # brief 52, rt_sched:=on only (nothing is added with off): the planner's thread check and
+        # the refusal line; the planner's own exit already shuts the launch down (stop_all). First
+        # in the list: the start handler must exist before the planner's start event.
+        actions = [
+            *rt.all_actions(planner, "mppi_planner_node", "mppi_planner_node", False),
+            *actions,
+        ]
     if deskew_node is not None:
         actions += [
             deskew_node,
@@ -1014,6 +1046,18 @@ def generate_launch_description() -> LaunchDescription:
                 description=(
                     "A perception bundle for a SECOND, shadow perception node (net backend) "
                     "publishing /pnp/shadow/local_track. Nothing subscribes to it."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "rt_sched",
+                default_value="off",
+                choices=["off", "on"],
+                description=(
+                    "Brief 52. on: start mppi_planner_node behind `chrt -f <priority>` "
+                    "(config/scheduling.yaml) and check every thread of it after start. The "
+                    "launch REFUSES to start (no fallback to SCHED_OTHER) when the policy is not "
+                    "granted, so the stack container needs --ulimit rtprio=<n>. off (default): "
+                    "the planner starts exactly as before, and the launch only logs its policy."
                 ),
             ),
             DeclareLaunchArgument(

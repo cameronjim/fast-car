@@ -114,7 +114,9 @@ docs/notes/first-boot-runbook.md "First mapping session".
 """
 
 import datetime
+import importlib.util
 import os
+import sys
 
 from ament_index_python.resources import has_resource
 from launch import LaunchDescription
@@ -154,6 +156,20 @@ _MAPPING_LAUNCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 _LOCALIZATION_LAUNCH_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "localization.launch.py"
 )
+
+#: rt_sched.py (brief 52), found the same way: loaded by path because launch files are not a package.
+_RT_SCHED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rt_sched.py")
+
+
+def _load_rt_sched():
+    name = "racer_bringup_rt_sched"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, _RT_SCHED_FILE)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
 
 #: FIRST-DRIVE TELEOP PROFILE (GitHub issue #72). keyboard_teleop_node's tap sizes default to
 #: a derivation from vehicle_params (one 50 Hz control period at the vehicle's maximum
@@ -712,11 +728,26 @@ def generate_launch_description() -> LaunchDescription:
             "bit-identical either way (racer_safety test/ab)."
         ),
     )
+    rt = _load_rt_sched()
+    rt_sched_arg = DeclareLaunchArgument(
+        "rt_sched",
+        default_value=rt.RT_SCHED_DEFAULT,
+        choices=rt.RT_SCHED_CHOICES,
+        description=(
+            "Brief 52. on: start safety_node behind `chrt -f <priority>` (config/scheduling.yaml) "
+            "and check every thread of it after start. The launch REFUSES to start (no fallback to "
+            "SCHED_OTHER) when the policy is not granted, so the container needs --ulimit "
+            "rtprio=<n>. off (default): safety_node starts exactly as before, and the launch only "
+            "logs its scheduling policy. No racer_safety source is involved."
+        ),
+    )
     safety_node = Node(
         package="racer_safety",
         executable="safety_node",
         name="safety_node",
         output="screen",
+        # empty with rt_sched off (the global launch-prefix is kept, as with no prefix at all)
+        prefix=rt.prefix_for("safety_node"),
         parameters=[
             {
                 "publish_cycle_record": ParameterValue(
@@ -853,6 +884,7 @@ def generate_launch_description() -> LaunchDescription:
             throttle_pwm_channel_arg,
             drive_timeout_s_arg,
             safety_cycle_record_arg,
+            rt_sched_arg,
             record_arg,
             bag_dir_arg,
             bag_storage_arg,
@@ -885,6 +917,8 @@ def generate_launch_description() -> LaunchDescription:
             # Mapping or localisation (both off by default), after the recorder like every other
             # sensor-side include.
             OpaqueFunction(function=_localization_actions),
+            # rt_sched:=on only (an inert entity otherwise); before the node it watches
+            rt.actions_if_on(safety_node, "safety_node", "safety_node"),
             safety_node,
             pwm_output_node,
             teleop_node,

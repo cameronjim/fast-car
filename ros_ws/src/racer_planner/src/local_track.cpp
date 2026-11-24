@@ -87,6 +87,17 @@ int TrackProjector::locate(double x, double y) const {
   return best;
 }
 
+double TrackProjector::curvature(int i) const {
+  if (n_ < 3) return 0.0;
+  // Interior stations 1 .. n-2 have a segment on each side; the ends take their neighbour's.
+  const int k = std::min(std::max(i, 1), n_ - 2);
+  const double cross = ux_[k - 1] * uy_[k] - uy_[k - 1] * ux_[k];
+  const double dot = ux_[k - 1] * ux_[k] + uy_[k - 1] * uy_[k];
+  const double len = 0.5 * (len_[k - 1] + len_[k]);
+  if (!(len > 1e-9)) return 0.0;
+  return std::fabs(std::atan2(cross, dot)) / len;
+}
+
 Projection TrackProjector::project(double x, double y, int* hint) const {
   Projection out;
   if (n_ < 2) return out;

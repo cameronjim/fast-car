@@ -60,6 +60,7 @@ REPO_ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO_ROOT / "tools" / "track_session"))
 
+import dv1_measures
 import pnp_tick_summary as pts
 import reactive_bench_runner as base
 from truth_lap_source import FaultPlan, TruthLapSource
@@ -1210,6 +1211,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     tracker_resets: list[float] = []  # stamps of ground-truth teleports (the tracker restarts)
     lap_events: list[dict] = []
     guidance_log: list[tuple] = []
+    bound_log = dv1_measures.BoundLog()  # brief 53: the published bound per lap and station
     cap_series: list[tuple[float, float]] = []  # (t, cap) at every change of the guidance cap
     cap_last = [math.nan]
     oracle: TruthLapSource | None = (
@@ -1306,6 +1308,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                         len(m.s_m),
                     )
                 )
+                bound_log.add(int(m.lap_index), float(m.v_cap_mps), list(m.s_m), list(m.v_ref_mps))
 
             def on_lap_status(m) -> None:
                 lap_status.clear()
@@ -1659,6 +1662,26 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     )
                 )
                 result["startup_reset_done_s"] = reset_done[0] if reset_done else None
+                # brief 53 (battery B11): per truth lap clearance and speed command, the longest
+                # stop, the published bound per lap and station
+                c0 = result.get("gt_lap1_start_s")
+                crossings = result.get("gt_lap_crossings_s") or []
+                result["min_body_clearance_by_lap_m"] = dv1_measures.clearance_by_lap(
+                    recording.odom,
+                    c0,
+                    crossings,
+                    lambda x, y, yaw: bm.body_clearance_m(
+                        x, y, yaw, box, synthetic.walls, synthetic.wall_thickness_m
+                    ),
+                    stride=base.CLEARANCE_CHECK_STRIDE,
+                )
+                by_lap, top = dv1_measures.max_command_by_lap(recording.drive_raw, c0, crossings)
+                result["max_cmd_speed_by_lap_mps"] = by_lap
+                result["max_cmd_speed_mps"] = top
+                result["longest_stop_s"] = dv1_measures.longest_stop_s(
+                    recording.odom, c0, crossings[-1] if crossings else None
+                )
+                result["bound_by_lap"] = bound_log.to_json()
                 # brief 51c: the start of the run, so a start failure is explained by the report
                 result["start_trace"] = start_trace(
                     lap_node_first_status_s=lap_first_status[0] if lap_first_status else None,

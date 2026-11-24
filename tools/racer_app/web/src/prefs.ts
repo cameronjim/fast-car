@@ -158,8 +158,8 @@ export function pnpErrors(p: Prefs["pnp"], options: Options | null): FieldErrors
   } else if (on && !lapModeOffered(options, p.lap_mode)) {
     e.lap_mode = `lap_mode=${p.lap_mode} is not available in this build`;
   }
-  if (p.lap_mode === "v1" && p.lap_source !== "start_scan") {
-    e.lap_source = "pnp lap mode v1 needs lap source start_scan";
+  if (p.lap_mode === "v1" && p.lap_source !== "start_scan" && p.lap_source !== "camera") {
+    e.lap_source = "pnp lap mode v1 needs lap source start_scan or camera";
   } else if (on && !lapSourceOffered(options, p.lap_source)) {
     e.lap_source = `lap_source=${p.lap_source} is not available in this build`;
   }

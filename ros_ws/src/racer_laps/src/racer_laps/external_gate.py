@@ -81,6 +81,11 @@ DOUBTFUL_REASONS = (
 )
 
 
+#: Owner decision 24: a doubtful lap whose reasons all lie in this set is a camera fact, not a
+#: driving fact; with a clean drive it holds the speed cap (see `CapSchedule.finish_lap`).
+CAMERA_ONLY_REASONS = frozenset({"length", "heading", "sequence"})
+
+
 @dataclass(frozen=True)
 class ExternalConfig:
     """The `source_rule` block of `evaluation/prereg/pnp-v0.5-laps-camera.yaml`. Fixed by the
@@ -576,6 +581,7 @@ class ExternalLapGate:
             n_candidates=0,
             spread_m=0.0,
             line_source=self._source_name,
+            reasons=tuple(reasons),
         )
         if doubtful:
             self.missed_laps.append(self._laps)

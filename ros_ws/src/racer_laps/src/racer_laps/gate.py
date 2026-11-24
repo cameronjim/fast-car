@@ -301,6 +301,8 @@ class GateCrossing:
     n_candidates: int = 0  # STRONG matches the crossing was placed from
     spread_m: float = 0.0  # max minus min of their line estimates, wheel distance
     line_source: str = "start_scan"  # start_scan, anchor or winding (see StartScanGate)
+    #: The failed reasons of a doubtful lap (external gate only; empty for the other gates).
+    reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,8 @@
 
 Lap 1 runs at `v_cap_start_mps`. After a clean lap the cap rises one step, up to the ceiling.
 After an unclean lap it drops one step (not below the start value), and the next rise needs two
-clean laps in a row. The cap only changes in `finish_lap`, so it never changes mid lap.
+clean laps in a row. A lap that is `hold` (owner decision 24: doubtful only by a camera reason with
+a clean drive) changes nothing: no step, the clean streak kept, and it does not count as clean. The cap only changes in `finish_lap`, so it never changes mid lap.
 
 The cap is `min(ceiling, start + level * step)` with an integer `level`, so repeated steps do not
 accumulate float error and a ceiling that is not on the step grid is still reached exactly.
@@ -46,7 +47,7 @@ class CapSchedule:
         self.step_mps = float(step_mps)
         self.ceiling_mps = float(ceiling_mps)
         self._max_level = math.ceil((self.ceiling_mps - self.start_mps) / self.step_mps - 1e-9)
-        self._history: list[tuple[int, bool]] = []
+        self._history: list[tuple[int, bool, bool]] = []
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -58,26 +59,30 @@ class CapSchedule:
     def cap_mps(self) -> float:
         return min(self.ceiling_mps, self.start_mps + self._level * self.step_mps)
 
-    def finish_lap(self, clean: bool, lap_index: int | None = None) -> float:
+    def finish_lap(self, clean: bool, lap_index: int | None = None, hold: bool = False) -> float:
         """Record the outcome of the lap just driven. Returns the cap for the next lap.
-        `lap_index` (optional) lets `drop_lap` take the lap back out later."""
+        `lap_index` (optional) lets `drop_lap` take the lap back out later. `hold` (never with
+        `clean`) leaves the cap and the clean streak as they are."""
+        hold = bool(hold) and not clean
         if lap_index is not None:
-            self._history.append((lap_index, bool(clean)))
-        self._apply(clean)
+            self._history.append((lap_index, bool(clean), hold))
+        self._apply(clean, hold)
         return self.cap_mps
 
     def drop_lap(self, lap_index: int) -> float:
         """Forget a lap that turned out not to be one (a suspect closure): replay the outcomes of
         the remaining indexed laps from the start. Returns the cap for the next lap."""
-        if not any(i == lap_index for i, _ in self._history):
+        if not any(i == lap_index for i, _, _ in self._history):
             return self.cap_mps
-        self._history = [(i, c) for i, c in self._history if i != lap_index]
+        self._history = [(i, c, h) for i, c, h in self._history if i != lap_index]
         self._reset_state()
-        for _i, clean in self._history:
-            self._apply(clean)
+        for _i, clean, hold in self._history:
+            self._apply(clean, hold)
         return self.cap_mps
 
-    def _apply(self, clean: bool) -> None:
+    def _apply(self, clean: bool, hold: bool = False) -> None:
+        if hold:
+            return
         if clean:
             self._clean_streak += 1
             if (not self._needs_two) or self._clean_streak >= 2:

@@ -104,3 +104,51 @@ def test_bad_parameters_are_refused(start: float, step: float, ceiling: float) -
 )
 def test_clean_criteria(brakes: int, non_driving: bool, clearance: float, expected: bool) -> None:
     assert lap_is_clean(brakes, non_driving, clearance, 0.08) is expected
+
+
+# -- owner decision 24: a held lap changes nothing --------------------------------------------------
+
+H = "hold"
+
+
+def _run(outcomes: list[object]) -> list[float]:
+    sched = CapSchedule(0.5, 0.1, 1.0)
+    caps = [sched.cap_mps]
+    for o in outcomes:
+        caps.append(sched.finish_lap(o is C, hold=o == H))
+    return caps
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "caps"),
+    [
+        pytest.param([C, C, H], [0.5, 0.6, 0.7, 0.7], id="hold-holds"),
+        pytest.param([C, C, H, C], [0.5, 0.6, 0.7, 0.7, 0.8], id="hold-keeps-no-two-clean-rule"),
+        pytest.param(
+            [C, C, U, H, C, C], [0.5, 0.6, 0.7, 0.6, 0.6, 0.6, 0.7], id="hold-is-not-a-clean-lap"
+        ),
+        pytest.param(
+            [C, C, U, C, H, C], [0.5, 0.6, 0.7, 0.6, 0.6, 0.6, 0.7], id="hold-keeps-the-streak"
+        ),
+        pytest.param([H, H, H], [0.5, 0.5, 0.5, 0.5], id="hold-at-the-start"),
+        pytest.param([C, C, H, U], [0.5, 0.6, 0.7, 0.7, 0.6], id="unclean-after-hold-steps"),
+    ],
+)
+def test_hold_sequences(outcomes: list[object], caps: list[float]) -> None:
+    assert _run(outcomes) == pytest.approx(caps)
+
+
+def test_hold_never_goes_with_clean() -> None:
+    sched = CapSchedule(0.5, 0.1, 1.0)
+    assert sched.finish_lap(True, hold=True) == pytest.approx(0.6)  # hold is ignored when clean
+    assert sched.finish_lap(True, hold=True) == pytest.approx(0.7)
+
+
+def test_drop_lap_replays_holds() -> None:
+    sched = CapSchedule(0.5, 0.1, 1.0)
+    sched.finish_lap(True, 1)
+    sched.finish_lap(True, 2)
+    sched.finish_lap(False, 3, hold=True)
+    sched.finish_lap(True, 4)
+    assert sched.cap_mps == pytest.approx(0.8)
+    assert sched.drop_lap(2) == pytest.approx(0.7)  # replay: C, hold, C

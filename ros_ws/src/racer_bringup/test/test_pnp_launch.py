@@ -115,11 +115,13 @@ def test_argument_defaults() -> None:
         "shadow_perception_bundle": "",
         "rt_sched": "off",
         "dynamics_adaptation": "false",
+        "dynamics_fast_mlp": "false",
         "params_file": "",
     }
     assert declared["rt_sched"].choices == ["off", "on"]
     assert declared["deskew"].choices == ["true", "false"]
     assert declared["dynamics_adaptation"].choices == ["true", "false"]
+    assert declared["dynamics_fast_mlp"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
     assert declared["lap_source"].choices == ["start_scan", "map_pose", "camera", "truth"]
@@ -309,6 +311,35 @@ def test_dynamics_adaptation_bad_value_is_refused(monkeypatch) -> None:
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
     with pytest.raises(RuntimeError):
         m._make_actions(_context(dynamics_adaptation="yes"))
+
+
+def test_dynamics_fast_mlp_is_off_by_default_and_adds_nothing(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    for ctx in (_context(), _context(dynamics_fast_mlp="false")):
+        planner = next(
+            a for a in m._make_actions(ctx) if getattr(a, "node_package", "") == "racer_planner"
+        )
+        assert m.FAST_MLP_PARAM not in _flat_params(planner)
+
+
+def test_dynamics_fast_mlp_true_switches_the_planner_parameter_on(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(_context(dynamics_fast_mlp="true"))
+    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    assert _flat_params(planner)[m.FAST_MLP_PARAM] is True
+    perception = next(
+        a for a in actions if getattr(a, "node_package", "") == "racer_track_perception"
+    )
+    assert m.FAST_MLP_PARAM not in _flat_params(perception)
+
+
+def test_dynamics_fast_mlp_bad_value_is_refused(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    with pytest.raises(RuntimeError):
+        m._make_actions(_context(dynamics_fast_mlp="yes"))
 
 
 def test_lap_memory_is_off_by_default(monkeypatch) -> None:

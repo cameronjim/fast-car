@@ -56,8 +56,10 @@ constexpr double kGoldenTolerance = 1e-4;
 
 // requested_v_max_mps is the speed cap the node wants to run; above io.validity.v_max_mps it is
 // a ValidityExceeded refusal, never a clamp.
+// fast_mlp sets DynamicsParams::fast_mlp of the loaded params before the golden rollouts are
+// checked, so the check runs the forward pass the node will use.
 LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeometry& geometry,
-                                double requested_v_max_mps);
+                                double requested_v_max_mps, bool fast_mlp = false);
 
 // Runs every rollout of a golden CSV through the model from its first row and compares each
 // state. Returns a GoldenRolloutMismatch refusal on any problem. max_abs_error may be null.

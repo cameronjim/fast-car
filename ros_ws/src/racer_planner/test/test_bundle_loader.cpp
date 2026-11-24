@@ -321,3 +321,29 @@ TEST(BundleLoader, DynCar20261112WithADeadZoneLoadsAndReproducesTheGoldenRollout
   ASSERT_TRUE(mismatch.has_value());
   EXPECT_EQ(mismatch->code, RefusalCode::GoldenRolloutMismatch);
 }
+
+// The fast MLP mode (launch dynamics_fast_mlp) is checked against the same golden rollouts: the
+// contract 1 fixture's residual and the contract 2 fixture's learned ground block reproduce them
+// within the tolerance, the loaded params carry the mode, and a bundle the exact mode refuses is
+// still refused.
+TEST(BundleLoader, FastMlpModeReproducesTheGoldenRolloutsOfBothContracts) {
+  for (const std::string& dir : {test::fixture_dir(), test::fixture_v2_dir()}) {
+    const auto geometry = test::fixture_geometry(dir);
+    const auto exact = load_dynamics_bundle(dir, geometry, 0.5, false);
+    const auto fast = load_dynamics_bundle(dir, geometry, 0.5, true);
+    ASSERT_TRUE(exact.ok()) << dir << ": " << (exact.refusal ? exact.refusal->message : "");
+    ASSERT_TRUE(fast.ok()) << dir << ": " << (fast.refusal ? fast.refusal->message : "");
+    EXPECT_FALSE(exact.bundle->params.fast_mlp);
+    EXPECT_TRUE(fast.bundle->params.fast_mlp);
+    EXPECT_TRUE(fast.bundle->params.residual.enabled || fast.bundle->params.ground.learned_enabled)
+        << dir;
+    EXPECT_LT(fast.bundle->golden_max_abs_error, kGoldenTolerance) << dir;
+    // The two modes differ by rounding only: the worst golden error moves by far less than the
+    // tolerance.
+    EXPECT_NEAR(fast.bundle->golden_max_abs_error, exact.bundle->golden_max_abs_error, 1e-9) << dir;
+  }
+  BundleCopy b;
+  b.edit_manifest("steer_gain_left: 1.1", "steer_gain_left: 1.2");
+  const auto r = load_dynamics_bundle(b.dir(), test::fixture_geometry(), 0.5, true);
+  expect_refusal(r, RefusalCode::GoldenRolloutMismatch);
+}

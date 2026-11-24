@@ -116,6 +116,13 @@ struct DynamicsParams {
   GroundMotionParams ground;
   double v_min_mps = 0.0;
   double v_max_mps = 0.9;
+  // Not part of the bundle: how the node evaluates the learned MLP (the 1.x residual and the
+  // contract 2 ground block). false (the default): std::tanh and the plain summation order, bit
+  // for bit the forward pass every pinned test recorded. true (launch dynamics_fast_mlp, default
+  // off): a vectorised polynomial tanh and a split output sum, a few 1e-16 from the plain pass
+  // and about 2.6x faster solves with dyn-v0.7p. The golden rollouts are checked with the
+  // mode the node runs (load_dynamics_bundle), so the bundle contract holds in both.
+  bool fast_mlp = false;
 };
 
 inline double clamp_double(double x, double lo, double hi) {
@@ -181,7 +188,7 @@ class DynamicsModel {
   // The yaw rate the step uses for state (v, delta) under command u: the nominal rate plus the
   // residual's yaw term when the bundle enables one. Dead reckoning (EgoMotion) calls this so the
   // scan frame compensation and the rollouts share one motion model. Without a residual it is
-  // exactly yaw_rate(v, delta). Not thread safe (the residual has scratch space).
+  // exactly yaw_rate(v, delta).
   double yaw_rate_for(double v, double delta, double speed_cmd, double steering_cmd) const {
     double w = yaw_rate(v, delta);
     if (residual_enabled_) {
@@ -193,8 +200,7 @@ class DynamicsModel {
   }
   bool has_residual() const { return residual_enabled_; }
 
-  // Residual MLP: output_scale * MLP((inputs - mean) / std). Preallocated scratch, not
-  // thread safe: one model instance per thread.
+  // Residual MLP: output_scale * MLP((inputs - mean) / std). No shared scratch (thread safe).
   void residual(double v, double delta, double speed_cmd, double steering_cmd,
                 double out[kMlpOut]) const;
 
@@ -214,8 +220,7 @@ class DynamicsModel {
   const SpeedCorrection& speed_correction() const { return correction_; }
 
   // Contract 2: alpha (ground distance per wheel distance) and rho (relative yaw correction) of a
-  // state and the command acting on it. Contract 1: alpha = 1, rho = 0. Not thread safe when the
-  // learned block is on (scratch space), like residual().
+  // state and the command acting on it. Contract 1: alpha = 1, rho = 0.
   void ground_factors(double v, double delta, double speed_cmd, double steering_cmd, double* alpha,
                       double* rho) const;
 
@@ -240,8 +245,14 @@ class DynamicsModel {
                     double* yaw_rate_out, double* alpha_out) const;
   // Bilinear table lookup, constant outside the grid (the Python reference's table_alpha).
   double table_alpha(double delta, double v) const;
-  // 4 -> 32 -> 32 -> 2 network on already standardised inputs, raw output.
-  void mlp(const double* weights, const double in[kMlpIn], double out[kMlpOut]) const;
+  // 4 -> 32 -> 32 -> 2 network on already standardised inputs, raw output. `packed` is the
+  // bundle's weights in the layout of pack_mlp_weights (dynamics_model.cpp): the hidden layers
+  // transposed so each layer is one loop over the 32 units, vectorised by the compiler, with the
+  // same operations per unit as the plain loop. kFast false: std::tanh and the output sums in
+  // order, bit for bit the plain forward pass. kFast true (fast_mlp): see DynamicsParams.
+  template <bool kFast>
+  static void mlp(const double* packed, const double in[kMlpIn], double out[kMlpOut]);
+  void run_mlp(const double* packed, const double in[kMlpIn], double out[kMlpOut]) const;
 
   DynamicsParams params_;
   double dt_;
@@ -254,8 +265,9 @@ class DynamicsModel {
   SpeedCorrection correction_{};
   double correction_bias_dt_ = 0.0;
   bool correction_active_ = false;
-  mutable std::array<double, kMlpHidden> h1_;
-  mutable std::array<double, kMlpHidden> h2_;
+  // The residual's and the ground block's weights packed for mlp() (zeros when absent).
+  alignas(16) std::array<double, kMlpWeightCount> residual_packed_{};
+  alignas(16) std::array<double, kMlpWeightCount> ground_packed_{};
 };
 
 }  // namespace racer_planner

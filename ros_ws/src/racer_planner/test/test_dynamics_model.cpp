@@ -293,10 +293,13 @@ TEST(DynamicsModel, DisabledResidualIsIgnoredEvenWithWeights) {
   EXPECT_EQ(a.yaw, b.yaw);
 }
 
-// The residual's hidden tanh is computed as (e - 1) / (e + 1) for speed: it must equal a plain
-// std::tanh forward pass to rounding, for inputs from tiny to saturating, and pass a NaN on.
-TEST(DynamicsModel, ResidualEqualsAStdTanhForwardPass) {
+// The residual's forward pass is vectorised (transposed hidden layers; in the fast mode also a
+// polynomial exp based tanh and a split output sum): in both modes it must equal a plain
+// std::tanh forward pass in the bundle's layout to rounding, for inputs from tiny to saturating
+// and infinite, and pass a NaN on.
+static void expect_residual_equals_a_std_tanh_forward_pass(bool fast_mlp) {
   DynamicsParams p = nominal();
+  p.fast_mlp = fast_mlp;
   p.residual.enabled = true;
   p.residual.input_mean = {0.5, 0.0, 0.6, 0.0};
   p.residual.input_std = {0.4, 0.2, 0.4, 0.2};
@@ -345,7 +348,25 @@ TEST(DynamicsModel, ResidualEqualsAStdTanhForwardPass) {
       EXPECT_NEAR(got[1], want[1], 1e-12);
     }
   }
+  // Infinite inputs saturate the first layer (tanh(+-inf) = +-1), the output stays finite.
+  for (double inf : {INFINITY, -INFINITY}) {
+    const double in4[4] = {inf, 0.1, 0.6, 0.2};
+    double got[2], want[2];
+    m.residual(in4[0], in4[1], in4[2], in4[3], got);
+    reference(in4, want);
+    ASSERT_TRUE(std::isfinite(want[0]) && std::isfinite(want[1]));
+    EXPECT_NEAR(got[0], want[0], 1e-12);
+    EXPECT_NEAR(got[1], want[1], 1e-12);
+  }
   double out[2];
   m.residual(std::nan(""), 0.0, 0.0, 0.0, out);
   EXPECT_TRUE(std::isnan(out[0]) && std::isnan(out[1]));
+}
+
+TEST(DynamicsModel, ResidualEqualsAStdTanhForwardPass) {
+  expect_residual_equals_a_std_tanh_forward_pass(false);
+}
+
+TEST(DynamicsModel, FastResidualEqualsAStdTanhForwardPass) {
+  expect_residual_equals_a_std_tanh_forward_pass(true);
 }

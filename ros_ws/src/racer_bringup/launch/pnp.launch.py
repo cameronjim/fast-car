@@ -51,6 +51,10 @@ Prototype switch (owner decision 29, default off):
   fitted at run time from /odom/wheel, status on `/pnp/dynamics/adaptation`, reset by an empty
   message on `/pnp/dynamics/adaptation_reset`. With false the planner gets no extra parameter and
   runs exactly as before. Independent of which `dynamics_bundle` is loaded.
+* `dynamics_fast_mlp` (default false): the planner evaluates the bundle's learned MLP (the
+  dyn-v0.7p residual) with a vectorised tanh, a few 1e-16 from the exact pass, checked against the
+  bundle's golden rollouts at load; about 2.6x faster solves with dyn-v0.7p. No effect on a
+  bundle without a learned block (dyn-v0.1). With false the planner gets no extra parameter.
 
 Options that are measurements, not part of the command path:
 
@@ -258,6 +262,15 @@ def adaptation_parameters(enabled: bool) -> dict:
     """Planner parameters of the online speed adaptation: none when off, so a launch without it
     starts the planner exactly as before."""
     return {ADAPTATION_PARAM: True} if enabled else {}
+
+
+FAST_MLP_PARAM = "dynamics_fast_mlp"
+
+
+def fast_mlp_parameters(enabled: bool) -> dict:
+    """Planner parameter of the fast MLP mode: none when off, so a launch without it starts the
+    planner exactly as before."""
+    return {FAST_MLP_PARAM: True} if enabled else {}
 
 
 def deskew_parameters() -> dict:
@@ -717,6 +730,8 @@ def _make_actions(context: LaunchContext) -> list:
     )
     adaptation = LaunchConfiguration(ADAPTATION_PARAM, default="false").perform(context).strip()
     planner_params.update(adaptation_parameters(_bool(adaptation, ADAPTATION_PARAM)))
+    fast_mlp = LaunchConfiguration(FAST_MLP_PARAM, default="false").perform(context).strip()
+    planner_params.update(fast_mlp_parameters(_bool(fast_mlp, FAST_MLP_PARAM)))
     lap_memory = _bool(arg("lap_memory"), "lap_memory")
     deskew_on = _bool(arg("deskew"), "deskew")
     scan_remapping = DESKEW_REMAPPING if deskew_on else None
@@ -1086,6 +1101,16 @@ def generate_launch_description() -> LaunchDescription:
                 description=(
                     "PROTOTYPE: online bias and gain correction of the dynamics model's speed "
                     "channel from the wheel speed (default off: the planner is unchanged)."
+                ),
+            ),
+            DeclareLaunchArgument(
+                FAST_MLP_PARAM,
+                default_value="false",
+                choices=["true", "false"],
+                description=(
+                    "true: the planner evaluates the dynamics bundle's learned MLP with a "
+                    "vectorised tanh (golden rollouts checked at load), for a bundle with a "
+                    "residual such as dyn-v0.7p. false (default): the planner is unchanged."
                 ),
             ),
             DeclareLaunchArgument(

@@ -3,7 +3,7 @@
 Unregistered development candidate (owner decision 29), overnight 2026-11-23 workstream W2. Roles,
 held-out sets and the ship rule were committed and pushed before any v3 training:
 `evaluation/prereg/w2-trackperc-v3-2026-11-23.yaml`, SHA-256
-`03ab38fac9ed0aa629a3b4331c855cc1a943f78847e1eaa988030a2a43780b01` (commit 9577d04). Scored once,
+`03ab38fac9ed0aa629a3b4331c855cc1a943f78847e1eaa988030a2a43780b01` (pushed as 9577d04 before training; the same file after the rebase onto main). Scored once,
 after the freeze, with `racer_pnp_perception.compare_v3`.
 
 Outcome by the stated rule: **not shipped**. v3 has the better centre on the unseen layout but a

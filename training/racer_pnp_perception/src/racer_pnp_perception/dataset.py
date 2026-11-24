@@ -62,8 +62,10 @@ def generate_chunk(
     held_out: str | None = None,
     clean: bool = False,
     keep_ranges: bool = False,
+    lidar_dr: bool = False,
 ) -> dict[str, NDArray[Any]]:
-    """`n` samples from random training worlds (or, with `held_out`, from that held-out track)."""
+    """`n` samples from random training worlds (or, with `held_out`, from that held-out track).
+    `lidar_dr` adds the LiDAR-model randomisation of `sample.make_sample`."""
     live = _vehicle()
     geometry = ScanGeometry()
     rng = np.random.default_rng(seed)
@@ -78,7 +80,7 @@ def generate_chunk(
             world = held[held_out] if held_out else sample_world(rng)
             lane = LaneGeometry(world.centreline)
         assert lane is not None
-        s = make_sample(world, lane, rng, live.mount, geometry, clean=clean)
+        s = make_sample(world, lane, rng, live.mount, geometry, clean=clean, lidar_dr=lidar_dr)
         tensors[i] = scan_to_tensor(
             s.ranges,
             geometry.angle_min_rad,
@@ -97,9 +99,9 @@ def generate_chunk(
     return out
 
 
-def _chunk_job(args: tuple[int, int, str | None, bool, bool]) -> dict[str, NDArray[Any]]:
-    seed, n, held_out, clean, keep_ranges = args
-    return generate_chunk(seed, n, held_out, clean, keep_ranges)
+def _chunk_job(args: tuple[int, int, str | None, bool, bool, bool]) -> dict[str, NDArray[Any]]:
+    seed, n, held_out, clean, keep_ranges, lidar_dr = args
+    return generate_chunk(seed, n, held_out, clean, keep_ranges, lidar_dr)
 
 
 def generate(
@@ -109,11 +111,15 @@ def generate(
     held_out: str | None = None,
     clean: bool = False,
     keep_ranges: bool = False,
+    lidar_dr: bool = False,
 ) -> dict[str, NDArray[Any]]:
     """`n` samples in parallel chunks; deterministic in (n, seed, ...)."""
     sizes = [CHUNK] * (n // CHUNK) + ([n % CHUNK] if n % CHUNK else [])
     seeds = np.random.SeedSequence(seed).generate_state(len(sizes))
-    jobs = [(int(s), k, held_out, clean, keep_ranges) for s, k in zip(seeds, sizes, strict=True)]
+    jobs = [
+        (int(s), k, held_out, clean, keep_ranges, lidar_dr)
+        for s, k in zip(seeds, sizes, strict=True)
+    ]
     workers = workers or max((mp.cpu_count() or 2) - 1, 1)
     if workers == 1 or len(jobs) == 1:
         parts = [_chunk_job(j) for j in jobs]
@@ -141,15 +147,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=Path, default=DEFAULT_DIR)
     parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument(
+        "--lidar-dr",
+        action="store_true",
+        help="add the LiDAR-model randomisation (files are named trackperc-v3dr-...)",
+    )
     args = parser.parse_args(argv)
+    prefix = "trackperc-v3dr" if args.lidar_dr else "trackperc-v0"
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     for name, n, seed in (
         ("train", args.n_train, args.seed),
         ("val", args.n_val, args.seed + 1_000_003),
     ):
-        path = args.out / f"trackperc-v0-{name}-s{args.seed}-n{n}.npz"
+        path = args.out / f"{prefix}-{name}-s{args.seed}-n{n}.npz"
         log.info("generating %s: %d samples, seed %d -> %s", name, n, seed, path)
-        save(path, generate(n, seed, args.workers))
+        save(path, generate(n, seed, args.workers, lidar_dr=args.lidar_dr))
     return 0
 
 

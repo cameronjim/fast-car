@@ -283,15 +283,19 @@ class Planner {
   int solve_good_ticks_ = 0;
   Pose2 ego_pose_;
   bool plan_valid_ = false;
-  // Online speed adaptation: the estimator, an unadapted model at the bundle's step for its
-  // predictions, and the previous odometry sample.
+  // Online speed adaptation: the estimator, the shadow models at the control tick (one with the
+  // current correction, one without), and the open comparison window.
   SpeedAdaptation adapt_;
   DynamicsModel model_adapt_;
-  bool adapt_have_prev_ = false;
-  double adapt_prev_t_ = 0.0;
-  double adapt_prev_v_ = 0.0;
-  double adapt_prev_delta_ = 0.0;
-  Control adapt_prev_u_;
+  DynamicsModel model_adapt_raw_;
+  bool adapt_win_ = false;
+  double adapt_t0_ = 0.0;
+  double adapt_v0_ = 0.0;
+  double adapt_last_t_ = 0.0;
+  State adapt_shadow_;
+  double adapt_sens_[2] = {0.0, 0.0};
+  bool adapt_fwd_ = true;
+  Control adapt_u_;
 
   // -- publish side only --------------------------------------------------------------------
   Command last_published_;

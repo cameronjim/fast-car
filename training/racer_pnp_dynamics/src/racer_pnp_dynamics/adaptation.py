@@ -1,13 +1,17 @@
 """Python reference of the planner's online speed adaptation (racer_planner speed_adaptation.hpp)
 and its offline replay on recorded runs (prototype, owner decision 29).
 
-The planner fits, by recursive least squares with forgetting, `a_meas - a_pred = bias + gain *
-a_pred` over each odometry interval (a_pred: one model step from the measured wheel speed and the
-model's steering under the command acting then) and corrects the speed step of its rollouts
-`dv <- dv * (1 + gain) + bias * dt` while the speed target is above 0. Same constants, same
-gating, same limits as the C++ class; `replay` runs it causally along a recorded run (it only
-ever uses the odometry up to the window start, as the car would) and scores the corrected
-rollouts on the same windows as the uncorrected ones.
+The planner corrects the speed step of its model `dv <- dv * (1 + gain) + bias * dt` (only while
+the speed target is above 0) and fits (bias, gain) at run time from the wheel speed by a
+recursive prediction error method: over each comparison window of `window_s` a shadow of the
+CORRECTED model is stepped once per odometry sample from the measured speed at the window start
+under the commands that acted, together with the sensitivities of its speed to bias and gain
+(S <- dF/dv * S + dF/dtheta); at the window end the error measured - shadow and the sensitivities
+are one recursive least squares sample (normalised by `error_sigma_mps`), with forgetting, hard
+limits on both parameters and a covariance ceiling. Comparing over a window, not per sample,
+keeps the derivative of a noisy and delayed wheel speed out of it; the sensitivities make the
+fitted numbers the step's own parameters, not window averages. Same constants, gating and limits
+as the C++ class; `run_corrections` replays it causally along a recorded run.
 """
 
 from __future__ import annotations
@@ -24,14 +28,16 @@ from .vehicle import Vehicle
 @dataclass(frozen=True)
 class AdaptationParams:
     enabled: bool = True
-    forgetting: float = 0.995
-    initial_variance: float = 0.05
+    forgetting: float = 0.98  # per window
+    initial_variance: float = 0.1  # prior variance of each parameter after a reset
     variance_max: float = 1.0
+    error_sigma_mps: float = 0.05  # the window error a sample is normalised by
     bias_max_mps2: float = 0.5
     gain_max: float = 0.3
     min_speed_mps: float = 0.3
-    min_dt_s: float = 0.01
-    max_dt_s: float = 0.2
+    min_dt_s: float = 0.05
+    max_dt_s: float = 2.0
+    window_s: float = 0.5
     innovation_max_mps2: float = 4.0
 
 
@@ -54,6 +60,10 @@ class SpeedAdaptation:
             min_dt_s=params.min_dt_s,
             max_dt_s=params.max_dt_s,
             innovation_max_mps2=params.innovation_max_mps2,
+            window_s=params.window_s,
+            error_sigma_mps=params.error_sigma_mps
+            if math.isfinite(params.error_sigma_mps) and params.error_sigma_mps > 0
+            else 0.05,
         )
         self.resets = 0
         self.skipped = 0
@@ -68,27 +78,34 @@ class SpeedAdaptation:
         self.resets += 1
 
     def update(
-        self, a_pred: float, a_meas: float, v_start: float, dt: float, forward: bool
+        self,
+        phi_bias: float,
+        phi_gain: float,
+        error_mps: float,
+        v_start: float,
+        span_s: float,
+        forward: bool,
     ) -> bool:
+        """One closed window: the sensitivities of the shadow's end speed to bias and gain, the
+        error measured minus shadow at its end, the speed at its start and its length."""
         p = self.p
         if not p.enabled:
             return False
-        if not all(math.isfinite(x) for x in (a_pred, a_meas, v_start, dt)):
+        if not all(math.isfinite(x) for x in (phi_bias, phi_gain, error_mps, v_start, span_s)):
             self.skipped += 1
             self.reset()
             return False
-        y = a_meas - a_pred
         if (
             not forward
             or v_start < p.min_speed_mps
-            or dt < p.min_dt_s
-            or dt > p.max_dt_s
-            or abs(y) > p.innovation_max_mps2
+            or span_s < p.min_dt_s
+            or span_s > p.max_dt_s
+            or abs(error_mps) > p.innovation_max_mps2 * span_s
         ):
             self.skipped += 1
             return False
-        phi = np.array([1.0, a_pred])
-        e = y - float(self.theta @ phi)
+        phi = np.array([phi_bias, phi_gain]) / p.error_sigma_mps
+        e = error_mps / p.error_sigma_mps
         pphi = self.P @ phi
         denom = p.forgetting + float(phi @ pphi)
         k = pphi / denom
@@ -140,6 +157,9 @@ def step_corrected(
     return out
 
 
+SENS_EPS_MPS = 1e-4  # finite difference step of dF/dv
+
+
 def run_corrections(
     t_s: np.ndarray,
     wheel_mps: np.ndarray,
@@ -150,30 +170,65 @@ def run_corrections(
     ap: AdaptationParams | None = None,
 ) -> np.ndarray:
     """(T, 2) bias and gain after each grid sample of a run, causally (row i uses samples up to
-    i). The steering estimate is the model's own lag driven by the commands; a gap in the wheel
-    speed starts a new interval chain, as on the car."""
-    est = SpeedAdaptation(ap or AdaptationParams())
+    i), as the planner computes them (module docstring). The steering estimate is the model's
+    own lag driven by the commands. A gap in the wheel speed drops the open window."""
+    ap = ap or AdaptationParams()
+    est = SpeedAdaptation(ap)
     out = np.zeros((len(t_s), 2))
+    dt = float(t_s[1] - t_s[0]) if len(t_s) > 1 else DT_S
+    floor = params.speed_deadband_mps
     delta = 0.0
-    prev = None  # (t, v, delta, cmd)
+    win = None
     for i in range(len(t_s)):
         u = cmds[i]
         v = wheel_mps[i]
-        if math.isfinite(v) and np.all(np.isfinite(u)):
-            if prev is not None:
-                t0, v0, d0, u0 = prev
-                s = np.array([0.0, 0.0, 0.0, v0, d0])
-                a_pred = (float(step(s, u0, params, vehicle, residual)[3]) - v0) / DT_S
-                dt = float(t_s[i] - t0)
-                floor = params.speed_deadband_mps
-                est.update(a_pred, (v - v0) / dt, v0, dt, bool(u0[0] > 0.0 and u0[0] >= floor))
-            prev = (float(t_s[i]), float(v), delta, u.copy())
-            s = np.array([0.0, 0.0, 0.0, v, delta])
-            delta = float(step(s, u, params, vehicle, None, float(t_s[1] - t_s[0]))[4])
-        else:
-            prev = None
+        if not (math.isfinite(v) and np.all(np.isfinite(u))):
+            win = None
+            out[i] = est.correction()
+            continue
+        if win is not None:
+            b, g = est.correction()
+            shadow, sens, u0 = win["shadow"], win["sens"], win["u"]
+            nxt = step_scalar(shadow, u0, params, vehicle, residual, b, g, dt)
+            bumped = shadow.copy()
+            bumped[3] += SENS_EPS_MPS
+            f_v = (step_scalar(bumped, u0, params, vehicle, residual, b, g, dt)[3] - nxt[3]) / (
+                SENS_EPS_MPS
+            )
+            if float(speed_target(u0[0], params)) > 0.0:
+                raw = step(shadow, u0, params, vehicle, residual, dt)
+                f_theta = np.array([dt, raw[3] - shadow[3]])
+            else:
+                f_theta = np.zeros(2)
+            win["sens"] = f_v * sens + f_theta
+            win["shadow"] = nxt
+            win["fwd"] = win["fwd"] and bool(u0[0] > 0.0 and u0[0] >= floor)
+            win["u"] = u.copy()
+            span = float(t_s[i] - win["t0"])
+            if span >= ap.window_s - 1e-9:
+                est.update(win["sens"][0], win["sens"][1], v - nxt[3], win["v0"], span, win["fwd"])
+                win = None
+        if win is None:
+            win = {
+                "t0": float(t_s[i]),
+                "v0": float(v),
+                "shadow": np.array([0.0, 0.0, 0.0, v, delta]),
+                "sens": np.zeros(2),
+                "fwd": True,
+                "u": u.copy(),
+            }
+        s = np.array([0.0, 0.0, 0.0, v, delta])
+        delta = float(step(s, u, params, vehicle, None, dt)[4])
         out[i] = est.correction()
     return out
+
+
+def step_scalar(state, control, params, vehicle, residual, bias, gain, dt):
+    """`step_corrected` of one state with scalar bias and gain."""
+    return step_corrected(
+        state, np.asarray(control, float), params, vehicle, residual,
+        np.array(bias), np.array(gain), dt,
+    )  # fmt: skip
 
 
 def predict_corrected(

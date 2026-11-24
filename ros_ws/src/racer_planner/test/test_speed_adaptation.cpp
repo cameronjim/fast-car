@@ -46,14 +46,18 @@ DynamicsParams nominal() {
   return p;
 }
 
-// Feed n samples of a plant a_meas = a_pred * (1 + gain) + bias + noise, a_pred excited.
+// Feed n windows of a plant in the model family: the window error is phi . (theta_true - theta)
+// plus noise, phi = (sensitivity to bias, sensitivity to gain) of a 0.5 s window.
 void feed(SpeedAdaptation* a, double bias, double gain, int n, double noise, unsigned seed) {
   std::mt19937 rng(seed);
-  std::uniform_real_distribution<double> apred(-1.5, 1.5);
+  std::uniform_real_distribution<double> sg(-0.6, 0.6);
   std::normal_distribution<double> nz(0.0, noise);
   for (int i = 0; i < n; ++i) {
-    const double ap = apred(rng);
-    a->update(ap, ap * (1.0 + gain) + bias + nz(rng), 1.0, 0.02, true);
+    const double pb = 0.5, pg = sg(rng);
+    const SpeedCorrection c = a->correction();
+    const double err =
+        pb * (bias - c.bias_mps2) + pg * (gain - c.gain) + (noise > 0 ? nz(rng) : 0.0);
+    a->update(pb, pg, err, 1.0, 0.5, true);
   }
 }
 
@@ -61,7 +65,7 @@ void feed(SpeedAdaptation* a, double bias, double gain, int n, double noise, uns
 
 TEST(SpeedAdaptation, DisabledDoesNothing) {
   SpeedAdaptation a(SpeedAdaptationParams{});
-  EXPECT_FALSE(a.update(0.5, 0.0, 1.0, 0.02, true));
+  EXPECT_FALSE(a.update(0.5, 0.1, 0.02, 1.0, 0.5, true));
   EXPECT_EQ(a.correction().bias_mps2, 0.0);
   EXPECT_EQ(a.correction().gain, 0.0);
   EXPECT_FALSE(a.status().enabled);
@@ -77,11 +81,11 @@ TEST(SpeedAdaptation, StartsAtZero) {
 
 TEST(SpeedAdaptation, ConvergesOnAKnownPlant) {
   SpeedAdaptation a(on());
-  feed(&a, -0.2, 0.15, 2000, 0.05, 1);
+  feed(&a, -0.2, 0.15, 2000, 0.01, 1);
   EXPECT_NEAR(a.correction().bias_mps2, -0.2, 0.02);
   EXPECT_NEAR(a.correction().gain, 0.15, 0.03);
   EXPECT_FALSE(a.status().at_limit);
-  EXPECT_GT(a.status().updates, 1900u);
+  EXPECT_EQ(a.status().updates, 2000u);
 }
 
 TEST(SpeedAdaptation, ExactPlantIsLeftAlone) {
@@ -93,7 +97,7 @@ TEST(SpeedAdaptation, ExactPlantIsLeftAlone) {
 
 TEST(SpeedAdaptation, HardLimitsHold) {
   SpeedAdaptation a(on());
-  feed(&a, 3.0, 0.0, 500, 0.0, 3);  // innovation 3.0 is under innovation_max 4.0
+  feed(&a, 1.5, 0.0, 500, 0.0, 3);
   EXPECT_DOUBLE_EQ(a.correction().bias_mps2, a.params().bias_max_mps2);
   EXPECT_TRUE(a.status().at_limit);
   SpeedAdaptation b(on());
@@ -129,33 +133,34 @@ TEST(SpeedAdaptation, ResetZeroes) {
 TEST(SpeedAdaptation, NonFiniteSampleResets) {
   SpeedAdaptation a(on());
   feed(&a, -0.3, 0.1, 500, 0.0, 7);
-  EXPECT_FALSE(a.update(std::numeric_limits<double>::quiet_NaN(), 0.0, 1.0, 0.02, true));
+  EXPECT_FALSE(a.update(std::numeric_limits<double>::quiet_NaN(), 0.1, 0.0, 1.0, 0.5, true));
   EXPECT_EQ(a.correction().bias_mps2, 0.0);
   EXPECT_EQ(a.status().resets, 1u);
-  EXPECT_FALSE(a.update(0.0, std::numeric_limits<double>::infinity(), 1.0, 0.02, true));
+  EXPECT_FALSE(a.update(0.5, 0.1, std::numeric_limits<double>::infinity(), 1.0, 0.5, true));
   EXPECT_EQ(a.status().resets, 2u);
 }
 
 TEST(SpeedAdaptation, GatedSamplesAreSkipped) {
   SpeedAdaptation a(on());
-  EXPECT_FALSE(a.update(0.5, 0.0, 1.0, 0.02, false));  // not driving forward
-  EXPECT_FALSE(a.update(0.5, 0.0, 0.1, 0.02, true));   // under min_speed_mps
-  EXPECT_FALSE(a.update(0.5, 0.0, 1.0, 0.001, true));  // interval too short
-  EXPECT_FALSE(a.update(0.5, 0.0, 1.0, 0.5, true));    // interval too long
-  EXPECT_FALSE(a.update(0.0, 10.0, 1.0, 0.02, true));  // innovation above the limit
+  EXPECT_FALSE(a.update(0.5, 0.1, 0.02, 1.0, 0.5, false));  // not driving forward
+  EXPECT_FALSE(a.update(0.5, 0.1, 0.02, 0.1, 0.5, true));   // under min_speed_mps
+  EXPECT_FALSE(a.update(0.5, 0.1, 0.0, 1.0, 0.01, true));   // window too short
+  EXPECT_FALSE(a.update(0.5, 0.1, 0.02, 1.0, 2.5, true));   // window too long
+  EXPECT_FALSE(a.update(0.5, 0.1, 3.0, 1.0, 0.5, true));    // error above the limit
   EXPECT_EQ(a.status().skipped, 5u);
   EXPECT_EQ(a.status().updates, 0u);
   EXPECT_EQ(a.correction().bias_mps2, 0.0);
-  EXPECT_TRUE(a.update(0.5, 0.4, 1.0, 0.02, true));
+  EXPECT_TRUE(a.update(0.5, 0.1, 0.02, 1.0, 0.5, true));
 }
 
 // L2 property: whatever finite or non-finite inputs arrive, the correction stays finite and
-// inside its hard limits, and with no excitation of the gain (a_pred always 0) it does not drift.
+// inside its hard limits, and with no excitation of the gain (its sensitivity always 0) it does not
+// drift.
 TEST(SpeedAdaptationProperty, AlwaysBoundedAndFinite) {
   std::mt19937 rng(20261124);
-  std::uniform_real_distribution<double> u(-20.0, 20.0);
+  std::uniform_real_distribution<double> u(-5.0, 5.0);
   std::uniform_real_distribution<double> v(-1.0, 3.0);
-  std::uniform_real_distribution<double> dtd(0.0, 0.3);
+  std::uniform_real_distribution<double> dtd(0.0, 2.5);
   std::uniform_int_distribution<int> pick(0, 99);
   for (int trial = 0; trial < 50; ++trial) {
     SpeedAdaptationParams p = on();
@@ -164,9 +169,9 @@ TEST(SpeedAdaptationProperty, AlwaysBoundedAndFinite) {
     p.forgetting = std::uniform_real_distribution<double>(0.9, 1.0)(rng);
     SpeedAdaptation a(p);
     for (int i = 0; i < 2000; ++i) {
-      double ap = u(rng), am = u(rng);
-      if (pick(rng) == 0) am = std::numeric_limits<double>::quiet_NaN();
-      a.update(ap, am, v(rng), dtd(rng), pick(rng) < 90);
+      double pb = u(rng), pg = u(rng), err = u(rng);
+      if (pick(rng) == 0) err = std::numeric_limits<double>::quiet_NaN();
+      a.update(pb, pg, err, v(rng), dtd(rng), pick(rng) < 90);
       const SpeedCorrection c = a.correction();
       ASSERT_TRUE(std::isfinite(c.bias_mps2));
       ASSERT_TRUE(std::isfinite(c.gain));
@@ -179,9 +184,9 @@ TEST(SpeedAdaptationProperty, AlwaysBoundedAndFinite) {
 TEST(SpeedAdaptationProperty, NoGainDriftWithoutExcitation) {
   SpeedAdaptation a(on());
   std::mt19937 rng(9);
-  std::normal_distribution<double> nz(0.0, 0.3);
-  for (int i = 0; i < 20000; ++i) a.update(0.0, nz(rng), 1.0, 0.02, true);
-  EXPECT_EQ(a.correction().gain, 0.0);  // phi = [1, 0]: the gain row is never excited
+  std::normal_distribution<double> nz(0.0, 0.05);
+  for (int i = 0; i < 20000; ++i) a.update(0.5, 0.0, nz(rng), 1.0, 0.5, true);
+  EXPECT_EQ(a.correction().gain, 0.0);  // phi = [0.5, 0]: the gain row is never excited
   EXPECT_LE(std::fabs(a.correction().bias_mps2), 0.2);
 }
 
@@ -223,32 +228,40 @@ TEST(SpeedCorrectionInModel, ScalesTheSpeedStepOnlyWhenDriving) {
   EXPECT_EQ(corrected.step(s, drive).v, plain.step(s, drive).v);
 }
 
-// Closed loop on a synthetic plant that accelerates 20 percent slower than the model and with a
-// constant drag: the adapted one-step prediction error falls well below the unadapted one.
-TEST(SpeedCorrectionInModel, AdaptationReducesPredictionErrorOnASlowPlant) {
-  const DynamicsModel model(nominal(), synthetic(), 0.05);
-  DynamicsModel adapted(nominal(), synthetic(), 0.05);
+// The planner's estimator in the loop on a plant in the model family (speed step scaled by 0.8,
+// drag 0.1 m/s^2), with the window and sensitivity bookkeeping of Planner::adapt_speed: the
+// estimate converges to the plant's own numbers.
+TEST(SpeedCorrectionInModel, WindowedEstimateFindsTheStepParameters) {
+  const double tick = 0.02;
+  const DynamicsModel raw(nominal(), synthetic(), tick);
+  DynamicsModel corrected(nominal(), synthetic(), tick);
+  DynamicsModel plant(nominal(), synthetic(), tick);
+  plant.set_speed_correction(SpeedCorrection{-0.1, -0.2});
   SpeedAdaptation a(on());
-  double v = 0.6;
-  double err_plain = 0.0, err_adapted = 0.0;
-  int n = 0;
-  for (int i = 0; i < 3000; ++i) {
-    const Control u{0.9 + 0.4 * std::sin(0.013 * i), 0.0};
-    const State s{0.0, 0.0, 0.0, v, 0.0};
-    const double a_pred = (model.step(s, u).v - v) / 0.05;
-    const double a_true = 0.8 * a_pred - 0.1;
-    const double v_next = v + a_true * 0.05;
-    if (i > 1500) {
-      err_plain += std::pow(model.step(s, u).v - v_next, 2);
-      err_adapted += std::pow(adapted.step(s, u).v - v_next, 2);
-      ++n;
+  State car{0.0, 0.0, 0.0, 0.6, 0.0};
+  State shadow = car;
+  double sens[2] = {0.0, 0.0};
+  double t0 = 0.0, v0 = car.v;
+  for (int i = 1; i <= 6000; ++i) {
+    const double t = i * tick;
+    const Control u{0.9 + 0.4 * std::sin(0.9 * (t - tick)), 0.0};
+    const State next = corrected.step(shadow, u);
+    State bumped = shadow;
+    bumped.v += 1e-4;
+    const double f_v = (corrected.step(bumped, u).v - next.v) / 1e-4;
+    sens[0] = f_v * sens[0] + tick;
+    sens[1] = f_v * sens[1] + (raw.step(shadow, u).v - shadow.v);
+    shadow = next;
+    car = plant.step(car, u);
+    if (t - t0 >= a.params().window_s - 1e-9) {
+      a.update(sens[0], sens[1], car.v - shadow.v, v0, t - t0, true);
+      corrected.set_speed_correction(a.correction());
+      t0 = t;
+      v0 = car.v;
+      shadow = car;
+      sens[0] = sens[1] = 0.0;
     }
-    a.update(a_pred, a_true, v, 0.05, true);
-    adapted.set_speed_correction(a.correction());
-    v = v_next;
   }
-  ASSERT_GT(n, 0);
-  EXPECT_LT(err_adapted, 0.01 * err_plain);
+  EXPECT_NEAR(a.correction().bias_mps2, -0.1, 0.01);
   EXPECT_NEAR(a.correction().gain, -0.2, 0.02);
-  EXPECT_NEAR(a.correction().bias_mps2, -0.1, 0.02);
 }

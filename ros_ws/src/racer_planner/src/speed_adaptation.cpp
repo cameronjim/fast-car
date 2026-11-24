@@ -14,6 +14,8 @@ SpeedAdaptation::SpeedAdaptation(const SpeedAdaptationParams& params) : p_(param
       std::isfinite(p_.initial_variance) ? std::max(1e-9, p_.initial_variance) : 0.05;
   p_.variance_max =
       std::isfinite(p_.variance_max) ? std::max(p_.initial_variance, p_.variance_max) : 1.0;
+  p_.error_sigma_mps =
+      std::isfinite(p_.error_sigma_mps) && p_.error_sigma_mps > 0.0 ? p_.error_sigma_mps : 0.05;
   reset();
   resets_ = 0;
 }
@@ -36,24 +38,23 @@ void SpeedAdaptation::clamp_theta() {
   theta_[1] = g;
 }
 
-bool SpeedAdaptation::update(double a_pred, double a_meas, double v_start, double dt,
-                             bool driving_forward) {
+bool SpeedAdaptation::update(double phi_bias, double phi_gain, double error_mps, double v_start,
+                             double span_s, bool driving_forward) {
   if (!p_.enabled) return false;
-  if (!std::isfinite(a_pred) || !std::isfinite(a_meas) || !std::isfinite(v_start) ||
-      !std::isfinite(dt)) {
-    // A bad sample says the inputs cannot be trusted: forget what was learned from them.
+  if (!std::isfinite(phi_bias) || !std::isfinite(phi_gain) || !std::isfinite(error_mps) ||
+      !std::isfinite(v_start) || !std::isfinite(span_s)) {
+    // A bad window says the inputs cannot be trusted: forget what was learned from them.
     ++skipped_;
     reset();
     return false;
   }
-  const double y = a_meas - a_pred;
-  if (!driving_forward || v_start < p_.min_speed_mps || dt < p_.min_dt_s || dt > p_.max_dt_s ||
-      std::fabs(y) > p_.innovation_max_mps2) {
+  if (!driving_forward || v_start < p_.min_speed_mps || span_s < p_.min_dt_s ||
+      span_s > p_.max_dt_s || std::fabs(error_mps) > p_.innovation_max_mps2 * span_s) {
     ++skipped_;
     return false;
   }
-  const double phi[2] = {1.0, a_pred};
-  const double e = y - (theta_[0] + theta_[1] * a_pred);
+  const double phi[2] = {phi_bias / p_.error_sigma_mps, phi_gain / p_.error_sigma_mps};
+  const double e = error_mps / p_.error_sigma_mps;
   const double pphi0 = P_[0][0] * phi[0] + P_[0][1] * phi[1];
   const double pphi1 = P_[1][0] * phi[0] + P_[1][1] * phi[1];
   const double denom = p_.forgetting + phi[0] * pphi0 + phi[1] * pphi1;
@@ -68,7 +69,7 @@ bool SpeedAdaptation::update(double a_pred, double a_meas, double v_start, doubl
   theta_[1] += k1 * e;
   // P <- (P - k phi^T P) / lambda, kept symmetric.
   const double p00 = (P_[0][0] - k0 * pphi0) / p_.forgetting;
-  const double p01 = (P_[0][1] - k0 * pphi1) / p_.forgetting;
+  const double p01 = 0.5 * ((P_[0][1] - k0 * pphi1) + (P_[1][0] - k1 * pphi0)) / p_.forgetting;
   const double p11 = (P_[1][1] - k1 * pphi1) / p_.forgetting;
   P_[0][0] = p00;
   P_[1][1] = p11;
@@ -88,7 +89,7 @@ bool SpeedAdaptation::update(double a_pred, double a_meas, double v_start, doubl
     return false;
   }
   clamp_theta();
-  last_error_ = y - (theta_[0] + theta_[1] * a_pred);
+  last_error_ = error_mps;
   ++updates_;
   return true;
 }

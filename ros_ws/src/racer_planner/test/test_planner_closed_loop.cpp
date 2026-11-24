@@ -122,7 +122,7 @@ TEST(PlannerClosedLoop, StadiumTwoLapsWithSpeedAdaptationOnASlowPlant) {
     expect_good_run(r);
     EXPECT_EQ(r.adaptation.enabled, adapt);
     if (adapt) {
-      EXPECT_GT(r.adaptation.updates, 100u);
+      EXPECT_GT(r.adaptation.updates, 30u);  // one per 0.5 s window while driving
       EXPECT_TRUE(std::isfinite(r.adaptation.bias_mps2));
       EXPECT_LE(std::fabs(r.adaptation.bias_mps2), s.config.adaptation.bias_max_mps2);
       EXPECT_LE(std::fabs(r.adaptation.gain), s.config.adaptation.gain_max);

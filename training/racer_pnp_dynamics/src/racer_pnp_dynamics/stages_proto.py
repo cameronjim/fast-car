@@ -295,6 +295,45 @@ def dev_eval_cmd(args) -> int:  # pragma: no cover - real data
     return 0
 
 
+ADAPT_GRID = tuple((w, f) for w in (0.25, 0.5, 1.0) for f in (0.95, 0.98))
+
+
+def adapt_select_cmd(args) -> int:  # pragma: no cover - real data
+    """Choose the adaptation window and forgetting on the VALIDATION parts (never the dev parts):
+    macro S1 and P1 at 1.0 s of the shipping residual with and without the correction."""
+    from dataclasses import replace
+
+    from . import adaptation
+    from .evaluate import HORIZONS_S, eval_set
+    from .ground_motion import contract1_window_errors
+    from .pipeline import fit_vehicle_of
+    from .session_v05 import with_heading_direction
+    from .strata import assign_strata
+    from .vehicle import load_vehicle, repo_root
+
+    root = repo_root()
+    parts = load_parts(root)
+    vehicle = load_vehicle()
+    fvehicle = fit_vehicle_of(vehicle)
+    frozen = pickle.loads(_frozen_path(args).read_bytes())
+    val = [s for s in bag_segments(args, parts, (proto.VAL,), vehicle) if s.run.has_odom]
+    es = with_heading_direction(eval_set(val), val)
+    strata = assign_strata(es.direction, es.start_speed)
+    v01 = v01_nominal(root).nominal
+    res = frozen.shipping.residual
+    errs = {"proto": contract1_window_errors(es, v01, fvehicle, res, HORIZONS_S)}
+    for w, f in ADAPT_GRID:
+        ap = replace(adaptation.AdaptationParams(), window_s=w, forgetting=f)
+        corr = adaptation.window_corrections(es, v01, fvehicle, res, ap)
+        errs[f"proto + adaptation w{w} f{f}"] = adaptation.corrected_window_errors(
+            es, v01, fvehicle, res, corr, HORIZONS_S
+        )
+    rows = proto.summarise(errs, strata.label, {"val": np.ones(len(es), bool)}, "proto")
+    print(proto.render_rows(rows))
+    (args.cache / f"{proto.MODEL_ID}-adapt-select.json").write_text(json.dumps(rows, indent=2))
+    return 0
+
+
 def proto_session(run_name: str) -> str:
     return run_name[:10]
 
@@ -374,6 +413,7 @@ STAGE_COMMANDS = {
     "split": split_cmd,
     "truth": truth_cmd,
     "fit": fit_cmd,
+    "adapt-select": adapt_select_cmd,
     "dev-eval": dev_eval_cmd,
     "export": export_cmd,
 }

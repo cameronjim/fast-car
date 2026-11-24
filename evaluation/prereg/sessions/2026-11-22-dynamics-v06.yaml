@@ -1,0 +1,29 @@
+# Dynamics roles of the session 2026-11-22 for the yaw-only residual attempt R6 (brief 54,
+# pnp-v0.6-dynamics-yaw.yaml, block session_2026_11_22: the v0.5 rule, unchanged).
+# Written by tools/pnp_data.py split-v06 before anything is fitted on a train part.
+# Do not edit after the first commit. Times are bag seconds (after the first /scan).
+# The label 2026-11-22 is the date of the session; the bag carries the UTC date.
+session: "2026-11-22"
+prereg_id: pnp-v0.6-dynamics-yaw
+rule_file_sha256: db62eaac18ba655bf00e4ff7c8e8b287cd7e042b6ea671014ebb404032d00e0c
+rule:
+  min_run_s: 15
+  min_wheel_distance_m: 1
+  train_share: 0.55
+  guard_s: 2
+  heldout: the rest of the run
+  roles: dynamics only; train is fitted on, heldout decides GP2g-R once after the freeze
+bags:
+  2026-11-23T03-50-32_car_teleop:
+    first_scan_log_time_s: 1795405836.426
+    segments:
+      - {name: S1a, run: R0, kind: pnp, from: 405.925, to: 444.516, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S1b, run: R0, kind: pnp, from: 446.516, to: 476.091, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S2a, run: R1, kind: pnp, from: 594.53, to: 652.247, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S2b, run: R1, kind: pnp, from: 654.247, to: 699.471, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S3a, run: R2, kind: pnp, from: 838.055, to: 880.872, direction: by_heading, command_direction: ccw, dynamics: train}  # the first 55 percent of the run
+      - {name: S3b, run: R2, kind: pnp, from: 882.872, to: 915.904, direction: by_heading, command_direction: ccw, dynamics: heldout}  # after a 2 s guard
+      - {name: S4a, run: R3, kind: pnp, from: 1048.207, to: 1081.494, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S4b, run: R3, kind: pnp, from: 1083.494, to: 1108.729, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard
+      - {name: S5a, run: R4, kind: pnp, from: 1199.674, to: 1309.931, direction: by_heading, command_direction: cw, dynamics: train}  # the first 55 percent of the run
+      - {name: S5b, run: R4, kind: pnp, from: 1311.931, to: 1400.142, direction: by_heading, command_direction: cw, dynamics: heldout}  # after a 2 s guard

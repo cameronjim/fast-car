@@ -48,13 +48,13 @@ The ray cast does what the brief says: every rebuilt edge point lies on the trac
 * The tracer's stations are 0.20 m apart along its raw marching polyline, but the chord between
   neighbouring stations is shorter: the 16 stations of a full track are 2.90 to 2.98 m apart end to
   end, not 3.00 m. A resample at exactly 0.20 m along the centre therefore either gives one station
-  fewer (A-run, extension 0: 34 percent of scans lose 1 to 4 stations, mean loss 0.139 on those) or,
+  fewer (A-run, extension 0: 34 percent of scans lose stations, mostly 1 to 3, mean loss 0.139 on those) or,
   with the extension that recovers it, runs 1 to 3 cm per station beyond the tracer's polygon.
   Where no station is lost the loss is still mean 0.009 (p99 0.073) and the excess mean 0.016 (p99
   0.133) on A-run: the area of the polygon over the first `valid_count` stations changes by about
   the length difference (2 to 3 percent of a 3 m corridor) times the width.
 * The extension (up to 0.20 m) buys the lost station back and costs excess: at 0.20 the mean excess
-  is 0.036 to 0.044.
+  is 0.036 to 0.044 on the real sets.
 * No free parameter acts on this. Reach, margin, blend and the slope limit change the centre and
   barely the station spacing.
 

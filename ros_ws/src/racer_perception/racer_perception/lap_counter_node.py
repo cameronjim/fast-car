@@ -14,7 +14,8 @@ Subscribes
   yaw_rate_topic  nav_msgs/Odometry            default /odom         twist.angular.z, diagnostic only
 Publishes
   /lap/event   std_msgs/String  JSON, one per counted lap: lap, lap_time_s, best_lap_s,
-                                peak_similarity, crossing_time_s, distance_m, heading_turns
+                                peak_similarity, crossing_time_s, distance_m, heading_turns,
+                                reference (standing or driving: which reference scored, S4)
   /lap/similarity geometry_msgs/PointStamped  one per processed frame once a reference exists:
                                 header.stamp this node's clock (the clock of the lap times),
                                 point.x the cosine similarity, point.y and z 0. (S1, 2026-11-22.)
@@ -171,6 +172,18 @@ class LapCounterNode(Node):
             _DEFAULTS.min_reference_std,
             "Refuse a reference frame whose pixel std (0..255) is below this (blank frame).",
         )
+        declare(
+            "driving_reference",
+            _DEFAULTS.driving_reference,
+            "S4: the peak frame of lap 1 becomes a second reference and the distance gate "
+            "scales with the lap length (lap_gate_ratio). Off: the registered counter.",
+        )
+        declare(
+            "lap_gate_ratio",
+            _DEFAULTS.lap_gate_ratio,
+            "With driving_reference: from lap 2 the distance gate is this times the lap length.",
+            floating_point_range=[FloatingPointRange(from_value=0.05, to_value=1.0, step=0.0)],
+        )
 
         def get(name):
             return self.get_parameter(name).value
@@ -187,6 +200,8 @@ class LapCounterNode(Node):
             peak_window_max_s=float(get("peak_window_max_s")),
             min_reference_std=float(get("min_reference_std")),
             frame_stale_s=float(get("frame_stale_s")),
+            driving_reference=bool(get("driving_reference")),
+            lap_gate_ratio=float(get("lap_gate_ratio")),
         )
         cfg.validate()  # bad thresholds are a hard refusal, not a warning
         self._reduction = int(get("decode_reduction"))
@@ -266,7 +281,9 @@ class LapCounterNode(Node):
             self._event_pub.publish(String(data=_json(event.to_dict())))
             self.get_logger().info(
                 f"lap {event.lap}: {event.lap_time_s:.2f} s (best {event.best_lap_s:.2f} s), "
-                f"similarity {event.peak_similarity:.3f}, {event.distance_m:.2f} m"
+                f"similarity {event.peak_similarity:.3f}"
+                f"{'' if event.reference is None else f' ({event.reference})'}, "
+                f"{event.distance_m:.2f} m"
             )
 
     def _publish_frame_record(self, msg: CompressedImage, now_s: float) -> None:

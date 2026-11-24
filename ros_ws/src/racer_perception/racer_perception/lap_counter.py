@@ -26,6 +26,13 @@ Lap decision (every number is a LapConfig field, so a bag can be replayed to tun
      `peak_window_max_s` elapsed), stamped at the frame with the highest similarity inside it,
      so the lap time does not depend on where in the bright part the threshold happens to sit.
 
+Driving reference and alias guard (S4, 2026-11-23, both behind `driving_reference`, default off):
+the standing reference above stays exactly as it is. At the close of lap 1 the signature of that
+lap's peak frame becomes a second, driving reference, and from lap 2 the similarity is the larger
+of the two; each event says which one scored (`reference`). Once a lap length exists (the median
+distance of the last three counted laps) the distance gate of a window is `lap_gate_ratio` times
+it instead of the fixed `min_lap_distance_m`; lap 1 stays on the fixed gate. With the switch off nothing here runs and the counting is the 51c counting.
+
 Heading turns (yaw rate integrated from odometry) are reported with each lap as a cross-check
 only: a lap of an oval is about one turn. They never count or veto a lap.
 
@@ -44,6 +51,10 @@ import numpy as np
 
 STATE_WAITING = "waiting"
 STATE_RUNNING = "running"
+REFERENCE_STANDING = "standing"
+REFERENCE_DRIVING = "driving"
+#: The lap length is the median of this many of the latest counted lap distances.
+_LAP_LENGTH_LAPS = 3
 
 _TWO_PI = 2.0 * math.pi
 #: An odometry sample after a gap longer than this integrates over this much, not the gap.
@@ -77,6 +88,13 @@ class LapConfig:
     #: A camera whose last processed frame is older than this is stale, and so are the wheel
     #: odometry samples (outside review of brief 51c): `freshness()` says so, `/lap/status` carries it.
     frame_stale_s: float = 1.0
+    #: S4: a second, driving reference (the peak frame of lap 1) and a distance gate scaled to the
+    #: lap length. Off: the registered 51c counter, unchanged.
+    driving_reference: bool = False
+    #: With driving_reference: from lap 2 the distance gate is this times the lap length.
+    #: 0.75 (decision 21's ratio, the S4 design) lets the cw alias through: it sits at 0.77 to 0.78
+    #: of the lap. Replay on session 2 (docs/notes/lap-driving-reference-2026-11-23.md): 0.85.
+    lap_gate_ratio: float = 0.85
 
     def validate(self) -> None:
         for f in fields(self):
@@ -98,6 +116,8 @@ class LapConfig:
             raise ValueError("min_reference_std must be >= 0")
         if self.frame_stale_s <= 0.0:
             raise ValueError("frame_stale_s must be > 0")
+        if not 0.0 < self.lap_gate_ratio <= 1.0:
+            raise ValueError("lap_gate_ratio must be in (0, 1]")
 
     @classmethod
     def field_names(cls) -> list[str]:
@@ -118,9 +138,13 @@ class LapEvent:
     #: Signed heading turns of this lap from integrated yaw rate (1.0 = one full left turn);
     #: None when no yaw rate has been received.
     heading_turns: float | None
+    #: Which reference scored the peak: "standing" (the frame at the start) or "driving" (the
+    #: peak frame of lap 1). Only set (and only in to_dict) with `driving_reference` on, so the
+    #: event of the default counter is unchanged.
+    reference: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "lap": self.lap,
             "lap_time_s": self.lap_time_s,
             "best_lap_s": self.best_lap_s,
@@ -129,6 +153,9 @@ class LapEvent:
             "distance_m": self.distance_m,
             "heading_turns": self.heading_turns,
         }
+        if self.reference is not None:
+            out["reference"] = self.reference
+        return out
 
 
 # ------------------------------------------------------------------------------ image maths
@@ -240,13 +267,15 @@ class LapCounter:
         self.state = STATE_WAITING
         self._capture_now = capture_next_frame
         self._ref: np.ndarray | None = None
+        self._drive_ref: np.ndarray | None = None
+        self._lap_distances: list[float] = []
         self.laps = 0
         self.last_lap_s: float | None = None
         self.best_lap_s: float | None = None
         self.similarity: float | None = None
         self._armed = False
         self._suppressed = False
-        self._window: dict[str, float] | None = None
+        self._window: dict[str, Any] | None = None
         self._lap_start_t = 0.0
         self._lap_start_dist = 0.0
         self._lap_start_yaw = 0.0
@@ -321,12 +350,17 @@ class LapCounter:
 
         assert self._ref is not None
         s = 0.0 if sig is None else float(np.dot(sig, self._ref))
+        which = REFERENCE_STANDING
+        if sig is not None and self._drive_ref is not None:
+            s_drive = float(np.dot(sig, self._drive_ref))
+            if s_drive > s:
+                s, which = s_drive, REFERENCE_DRIVING
         self.similarity = s
 
         if self._window is not None:
             w = self._window
             if s > w["peak"]:
-                w.update(peak=s, t=t, dist=self.distance_m, yaw=self.yaw_rad)
+                w.update(peak=s, t=t, dist=self.distance_m, yaw=self.yaw_rad, sig=sig, ref=which)
             if s < cfg.similarity_threshold or t - w["open_t"] >= cfg.peak_window_max_s:
                 return self._close_window()
             return None
@@ -339,7 +373,7 @@ class LapCounter:
         if not self._armed or self._suppressed:
             return None
         gates_ok = (t - self._lap_start_t >= cfg.min_lap_time_s) and (
-            self.distance_m - self._lap_start_dist >= cfg.min_lap_distance_m
+            self.distance_m - self._lap_start_dist >= self.distance_gate_m()
         )
         if not gates_ok:
             self._suppressed = True  # the whole bright stretch is ignored, even if a gate opens
@@ -350,8 +384,23 @@ class LapCounter:
             "t": t,
             "dist": self.distance_m,
             "yaw": self.yaw_rad,
+            "sig": sig,
+            "ref": which,
         }
         return None
+
+    def lap_length_m(self) -> float | None:
+        """The lap length the distance gate scales with: the median distance of the last
+        `_LAP_LENGTH_LAPS` counted laps, None before lap 1 closes or without driving_reference."""
+        recent = self._lap_distances[-_LAP_LENGTH_LAPS:]
+        if not self.cfg.driving_reference or not recent:
+            return None
+        return sorted(recent)[len(recent) // 2]
+
+    def distance_gate_m(self) -> float:
+        """Path length a lap must reach before a bright stretch may open a window."""
+        length = self.lap_length_m()
+        return self.cfg.min_lap_distance_m if length is None else self.cfg.lap_gate_ratio * length
 
     def _close_window(self) -> LapEvent:
         w = self._window
@@ -371,7 +420,12 @@ class LapCounter:
             crossing_time_s=w["t"],
             distance_m=w["dist"] - self._lap_start_dist,
             heading_turns=(w["yaw"] - self._lap_start_yaw) / _TWO_PI if self.yaw_seen else None,
+            reference=w["ref"] if self.cfg.driving_reference else None,
         )
+        if self.cfg.driving_reference:
+            self._lap_distances.append(event.distance_m)
+            if self._drive_ref is None and w["sig"] is not None:
+                self._drive_ref = w["sig"]  # the peak frame of lap 1
         self._lap_start_t = w["t"]
         self._lap_start_dist = w["dist"]
         self._lap_start_yaw = w["yaw"]
@@ -402,7 +456,7 @@ class LapCounter:
 
     def status(self) -> dict[str, Any]:
         """JSON-able snapshot for /lap/status."""
-        return {
+        out = {
             "state": self.state,
             "similarity": self.similarity,
             "laps": self.laps,
@@ -418,3 +472,7 @@ class LapCounter:
             else None,
             "odom_seen": self.odom_seen,
         }
+        if self.cfg.driving_reference:
+            out["driving_reference"] = self._drive_ref is not None
+            out["lap_gate_m"] = self.distance_gate_m()
+        return out

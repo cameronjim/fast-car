@@ -698,3 +698,180 @@ def test_best_lap_tracks_the_minimum_across_laps():
     assert len(laps) >= 3
     assert laps[0] > laps[1]
     assert d.events[-1].best_lap_s == pytest.approx(min(laps))
+
+
+# ------------------------------------------------- S4: driving reference and alias guard (L1, L2)
+#
+# These feed signatures straight in (update_signature): unit vectors in R^8 where coordinate 0 is
+# the standing reference, so a frame `sig(s)` has similarity s to it, and `sig(s, k)` with another
+# k puts the frame on a different axis, so it is similar to nothing else.
+
+
+def sig(s: float, k: int = 1, axis: int = 0) -> np.ndarray:
+    v = np.zeros(8, dtype=np.float32)
+    v[axis] = s
+    v[k] = math.sqrt(max(1.0 - s * s, 0.0))
+    return v
+
+
+class SigDrive:
+    """1 m/s, a frame every 0.1 s (0.1 m), odometry before each frame."""
+
+    def __init__(self, **kw):
+        cfg = LapConfig(
+            min_lap_time_s=1.0, min_lap_distance_m=1.0, start_speed_mps=0.3, **kw
+        )
+        self.c = LapCounter(cfg)
+        self.t = 0.0
+        self.x = 0.0
+        self.events = []
+        self.c.update_odom(self.t, 1.0, self.x)
+        assert self.c.update_signature(self.t, sig(1.0)) is None  # the standing reference
+        assert self.c.state == STATE_RUNNING
+
+    def step(self, vec: np.ndarray):
+        self.t += 0.1
+        self.x += 0.1
+        self.c.update_odom(self.t, 1.0, self.x)
+        e = self.c.update_signature(self.t, vec)
+        if e is not None:
+            self.events.append(e)
+        return e
+
+    def lap(self, length_m: float, peak: np.ndarray, width: int = 3):
+        """Far from the mark for `length_m` minus a few frames, then `width` frames of `peak`,
+        then away again until the event closes."""
+        n = round(length_m / 0.1)
+        for i in range(n):
+            self.step(peak if n - width <= i < n else sig(0.2, 3))
+        self.step(sig(0.2, 3))  # the window closes on the first frame under the threshold
+
+
+def test_driving_reference_off_is_the_registered_counter():
+    d = SigDrive()
+    assert d.c.cfg.driving_reference is False
+    d.lap(6.0, sig(0.85))
+    d.lap(6.0, sig(0.85))
+    assert [e.lap for e in d.events] == [1, 2]
+    assert all(e.reference is None and "reference" not in e.to_dict() for e in d.events)
+    assert "driving_reference" not in d.c.status() and "lap_gate_m" not in d.c.status()
+    assert d.c.distance_gate_m() == 1.0  # the fixed gate, whatever the lap length
+
+
+def test_the_peak_frame_of_lap_1_becomes_the_driving_reference():
+    d = SigDrive(driving_reference=True)
+    peak = sig(0.85)  # lap 1 closes on a mediocre view of the start
+    d.lap(6.0, peak)
+    assert d.events[0].reference == "standing" and d.events[0].lap == 1
+    assert d.c.status()["driving_reference"] is True
+    # lap 2 sees that same view: 0.85 against the standing frame, 1.0 against the lap 1 peak
+    d.lap(6.0, peak)
+    e = d.events[1]
+    assert e.reference == "driving" and e.peak_similarity == pytest.approx(1.0, abs=1e-5)
+    assert e.to_dict()["reference"] == "driving"
+
+
+def test_the_standing_reference_still_scores_when_it_is_the_better_match():
+    d = SigDrive(driving_reference=True)
+    d.lap(6.0, sig(0.85))
+    d.lap(6.0, sig(1.0))  # the start view itself: 1.0 standing, 0.85 against the lap 1 peak
+    assert d.events[1].reference == "standing"
+    assert d.events[1].peak_similarity == pytest.approx(1.0, abs=1e-5)
+
+
+def test_standing_alone_would_have_missed_what_the_driving_reference_counts():
+    off = SigDrive()
+    on = SigDrive(driving_reference=True)
+    for d in (off, on):
+        d.lap(6.0, sig(0.85))
+        # 0.90 like the lap 1 peak, 0.54 like the start
+        d.lap(6.0, np.array([0.535, 0.845, 0, 0, 0, 0, 0, 0], dtype=np.float32))
+    assert [e.lap for e in off.events] == [1]
+    assert [e.lap for e in on.events] == [1, 2]
+
+
+def test_gate_is_the_ratio_times_the_lap_length_and_lap_1_stays_on_the_fixed_gate():
+    d = SigDrive(driving_reference=True, lap_gate_ratio=0.8)
+    assert d.c.distance_gate_m() == 1.0
+    # lap 1: a bright stretch 2 m in is past the fixed 1 m gate, so it counts (no lap length yet)
+    d.lap(2.0, sig(0.9))
+    assert [e.lap for e in d.events] == [1]
+    assert d.c.lap_length_m() == pytest.approx(2.0, abs=0.3)
+    L = d.c.lap_length_m()
+    assert d.c.distance_gate_m() == pytest.approx(0.8 * L)
+    assert d.c.status()["lap_gate_m"] == pytest.approx(0.8 * L)
+
+
+def test_a_bright_stretch_inside_the_scaled_gate_opens_no_window():
+    d = SigDrive(driving_reference=True, lap_gate_ratio=0.8)
+    d.lap(6.0, sig(0.9))
+    gate = d.c.distance_gate_m()
+    assert gate == pytest.approx(0.8 * d.events[0].distance_m)
+    # an alias 70 percent of the way round: bright enough, too early
+    d.lap(0.7 * 6.0, sig(0.95))
+    assert [e.lap for e in d.events] == [1]  # the early window was thrown away, whole
+    # the real one 6 m after lap 1 still counts (the stretch before was suppressed, then it fell)
+    for _ in range(8):
+        d.step(sig(0.2, 3))
+    d.lap(6.0 - 0.7 * 6.0 - 0.8, sig(0.9))
+    assert [e.lap for e in d.events] == [1, 2]
+
+
+def test_the_same_alias_counts_with_the_fixed_gate():
+    d = SigDrive()  # driving_reference off: the fixed 1 m gate lets a 4.2 m alias count
+    d.lap(6.0, sig(0.9))
+    d.lap(0.7 * 6.0, sig(0.95))
+    assert [e.lap for e in d.events] == [1, 2]
+    assert d.events[1].distance_m < 0.75 * d.events[0].distance_m
+
+
+def test_lap_length_is_a_median_so_one_short_or_doubled_lap_does_not_move_it():
+    d = SigDrive(driving_reference=True)
+    for length in (6.0, 6.0, 12.0, 6.0):  # a doubled lap (a missed crossing) in the middle
+        d.lap(length, sig(0.9))
+    assert d.c.lap_length_m() == pytest.approx(6.0, abs=0.15)
+
+
+def test_reset_clears_both_references_and_the_lap_length():
+    d = SigDrive(driving_reference=True)
+    d.lap(6.0, sig(0.9))
+    d.lap(6.0, sig(0.9))
+    assert d.c.lap_length_m() is not None and d.c.status()["driving_reference"]
+    d.c.reset(capture_next_frame=True)
+    assert d.c.lap_length_m() is None
+    assert d.c.distance_gate_m() == d.c.cfg.min_lap_distance_m
+    assert d.c.update_signature(d.t + 0.1, sig(1.0)) is None  # the new standing reference
+    assert d.c.status()["driving_reference"] is False and d.c.laps == 0
+    assert d.c._drive_ref is None and d.c._lap_distances == []
+
+
+def test_lap_gate_ratio_is_validated():
+    for bad in (0.0, -0.1, 1.5, float("nan")):
+        with pytest.raises(ValueError):
+            LapConfig(lap_gate_ratio=bad).validate()
+    LapConfig(lap_gate_ratio=1.0).validate()
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_property_events_have_a_window_and_never_come_inside_the_gate(seed):
+    """L2: random similarities against both references. An event always has a peak at or above
+    the threshold, no two events are closer than the gate that was in force when its window
+    opened, and every event after lap 1 is at least ratio * (the lap length then) long."""
+    rng = np.random.default_rng(seed)
+    ratio = 0.85
+    d = SigDrive(driving_reference=True, lap_gate_ratio=ratio)
+    gates = []
+    last = None
+    for _ in range(1500):
+        k = int(rng.integers(1, 8))
+        s = float(rng.choice([0.1, 0.4, 0.6, 0.82, 0.9, 0.97]))
+        vec = sig(s, k if k != 0 else 1, axis=int(rng.integers(0, 2)))
+        before = d.c.distance_gate_m()
+        gates.append(before)
+        e = d.step(vec)
+        if e is not None:
+            assert e.peak_similarity >= d.c.cfg.similarity_threshold
+            if last is not None:
+                assert e.distance_m >= min(gates[-60:]) - 1e-6
+            last = e
+    assert all(e.lap == i + 1 for i, e in enumerate(d.events))

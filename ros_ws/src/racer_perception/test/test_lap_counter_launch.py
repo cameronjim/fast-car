@@ -53,6 +53,26 @@ def test_launch_defaults_equal_lapconfig_defaults():
         assert float(defaults[name]) == getattr(cfg, name), name
 
 
+def test_launch_s4_switch_is_off_by_default_and_the_ratio_is_lapconfigs():
+    entities = _load(_LAUNCH).generate_launch_description().entities
+    defaults = _defaults(entities)
+    cfg = LapConfig()
+    assert defaults["driving_reference"] == "false" and cfg.driving_reference is False
+    assert float(defaults["lap_gate_ratio"]) == cfg.lap_gate_ratio
+    node = next(e for e in entities if isinstance(e, LaunchNode))
+    context = LaunchContext()
+    context.launch_configurations.update({**defaults, "driving_reference": "true"})
+    merged = {}
+    for entry in evaluate_parameters(context, node._Node__parameters):
+        merged.update(entry)
+    assert merged["driving_reference"] is True and isinstance(merged["lap_gate_ratio"], float)
+    context.launch_configurations.update(defaults)
+    merged = {}
+    for entry in evaluate_parameters(context, node._Node__parameters):
+        merged.update(entry)
+    assert merged["driving_reference"] is False
+
+
 def test_launch_starts_exactly_one_node_with_typed_parameters():
     entities = _load(_LAUNCH).generate_launch_description().entities
     nodes = [e for e in entities if isinstance(e, LaunchNode)]

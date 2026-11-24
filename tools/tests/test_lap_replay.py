@@ -892,3 +892,43 @@ def test_fixture_thumbs_replay_and_peak_table_match_the_session_numbers(capsys):
     assert min(table.peaks("driving")) < min(table.peaks("standing"))
     text = "\n".join(lap_replay.render_peak_table(table, result.frame_kind, 4.7))
     assert "APPROXIMATE" in text and "0.778 <" in text
+
+
+# ---- L4: S4 on tonight's D v0 cw run (2026-11-23, exact /lap/thumb, first 60 s, every 3rd frame)
+
+ALIAS_FIXTURE = Path(__file__).parent / "fixtures" / "lap_thumbs_2026_11_23_dv0_cw_alias.npz"
+
+
+def _alias_replay(**kw):
+    return replay(
+        lap_replay.iter_thumbs_messages(ALIAS_FIXTURE), LapConfig(start_speed_mps=0.0, **kw)
+    )
+
+
+def test_alias_fixture_default_counter_fires_early_twice_and_names_no_reference():
+    assert lap_replay.thumbs_are_exact(ALIAS_FIXTURE)
+    events = _alias_replay().events
+    # lap 2 at 5.15 m and lap 3 at 6.32 m: fired 1.1 m before the real crossings (7.11 + k * 5.6 m)
+    assert [round(e.distance_m, 2) for e in events] == pytest.approx(
+        [7.11, 5.15, 6.32, 6.95], abs=0.02
+    )
+    assert all(e.reference is None for e in events)
+
+
+def test_alias_fixture_with_the_driving_reference_counts_only_the_true_crossings():
+    events = _alias_replay(driving_reference=True).events
+    assert [round(e.distance_m, 2) for e in events] == pytest.approx(
+        [7.11, 6.29, 6.23, 5.84], abs=0.02
+    )
+    assert [e.reference for e in events] == ["standing", "driving", "driving", "driving"]
+    # four true crossings: every one at the station 7.11 + k * about 5.6 m, none early
+    stations = np.cumsum([e.distance_m for e in events])
+    assert stations == pytest.approx([7.11, 13.40, 19.63, 25.47], abs=0.05)
+
+
+def test_alias_fixture_the_registered_ratio_of_decision_21_is_not_what_the_full_run_needs():
+    # the 60 s window has 7.11 m lap 1, so 0.75 happens to hold here; the full run (docs/notes/
+    # lap-driving-reference-2026-11-23.md) needs 0.85, which is the default
+    assert LapConfig().lap_gate_ratio == 0.85
+    events = _alias_replay(driving_reference=True, lap_gate_ratio=0.75).events
+    assert len(events) == 4

@@ -114,6 +114,22 @@ describe("demo fake agent", () => {
     expect((await api.status()).drive.mode).toBe("pnp");
   });
 
+  it("the demo agent takes the prototype switches and refuses a D v1 variant outside lap mode v1", async () => {
+    const { car, api } = rig();
+    car.preset("running");
+    const base = { mode: "pnp", pnp_backend: "geometric", pnp_dynamics: "dyn-2026-10-20", pnp_lap_memory: true };
+    for (const bad of [
+      { pnp_dv1_variant: "K3" },
+      { pnp_lap_mode: "v1", pnp_dv1_variant: "K9" },
+      { pnp_dynamics_fast_mlp: "true" },
+      { pnp_rt_sched: 1 },
+    ]) {
+      await expect(api.startDrive({ ...base, ...bad } as never)).rejects.toMatchObject({ status: 400 });
+    }
+    await api.startDrive({ ...base, pnp_lap_mode: "v1", pnp_lap_source: "camera", pnp_dv1_variant: "K3", pnp_dynamics_fast_mlp: true } as never);
+    expect((await api.status()).drive.mode).toBe("pnp");
+  });
+
   it("the demo agent refuses a speed cap above the dynamics bundle's validity, like the car", async () => {
     const { car, api } = rig();
     car.preset("running");

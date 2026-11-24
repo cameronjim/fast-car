@@ -124,6 +124,15 @@ def _describe_laps(params: dict[str, Any]) -> str:
         text += f" length_ratio={lap['ratio_min']:.2f}..{lap['ratio_max']:.2f}"
     if lap.get("rate_hz"):
         text += f" lap_rate_hz={lap['rate_hz']:g}"
+    if lap.get("dv1_variant", "registered") != "registered":
+        text += f" dv1_variant={lap['dv1_variant']}"
+    for key, label in (
+        ("fast_mlp", "dynamics_fast_mlp"),
+        ("adaptation", "dynamics_adaptation"),
+        ("rt_sched", "rt_sched"),
+    ):
+        if lap.get(key):
+            text += f" {label}"
     if lap["shadow"]:
         text += f" shadow={lap['shadow']}"
     return text
@@ -1024,6 +1033,10 @@ class Controller:
         pnp_lap_length_ratio_min: Any = 0.0,
         pnp_lap_length_ratio_max: Any = 0.0,
         pnp_lap_rate_hz: Any = 0.0,
+        pnp_dv1_variant: Any = "registered",
+        pnp_dynamics_fast_mlp: Any = False,
+        pnp_dynamics_adaptation: Any = False,
+        pnp_rt_sched: Any = False,
         max_speed_mps: float | None = None,
         min_speed_mps: float | None = None,
         a_lat_max_mps2: float | None = None,
@@ -1079,6 +1092,10 @@ class Controller:
                         pnp_lap_length_ratio_min,
                         pnp_lap_length_ratio_max,
                         pnp_lap_rate_hz,
+                        pnp_dv1_variant,
+                        pnp_dynamics_fast_mlp,
+                        pnp_dynamics_adaptation,
+                        pnp_rt_sched,
                     ),
                 )
                 params.update(resolved)
@@ -1370,6 +1387,10 @@ class Controller:
             ratio_min,
             ratio_max,
             rate_hz,
+            dv1_variant,
+            fast_mlp,
+            adaptation,
+            rt_sched,
         ) = lap
         if shadow and (not isinstance(shadow, str) or shadow not in status["perception"]):
             raise ActionError(
@@ -1388,6 +1409,10 @@ class Controller:
             length_ratio_min=ratio_min,
             length_ratio_max=ratio_max,
             rate_hz=rate_hz,
+            dv1_variant=dv1_variant,
+            dynamics_fast_mlp=fast_mlp,
+            dynamics_adaptation=adaptation,
+            rt_sched=rt_sched,
             shadow_container_path=cmd.container_path(self.s.repo_dir, models / shadow)
             if shadow
             else "",
@@ -1429,6 +1454,10 @@ class Controller:
                     "ratio_min": ratio_min,
                     "ratio_max": ratio_max,
                     "rate_hz": rate_hz,
+                    "dv1_variant": dv1_variant,
+                    "fast_mlp": fast_mlp,
+                    "adaptation": adaptation,
+                    "rt_sched": rt_sched,
                 },
             },
         )
@@ -1736,6 +1765,10 @@ class Controller:
                     length_ratio_min=n.lap_length_ratio_min,
                     length_ratio_max=n.lap_length_ratio_max,
                     rate_hz=n.lap_rate_hz,
+                    dv1_variant=n.dv1_variant,
+                    dynamics_fast_mlp=n.dynamics_fast_mlp,
+                    dynamics_adaptation=n.dynamics_adaptation,
+                    rt_sched=n.rt_sched,
                     shadow_container_path=shadow if n.shadow_perception else "",
                 ),
                 driving if n.backend == "net" and n.perception else "",

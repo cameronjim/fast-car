@@ -60,6 +60,11 @@ class PnpPrefs(_Strict):
     lap_length_ratio_max: float = 0.0
     # pnp.launch.py lap_rate_hz (the camera lap counter's rate); 0: the launch default (15).
     lap_rate_hz: float = Field(default=0.0, ge=0.0, le=30.0)
+    # Prototype switches (owner decision 29): the defaults send nothing.
+    dv1_variant: Literal["registered", "K1", "K2", "K3"] = "registered"
+    dynamics_fast_mlp: bool = False
+    dynamics_adaptation: bool = False
+    rt_sched: bool = False
 
 
 class TrackerPrefs(_Strict):

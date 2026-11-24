@@ -324,6 +324,12 @@ export class DemoCar {
     const rate = b.pnp_lap_rate_hz ?? 0;
     if (typeof rate !== "number" || !(rate >= 0 && rate <= 30)) return "pnp lap counter rate must be a number from 0 to 30 Hz";
     if (rate !== 0 && b.pnp_lap_counter === false) return "pnp lap counter rate needs the lap counter on";
+    for (const k of ["pnp_dynamics_fast_mlp", "pnp_dynamics_adaptation", "pnp_rt_sched"] as const) {
+      if (b[k] !== undefined && !isBool(b[k])) return `${k} must be true or false`;
+    }
+    const variant = b.pnp_dv1_variant ?? "registered";
+    if (!["registered", "K1", "K2", "K3"].includes(String(variant))) return "pnp D v1 variant must be one of ['registered', 'K1', 'K2', 'K3']";
+    if (variant !== "registered" && mode !== "v1") return "pnp D v1 variant needs lap mode v1";
     const shadow = b.pnp_shadow_perception;
     if (shadow && shadow === b.pnp_perception) return "the shadow perception bundle cannot be the driving one";
     return null;

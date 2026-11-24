@@ -52,6 +52,9 @@ PNP_MODELS_IN_CONTAINER = "/workspace/data/pnp/models/"
 #: `parse_launch_declarations`), so a mode the launch does not have yet is refused, not sent.
 PNP_LAP_MODES = ("v0", "v1", "observe")
 PNP_LAP_SOURCES = ("start_scan", "map_pose", "camera")
+#: D v1 variants of pnp.launch.py `dv1_variant` (brief 53; development runs, owner decision 29). Only
+#: with lap mode v1; `registered` is the launch default and is not sent.
+PNP_DV1_VARIANTS = ("registered", "K1", "K2", "K3")
 #: Sources pnp.launch.py declares that the app never offers: `truth` is the simulator's line
 #: crossing (brief 51) and the car has no truth. The app's sources are the launch's choices minus this.
 PNP_SIM_ONLY_LAP_SOURCES = frozenset({"truth"})
@@ -518,6 +521,11 @@ class PnpLap:
     length_ratio_max: object = 0.0
     # lap_rate_hz of the camera lap counter pnp.launch.py starts; 0.0: the launch default.
     rate_hz: object = 0.0
+    # Prototype switches (owner decision 29), all default off: nothing is sent at the default.
+    dv1_variant: object = "registered"
+    dynamics_fast_mlp: object = False
+    dynamics_adaptation: object = False
+    rt_sched: object = False
 
 
 def parse_launch_declarations(text: str) -> dict[str, tuple[str, ...] | None]:
@@ -530,21 +538,35 @@ def parse_launch_declarations(text: str) -> dict[str, tuple[str, ...] | None]:
     except SyntaxError:
         return {}
     consts: dict[str, tuple[str, ...]] = {}
+    names: dict[str, str] = {}  # module-level NAME = "text", for `DeclareLaunchArgument(NAME, ...)`
     for node in tree.body:
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             value = node.value
             target = node.targets[0] if isinstance(node, ast.Assign) else node.target
             if isinstance(target, ast.Name) and value is not None:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    names[target.id] = value.value
                 strings = _string_seq(value, consts)
+                if strings is None and isinstance(value, ast.Dict):
+                    # list(NAME) of a dict is its keys
+                    keys = value.keys
+                    if all(isinstance(k, ast.Constant) and isinstance(k.value, str) for k in keys):
+                        strings = tuple(k.value for k in keys)  # type: ignore[union-attr]
                 if strings is not None:
                     consts[target.id] = strings
     out: dict[str, tuple[str, ...] | None] = {}
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and _call_name(node) == "DeclareLaunchArgument"):
             continue
-        if not node.args or not isinstance(node.args[0], ast.Constant):
+        if not node.args:
             continue
-        name = node.args[0].value
+        first = node.args[0]
+        if isinstance(first, ast.Constant):
+            name = first.value
+        elif isinstance(first, ast.Name):
+            name = names.get(first.id)
+        else:
+            continue
         if not isinstance(name, str):
             continue
         choices: tuple[str, ...] | None = None
@@ -612,6 +634,18 @@ def _pnp_lap_args(
         if lap.lap_source != "camera":
             raise CommandError("pnp lap length ratios apply to lap source camera only")
 
+    for name, value in (
+        ("pnp_dynamics_fast_mlp", lap.dynamics_fast_mlp),
+        ("pnp_dynamics_adaptation", lap.dynamics_adaptation),
+        ("pnp_rt_sched", lap.rt_sched),
+    ):
+        if not isinstance(value, bool):
+            raise CommandError(f"{name} must be true or false")
+    if not isinstance(lap.dv1_variant, str) or lap.dv1_variant not in PNP_DV1_VARIANTS:
+        raise CommandError(f"pnp D v1 variant must be one of {list(PNP_DV1_VARIANTS)}")
+    if lap.dv1_variant != "registered" and lap.lap_mode != "v1":
+        raise CommandError("pnp D v1 variant needs lap mode v1")
+
     if not _is_number(lap.rate_hz) or not (0.0 <= float(lap.rate_hz) <= 30.0):  # type: ignore[arg-type]
         raise CommandError("pnp lap counter rate must be a number from 0 to 30 Hz")
     rate_hz = float(lap.rate_hz)  # type: ignore[arg-type]
@@ -659,6 +693,14 @@ def _pnp_lap_args(
         used.append(("shadow_perception_bundle", shadow, None))
     if rate_hz:
         used.append(("lap_rate_hz", f"{rate_hz:g}", None))
+    if lap.dv1_variant != "registered":
+        used.append(("dv1_variant", str(lap.dv1_variant), str(lap.dv1_variant)))
+    if lap.dynamics_fast_mlp:
+        used.append(("dynamics_fast_mlp", "true", None))
+    if lap.dynamics_adaptation:
+        used.append(("dynamics_adaptation", "true", None))
+    if lap.rt_sched:
+        used.append(("rt_sched", "on", "on"))
     if ratio_on:
         used.append(("lap_length_ratio_min", f"{r_lo:.2f}", None))
         used.append(("lap_length_ratio_max", f"{r_hi:.2f}", None))

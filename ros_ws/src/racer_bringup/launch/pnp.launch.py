@@ -57,6 +57,15 @@ Prototype switch (owner decision 29, default off):
   bundle's golden rollouts at load; about 2.6x faster solves with dyn-v0.7p. No effect on a
   bundle without a learned block (dyn-v0.1). With false the planner gets no extra parameter.
 
+Prototype profile (owner decision 29, default none):
+
+* `profile:=prototype` turns every learned part on together as development runs: `backend:=net`
+  with trackperc-v2, dyn-v0.7p with `dynamics_fast_mlp:=true` (`dynamics_adaptation` stays false),
+  `lap_mode:=v1` with `dv1_variant:=K3`, `lap_source:=camera` and the session 2 lap settings
+  (`lap_rate_hz` 30, ratio 0.75 / 1.5, `v_lap1_mps` 0.5, `v_max_mps` 1.3). It only changes the
+  DEFAULTS of those arguments (PROFILES below); any argument given on the command line wins.
+  `profile:=none` (default) changes nothing. `rt_sched` is not part of it.
+
 Options that are measurements, not part of the command path:
 
 * `lap_memory` (default false) adds racer_laps' lap_memory_node (`lap_source:=start_scan|map_pose|
@@ -114,10 +123,52 @@ from launch.event_handlers import OnProcessExit, OnProcessIO
 from launch.events import Shutdown
 from launch.launch_context import LaunchContext
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch_ros.actions import Node
 
 _RT_SCHED_FILE = Path(__file__).resolve().with_name("rt_sched.py")
+
+
+# profile:=prototype (decision 29): the defaults of the arguments below, nothing else. D v1 K3 was
+# "unsafe in sim" on B11, so it runs capped (v_max_mps) with the owner on the kill switch.
+PROFILE_NONE = "none"
+PROFILES: dict[str, dict[str, str]] = {
+    PROFILE_NONE: {},
+    "prototype": {
+        "backend": "net",
+        "perception_bundle": "/workspace/data/pnp/models/trackperc-v2-2026-11-14",
+        "dynamics_bundle": "/workspace/data/pnp/models/dyn-v0.7p-2026-11-24",
+        "dynamics_fast_mlp": "true",
+        "dynamics_adaptation": "false",
+        "lap_memory": "true",
+        "lap_mode": "v1",
+        "dv1_variant": "K3",
+        "lap_source": "camera",
+        "lap_counter": "true",
+        "lap_rate_hz": "30.0",
+        "lap_length_ratio_min": "0.75",
+        "lap_length_ratio_max": "1.5",
+        "v_lap1_mps": "0.5",
+        "v_max_mps": "1.3",
+    },
+}
+
+
+class _ProfileDefault(TextSubstitution):
+    """An argument default that the chosen profile may replace.
+
+    `text` is the plain default (profile none), so the declared default reads as before. An
+    argument given on the command line is already in the launch context when its
+    DeclareLaunchArgument runs and this default is never evaluated, so it wins over the profile.
+    """
+
+    def __init__(self, name: str, default: str):
+        super().__init__(text=default)
+        self._name = name
+
+    def perform(self, context: LaunchContext) -> str:
+        profile = context.launch_configurations.get("profile", PROFILE_NONE)
+        return PROFILES.get(profile, {}).get(self._name, self.text)
 
 
 def _load_rt_sched():
@@ -811,6 +862,12 @@ def _make_actions(context: LaunchContext) -> list:
     v_lap1 = float(v_lap1_text) if v_lap1_text else None
     lap_params = None
     log: list[str] = []
+    profile = LaunchConfiguration("profile", default=PROFILE_NONE).perform(context).strip()
+    if profile != PROFILE_NONE:
+        log.append(
+            f"profile:={profile}: development defaults {PROFILES[profile]} (arguments given "
+            "on the command line win). D v1 K3 was unsafe in sim: owner on the kill switch."
+        )
     if lap_memory:
         lap_params = lap_memory_parameters(
             arg("dynamics_bundle"),
@@ -976,18 +1033,30 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument(
+                "profile",
+                default_value=PROFILE_NONE,
+                choices=list(PROFILES),
+                description=(
+                    "prototype: the defaults of every learned part together (net perception with "
+                    "trackperc-v2, dyn-v0.7p with dynamics_fast_mlp, lap_mode v1 K3 on the camera "
+                    "source, the session 2 lap settings, v_max_mps 1.3); development runs "
+                    "(owner decision 29). An argument given explicitly overrides it. none "
+                    "(default): nothing changes."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "perception_bundle",
-                default_value="",
+                default_value=_ProfileDefault("perception_bundle", ""),
                 description="track_perception bundle directory. Required with backend:=net.",
             ),
             DeclareLaunchArgument(
                 "dynamics_bundle",
-                default_value="",
+                default_value=_ProfileDefault("dynamics_bundle", ""),
                 description="dynamics bundle directory (required).",
             ),
             DeclareLaunchArgument(
                 "backend",
-                default_value="geometric",
+                default_value=_ProfileDefault("backend", "geometric"),
                 choices=list(BACKENDS),
                 description=(
                     "Track perception backend: geometric (default: the net failed the real-bag "
@@ -996,7 +1065,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "v_max_mps",
-                default_value="0.5",
+                default_value=_ProfileDefault("v_max_mps", "0.5"),
                 description=(
                     "The absolute speed cap in m/s passed to the planner: the ceiling. With "
                     "lap_memory the lap cap rises towards it."
@@ -1004,7 +1073,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "v_lap1_mps",
-                default_value="",
+                default_value=_ProfileDefault("v_lap1_mps", ""),
                 description=(
                     "Cap of lap 1 in m/s: the lap memory's start cap and the planner's "
                     "v_no_guidance_mps. Empty: equal to v_max_mps. Refused above v_max_mps "
@@ -1013,7 +1082,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "lap_length_ratio_min",
-                default_value="0.0",
+                default_value=_ProfileDefault("lap_length_ratio_min", "0.0"),
                 description=(
                     "Owner decision 21: with lap_source:=camera a lap counts if its wheel length "
                     "is at least this times the reference. 0 with lap_length_ratio_max 0: the "
@@ -1022,7 +1091,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "lap_length_ratio_max",
-                default_value="0.0",
+                default_value=_ProfileDefault("lap_length_ratio_max", "0.0"),
                 description=(
                     "Owner decision 21: at most this times the reference (below 2, so a missed "
                     "crossing, a double lap, stays doubtful). 0: the registered band."
@@ -1048,7 +1117,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "lap_memory",
-                default_value="false",
+                default_value=_ProfileDefault("lap_memory", "false"),
                 choices=["true", "false"],
                 description=(
                     "Also start racer_laps' lap_memory_node and let the planner use its speed "
@@ -1058,7 +1127,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "lap_mode",
-                default_value="v0",
+                default_value=_ProfileDefault("lap_mode", "v0"),
                 choices=list(LAP_MODES),
                 description=(
                     "D v0 (cap schedule), v1 (station set; start_scan or camera) or observe (the lap "
@@ -1068,7 +1137,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "dv1_variant",
-                default_value="registered",
+                default_value=_ProfileDefault("dv1_variant", "registered"),
                 choices=list(DV1_VARIANTS),
                 description=(
                     "lap_mode:=v1 only: registered (D v1 of brief 26) or a brief 53 candidate K1, "
@@ -1078,7 +1147,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "lap_source",
-                default_value="start_scan",
+                default_value=_ProfileDefault("lap_source", "start_scan"),
                 choices=list(LAP_SOURCES),
                 description=(
                     "How a lap closes: start_scan (start-scan gate plus wheel odometry, no map "
@@ -1097,7 +1166,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "lap_counter",
-                default_value="true",
+                default_value=_ProfileDefault("lap_counter", "true"),
                 choices=["true", "false"],
                 description=(
                     "Start the camera lap counter (racer_perception) unless one is already in "
@@ -1106,7 +1175,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "lap_rate_hz",
-                default_value="15.0",
+                default_value=_ProfileDefault("lap_rate_hz", "15.0"),
                 description=(
                     "Frames per second the camera lap counter processes (a fixed phase, so a "
                     "camera at least this fast delivers exactly this). The car session uses 30. "
@@ -1155,7 +1224,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 ADAPTATION_PARAM,
-                default_value="false",
+                default_value=_ProfileDefault("dynamics_adaptation", "false"),
                 choices=["true", "false"],
                 description=(
                     "PROTOTYPE: online bias and gain correction of the dynamics model's speed "
@@ -1164,7 +1233,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 FAST_MLP_PARAM,
-                default_value="false",
+                default_value=_ProfileDefault("dynamics_fast_mlp", "false"),
                 choices=["true", "false"],
                 description=(
                     "true: the planner evaluates the dynamics bundle's learned MLP with a "

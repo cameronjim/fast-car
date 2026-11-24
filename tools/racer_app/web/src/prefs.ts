@@ -34,6 +34,10 @@ export const DEFAULT_PREFS: Prefs = {
     lap_length_ratio_min: 0,
     lap_length_ratio_max: 0,
     lap_rate_hz: 0,
+    dv1_variant: "registered",
+    dynamics_fast_mlp: false,
+    dynamics_adaptation: false,
+    rt_sched: false,
   },
   tracker: { raceline: "" },
 };
@@ -75,7 +79,53 @@ export type PnpField =
   | "require_lap_counter"
   | "shadow_perception"
   | "lap_length_ratio_min"
-  | "lap_rate_hz";
+  | "lap_rate_hz"
+  | "dv1_variant";
+
+export const DV1_VARIANTS = ["registered", "K1", "K2", "K3"] as const;
+
+/**
+ * The Prototype preset (owner decision 29): every learned part together, as development runs. The
+ * same defaults as `profile:=prototype` of pnp.launch.py. D v1 K3 was "unsafe in sim" on B11, so
+ * it runs under the speed cap with the owner on the kill switch.
+ */
+export const PROTOTYPE = {
+  perception: "trackperc-v2-2026-11-14",
+  dynamics: "dyn-v0.7p-2026-11-24",
+  v_max_mps: 1.3,
+  v_lap1_mps: 0.5,
+  lap_rate_hz: 30,
+} as const;
+
+/** Bundles that did not pass their rule and are on the car only to be tried (decision 29). */
+export const CANDIDATE_BUNDLES: readonly string[] = ["trackperc-v3-2026-11-23"];
+
+/** A bundle name as the pickers show it. */
+export const bundleLabel = (id: string): string => (CANDIDATE_BUNDLES.includes(id) ? `${id} (candidate)` : id);
+
+/** The ML driver fields the Prototype preset sets (the rest of the card is left as the owner had it). */
+export function prototypePatch(options: Options | null): Partial<Prefs["pnp"]> {
+  const limit = pnpSpeedLimit({ dynamics: PROTOTYPE.dynamics }, options);
+  return {
+    backend: "net",
+    perception: PROTOTYPE.perception,
+    dynamics: PROTOTYPE.dynamics,
+    v_max_mps: Math.min(PROTOTYPE.v_max_mps, limit.max),
+    v_lap1_mps: PROTOTYPE.v_lap1_mps,
+    lap_memory: true,
+    lap_mode: "v1",
+    lap_source: "camera",
+    lap_counter: true,
+    require_lap_counter: true,
+    lap_rate_hz: PROTOTYPE.lap_rate_hz,
+    lap_length_ratio_min: RATIO_BAND.min,
+    lap_length_ratio_max: RATIO_BAND.max,
+    dv1_variant: "K3",
+    dynamics_fast_mlp: true,
+    dynamics_adaptation: false,
+    rt_sched: false,
+  };
+}
 
 /** The band owner decision 21 used on the car (2026-11-22): at least 0.75 and at most 1.5 times the reference. */
 export const RATIO_BAND = { min: 0.75, max: 1.5 } as const;
@@ -181,6 +231,11 @@ export function pnpErrors(p: Prefs["pnp"], options: Options | null): FieldErrors
   } else if (p.lap_rate_hz !== 0 && !p.lap_counter) {
     e.lap_rate_hz = "pnp lap counter rate needs the lap counter on";
   }
+  if (!(DV1_VARIANTS as readonly string[]).includes(p.dv1_variant)) {
+    e.dv1_variant = `pnp D v1 variant must be one of ${JSON.stringify([...DV1_VARIANTS])}`;
+  } else if (p.dv1_variant !== "registered" && !(on && p.lap_mode === "v1")) {
+    e.dv1_variant = "pnp D v1 variant needs lap mode v1";
+  }
   const ratioOn = p.lap_length_ratio_min !== 0 || p.lap_length_ratio_max !== 0;
   if (ratioOn) {
     const lo = p.lap_length_ratio_min;
@@ -261,6 +316,10 @@ export function pnpBody(p: Prefs, options: Options | null) {
     pnp_require_lap_counter: n.require_lap_counter ? true : undefined,
     pnp_shadow_perception: shadow || undefined,
     pnp_lap_rate_hz: n.lap_counter && n.lap_rate_hz !== 0 ? n.lap_rate_hz : undefined,
+    pnp_dv1_variant: on && n.lap_mode === "v1" && n.dv1_variant !== "registered" ? n.dv1_variant : undefined,
+    pnp_dynamics_fast_mlp: n.dynamics_fast_mlp ? true : undefined,
+    pnp_dynamics_adaptation: n.dynamics_adaptation ? true : undefined,
+    pnp_rt_sched: n.rt_sched ? true : undefined,
     ...(ratioSent(n) ? { pnp_lap_length_ratio_min: n.lap_length_ratio_min, pnp_lap_length_ratio_max: n.lap_length_ratio_max } : {}),
   };
 }
@@ -319,10 +378,14 @@ export function pnpSummary(p: Prefs, options: Options | null = null): string {
     const label = LAP_CHOICES.find((c) => c.id === choice)?.label ?? choice;
     parts.push(`${label} from ${(n.v_lap1_mps ?? n.v_max_mps).toFixed(2)}`);
     if (n.lap_source !== "start_scan") parts.push(`source ${n.lap_source}`);
+    if (n.lap_mode === "v1" && n.dv1_variant !== "registered") parts.push(`variant ${n.dv1_variant}`);
     if (ratioSent(n)) parts.push(`length ${n.lap_length_ratio_min} to ${n.lap_length_ratio_max} x reference`);
   }
   parts.push(n.lap_counter ? (n.require_lap_counter ? "lap counter required" : "lap counter on") : "lap counter off");
   if (n.lap_counter && n.lap_rate_hz !== 0) parts.push(`counter ${n.lap_rate_hz} Hz`);
+  if (n.dynamics_fast_mlp) parts.push("fast MLP");
+  if (n.dynamics_adaptation) parts.push("adaptation");
+  if (n.rt_sched) parts.push("rt_sched");
   const shadow = pnpBody(p, options).pnp_shadow_perception;
   if (shadow) parts.push(`shadow ${shadow}`);
   return parts.join(", ");

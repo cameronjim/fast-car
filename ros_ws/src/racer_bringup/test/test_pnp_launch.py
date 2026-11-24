@@ -95,6 +95,7 @@ def test_argument_defaults() -> None:
     }
     defaults = {name: "".join(t.text for t in arg.default_value) for name, arg in declared.items()}
     assert defaults == {
+        "profile": "none",
         "perception_bundle": "",
         "dynamics_bundle": "",
         "backend": "geometric",
@@ -119,6 +120,7 @@ def test_argument_defaults() -> None:
         "dynamics_fast_mlp": "false",
         "params_file": "",
     }
+    assert declared["profile"].choices == ["none", "prototype"]
     assert declared["rt_sched"].choices == ["off", "on"]
     assert declared["deskew"].choices == ["true", "false"]
     assert declared["dynamics_adaptation"].choices == ["true", "false"]
@@ -1258,3 +1260,91 @@ def test_the_recorder_regex_takes_the_shadow_lap_topics() -> None:
     assert (
         '|/lap/(event|status|similarity|thumb)|/pnp/.*)$"' in text
     )  # /pnp/lap_shadow/* is under /pnp/
+
+
+# profile:=prototype (owner decision 29): only the defaults change, an explicit argument wins.
+def _declared_context(profile: str | None, **explicit: str) -> LaunchContext:
+    """The launch context after the DeclareLaunchArguments ran in order, as `ros2 launch` does:
+    arguments given on the command line are in the context before their declaration runs."""
+    context = LaunchContext()
+    if profile is not None:
+        context.launch_configurations["profile"] = profile
+    context.launch_configurations.update(explicit)
+    for entity in _module().generate_launch_description().entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+    return context
+
+
+def test_profile_none_is_every_default_as_before() -> None:
+    plain = _declared_context(None)
+    none = _declared_context("none")
+    assert plain.launch_configurations == {**none.launch_configurations}
+    assert plain.launch_configurations["backend"] == "geometric"
+    assert plain.launch_configurations["lap_memory"] == "false"
+    assert plain.launch_configurations["lap_mode"] == "v0"
+    assert plain.launch_configurations["dynamics_fast_mlp"] == "false"
+    assert plain.launch_configurations["v_max_mps"] == "0.5"
+
+
+def test_profile_prototype_sets_the_learned_defaults() -> None:
+    c = _declared_context("prototype").launch_configurations
+    assert c["backend"] == "net"
+    assert c["perception_bundle"].endswith("/trackperc-v2-2026-11-14")
+    assert c["dynamics_bundle"].endswith("/dyn-v0.7p-2026-11-24")
+    assert c["dynamics_fast_mlp"] == "true"
+    assert c["dynamics_adaptation"] == "false"
+    assert c["lap_memory"] == "true"
+    assert c["lap_mode"] == "v1" and c["dv1_variant"] == "K3"
+    assert c["lap_source"] == "camera" and c["lap_counter"] == "true"
+    assert float(c["lap_rate_hz"]) == 30.0
+    assert (float(c["lap_length_ratio_min"]), float(c["lap_length_ratio_max"])) == (0.75, 1.5)
+    assert float(c["v_lap1_mps"]) == 0.5 and float(c["v_max_mps"]) == 1.3
+    # not part of the profile
+    assert c["rt_sched"] == "off" and c["deskew"] == "false" and c["lap_shadow"] == ""
+
+
+def test_profile_prototype_explicit_arguments_win() -> None:
+    c = _declared_context(
+        "prototype",
+        backend="geometric",
+        dynamics_fast_mlp="false",
+        dv1_variant="registered",
+        v_max_mps="0.9",
+        dynamics_bundle="/b/dyn-v0.1",
+        lap_memory="false",
+    ).launch_configurations
+    assert c["backend"] == "geometric" and c["dynamics_fast_mlp"] == "false"
+    assert c["dv1_variant"] == "registered" and c["v_max_mps"] == "0.9"
+    assert c["dynamics_bundle"] == "/b/dyn-v0.1" and c["lap_memory"] == "false"
+    # the rest still follows the profile
+    assert c["lap_mode"] == "v1" and c["lap_source"] == "camera"
+
+
+def test_an_unknown_profile_is_refused() -> None:
+    with pytest.raises(Exception, match="profile"):
+        _declared_context("bogus")
+
+
+def test_profile_prototype_builds_the_whole_learned_stack(monkeypatch, tmp_path) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
+    context = _declared_context(
+        "prototype", dynamics_bundle=_bundle(tmp_path, v_max=1.5), params_file=""
+    )
+    actions = m._make_actions(context)
+    q = _flat_params(_planner_of(actions))
+    p = _flat_params(_laps_nodes(actions)[0])
+    assert q["dynamics_fast_mlp"] is True and "dynamics_adaptation" not in q
+    assert q["use_lap_guidance"] is True and q["v_max_mps"] == 1.3
+    assert q["v_no_guidance_mps"] == 0.5
+    assert p["lap_mode"] == "v1" and p["lap_source"] == "camera"
+    lap, planner = m.DV1_VARIANTS["K3"]
+    for k, v in lap.items():
+        assert p[k] == v, k
+    for k, v in planner.items():
+        assert q[k] == v, k
+    assert p["length_ratio_min"] == 0.75 and p["length_ratio_max"] == 1.5
+    # nothing on the command path changed
+    assert not any("/drive" in str(getattr(a, "_Node__remappings", "")) for a in actions)

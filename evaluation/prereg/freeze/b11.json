@@ -1,0 +1,36 @@
+{
+  "commit_sha": "0cdd9d0bebfa0b13eab5f5e0400376b8b942d559",
+  "main_sha_contained": "a4c190b78d0a14d3c6c2d7ec0b4be7e3ae5aebe1",
+  "branch": "feat/dv1-b11",
+  "yaml_sha256": "a75b088fb15f791d0ba23087708e0e8ebdfbbe759af6e4342e620f1b38d06c4b",
+  "addendum_sha256": "e5cee1c64b9ac9232a1c819f65188eee0947dcffe5e8e30237de4e58952576fa",
+  "candidate": "K3",
+  "candidate_rule": "M-D1b part 1 (c, K1, K2, K3 on T, S1, S2, S3, N1, N3, seeds 11 to 13, both directions; car-data/pnp/battery/v0.6-dv1-dev, runs at bf4ff89): K1 eligible score 1.027; K2 not eligible (K2 T/cw/11 starved on 3 attempts, counts as failed to execute); K3 eligible score 0.801. Pick K3 (below 0.97).",
+  "tuned_values": {
+    "station_uncertainty_rate": 0.02,
+    "station_uncertainty_cap_m": 0.5,
+    "reset_length_share": 0.08,
+    "curvature_bound_a_lat_mps2": 2.0
+  },
+  "tuned_values_note": "chosen before any development run, not tuned on the data",
+  "switches": {
+    "lap": {
+      "zone_floor_mode": "cap_wins",
+      "station_uncertainty": true,
+      "reset_on_change": true,
+      "value_profile_mode": "freeze_after_first_clean_lap"
+    },
+    "planner": {
+      "lap_station_mode": "track",
+      "lap_reward_mode": "replace"
+    }
+  },
+  "defaults_bit_identical_test": [
+    "racer_planner test_mppi_costs MppiLap.DefaultsWithAProfileAreBitIdenticalToMainBeforeTheSwitches (golden recorded from main 728a52d)",
+    "racer_planner MppiSolver.WithoutTheHooksTheSolverIsBitIdenticalToTheOneBeforeThem",
+    "racer_laps tests/test_dv1_switches.py defaults tests",
+    "existing lap and planner goldens unchanged"
+  ],
+  "branch_not_main": "owner decision 28 item 1: B11 freezes on this branch, unmerged",
+  "note": "The car path of owner decision 29 (feat/dv1-car) is a separate branch; B11 runs this commit."
+}

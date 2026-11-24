@@ -66,7 +66,11 @@ def test_launch_s4_switch_is_off_by_default_and_the_ratio_is_lapconfigs():
     for entry in evaluate_parameters(context, node._Node__parameters):
         merged.update(entry)
     assert merged["driving_reference"] is True and isinstance(merged["lap_gate_ratio"], float)
-    context.launch_configurations.update(defaults)
+    # a fresh description (evaluate_parameters caches what it evaluated), nothing overridden
+    fresh = _load(_LAUNCH).generate_launch_description().entities
+    node = next(e for e in fresh if isinstance(e, LaunchNode))
+    context = LaunchContext()
+    context.launch_configurations.update(_defaults(fresh))
     merged = {}
     for entry in evaluate_parameters(context, node._Node__parameters):
         merged.update(entry)

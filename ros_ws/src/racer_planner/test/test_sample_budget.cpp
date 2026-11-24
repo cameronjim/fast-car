@@ -1,8 +1,8 @@
-// SampleBudget, L2 and L4. L2: for any sequence of solve times (seeded generators, bursts, outliers,
-// sustained overload, recovery) the count stays within [min, max], never grows on a tick whose solve
-// was over the halve limit, and never falls on a tick whose solve was not over it. L4: the solve
-// times of the D v0 cw run of session 2026-11-22 (a car run on which the budget sat at about 200 of
-// 512 samples) fed through the budget.
+// SampleBudget, L2 and L4. L2: for any sequence of solve times (seeded generators, bursts,
+// outliers, sustained overload, recovery) the count stays within [min, max], never grows on a tick
+// whose solve was over the halve limit, and never falls on a tick whose solve was not over it. L4:
+// the solve times of the D v0 cw run of session 2026-11-22 (a car run on which the budget sat at
+// about 200 of 512 samples) fed through the budget.
 #include <gtest/gtest.h>
 
 #include <algorithm>

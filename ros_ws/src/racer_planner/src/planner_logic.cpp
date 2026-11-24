@@ -375,9 +375,9 @@ void SampleBudget::clear_window() {
 int SampleBudget::update(double solve_time_s, bool* halved) {
   if (halved != nullptr) *halved = false;
   if (!std::isfinite(solve_time_s)) return current_;
-  const Kind kind = solve_time_s > p_.halve_over_s       ? kOver
+  const Kind kind = solve_time_s > p_.halve_over_s      ? kOver
                     : solve_time_s < p_.restore_under_s ? kUnder
-                                                         : kMid;
+                                                        : kMid;
   unsigned char& slot = ring_[static_cast<size_t>(head_)];
   if (filled_ == p_.window) {  // drop the oldest
     if (slot == kOver) --over_;

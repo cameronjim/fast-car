@@ -101,9 +101,15 @@ def test_a_camera_config_needs_the_odometry_model() -> None:
 
 
 @pytest.mark.parametrize("source", ["camera", "truth"])
-def test_lap_mode_v1_is_refused_with_an_external_source(source: str) -> None:
+def test_lap_mode_v1_is_allowed_with_an_external_source(source: str) -> None:
+    # brief 53 and owner decision 29 (changed expectation: refused before)
+    cfg = LapConfig(lap_source=source, lap_mode="v1", gate=odom_model())
+    assert isinstance(LapMemory(cfg).gate, ExternalLapGate)
+
+
+def test_lap_mode_v1_is_refused_with_the_map_pose_source() -> None:
     with pytest.raises(ValueError):
-        LapConfig(lap_source=source, lap_mode="v1", gate=odom_model())
+        LapConfig(lap_source="map_pose", lap_mode="v1")
 
 
 def test_external_config_is_used_when_given() -> None:

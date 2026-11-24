@@ -65,6 +65,11 @@ class TrackProjector {
   int locate(double x, double y) const;
   // Projection with a segment hint (in and out) for cheap sequential queries along a rollout.
   Projection project(double x, double y, int* hint) const;
+  // Arc length of valid station i (0 <= i < station_count()).
+  double station_s(int i) const { return s_at_[i]; }
+  // Unsigned curvature at valid station i, 1/m: the heading change from the segment before it to
+  // the segment after it over the mean of their lengths (the end stations take their neighbour's).
+  double curvature(int i) const;
 
  private:
   int n_ = 0;

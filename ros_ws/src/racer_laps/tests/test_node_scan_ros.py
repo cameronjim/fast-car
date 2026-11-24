@@ -376,7 +376,7 @@ def test_observe_mode_publishes_events_and_status_and_no_guidance(tmp_path: Path
 def test_bad_modes_are_refused(tmp_path: Path, bad: str) -> None:
     params = [bad]
     if bad == "lap_mode:=v1":
-        params.append("lap_source:=map_pose")  # v1 is indexed by station: start_scan only
+        params.append("lap_source:=map_pose")  # v1 is indexed by station: not map_pose
     proc = subprocess.run(
         [
             sys.executable,

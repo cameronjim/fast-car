@@ -555,6 +555,11 @@ def test_the_app_refuses_truth_and_sends_camera_when_the_launch_declares_it():
     # a launch without `camera` refuses it as not available in this build
     with pytest.raises(cmd.CommandError):
         build(lap(lap_memory=True, lap_source="camera"))
+    # owner decision 29: D v1 on the camera source (refused before)
+    out = build(lap(lap_memory=True, lap_mode="v1", lap_source="camera"), launch=with_camera)
+    assert out.endswith("lap_memory:=true lap_mode:=v1 lap_source:=camera")
+    with pytest.raises(cmd.CommandError, match="start_scan or camera"):
+        build(lap(lap_memory=True, lap_mode="v1", lap_source="map_pose"), launch=with_camera)
 
 
 # -- owner decision 21: the ratio length check of the camera lap gate ----------------------------

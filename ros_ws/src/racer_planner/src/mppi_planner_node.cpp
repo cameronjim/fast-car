@@ -332,6 +332,43 @@ class MppiPlannerNode : public rclcpp::Node {
     mp.w_trust = declare_double("w_trust", mp.w_trust, 0.0, 1e7,
                                 "Weight of the speed trust region around the lap profile's "
                                 "per station speed bound (only while a profile is active).");
+    {
+      // Brief 53 switches (brief 44 section 1), every default the behaviour before them.
+      const std::string reward = declare_string(
+          "lap_reward_mode", "replace",
+          "replace (registered D v1): the lap profile's cost-to-go replaces the progress term. "
+          "keep_progress: the progress term stays, the cost-to-go is not used, the speed trust "
+          "region stays.");
+      if (reward == "replace") {
+        mp.lap_reward_mode = MppiParams::LapRewardMode::kReplace;
+      } else if (reward == "keep_progress") {
+        mp.lap_reward_mode = MppiParams::LapRewardMode::kKeepProgress;
+      } else {
+        throw std::invalid_argument("lap_reward_mode must be replace or keep_progress, got '" +
+                                    reward + "'");
+      }
+      const std::string station = declare_string(
+          "lap_station_mode", "path",
+          "path: inside a rollout the lap station advances by the rollout's wheel distance. "
+          "track: by the projected track progress while the track is in use.");
+      if (station == "path") {
+        mp.lap_station_mode = MppiParams::LapStationMode::kPath;
+      } else if (station == "track") {
+        mp.lap_station_mode = MppiParams::LapStationMode::kTrack;
+      } else {
+        throw std::invalid_argument("lap_station_mode must be path or track, got '" + station +
+                                    "'");
+      }
+      mp.terminal_curvature_bound = declare_bool(
+          "terminal_curvature_bound", false,
+          "A terminal penalty on speed above what lets the car slow to sqrt(a / curvature) at "
+          "every visible track station ahead (no memory).");
+      mp.curvature_bound_a_lat_mps2 =
+          declare_double("curvature_bound_a_lat_mps2", mp.curvature_bound_a_lat_mps2, 0.1, 50.0,
+                         "Lateral acceleration a of terminal_curvature_bound (m/s^2).");
+      mp.w_curvature_bound = declare_double("w_curvature_bound", mp.w_curvature_bound, 0.0, 1e6,
+                                            "Weight of terminal_curvature_bound.");
+    }
     cfg.drivability.stall_hold_s = declare_double(
         "stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0,
         "Wheel speed under 0.03 m/s while a speed at least the floor is published for this long: "

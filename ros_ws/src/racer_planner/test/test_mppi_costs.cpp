@@ -1526,3 +1526,306 @@ TEST(MppiLap, PropertyAnyValidProfileAndInputGivesAFiniteCommandWithinTheLimits)
   }
   EXPECT_GT(accepted, 100);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Brief 53: with a lap profile active and every switch at its default, the solver is bit-identical
+// to main before the switches (kGoldenLap was recorded from main 728a52d, same scenes and seeds;
+// RACER_RECORD_GOLDEN_LAP=1 prints the rows).
+
+namespace {
+
+constexpr int kGoldenLapScenes = 3;
+constexpr int kGoldenLapFields = 8;
+using GoldenLapRow = std::array<double, kGoldenLapFields>;
+
+LapProfile golden_profile(int scene) {
+  std::vector<float> s, v, q;
+  const double s0 = scene == 1 ? 0.7 : 0.0;
+  for (int i = 0; i < 61; ++i) {
+    const double st = s0 + 0.1 * i;
+    s.push_back(static_cast<float>(st));
+    double bound = 1.5;
+    if (scene == 0) bound = st < s0 + 1.0 ? 1.4 : 0.6;
+    if (scene == 2) bound = 0.9;
+    v.push_back(static_cast<float>(bound));
+    const double togo = st < 2.0 ? 9.0 - 2.0 * st : 5.0 - 0.6 * (st - 2.0);
+    q.push_back(static_cast<float>(togo));
+  }
+  LapProfile p;
+  make_lap_profile(s.data(), v.data(), q.data(), s.size(), v.size(), q.size(), 1.0, 1.0, &p);
+  return p;
+}
+
+std::array<GoldenLapRow, kGoldenSolves> golden_lap_scene(int scene) {
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 256;
+  p.speed_floor_mps = 0.2;
+  p.seed = 21 + static_cast<std::uint64_t>(scene);
+  Env e;
+  const LapProfile prof = golden_profile(scene);
+  SolveInput in = e.input(0.6, 0.0, 1.2);
+  if (scene == 1) {
+    std::vector<PointXY> pts;
+    pts.push_back({1.1, 0.2});
+    e.set_points(pts);
+    in.lap_station_now_m = 0.15;
+  }
+  if (scene == 2) {
+    in.x0.y = 0.12;
+    in.x0.yaw = -0.2;
+  }
+  in.lap = &prof;
+  MppiSolver s(p, e.model, e.g, 256);
+  std::array<GoldenLapRow, kGoldenSolves> rows{};
+  for (int i = 0; i < kGoldenSolves; ++i) {
+    const SolveOutput o = s.solve(in);
+    rows[static_cast<std::size_t>(i)] =
+        GoldenLapRow{o.cmd.speed_cmd,        o.cmd.steering_cmd,       o.best_cost,
+                     o.plan_progress_m,      o.plan_min_clearance_m,   o.collision_fraction,
+                     o.final_cost.lap_trust, o.final_cost.lap_terminal};
+  }
+  return rows;
+}
+
+// Recorded on aarch64 (GCC 11, the ros-dev image, Release: the package default build type)
+// from main 728a52d.
+const GoldenLapRow kGoldenLap[kGoldenLapScenes * kGoldenSolves] = {
+    {0x1.793085cf96a65p-1, 0x1.a43f91e79554dp-5, -0x1.a810cb598aec8p+4, 0x1.1016e451a39c4p+0,
+     0x1.3b0a3d70a3d71p+3, 0x0p+0, 0x1.92b49e35ca1f7p-4, -0x1.9843b27728b47p+4},
+    {0x1.aee9b4e79538fp-1, -0x1.3b85995f6a6c8p-6, -0x1.bc8c183e34155p+4, 0x1.24e1846fd793ap+0,
+     0x1.3b0a3d70a3d71p+3, 0x0p+0, 0x1.2759092a12cabp-36, -0x1.b782b318f979dp+4},
+    {0x1.dac853c12aa4ap-1, -0x1.2a7aacd1e9dbap-4, -0x1.c733f41cf4c4dp+4, 0x1.30b4d63e432cdp+0,
+     0x1.3b0a3d70a3d71p+3, 0x0p+0, 0x1.5be37cc025814p-6, -0x1.ca132c4895b99p+4},
+    {0x1.61394e7bfb93cp-1, -0x1.7bb8acd3ecd78p-3, -0x1.872c75731cf66p+4, 0x1.02b4a9418250ep+0,
+     0x1.1022a99c9fep-2, 0x1.acp-2, 0x0p+0, -0x1.960a7298b8aaep+4},
+    {0x1.9428d039e328cp-1, -0x1.8c4846405a6d7p-3, -0x1.abf2cf59e7419p+4, 0x1.14cf61ab92f58p+0,
+     0x1.2c28f686e7beap-2, 0x1.4p-6, 0x0p+0, -0x1.bc2f488343781p+4},
+    {0x1.9c5fa215cbfc9p-1, -0x1.9ebfeca5c789ep-3, -0x1.b73162ecf369ep+4, 0x1.212a6deda7eb1p+0,
+     0x1.397a2709ee4d1p-2, 0x1p-6, 0x0p+0, -0x1.c1ad639a316cp+4},
+    {0x1.6b232a19db372p-1, 0x1.8d9701cafd0e8p-7, -0x1.b8a321f6274f3p+4, 0x1.136f6cee47c16p+0,
+     0x1.3b0a3d70a3d71p+3, 0x0p+0, 0x0p+0, -0x1.a3f9e52a4f9efp+4},
+    {0x1.b05a103dc4c26p-1, -0x1.ac05ba69ba1f1p-6, -0x1.d77e32d1152f4p+4, 0x1.341eff77ffb08p+0,
+     0x1.3b0a3d70a3d71p+3, 0x0p+0, 0x0p+0, -0x1.d757755cf1e3ap+4},
+    {0x1.d4defd82e8ee8p-1, -0x1.faacd069c7772p-7, -0x1.e1ccda9455516p+4, 0x1.38574bd25a53fp+0,
+     0x1.3b0a3d70a3d71p+3, 0x0p+0, 0x0p+0, -0x1.df2544659f9efp+4},
+};
+
+}  // namespace
+
+TEST(MppiLap, RecordGoldenWithAProfile) {
+  if (std::getenv("RACER_RECORD_GOLDEN_LAP") == nullptr) GTEST_SKIP() << "recording only";
+  for (int sc = 0; sc < kGoldenLapScenes; ++sc) {
+    for (const auto& row : golden_lap_scene(sc)) {
+      std::printf("    {");
+      for (int f = 0; f < kGoldenLapFields; ++f) {
+        std::printf("%a%s", row[static_cast<std::size_t>(f)], f + 1 < kGoldenLapFields ? ", " : "");
+      }
+      std::printf("},\n");
+    }
+  }
+}
+
+TEST(MppiLap, DefaultsWithAProfileAreBitIdenticalToMainBeforeTheSwitches) {
+  const MppiParams p;
+  EXPECT_EQ(p.lap_reward_mode, MppiParams::LapRewardMode::kReplace);
+  EXPECT_EQ(p.lap_station_mode, MppiParams::LapStationMode::kPath);
+  EXPECT_FALSE(p.terminal_curvature_bound);
+  for (int sc = 0; sc < kGoldenLapScenes; ++sc) {
+    const auto rows = golden_lap_scene(sc);
+    for (int i = 0; i < kGoldenSolves; ++i) {
+      const GoldenLapRow& want = kGoldenLap[sc * kGoldenSolves + i];
+      const GoldenLapRow& got = rows[static_cast<std::size_t>(i)];
+      for (int f = 0; f < kGoldenLapFields; ++f) {
+        const std::string what = "scene " + std::to_string(sc) + " solve " + std::to_string(i) +
+                                 " field " + std::to_string(f);
+#if defined(__aarch64__)
+        EXPECT_EQ(got[static_cast<std::size_t>(f)], want[static_cast<std::size_t>(f)]) << what;
+#else
+        EXPECT_NEAR(got[static_cast<std::size_t>(f)], want[static_cast<std::size_t>(f)],
+                    1e-9 * std::max(1.0, std::fabs(want[static_cast<std::size_t>(f)])))
+            << what;
+#endif
+      }
+    }
+  }
+}
+
+// -- lap_reward_mode keep_progress
+
+TEST(MppiLap, KeepProgressKeepsTheProgressTermDropsTheValueAndKeepsTheTrustRegion) {
+  Env e;
+  MppiParams p = only_weights();
+  p.w_progress = 10.0;
+  p.w_trust = 400.0;
+  MppiParams kp = p;
+  kp.lap_reward_mode = MppiParams::LapRewardMode::kKeepProgress;
+  auto s_rep = e.solver(p);
+  auto s_kp = e.solver(kp);
+  const auto bound = [](double st) { return st < 0.5 ? 1.5 : 0.5; };
+  const auto togo = [](double st) { return 9.0 - 2.0 * st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
+  const auto seq = e.constant(0.8, 0.0);
+  SolveInput in = e.input(0.8, 0.0, 1.5);
+  CostBreakdown none, rep, kpb;
+  s_kp.evaluate_sequence(in, seq.data(), &none);  // no profile: the plain progress term
+  in.lap = &prof;
+  s_rep.evaluate_sequence(in, seq.data(), &rep);
+  s_kp.evaluate_sequence(in, seq.data(), &kpb);
+  EXPECT_EQ(kpb.progress, none.progress);
+  EXPECT_LT(kpb.progress, 0.0);
+  EXPECT_EQ(kpb.lap_terminal, 0.0);
+  EXPECT_EQ(kpb.lap_trust, rep.lap_trust);
+  EXPECT_GT(kpb.lap_trust, 0.0);
+  EXPECT_EQ(rep.progress, 0.0);  // replace: the registered behaviour
+  EXPECT_LT(rep.lap_terminal, 0.0);
+  EXPECT_NEAR(kpb.total, kpb.progress + kpb.lap_trust, 1e-12);
+}
+
+// -- lap_station_mode track
+
+TEST(MppiLap, TrackStationAdvancesByTrackProgressOnARolloutThatLeavesTheLine) {
+  Env e;  // straight track along x
+  MppiParams p = only_weights();
+  p.w_trust = 400.0;
+  MppiParams tp = p;
+  tp.lap_station_mode = MppiParams::LapStationMode::kTrack;
+  auto s_path = e.solver(p);
+  auto s_track = e.solver(tp);
+  // slow from station 0.9: a car heading 45 degrees off the line covers 1.2 m of path but only
+  // about 0.85 m of track in the horizon
+  const auto bound = [](double st) { return st < 0.9 ? 1.5 : 0.3; };
+  const auto togo = [](double st) { return 9.0 - st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
+  SolveInput in = e.input(0.8, 0.0, 1.5);
+  in.x0.yaw = 0.785;
+  in.lap = &prof;
+  const auto seq = e.constant(0.8, 0.0);
+  CostBreakdown bp, bt;
+  s_path.evaluate_sequence(in, seq.data(), &bp);
+  s_track.evaluate_sequence(in, seq.data(), &bt);
+  EXPECT_GT(bp.lap_trust, 0.0);
+  EXPECT_LT(bt.lap_trust, bp.lap_trust);
+  // on the line, heading along it, track progress and path length agree: the same cost
+  in.x0.yaw = 0.0;
+  CostBreakdown ap, at;
+  s_path.evaluate_sequence(in, seq.data(), &ap);
+  s_track.evaluate_sequence(in, seq.data(), &at);
+  EXPECT_NEAR(at.lap_trust, ap.lap_trust, 0.05 * ap.lap_trust + 1e-9);
+  // without the track (confidence 0) the track mode is the path mode exactly
+  BlendEnv b;
+  in = b.blend_input(0.8, 0.0);
+  in.x0.yaw = 0.3;
+  in.lap = &prof;
+  auto bs_path = b.solver(p);
+  auto bs_track = b.solver(tp);
+  CostBreakdown fp, ft;
+  bs_path.evaluate_sequence(in, seq.data(), &fp);
+  bs_track.evaluate_sequence(in, seq.data(), &ft);
+  EXPECT_EQ(fp.lap_trust, ft.lap_trust);
+  EXPECT_EQ(fp.total, ft.total);
+}
+
+// -- terminal_curvature_bound
+
+namespace {
+
+// A track that runs straight for `straight_m` and then turns on a circle of radius `radius_m`.
+struct CurveEnv : Env {
+  explicit CurveEnv(double straight_m, double radius_m) {
+    data.x_m.clear();
+    data.y_m.clear();
+    for (int k = 0; k < kTrackStations; ++k) {
+      const double s = k * kTrackStationSpacingM;
+      if (s <= straight_m) {
+        data.x_m.push_back(s);
+        data.y_m.push_back(0.0);
+      } else {
+        const double a = (s - straight_m) / radius_m;
+        data.x_m.push_back(straight_m + radius_m * std::sin(a));
+        data.y_m.push_back(radius_m * (1.0 - std::cos(a)));
+      }
+    }
+    track.build(data, Pose2{});
+  }
+};
+
+}  // namespace
+
+TEST(MppiCurvatureBound, OffByDefaultAndNothingOnAStraight) {
+  CurveEnv curve(0.4, 0.5);
+  MppiParams p = only_weights();
+  p.w_term = 50.0;
+  auto s_off = curve.solver(p);
+  p.terminal_curvature_bound = true;
+  auto s_on = curve.solver(p);
+  const auto seq = curve.constant(1.2, 0.0);
+  SolveInput in = curve.input(1.2, 0.0, 1.5);
+  CostBreakdown off, on;
+  s_off.evaluate_sequence(in, seq.data(), &off);
+  s_on.evaluate_sequence(in, seq.data(), &on);
+  EXPECT_GT(on.terminal, off.terminal) << "a fast car before a tight bend pays";
+  Env straight;
+  auto st_off = straight.solver(only_weights());
+  auto st_on = straight.solver(p);
+  SolveInput sin = straight.input(1.2, 0.0, 1.5);
+  CostBreakdown a, b;
+  st_off.evaluate_sequence(sin, seq.data(), &a);
+  st_on.evaluate_sequence(sin, seq.data(), &b);
+  EXPECT_EQ(b.terminal, a.terminal) << "no curvature, no penalty";
+}
+
+TEST(MppiCurvatureBound, MatchesTheFormulaAndOnlyAboveTheAllowedSpeed) {
+  // The whole visible track is one circle of radius R: v_allow at the end is sqrt(a R) (the next
+  // station ahead is the nearest), so the term is w (v_end - sqrt(a R))^2 above it, 0 below.
+  const double R = 0.8;
+  CurveEnv curve(-1.0, R);
+  MppiParams p = only_weights();
+  p.terminal_curvature_bound = true;
+  p.curvature_bound_a_lat_mps2 = 2.0;
+  p.w_curvature_bound = 100.0;
+  p.w_term = 0.0;
+  auto s = curve.solver(p);
+  const double v_allow = std::sqrt(2.0 * R);
+  // slow: below sqrt(a R) plus any braking room
+  SolveInput in = curve.input(0.6, 0.0, 2.0);
+  const auto slow = curve.constant(0.6, 0.0);
+  CostBreakdown bd;
+  s.evaluate_sequence(in, slow.data(), &bd);
+  EXPECT_EQ(bd.terminal, 0.0);
+  // a car that ends well above it: the excess over sqrt(a R + 2 d ds) for the nearest station,
+  // at most the excess over sqrt(a R)
+  SolveInput fast = curve.input(1.9, 0.0, 2.0);
+  const auto f = curve.constant(1.9, 0.0);
+  s.evaluate_sequence(fast, f.data(), &bd);
+  ASSERT_GT(bd.terminal, 0.0);
+  const double upper = 100.0 * std::pow(std::max(0.0, bd.v_end_mps - v_allow), 2);
+  EXPECT_LE(bd.terminal, upper * (1.0 + 1e-3) + 1e-9);
+  // a lower lateral acceleration allows less: more cost
+  p.curvature_bound_a_lat_mps2 = 1.0;
+  auto s2 = curve.solver(p);
+  CostBreakdown bd2;
+  s2.evaluate_sequence(fast, f.data(), &bd2);
+  EXPECT_GT(bd2.terminal, bd.terminal);
+}
+
+TEST(MppiCurvatureBound, TheSolverSlowsBeforeATightBendWithTheBound) {
+  CurveEnv curve(1.0, 0.45);
+  MppiParams p;
+  p.horizon_steps = kT;
+  p.samples = 256;
+  p.speed_floor_mps = 0.2;
+  p.d_hard_m = -100.0;
+  MppiParams pb = p;
+  pb.terminal_curvature_bound = true;
+  pb.curvature_bound_a_lat_mps2 = 1.0;
+  MppiSolver off(p, curve.model, curve.g, 256);
+  MppiSolver on(pb, curve.model, curve.g, 256);
+  SolveInput in = curve.input(1.3, 0.0, 1.5);
+  double v_off = 0.0, v_on = 0.0;
+  for (int i = 0; i < 3; ++i) {
+    v_off = off.solve(in).plan_speed_mps;
+    v_on = on.solve(in).plan_speed_mps;
+  }
+  EXPECT_LT(v_on, v_off);
+}

@@ -368,18 +368,6 @@ def test_observe_has_no_guidance_topic(tmp_path: Path) -> None:
         h.close()
 
 
-def test_v1_with_the_camera_is_refused(tmp_path: Path) -> None:
-    proc = subprocess.run(
-        node_args(tmp_path, "lap_source:=camera", "lap_mode:=v1"),
-        env=dict(os.environ),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert proc.returncode == 2
-
-
 def test_clean_shutdown_on_sigint(tmp_path: Path) -> None:
     h = Harness(tmp_path)
     h.wait_for_node()

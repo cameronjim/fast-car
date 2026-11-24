@@ -241,11 +241,12 @@ describe("pnpErrors lap rules, in the agent's words", () => {
     expect(errs({ lap_mode: "v1", lap_memory: false }).lap_mode).toBe("pnp lap mode v1 needs lap memory on");
     expect(errs({ lap_mode: "observe", lap_memory: false }).lap_mode).toBe("lap_mode=observe is not available in this build");
   });
-  it("v1 needs start_scan", () => {
-    expect(errs({ lap_memory: true, lap_mode: "v1", lap_source: "map_pose" }).lap_source).toBe("pnp lap mode v1 needs lap source start_scan");
+  it("v1 needs start_scan or camera", () => {
+    expect(errs({ lap_memory: true, lap_mode: "v1", lap_source: "map_pose" }).lap_source).toBe("pnp lap mode v1 needs lap source start_scan or camera");
     expect(errs({ lap_memory: true, lap_mode: "v0", lap_source: "map_pose" })).toEqual({});
     // brief 51: the camera source is a lap source the build offers once the launch declares it
-    expect(errs({ lap_memory: true, lap_mode: "v1", lap_source: "camera" }).lap_source).toBe("pnp lap mode v1 needs lap source start_scan");
+    // owner decision 29: v1 on the camera source is allowed where the build offers the camera
+    expect(errs({ lap_memory: true, lap_mode: "v1", lap_source: "camera" }).lap_source).toBe("lap_source=camera is not available in this build");
     expect(errs({ lap_memory: true, lap_mode: "v0", lap_source: "camera" }).lap_source).toBe("lap_source=camera is not available in this build");
   });
   it("the lap 1 cap needs lap memory or observe, a valid range and at most the speed cap", () => {

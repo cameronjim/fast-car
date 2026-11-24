@@ -67,6 +67,9 @@ class CautionZone:
         return self.created_lap < lap_in_progress <= self.created_lap + self.hold_laps
 
 
+VALUE_PROFILE_MODES = ("update", "freeze_after_first_clean_lap")
+ZONE_FLOOR_MODES = ("floor_wins", "cap_wins")
+
 #: Rounding allowance at the ends of a caution zone, metres (far below the 0.10 m station spacing).
 ZONE_EDGE_EPS_M = 1e-9
 
@@ -147,11 +150,29 @@ class StationSet:
         caution_laps: int = 2,
         floor_mps: float = 0.0,
         zone_merge: bool = True,
+        value_profile_mode: str = "update",
+        zone_floor_mode: str = "floor_wins",
     ) -> None:
         if spacing_m <= 0.0 or min_filter_half_m < 0.0 or caution_before_m <= 0.0:
             raise ValueError("station set spacing and zone lengths must be positive")
         if caution_laps < 0:
             raise ValueError("caution_laps must not be negative")
+        if value_profile_mode not in VALUE_PROFILE_MODES:
+            raise ValueError(
+                f"value_profile_mode must be one of {VALUE_PROFILE_MODES}, got {value_profile_mode!r}"
+            )
+        if zone_floor_mode not in ZONE_FLOOR_MODES:
+            raise ValueError(
+                f"zone_floor_mode must be one of {ZONE_FLOOR_MODES}, got {zone_floor_mode!r}"
+            )
+        #: Brief 53 switch: `update` (registered) builds Q from every stored lap,
+        #: `freeze_after_first_clean_lap` from the first stored lap only (the speed profile still
+        #: learns from every lap).
+        self.value_profile_mode = value_profile_mode
+        #: Brief 53 switch (owner decision 5 of 2026-11-14): `floor_wins` (registered) lifts every
+        #: bound to the floor; `cap_wins` never lifts a caution zone's bound, and one below the
+        #: floor is published as 0 (hold).
+        self.zone_floor_mode = zone_floor_mode
         self.spacing_m = float(spacing_m)
         self.min_filter_half_m = float(min_filter_half_m)
         self.caution_before_m = float(caution_before_m)
@@ -275,8 +296,13 @@ class StationSet:
         half = round(self.min_filter_half_m / self.spacing_m)
         v = np.stack([_periodic_min_filter(lap.v_mps, half) for lap in self._laps])
         self._v_safe = v.max(axis=0)
-        self._q = np.stack([lap.ctg_s for lap in self._laps]).min(axis=0)
-        self._t_best = float(min(lap.lap_time_s for lap in self._laps))
+        if self.value_profile_mode == "freeze_after_first_clean_lap":
+            # the value profile of the first stored lap, kept while later laps are stored
+            self._q = self._laps[0].ctg_s.copy()
+            self._t_best = float(self._laps[0].lap_time_s)
+        else:
+            self._q = np.stack([lap.ctg_s for lap in self._laps]).min(axis=0)
+            self._t_best = float(min(lap.lap_time_s for lap in self._laps))
         # Q(0) = T_best by construction; make the lap end exactly Q(0) - T_best.
         self._q[-1] = self._q[0] - self._t_best
 
@@ -358,8 +384,66 @@ class StationSet:
             )
             zone_cap = np.where(inside, np.minimum(zone_cap, max(0.0, z.speed_mps - 0.1)), zone_cap)
         # inside any zone: the lowest of the zones' caps and v_safe, no exploration step
-        bound = np.where(np.isfinite(zone_cap), np.minimum(safe, zone_cap), safe + explore_dv_mps)
+        in_zone = np.isfinite(zone_cap)
+        bound = np.where(in_zone, np.minimum(safe, zone_cap), safe + explore_dv_mps)
+        if self.zone_floor_mode == "cap_wins":
+            # owner decision 5: in a zone the cap wins, below the floor is a hold (0), never a raise
+            lifted = np.maximum(bound, self.floor_mps)
+            return np.where(in_zone, np.where(bound < self.floor_mps, 0.0, bound), lifted)
         return np.maximum(bound, self.floor_mps)
+
+    def v_bound_uncertain(
+        self,
+        s_m: FloatArray | float,
+        lap_in_progress: int,
+        explore_dv_mps: float,
+        half_width_m: FloatArray | float,
+    ) -> FloatArray:
+        """Brief 53 `station_uncertainty`: the lowest `v_bound` over [s - w, s + w] with w the
+        half width at each station (0 is `v_bound` itself). NaN when no lap is stored."""
+        s = np.atleast_1d(np.asarray(s_m, dtype=np.float64))
+        w = np.broadcast_to(np.asarray(half_width_m, dtype=np.float64), s.shape)
+        base = self.v_bound(s, lap_in_progress, explore_dv_mps)
+        if self._n == 0 or self.n_laps == 0 or not np.any(w > 0.0):
+            return base
+        # The bound is piecewise linear between the grid knots and steps at zone ends, so its
+        # lowest value over [s - w, s + w] is at an end, a knot or a zone end inside.
+        lo, hi = s - w, s + w
+        out = np.minimum(base, self.v_bound(lo, lap_in_progress, explore_dv_mps))
+        out = np.minimum(out, self.v_bound(hi, lap_in_progress, explore_dv_mps))
+        h = self._l_ref / self._n
+        k_lo = np.ceil(lo / h - 1e-12)
+        n_knots = math.ceil(2.0 * float(np.max(w)) / h) + 1
+        for j in range(n_knots):
+            p = (k_lo + j) * h
+            inside = p <= hi + 1e-12
+            if not np.any(inside):
+                break
+            out = np.where(
+                inside, np.minimum(out, self.v_bound(p, lap_in_progress, explore_dv_mps)), out
+            )
+        for z in self._zones:
+            if not z.active_on(lap_in_progress):
+                continue
+            for edge in (z.centre_m, z.centre_m - z.length_m):
+                # the nearest copy of the edge (periodic) at or after lo, and points just inside
+                p = edge + self._l_ref * np.ceil((lo - edge) / self._l_ref - 1e-12)
+                for q in (p - 1e-6, p, p + 1e-6):
+                    inside = (q >= lo) & (q <= hi)
+                    out = np.where(
+                        inside,
+                        np.minimum(out, self.v_bound(q, lap_in_progress, explore_dv_mps)),
+                        out,
+                    )
+        return out
+
+    def clear_laps(self) -> None:
+        """Brief 53 `reset_on_change`: drop every stored lap (zones and the reference length
+        stay)."""
+        self._laps = []
+        self._v_safe = np.zeros(0)
+        self._q = np.zeros(0)
+        self._t_best = math.nan
 
     def cost_to_go(self, s_m: FloatArray | float) -> FloatArray:
         """Q, unwrapped past the lap end. NaN when no lap is stored."""
@@ -385,6 +469,7 @@ class StationSet:
         lap_in_progress: int,
         explore_dv_mps: float,
         spacing_m: float = SPACING_M,
+        uncertainty: tuple[float, float] | None = None,
     ) -> tuple[FloatArray, FloatArray, FloatArray]:
         """The guidance arrays: stations every `spacing_m` from `station_now_m` over `horizon_m`
         (horizon / spacing + 1 of them), the bound and Q there. Empty before the first stored
@@ -394,11 +479,15 @@ class StationSet:
             return empty, empty, empty
         n = round(horizon_m / spacing_m) + 1
         s = station_now_m + spacing_m * np.arange(n)
-        return (
-            s,
-            np.maximum(self.v_bound(s, lap_in_progress, explore_dv_mps), 0.0),
-            self.cost_to_go(s),
-        )
+        if uncertainty is None:
+            bound = self.v_bound(s, lap_in_progress, explore_dv_mps)
+        else:
+            # (rate, cap): the half width grows with the wheel distance since the last accepted
+            # crossing, which is the station itself
+            rate, cap = uncertainty
+            half = np.minimum(rate * np.maximum(s, 0.0), cap)
+            bound = self.v_bound_uncertain(s, lap_in_progress, explore_dv_mps, half)
+        return (s, np.maximum(bound, 0.0), self.cost_to_go(s))
 
     # -- persistence -----------------------------------------------------------------------
 

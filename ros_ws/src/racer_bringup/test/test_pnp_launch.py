@@ -106,6 +106,7 @@ def test_argument_defaults() -> None:
         "lap_length_ratio_min": "0.0",
         "lap_length_ratio_max": "0.0",
         "lap_mode": "v0",
+        "dv1_variant": "registered",
         "lap_source": "start_scan",
         "lap_shadow": "",
         "lap_counter": "true",
@@ -124,6 +125,7 @@ def test_argument_defaults() -> None:
     assert declared["dynamics_fast_mlp"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
+    assert declared["dv1_variant"].choices == ["registered", "K1", "K2", "K3"]
     assert declared["lap_source"].choices == ["start_scan", "map_pose", "camera", "truth"]
 
 
@@ -442,7 +444,7 @@ def test_lap_memory_ceiling_is_the_lower_of_v_max_and_the_bundle_validity(tmp_pa
     ("kwargs", "match"),
     [
         ({"v_lap1_mps": 0.9, "v_max_mps": 0.8}, "v_lap1_mps"),
-        ({"lap_mode": "v1", "lap_source": "map_pose"}, "start_scan"),
+        ({"lap_mode": "v1", "lap_source": "map_pose"}, "start_scan or camera"),
         ({"lap_mode": "v2"}, "lap_mode"),
         ({"lap_source": "gps"}, "lap_source"),
     ],
@@ -1111,22 +1113,62 @@ def test_lap_memory_parameters_still_accept_truth_for_the_sim_runner(tmp_path) -
     m = _module()
     params = m.lap_memory_parameters(_bundle(tmp_path, 0.9), 0.8, 0.5, "v0", "truth")
     assert params["lap_source"] == "truth" and params["v_cap_start_mps"] == 0.5
+    # owner decision 29 (changed expectation: v1 on an external source was refused)
     for source in ("camera", "truth"):
-        with pytest.raises(RuntimeError, match="v1"):
-            m.lap_memory_parameters(_bundle(tmp_path, 0.9), 0.8, 0.5, "v1", source)
+        params = m.lap_memory_parameters(_bundle(tmp_path, 0.9), 0.8, 0.5, "v1", source)
+        assert params["lap_mode"] == "v1" and params["lap_source"] == source
 
 
-def test_lap_mode_v1_with_the_camera_is_refused(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("variant", ["registered", "K1", "K2", "K3"])
+def test_lap_mode_v1_with_the_camera_launches_with_each_variant(
+    monkeypatch, tmp_path, variant
+) -> None:
     m = _module()
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
     monkeypatch.setattr(m, "lap_counter_in_graph", lambda *a, **k: True)
-    with pytest.raises(RuntimeError, match="v1"):
+    actions = m._make_actions(
+        _context(
+            lap_memory="true",
+            lap_mode="v1",
+            lap_source="camera",
+            dynamics_bundle=_bundle(tmp_path),
+            dv1_variant=variant,
+        )
+    )
+    p = _flat_params(_laps_nodes(actions)[0])
+    q = _flat_params(_planner_of(actions))
+    assert p["lap_mode"] == "v1" and p["lap_source"] == "camera"
+    assert q["use_lap_guidance"] is True
+    lap, planner = m.DV1_VARIANTS[variant]
+    for k, v in lap.items():
+        assert p[k] == v, k
+    for k, v in planner.items():
+        assert q[k] == v, k
+    if variant == "registered":
+        assert "zone_floor_mode" not in p and "lap_reward_mode" not in q
+
+
+@pytest.mark.parametrize("mode", ["v0", "observe"])
+def test_the_dv1_variant_changes_nothing_outside_v1(monkeypatch, tmp_path, mode) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    base = {"lap_memory": "true", "lap_mode": mode, "dynamics_bundle": _bundle(tmp_path)}
+    a = m._make_actions(_context(**base))
+    b = m._make_actions(_context(**base, dv1_variant="K2"))
+    assert _flat_params(_laps_nodes(a)[0]) == _flat_params(_laps_nodes(b)[0])
+    assert _flat_params(_planner_of(a)) == _flat_params(_planner_of(b))
+
+
+def test_an_unknown_dv1_variant_is_refused(monkeypatch, tmp_path) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    with pytest.raises(RuntimeError, match="dv1_variant"):
         m._make_actions(
             _context(
                 lap_memory="true",
                 lap_mode="v1",
-                lap_source="camera",
                 dynamics_bundle=_bundle(tmp_path),
+                dv1_variant="K9",
             )
         )
 

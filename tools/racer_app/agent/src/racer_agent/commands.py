@@ -622,8 +622,8 @@ def _pnp_lap_args(
     observe = mode == "observe"
     if mode != "v0" and not lap.lap_memory and not observe:
         raise CommandError(f"pnp lap mode {mode} needs lap memory on")
-    if mode == "v1" and lap.lap_source != "start_scan":
-        raise CommandError("pnp lap mode v1 needs lap source start_scan")
+    if mode == "v1" and lap.lap_source not in ("start_scan", "camera"):
+        raise CommandError("pnp lap mode v1 needs lap source start_scan or camera")
     memory = bool(lap.lap_memory) or observe
     if lap.v_lap1_mps is not None:
         if not memory:

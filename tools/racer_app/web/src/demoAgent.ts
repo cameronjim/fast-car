@@ -307,7 +307,7 @@ export class DemoCar {
     if (!["start_scan", "map_pose", "camera"].includes(String(source))) return "pnp lap source must be one of ['start_scan', 'map_pose', 'camera']";
     const memory = b.pnp_lap_memory === true || mode === "observe";
     if (mode !== "v0" && !memory) return `pnp lap mode ${mode} needs lap memory on`;
-    if (mode === "v1" && source !== "start_scan") return "pnp lap mode v1 needs lap source start_scan";
+    if (mode === "v1" && source !== "start_scan" && source !== "camera") return "pnp lap mode v1 needs lap source start_scan or camera";
     if (cap !== undefined) {
       if (!memory) return "pnp lap 1 cap needs lap memory on or lap mode observe";
       if (cap < 0.2 || cap > 1.5) return "pnp lap 1 cap must be between 0.2 and 1.5 m/s";

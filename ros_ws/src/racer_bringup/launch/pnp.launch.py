@@ -29,7 +29,8 @@ Refusals (a launch that does not start is the safe outcome):
   Only sim tests pass false.
 * `dynamics_bundle` is required, and `perception_bundle` is required with `backend:=net`.
 * `lap_memory:=true` with `v_lap1_mps` above `v_max_mps`; `lap_mode:=v1` with
-  `lap_source:=map_pose` or `camera` (D v1 is indexed by station).
+  `lap_source:=map_pose` (D v1 is indexed by station: start_scan or camera); an unknown
+  `dv1_variant`.
 * `lap_source:=truth` always: it is a simulator source (the sim runner starts its own lap node
   with it) and the car has no truth. `lap_source:=camera` with `lap_counter:=false` refuses when no
   `lap_counter_node` is in the graph (the wording of the `require_lap_counter` refusal), and with
@@ -383,9 +384,10 @@ def lap_memory_parameters(
         raise RuntimeError(f"pnp.launch.py: lap_source must be one of {list(LAP_SOURCES)}")
     if lap_mode not in LAP_MODES:
         raise RuntimeError(f"pnp.launch.py: lap_mode must be one of {list(LAP_MODES)}")
-    if lap_mode == "v1" and lap_source != "start_scan":
+    if lap_mode == "v1" and lap_source == "map_pose":
         raise RuntimeError(
-            "pnp.launch.py: lap_mode:=v1 needs lap_source:=start_scan (D v1 is indexed by station)"
+            "pnp.launch.py: lap_mode:=v1 needs lap_source:=start_scan or camera (D v1 is indexed "
+            "by station)"
         )
     if lap_mode == "observe":
         # The gate runs, events and status are published, no guidance: the planner keeps its
@@ -412,6 +414,47 @@ def lap_memory_parameters(
         "lap_source": lap_source,
         **ratio,
     }
+
+
+#: D v1 variants of brief 53 (owner decision 29: runnable on the car behind a switch, default
+#: off; unregistered development runs). `registered` is D v1 as brief 26 built it. K1 to K3 are the
+#: M-D1b candidates (cap wins in caution zones, station uncertainty, reset on change, the lap
+#: station along the track), with the values chosen before M-D1b. Each maps to (lap node
+#: parameters, planner parameters); every key left out keeps its node default.
+_DV1_COMMON_LAP = {
+    "zone_floor_mode": "cap_wins",
+    "station_uncertainty": True,
+    "station_uncertainty_rate": 0.02,
+    "station_uncertainty_cap_m": 0.5,
+    "reset_on_change": True,
+    "reset_length_share": 0.08,
+}
+DV1_VARIANTS: dict[str, tuple[dict, dict]] = {
+    "registered": ({}, {}),
+    "K1": (
+        dict(_DV1_COMMON_LAP),
+        {"lap_station_mode": "track", "lap_reward_mode": "keep_progress"},
+    ),
+    "K2": (
+        {**_DV1_COMMON_LAP, "value_profile_mode": "update"},
+        {"lap_station_mode": "track", "lap_reward_mode": "replace"},
+    ),
+    "K3": (
+        {**_DV1_COMMON_LAP, "value_profile_mode": "freeze_after_first_clean_lap"},
+        {"lap_station_mode": "track", "lap_reward_mode": "replace"},
+    ),
+}
+
+
+def dv1_variant_parameters(variant: str, lap_mode: str) -> tuple[dict, dict]:
+    """(lap node, planner) parameters of a D v1 variant. Nothing unless `lap_mode` is v1, so the
+    D v0 and observe paths are unchanged whatever `dv1_variant` says."""
+    if variant not in DV1_VARIANTS:
+        raise RuntimeError(f"pnp.launch.py: dv1_variant must be one of {list(DV1_VARIANTS)}")
+    if lap_mode != "v1":
+        return {}, {}
+    lap, planner = DV1_VARIANTS[variant]
+    return dict(lap), dict(planner)
 
 
 def _length_ratio_params(length_ratio: tuple[float, float], lap_source: str) -> dict:
@@ -777,6 +820,12 @@ def _make_actions(context: LaunchContext) -> list:
             lap_source,
             (float(arg("lap_length_ratio_min")), float(arg("lap_length_ratio_max"))),
         )
+        variant = LaunchConfiguration("dv1_variant", default="registered").perform(context)
+        dv1_lap, dv1_planner = dv1_variant_parameters(variant.strip(), arg("lap_mode"))
+        lap_params.update(dv1_lap)
+        planner_params.update(dv1_planner)
+        if dv1_lap or dv1_planner:
+            log.append(f"D v1 variant {variant}: lap {dv1_lap} planner {dv1_planner}")
         if arg("lap_mode") == "observe":
             # the planner is launched exactly as with lap_memory:=false: fixed cap, no guidance
             # expected, no no-guidance fallback
@@ -1012,9 +1061,19 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="v0",
                 choices=list(LAP_MODES),
                 description=(
-                    "D v0 (cap schedule), v1 (station set; needs start_scan) or observe (the lap "
+                    "D v0 (cap schedule), v1 (station set; start_scan or camera) or observe (the lap "
                     "node publishes events and status and no guidance; the planner runs at its "
                     "fixed cap v_max_mps and v_lap1_mps is ignored)."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "dv1_variant",
+                default_value="registered",
+                choices=list(DV1_VARIANTS),
+                description=(
+                    "lap_mode:=v1 only: registered (D v1 of brief 26) or a brief 53 candidate K1, "
+                    "K2, K3. Ignored for v0 and observe. Development runs, not a registered "
+                    "result (owner decision 29)."
                 ),
             ),
             DeclareLaunchArgument(

@@ -255,6 +255,62 @@ class LapMemoryNode(Node):
             0.2,
             12.0,
         )
+        # Brief 53 switches (brief 44 section 1), every default the behaviour before them.
+        value_profile_mode = declare_str(
+            "value_profile_mode",
+            _DEFAULTS.value_profile_mode,
+            "D v1: update (registered) or freeze_after_first_clean_lap (the cost to go of the "
+            "first stored lap only).",
+        )
+        station_uncertainty = bool(
+            self.declare_parameter(
+                "station_uncertainty",
+                _DEFAULTS.station_uncertainty,
+                ParameterDescriptor(
+                    description="D v1: publish the lowest bound over station +- min(rate * "
+                    "wheel distance since the last accepted crossing, cap)."
+                ),
+            ).value
+        )
+        unc_rate = declare(
+            "station_uncertainty_rate",
+            _DEFAULTS.station_uncertainty_rate,
+            "station_uncertainty: half width growth per metre of wheel distance.",
+            0.0,
+            1.0,
+        )
+        unc_cap = declare(
+            "station_uncertainty_cap_m",
+            _DEFAULTS.station_uncertainty_cap_m,
+            "station_uncertainty: largest half width, metres.",
+            0.0,
+            5.0,
+        )
+        reset_on_change = bool(
+            self.declare_parameter(
+                "reset_on_change",
+                _DEFAULTS.reset_on_change,
+                ParameterDescriptor(
+                    description="Drop the stored laps and return to the lap-1 cap when the lap "
+                    "length leaves its band twice running, a crossing is missed or doubtful "
+                    "twice running, an obstacle brake hits where the bound was above the lap-1 "
+                    "cap, or on the ~/reset_memory service (std_srvs/Trigger)."
+                ),
+            ).value
+        )
+        reset_share = declare(
+            "reset_length_share",
+            _DEFAULTS.reset_length_share,
+            "reset_on_change: a lap this share off the reference length is out of its band.",
+            0.01,
+            0.99,
+        )
+        zone_floor_mode = declare_str(
+            "zone_floor_mode",
+            _DEFAULTS.zone_floor_mode,
+            "D v1: floor_wins (registered) or cap_wins (owner decision 5: a caution zone bound is "
+            "never lifted to the floor; below it is published as 0).",
+        )
         gate = GateConfig(
             wheelbase_m=1.0,  # replaced below once vehicle_params is loaded
             min_lap_length_m=float(min_len),
@@ -514,6 +570,13 @@ class LapMemoryNode(Node):
             min_filter_half_m=float(min_filter),
             zone_merge=zone_merge,
             start_unanswered_s=float(start_unanswered_s),
+            value_profile_mode=value_profile_mode,
+            station_uncertainty=station_uncertainty,
+            station_uncertainty_rate=float(unc_rate),
+            station_uncertainty_cap_m=float(unc_cap),
+            reset_on_change=reset_on_change,
+            reset_length_share=float(reset_share),
+            zone_floor_mode=zone_floor_mode,
             gate=gate if lap_source == "start_scan" or external else None,
             external=(
                 ExternalConfig(
@@ -528,6 +591,11 @@ class LapMemoryNode(Node):
         # A bad cap schedule (ceiling below start, ...) raises here and the node exits non-zero.
         self._mem = LapMemory(cfg)
         self._cfg = cfg
+        if reset_on_change:
+            # only with the switch on: the default graph has no service and needs no std_srvs
+            from std_srvs.srv import Trigger
+
+            self.create_service(Trigger, "~/reset_memory", self._on_reset_request)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         kind = "safe_set" if lap_source == "map_pose" else "station_set"
         self._save_path = self._output_dir / f"{kind}_{stamp}.npz"
@@ -763,6 +831,14 @@ class LapMemoryNode(Node):
                 f"{gate.reference_suspect_lap} is {gate.suspect_lap_length_m:.2f} m, otherwise fine: "
                 "lap 1 was probably not a whole lap: stop and relaunch from the mark"
             )
+        if (
+            self._cfg.reset_on_change
+            and self._mem.resets
+            and self._mem.resets[-1][0] == r.lap_index
+        ):
+            self.get_logger().warn(
+                f"lap memory reset after lap {r.lap_index}: {self._mem.resets[-1][1]}"
+            )
         if self._external and r.missed_gate:
             doubtful = self._mem.status().get("doubtful_laps") or []
             why = doubtful[-1]["reasons"] if doubtful else []  # type: ignore[index]
@@ -857,6 +933,14 @@ class LapMemoryNode(Node):
         msg.cost_to_go_s = [float(v) for v in g.cost_to_go_s]
         assert self._guidance_pub is not None
         self._guidance_pub.publish(msg)
+
+    def _on_reset_request(self, _request: Any, response: Any) -> Any:
+        """reset_on_change: the operator's reset (std_srvs/Trigger)."""
+        self._mem.reset("operator")
+        self.get_logger().warn("lap memory reset: operator request")
+        response.success = True
+        response.message = "stored laps dropped, lap-1 cap"
+        return response
 
     def _publish_status(self) -> None:
         self._tick()

@@ -22,7 +22,8 @@ output's own normals instead:
    net's own half widths.
 
 Every rebuilt edge point of stations 0 to n-1 therefore lies on the tracer's edge polyline (or its
-allowed extension): the polygon a consumer rebuilds has its vertices on the tracer's polygon
+allowed extension), except where the hit is farther than the 2.0 m half width cap of the message and
+the width is clipped to it: the polygon a consumer rebuilds has its vertices on the tracer's polygon
 boundary. Sigma is the larger of the two tracer sigmas either side of the station.
 
 A net output that is empty or not finite returns the tracer's track and is reported as

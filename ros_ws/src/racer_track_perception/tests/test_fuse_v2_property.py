@@ -67,7 +67,10 @@ def test_every_rebuilt_edge_point_lies_on_the_tracers_edge_polyline(geo, net, ex
         return
     g_left, g_right = edge_polylines(geo)
     o_left, o_right = edge_polylines(out)
-    for poly, rebuilt in ((g_left, o_left), (g_right, o_right)):
+    widths = (out.half_width_left_m[:n], out.half_width_right_m[:n])
+    for poly, rebuilt, width in ((g_left, o_left, widths[0]), (g_right, o_right, widths[1])):
         extended = with_extensions(poly, ext)
-        for p in rebuilt:
+        for p, w in zip(rebuilt, width, strict=True):
+            if w >= tr.HALF_WIDTH_CAP_M - 1e-6:
+                continue  # a hit beyond the message's 2.0 m cap is clipped to it, off the polyline
             assert dist_to_polyline(p, extended) <= EDGE_TOL * 10

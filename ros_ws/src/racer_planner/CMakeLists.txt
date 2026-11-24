@@ -209,7 +209,7 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   foreach(t test_planner_node_launch test_planner_node_silence_launch test_planner_node_refusal_launch
                  test_planner_node_start_gate_launch test_planner_node_shutdown_launch
-                 test_planner_node_params_file_launch)
+                 test_planner_node_params_file_launch test_planner_node_adaptation_launch)
     add_launch_test(test/${t}.py TARGET ${t} TIMEOUT 180)
   endforeach()
 endif()

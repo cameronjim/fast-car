@@ -14,6 +14,7 @@ of a table in this file, a map must be a file the agent found itself, a name mus
 from __future__ import annotations
 
 import ast
+import importlib.util
 import re
 import shlex
 from collections.abc import Sequence
@@ -170,6 +171,23 @@ def launch_args(flags: StackFlags, container_map: str = "") -> list[str]:
     return args
 
 
+def rtprio_ulimit(repo_dir: Path) -> int:
+    """`rt.rtprio_ulimit` of repo_dir/config/scheduling.yaml (brief 52), through the repo's own
+    loader (config/scheduling.py), so the number and its checks have one home. A missing or bad
+    file refuses the stack start: the flag is always added, and a stack that cannot say what it
+    grants does not start."""
+    path = repo_dir / "config" / "scheduling.py"
+    spec = importlib.util.spec_from_file_location("racer_scheduling_config_agent", path)
+    if spec is None or spec.loader is None or not path.is_file():
+        raise CommandError(f"cannot load {path}: config/scheduling.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        return int(module.load(repo_dir / "config" / "scheduling.yaml").rtprio_ulimit)
+    except (OSError, ValueError) as exc:  # SchedulingConfigError is a ValueError
+        raise CommandError(f"config/scheduling.yaml refused: {exc}") from exc
+
+
 def stack_run_argv(
     host: HostInfo,
     repo_dir: Path,
@@ -192,6 +210,10 @@ def stack_run_argv(
         "host",
         "--user",
         f"{host.uid}:{host.gid}",
+        # brief 52: lets the unprivileged user ask for SCHED_FIFO up to this priority and nothing
+        # else (no capability). Inert unless a launch is started with rt_sched:=on.
+        "--ulimit",
+        f"rtprio={rtprio_ulimit(repo_dir)}",
     ]
     if gpio is not None:
         argv += ["--group-add", str(gpio)]

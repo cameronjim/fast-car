@@ -232,6 +232,15 @@ def cmd_session(args: argparse.Namespace) -> int:
     from pnp_session import session_checks
 
     report, text = session_checks.run([Path(b) for b in args.bag])
+    facts = None
+    if args.host_facts:
+        try:
+            facts = json.loads(Path(args.host_facts).read_text())
+        except (OSError, ValueError):
+            facts = None  # reported as `not recorded`, never as a pass
+    check = hostfacts.scheduling_check(facts, hostfacts.load_scheduling(), args.rt_sched)
+    report["scheduling_check"] = check
+    text = text.rstrip("\n") + "\n\n" + hostfacts.format_check(check)
     if args.out:
         Path(args.out).write_text(
             json.dumps(report, indent=2, sort_keys=True, default=_json_default) + "\n"
@@ -244,9 +253,14 @@ def cmd_host_facts(args: argparse.Namespace, runner: hostfacts.Runner | None = N
     facts = hostfacts.collect(runner or hostfacts.default_runner)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "host_facts.txt").write_text(hostfacts.format_text(facts))
+    text = hostfacts.format_text(facts)
+    if args.rt_sched:
+        check = hostfacts.scheduling_check(facts, hostfacts.load_scheduling(), args.rt_sched)
+        facts["scheduling_check"] = check
+        text += hostfacts.format_check(check)
+    (out_dir / "host_facts.txt").write_text(text)
     (out_dir / "host_facts.json").write_text(json.dumps(facts, indent=2, sort_keys=True) + "\n")
-    print(hostfacts.format_text(facts), end="")
+    print(text, end="")
     return 0
 
 
@@ -473,9 +487,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     se.add_argument("--bag", action="append", required=True, help="a bag, once per bag")
     se.add_argument("--out", help="write the JSON here")
+    se.add_argument(
+        "--host-facts",
+        help="host_facts.json of the run (host-facts step), for the scheduling check",
+    )
+    se.add_argument(
+        "--rt-sched",
+        choices=["on", "off"],
+        default="off",
+        help="the rt_sched value the run was launched with (brief 52); default off",
+    )
     se.set_defaults(func=cmd_session)
     h = sub.add_parser("host-facts", help="scheduling policy, CPU governor, load: read only")
     h.add_argument("--out-dir", required=True)
+    h.add_argument(
+        "--rt-sched",
+        choices=["on", "off"],
+        help="also compare with config/scheduling.yaml and this rt_sched value (brief 52)",
+    )
     h.set_defaults(func=cmd_host_facts)
     sub.add_parser(
         "check-prereg", help="refuse unless the v0.4 constants file is the frozen one"

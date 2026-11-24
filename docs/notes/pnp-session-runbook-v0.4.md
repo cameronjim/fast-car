@@ -391,3 +391,30 @@ brief 51 section as superseded. Steps 1, 3 and 5 are those of brief 51 with the 
    brake. If the status says `reference_suspect`, stop at once and relaunch from the mark; the run is not evidence. If it
    happens twice in a direction, change the start view and repeat the test pass (step 2).
 5. **After.** `lap-src --drive --bag <bag>` for the lap table. Write the session note the same day.
+
+## Real-time scheduling: `rt_sched` (brief 52, prototype, off by default)
+
+`rt_sched:=on` starts `safety_node` (in the stack launch) and `mppi_planner_node` (in the pnp launch)
+behind `chrt -f <priority>`, with the priorities of `config/scheduling.yaml`. Nothing in
+`racer_safety` or `racer_planner` changes, and with `rt_sched:=off` (the default) both launches are
+what they were. The L6 bench in the brief has not been run: treat it as an experiment.
+
+Turn it on, in this order, with the same value in both launches:
+
+1. The stack container must have `--ulimit rtprio=<rt.rtprio_ulimit>`. The racer app's stack start
+   and the runbook command add it already (it is inert without `rt_sched:=on`). Check it:
+   `docker exec car-stack bash -lc 'ulimit -r'` prints the limit.
+2. Start the stack with `rt_sched:=on` after `car_teleop.launch.py` (a hand-typed `exec ros2 launch
+   racer_bringup car_teleop.launch.py rt_sched:=on ...`), then the pnp launch with `rt_sched:=on`.
+3. If FIFO is not granted the launch refuses and ends with one ERROR line that starts "refusing to
+   start: real-time scheduling was asked for and not granted:". There is no fallback to ordinary
+   scheduling; run with `rt_sched:=off` instead.
+4. Five seconds after each node starts the launch logs `rt_sched on: <node> pid ..., N threads: ...
+   (all FIFO <priority>)`, or an ERROR and a shutdown if any thread is not FIFO at the priority.
+5. Record it: on the Jetson host, while the driver runs,
+   `uv run --project tools --extra session python tools/pnp_session_report.py host-facts
+   --out-dir <out>/host_facts --rt-sched on`. `host_facts.json` then holds each process's threads
+   (policy and priority) and the verdict `as configured`, `off`, `MISMATCH` or `not recorded`. The
+   session report takes it: `pnp_session_report.py session --bag <bag> --host-facts
+   <out>/host_facts/host_facts.json --rt-sched on` ends with the same line (`FLAG` on a mismatch).
+   Without facts it says `not recorded`, which is not a pass.

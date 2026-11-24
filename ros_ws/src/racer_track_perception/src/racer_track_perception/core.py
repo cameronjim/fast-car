@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from racer_track_perception import fuse, geometric, preprocess, refine, selfcheck
+from racer_track_perception import fuse, fuse_v2, geometric, preprocess, refine, selfcheck
 from racer_track_perception import track as tr
 from racer_track_perception.runtime import CircConv1dV0
 from racer_track_perception.vehicle import LiveVehicle
@@ -106,7 +106,12 @@ class TrackPerceiver:
                     geo = geometric.trace(
                         points, self.vehicle.body.half_width_m, self.sigma_max_m, self._geo_cfg
                     )
-                    track, outcome = fuse.fuse_track_with_outcome(geo, track, self.fuse_cfg)
+                    if isinstance(self.fuse_cfg, fuse_v2.FuseV2Config):  # `fused-v2`, brief 55
+                        track, outcome = fuse_v2.fuse_track_v2_with_outcome(
+                            geo, track, self.fuse_cfg
+                        )
+                    else:
+                        track, outcome = fuse.fuse_track_with_outcome(geo, track, self.fuse_cfg)
                     if outcome is fuse.FuseOutcome.NET_UNUSABLE:
                         self.fuse_fallbacks += 1
             else:

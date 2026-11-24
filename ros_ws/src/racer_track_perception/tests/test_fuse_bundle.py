@@ -39,11 +39,13 @@ def perceiver(path: Path, live: LiveVehicle) -> core.TrackPerceiver:
     )
 
 
-def test_exactly_three_arch_types_are_accepted() -> None:
+def test_exactly_four_arch_types_are_accepted() -> None:
+    # brief 55 added circ_conv1d_v0_fused_v2 (add-only); the first three are unchanged
     assert bd.ARCH_TYPES == (
         "circ_conv1d_v0",
         "circ_conv1d_v0_refine_v1",
         "circ_conv1d_v0_fused_v1",
+        "circ_conv1d_v0_fused_v2",
     )
 
 
@@ -72,7 +74,7 @@ def test_plain_and_refine_bundles_have_no_fuse_config(tmp_path: Path, live: Live
 
 @pytest.mark.parametrize(
     "arch",
-    ["circ_conv1d_v0_fused_v2", "circ_conv1d_v0_fused", "fused-v1", "circ_conv1d_v0_fuse_v1"],
+    ["circ_conv1d_v0_fused_v3", "circ_conv1d_v0_fused", "fused-v1", "circ_conv1d_v0_fuse_v1"],
 )
 def test_an_unknown_arch_type_is_refused(tmp_path: Path, live: LiveVehicle, arch: str) -> None:
     def change(m: dict[str, Any]) -> None:

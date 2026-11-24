@@ -82,6 +82,55 @@ def main() -> int:
     if loaded.returncode != 0 or "background threads 2" not in loaded.stdout:
         print("mppi_bench --background-threads 2 failed or did not report it")
         return 1
+    return mlp_modes(args.bench)
+
+
+def mlp_modes(bench: str) -> int:
+    """The four ways of evaluating the learned MLP, on a bundle whose residual is live: each runs,
+    reports its mode and finite timings. The real comparison is by hand (printed here), with the
+    dyn-v0.7p bundle: default, --fast-mlp, --float32-mlp and both."""
+    flags = {
+        "exact": [],
+        "fast": ["--fast-mlp"],
+        "float32": ["--float32-mlp"],
+        "float32+fast": ["--float32-mlp", "--fast-mlp"],
+    }
+    with tempfile.TemporaryDirectory(prefix="racer_planner_bench_") as tmp:
+        bundle = Path(tmp) / "residual"
+        common.make_fixture.make_bundle(
+            bundle,
+            common.VEHICLE,
+            residual_on=True,
+            nominal=common.make_fixture.NOMINAL,
+            v_max=common.V_MAX_VALIDITY,
+            model_id="dyn-l3-res-v0-2026-11-12",
+        )
+        for mode, extra in flags.items():
+            proc = subprocess.run(
+                [
+                    bench,
+                    "--bundle",
+                    str(bundle),
+                    "--solves",
+                    "100",
+                    "--budget-ms",
+                    "250",
+                    "--field-budget-ms",
+                    "250",
+                    *extra,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            sys.stdout.write(proc.stdout)
+            sys.stderr.write(proc.stderr)
+            if proc.returncode != 0 or f"mlp {mode}\n" not in proc.stdout:
+                print(f"mppi_bench {' '.join(extra)} failed or did not report mlp {mode}")
+                return 1
+            if not re.search(r"p50 [0-9.]+\s+p90 [0-9.]+\s+p99 [0-9.]+\s+max [0-9.]+", proc.stdout):
+                print(f"mppi_bench {mode} did not print p50 / p90 / p99 / max")
+                return 1
     return 0
 
 

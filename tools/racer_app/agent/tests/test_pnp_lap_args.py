@@ -676,7 +676,7 @@ def test_the_prototype_switches_send_nothing_at_their_defaults():
 def test_the_real_launch_declares_every_prototype_switch_the_app_sends():
     assert REAL["dv1_variant"] == ("registered", "K1", "K2", "K3")
     assert REAL["rt_sched"] == ("off", "on")
-    for name in ("dynamics_fast_mlp", "dynamics_adaptation", "profile"):
+    for name in ("dynamics_fast_mlp", "dynamics_mlp_float32", "dynamics_adaptation", "profile"):
         assert name in REAL
 
 
@@ -698,14 +698,27 @@ def test_a_dv1_variant_needs_lap_mode_v1(mode):
 
 
 def test_the_boolean_switches_are_sent_as_the_launch_spells_them():
-    out = build(lap(dynamics_fast_mlp=True, dynamics_adaptation=True, rt_sched=True), launch=REAL)
+    out = build(
+        lap(
+            dynamics_fast_mlp=True,
+            dynamics_mlp_float32=True,
+            dynamics_adaptation=True,
+            rt_sched=True,
+        ),
+        launch=REAL,
+    )
     assert " dynamics_fast_mlp:=true" in out
+    assert " dynamics_mlp_float32:=true" in out
+    assert " dynamics_mlp_float32:=true" not in build(lap(dynamics_fast_mlp=True), launch=REAL)
+    assert "dynamics_fast_mlp" not in build(lap(dynamics_mlp_float32=True), launch=REAL)
     assert " dynamics_adaptation:=true" in out
     assert out.endswith(" rt_sched:=on")
     assert "rt_sched" not in build(lap(), launch=REAL)
 
 
-@pytest.mark.parametrize("field", ["dynamics_fast_mlp", "dynamics_adaptation", "rt_sched"])
+@pytest.mark.parametrize(
+    "field", ["dynamics_fast_mlp", "dynamics_mlp_float32", "dynamics_adaptation", "rt_sched"]
+)
 @pytest.mark.parametrize("bad", ["true", 1, None])
 def test_a_non_boolean_switch_is_refused(field, bad):
     with pytest.raises(cmd.CommandError, match="must be true or false"):
@@ -715,6 +728,8 @@ def test_a_non_boolean_switch_is_refused(field, bad):
 def test_a_switch_this_build_does_not_declare_is_refused():
     with pytest.raises(cmd.CommandError, match="dynamics_fast_mlp is not available"):
         build(lap(dynamics_fast_mlp=True), launch=DECL_RATE)
+    with pytest.raises(cmd.CommandError, match="dynamics_mlp_float32 is not available"):
+        build(lap(dynamics_mlp_float32=True), launch=DECL_RATE)
     with pytest.raises(cmd.CommandError, match="rt_sched=on is not available"):
         build(lap(rt_sched=True), launch=DECL_RATE)
 
@@ -755,12 +770,14 @@ def test_the_full_prototype_request_builds_and_never_sends_the_profile_arg():
 
 def test_the_prefs_default_the_switches_off_and_reject_a_bad_variant():
     p = Prefs().pnp
-    assert (p.dv1_variant, p.dynamics_fast_mlp, p.dynamics_adaptation, p.rt_sched) == (
-        "registered",
-        False,
-        False,
-        False,
-    )
+    assert (
+        p.dv1_variant,
+        p.dynamics_fast_mlp,
+        p.dynamics_mlp_float32,
+        p.dynamics_adaptation,
+        p.rt_sched,
+    ) == ("registered", False, False, False, False)
+    assert Prefs.model_validate({"pnp": {"dynamics_mlp_float32": True}}).pnp.dynamics_mlp_float32
     assert Prefs.model_validate({"pnp": {"dv1_variant": "K3"}}).pnp.dv1_variant == "K3"
     with pytest.raises(ValueError):
         Prefs.model_validate({"pnp": {"dv1_variant": "K9"}})

@@ -56,6 +56,11 @@ Prototype switch (owner decision 29, default off):
   dyn-v0.7p residual) with a vectorised tanh, a few 1e-16 from the exact pass, checked against the
   bundle's golden rollouts at load; about 2.6x faster solves with dyn-v0.7p. No effect on a
   bundle without a learned block (dyn-v0.1). With false the planner gets no extra parameter.
+* `dynamics_mlp_float32` (default false, owner decision 30): the planner evaluates the learned MLP
+  in single precision, about 1e-7 relative from the double pass, checked against the bundle's
+  golden rollouts at load. Combines with `dynamics_fast_mlp`. The next fallback when the solve
+  time on the Jetson is over budget. No effect on a bundle without a learned block. With false the
+  planner gets no extra parameter and runs bit for bit as before. Not part of any profile.
 
 Prototype profile (owner decision 29, default none):
 
@@ -323,6 +328,15 @@ def fast_mlp_parameters(enabled: bool) -> dict:
     """Planner parameter of the fast MLP mode: none when off, so a launch without it starts the
     planner exactly as before."""
     return {FAST_MLP_PARAM: True} if enabled else {}
+
+
+MLP_FLOAT32_PARAM = "dynamics_mlp_float32"
+
+
+def mlp_float32_parameters(enabled: bool) -> dict:
+    """Planner parameter of the float32 MLP mode: none when off, so a launch without it starts the
+    planner exactly as before."""
+    return {MLP_FLOAT32_PARAM: True} if enabled else {}
 
 
 def deskew_parameters() -> dict:
@@ -826,6 +840,8 @@ def _make_actions(context: LaunchContext) -> list:
     planner_params.update(adaptation_parameters(_bool(adaptation, ADAPTATION_PARAM)))
     fast_mlp = LaunchConfiguration(FAST_MLP_PARAM, default="false").perform(context).strip()
     planner_params.update(fast_mlp_parameters(_bool(fast_mlp, FAST_MLP_PARAM)))
+    mlp_float32 = LaunchConfiguration(MLP_FLOAT32_PARAM, default="false").perform(context).strip()
+    planner_params.update(mlp_float32_parameters(_bool(mlp_float32, MLP_FLOAT32_PARAM)))
     lap_memory = _bool(arg("lap_memory"), "lap_memory")
     deskew_on = _bool(arg("deskew"), "deskew")
     scan_remapping = DESKEW_REMAPPING if deskew_on else None
@@ -1239,6 +1255,17 @@ def generate_launch_description() -> LaunchDescription:
                     "true: the planner evaluates the dynamics bundle's learned MLP with a "
                     "vectorised tanh (golden rollouts checked at load), for a bundle with a "
                     "residual such as dyn-v0.7p. false (default): the planner is unchanged."
+                ),
+            ),
+            DeclareLaunchArgument(
+                MLP_FLOAT32_PARAM,
+                default_value="false",
+                choices=["true", "false"],
+                description=(
+                    "true: the planner evaluates the dynamics bundle's learned MLP in single "
+                    "precision (about 1e-7 relative from the double pass, golden rollouts checked "
+                    "at load), for a bundle with a residual such as dyn-v0.7p. Combines with "
+                    "dynamics_fast_mlp. false (default): the planner is unchanged."
                 ),
             ),
             DeclareLaunchArgument(

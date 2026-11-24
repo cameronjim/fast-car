@@ -3,6 +3,7 @@
 // of the model, so a pass also proves the C++ step reproduces it.
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <cstdlib>
 
 #include "racer_planner/bundle_loader.hpp"
@@ -345,5 +346,32 @@ TEST(BundleLoader, FastMlpModeReproducesTheGoldenRolloutsOfBothContracts) {
   BundleCopy b;
   b.edit_manifest("steer_gain_left: 1.1", "steer_gain_left: 1.2");
   const auto r = load_dynamics_bundle(b.dir(), test::fixture_geometry(), 0.5, true);
+  expect_refusal(r, RefusalCode::GoldenRolloutMismatch);
+}
+
+// The float32 MLP mode (launch dynamics_mlp_float32, owner decision 30), alone and with the fast
+// mode, is checked against the same golden rollouts of both contracts: they are reproduced within
+// the tolerance, the loaded params carry the mode, and the worst error stays within 1e-6 of the
+// double pass's (the bound of the float32 path, far below the 1e-4 tolerance).
+TEST(BundleLoader, Float32MlpModeReproducesTheGoldenRolloutsOfBothContracts) {
+  for (const std::string& dir : {test::fixture_dir(), test::fixture_v2_dir()}) {
+    const auto geometry = test::fixture_geometry(dir);
+    const auto exact = load_dynamics_bundle(dir, geometry, 0.5, false, false);
+    for (const bool fast : {false, true}) {
+      const auto f32 = load_dynamics_bundle(dir, geometry, 0.5, fast, true);
+      ASSERT_TRUE(f32.ok()) << dir << ": " << (f32.refusal ? f32.refusal->message : "");
+      EXPECT_TRUE(f32.bundle->params.float32_mlp);
+      EXPECT_EQ(f32.bundle->params.fast_mlp, fast);
+      EXPECT_FALSE(exact.bundle->params.float32_mlp);
+      EXPECT_LT(f32.bundle->golden_max_abs_error, kGoldenTolerance) << dir;
+      EXPECT_NEAR(f32.bundle->golden_max_abs_error, exact.bundle->golden_max_abs_error, 1e-6)
+          << dir << " fast " << fast;
+      std::printf("float32 golden %s fast=%d: %.3e (double %.3e)\n", dir.c_str(), fast,
+                  f32.bundle->golden_max_abs_error, exact.bundle->golden_max_abs_error);
+    }
+  }
+  BundleCopy b;
+  b.edit_manifest("steer_gain_left: 1.1", "steer_gain_left: 1.2");
+  const auto r = load_dynamics_bundle(b.dir(), test::fixture_geometry(), 0.5, false, true);
   expect_refusal(r, RefusalCode::GoldenRolloutMismatch);
 }

@@ -382,15 +382,16 @@ describe("prototype switches (owner decision 29)", () => {
 
   it("send nothing while off", () => {
     const b = pnpBody(withP({}), options);
-    for (const k of ["pnp_dv1_variant", "pnp_dynamics_fast_mlp", "pnp_dynamics_adaptation", "pnp_rt_sched"]) {
+    for (const k of ["pnp_dv1_variant", "pnp_dynamics_fast_mlp", "pnp_dynamics_mlp_float32", "pnp_dynamics_adaptation", "pnp_rt_sched"]) {
       expect(b).not.toHaveProperty(k, expect.anything());
     }
-    expect(DEFAULT_PREFS.pnp).toMatchObject({ dv1_variant: "registered", dynamics_fast_mlp: false, dynamics_adaptation: false, rt_sched: false });
+    expect(DEFAULT_PREFS.pnp).toMatchObject({ dv1_variant: "registered", dynamics_fast_mlp: false, dynamics_mlp_float32: false, dynamics_adaptation: false, rt_sched: false });
   });
   it("send each switch when on", () => {
     expect(pnpBody(withP({ ...v1, dv1_variant: "K3" }), options)).toMatchObject({ pnp_dv1_variant: "K3", pnp_lap_mode: "v1", pnp_lap_source: "camera" });
-    expect(pnpBody(withP({ dynamics_fast_mlp: true, dynamics_adaptation: true, rt_sched: true }), options)).toMatchObject({
+    expect(pnpBody(withP({ dynamics_fast_mlp: true, dynamics_mlp_float32: true, dynamics_adaptation: true, rt_sched: true }), options)).toMatchObject({
       pnp_dynamics_fast_mlp: true,
+      pnp_dynamics_mlp_float32: true,
       pnp_dynamics_adaptation: true,
       pnp_rt_sched: true,
     });
@@ -402,9 +403,10 @@ describe("prototype switches (owner decision 29)", () => {
     expect(e({ ...v1, dv1_variant: "K9" as never }).dv1_variant).toContain("must be one of");
   });
   it("show up in the summary", () => {
-    const s = pnpSummary(withP({ ...v1, dv1_variant: "K3", dynamics_fast_mlp: true, rt_sched: true }), options);
+    const s = pnpSummary(withP({ ...v1, dv1_variant: "K3", dynamics_fast_mlp: true, dynamics_mlp_float32: true, rt_sched: true }), options);
     expect(s).toContain("variant K3");
     expect(s).toContain("fast MLP");
+    expect(s).toContain("float32 MLP");
     expect(s).toContain("rt_sched");
   });
   it("preset sets every learned part and leaves adaptation and rt_sched off", () => {
@@ -423,6 +425,7 @@ describe("prototype switches (owner decision 29)", () => {
       lap_length_ratio_max: 1.5,
       dv1_variant: "K3",
       dynamics_fast_mlp: true,
+      dynamics_mlp_float32: false,
       dynamics_adaptation: false,
       rt_sched: false,
     });

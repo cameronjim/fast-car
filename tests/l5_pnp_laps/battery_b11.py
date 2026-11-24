@@ -699,6 +699,10 @@ def dev_report_text(out: Path) -> str:
         "",
         f"Result: {sentence}",
         "",
+        "## Reading fixed by brief 44 (addendum 1 section 5.3)",
+        "",
+        b11.value_profile_reading(runs),
+        "",
     ]
     return "\n".join(lines)
 

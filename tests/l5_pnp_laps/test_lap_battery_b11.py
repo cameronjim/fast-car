@@ -622,3 +622,18 @@ def test_reported_rows() -> None:
     assert rows[0]["k_over_c"] == pytest.approx(0.9)
     assert rows[0]["reach_k"] == 8 and rows[0]["reach_c"] == 8
     assert math.isnan(rows[0]["T_late_t"])
+
+
+def test_the_value_profile_reading_of_brief_44() -> None:
+    rs = []
+    for key in DEV_KEYS:
+        rs.append(run("m", res(times(10.0)), key))
+        rs.append(run("u", res(times(9.7)), key))
+        rs.append(run("f", res(times(9.9)), key))
+    assert b11.value_profile_reading(rs).startswith("a learned value profile may be")
+    rs = [
+        r if r.condition != "u" else dataclasses.replace(r, gt_lap_times_s=tuple(times(9.71)))
+        for r in rs
+    ]
+    assert b11.value_profile_reading(rs).startswith("the later D keeps")
+    assert "no pairs" in b11.value_profile_reading([r for r in rs if r.condition != "f"])

@@ -741,3 +741,34 @@ def reported_rows(runs: list[RunSummary], k_name: str = "k") -> list[dict[str, A
             }
         )
     return rows
+
+
+def value_profile_reading(runs: list[RunSummary], max_ratio: float = 0.97) -> str:
+    """Brief 44 / addendum 1 section 5.3, fixed before M-D1: a learned value profile is part of a
+    later D only if u or f has a median late-lap time at most 0.97 times m's on the same pairs with
+    no more contacts; otherwise the later D keeps the planner's progress reward and uses memory as a
+    speed bound. Development only."""
+    m = {r.key: r for r in _of(runs, "m")}
+    parts = []
+    keep = False
+    for cond in ("u", "f"):
+        rs = [r for r in _of(runs, cond) if r.key in m]
+        if not rs:
+            parts.append(f"{cond}: no pairs with m")
+            continue
+        qs = [_ratio(t_late(r), t_late(m[r.key])) for r in rs]
+        qs = [q for q in qs if math.isfinite(q)]
+        med = statistics.median(qs) if qs else math.nan
+        c_x = sum(r.contacts for r in rs)
+        c_m = sum(m[r.key].contacts for r in rs)
+        ok = math.isfinite(med) and med <= max_ratio + EPS and c_x <= c_m
+        keep = keep or ok
+        parts.append(
+            f"{cond}: median T_late / m {med:.3f} over {len(qs)} pairs, contacts {c_x} vs m {c_m}"
+        )
+    verdict = (
+        "a learned value profile may be part of a later D"
+        if keep
+        else "the later D keeps the planner's own progress reward and uses memory as a speed bound"
+    )
+    return f"{verdict} ({'; '.join(parts)})"

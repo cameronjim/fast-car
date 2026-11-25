@@ -1,7 +1,8 @@
 """lap_memory_node with the switches of brief 53 on a live ROS graph (L3): D v1 on the sim truth
 source (`use_sim_time`, the harness publishes /clock), each lap node switch on (nominal: laps close
 clean, the guidance carries stations and a bound; silence: a silent source gives the lap-1 cap
-within 3.5 s), the reset service only with `reset_on_change`, and an unknown mode refused.
+within 3.5 s), the reset service only with `reset_on_change`, and an unknown mode refused. Also
+the two K3s switches (`bound_hold_after_doubtful`, `ttc_warning_zone_laps`).
 
 Reuses the harness of test_node_external_ros.py (the truth source reads the same two JSON topics).
 Needs rclpy and the colcon-built messages; skipped where they are absent.
@@ -43,6 +44,9 @@ SWITCHES = {
         "reset_on_change:=true",
         "value_profile_mode:=freeze_after_first_clean_lap",
     ),
+    # K3s (development, owner decision 29): the two lap node switches it adds
+    "bound_hold": ("bound_hold_after_doubtful:=true",),
+    "ttc_warning_zones": ("ttc_warning_zone_laps:=100",),
 }
 
 
@@ -93,7 +97,7 @@ def test_v1_on_truth_with_each_switch_nominal(tmp_path: Path, name: str) -> None
             h.close()
 
 
-@pytest.mark.parametrize("name", ["defaults", "candidate_all"])
+@pytest.mark.parametrize("name", ["defaults", "candidate_all", "bound_hold"])
 def test_v1_on_truth_silence_gives_the_lap_one_cap(tmp_path: Path, name: str) -> None:
     h = SimHarness(tmp_path, TRUTH_V1 + SWITCHES[name])
     try:
@@ -143,7 +147,10 @@ def test_the_reset_service_drops_the_laps(tmp_path: Path) -> None:
             h.close()
 
 
-@pytest.mark.parametrize("bad", ["value_profile_mode:=sometimes", "zone_floor_mode:=maybe"])
+@pytest.mark.parametrize(
+    "bad",
+    ["value_profile_mode:=sometimes", "zone_floor_mode:=maybe", "ttc_warning_zone_laps:=-1"],
+)
 def test_an_unknown_mode_is_refused(tmp_path: Path, bad: str) -> None:
     proc = subprocess.run(
         node_args(tmp_path, *TRUTH_V1, bad),

@@ -303,3 +303,136 @@ def test_station_uncertainty_in_the_engine_lowers_the_published_bound_only() -> 
     assert np.array_equal(ga.cost_to_go_s, gb.cost_to_go_s)
     assert ga.v_cap_mps == gb.v_cap_mps
     assert not math.isnan(a.mem.station_m)
+
+
+# -- K3s: the bound of the lap after a doubtful lap is held (development, owner decision 29) -------
+
+
+def _drive_and_log(rig: Rig, t_end: float, log: dict) -> None:
+    """Drive to `t_end` polling the guidance every 0.1 s; log the highest min(cap, bound) per
+    0.10 m station bin per lap in progress, and the highest cap of a guidance with no arrays."""
+    while (rig.k + 1) * DT <= t_end + 1e-9:
+        rig.drive_until(min(t_end, rig.k * DT + 0.1))
+        g = rig.mem.guidance()
+        entry = log.setdefault(g.lap_index, {"cap": None, "bins": {}})
+        if g.s_m.shape[0] == 0:
+            entry["cap"] = g.v_cap_mps if entry["cap"] is None else max(entry["cap"], g.v_cap_mps)
+            continue
+        for s, v in zip(g.s_m, g.v_ref_mps, strict=True):
+            b = math.floor(s / 0.1 + 1e-6)
+            entry["bins"][b] = max(entry["bins"].get(b, -math.inf), min(g.v_cap_mps, v))
+
+
+def _above(doubtful: dict, after: dict) -> list[int]:
+    out = []
+    for b, v in after["bins"].items():
+        refs = [x for x in (doubtful["bins"].get(b), doubtful["cap"]) if x is not None]
+        if not refs or v > max(refs) + 1e-9:
+            out.append(b)
+    return out
+
+
+def _doubtful_run(**kw: object) -> tuple[dict, Rig]:
+    rig = Rig(
+        station_uncertainty=True,
+        station_uncertainty_rate=0.2,
+        station_uncertainty_cap_m=1.0,
+        **kw,  # type: ignore[arg-type]
+    )
+    log: dict = {}
+    period = LAP_M / rig.speed
+    for k in (1, 2, 3):
+        if k == 2:
+            # a low plan clearance mid lap 2: a caution zone, active on laps 3 and 4, gone on 5
+            _drive_and_log(rig, period * 1.5, log)
+            rig.mem.on_planner_status(STATE_DRIVING, 0.01)
+        _drive_and_log(rig, period * k + 0.05, log)
+        rig.event(period * k, k)
+    # the crossing of lap 4 is dropped: lap 4 is a double lap closed by event 5 (doubtful)
+    _drive_and_log(rig, period * 5 + 0.05, log)
+    r = rig.event(period * 5, 5)
+    assert r is not None and r.missed_gate
+    _drive_and_log(rig, period * 6 + 0.05, log)
+    r = rig.event(period * 6, 6)
+    assert r is not None and not r.missed_gate
+    return log, rig
+
+
+def test_bound_hold_is_off_by_default_and_changes_nothing() -> None:
+    assert LapConfig().bound_hold_after_doubtful is False
+    a, _ = _doubtful_run()
+    b, _ = _doubtful_run(bound_hold_after_doubtful=False)
+    assert a == b
+
+
+def test_bound_hold_keeps_the_lap_after_a_doubtful_lap_at_or_below_it() -> None:
+    off, _ = _doubtful_run()
+    on, rig = _doubtful_run(bound_hold_after_doubtful=True)
+    # without the hold the lap after publishes higher bounds where the zone expired after the
+    # doubtful lap; with it, none
+    assert _above(off[4], off[5])
+    assert on[4]["bins"] and on[5]["bins"]
+    assert _above(on[4], on[5]) == []
+    # laps before the doubtful one are unchanged, and the hold ends with the lap after
+    for lap in (1, 2, 3, 4):
+        assert on[lap] == off[lap]
+    assert rig.mem._bound_hold is None
+
+
+def test_bound_hold_does_nothing_in_v0() -> None:
+    a, _ = _doubtful_run(mode="v0")
+    b, _ = _doubtful_run(mode="v0", bound_hold_after_doubtful=True)
+    assert a == b
+
+
+# -- K3s: a TTC warning makes a held caution zone (development, owner decision 29) -----------------
+
+SEVERITY_INFO = 0
+
+
+def _warned_rig(**kw: object) -> Rig:
+    rig = Rig(**kw)  # type: ignore[arg-type]
+    rig.laps(2)
+    rig.drive_until(rig.results[-1].t_cross_s + 2.0)
+    rig.mem.on_safety_event(0, SEVERITY_INFO, "ttc")  # advisory warning, no command change
+    return rig
+
+
+def test_ttc_warning_zone_is_off_by_default() -> None:
+    assert LapConfig().ttc_warning_zone_laps == 0
+    a, b = _warned_rig(), _warned_rig(ttc_warning_zone_laps=0)
+    assert a.mem.station_set.zones == () and b.mem.station_set.zones == ()
+    a.laps(1)
+    b.laps(1)
+    assert np.array_equal(a.mem.guidance().v_ref_mps, b.mem.guidance().v_ref_mps)
+    with pytest.raises(ValueError):
+        LapConfig(ttc_warning_zone_laps=-1)
+
+
+def test_ttc_warning_makes_a_zone_held_for_the_laps_given() -> None:
+    rig = _warned_rig(ttc_warning_zone_laps=5)
+    (zone,) = rig.mem.station_set.zones
+    assert zone.reason == "ttc_warning" and zone.hold_laps == 5
+    centre = zone.centre_m
+    ss = rig.mem.station_set
+    lap = rig.mem.lap_in_progress
+    # not on the lap it was made, then the speed driven there less 0.1 for 5 laps, then gone
+    assert ss.v_bound(centre, lap, 0.2)[0] == pytest.approx(1.2)
+    for k in range(1, 6):
+        assert ss.v_bound(centre, lap + k, 0.2)[0] == pytest.approx(zone.speed_mps - 0.1)
+    assert ss.v_bound(centre, lap + 6, 0.2)[0] == pytest.approx(1.2)
+    # a brake is still not a zone for the ttc gate's warning path, and the default zones keep
+    # their own hold
+    rig.mem.on_planner_status(STATE_DRIVING, 0.01)
+    assert rig.mem.station_set.zones[-1].hold_laps == rig.mem.cfg.caution_laps
+
+
+def test_ttc_warning_zone_ignores_other_sources_and_v0() -> None:
+    rig = Rig(ttc_warning_zone_laps=5)
+    rig.laps(2)
+    rig.drive_until(rig.results[-1].t_cross_s + 2.0)
+    rig.mem.on_safety_event(0, SEVERITY_INFO, "watchdog")
+    rig.mem.on_safety_event(1, SEVERITY_INFO, "ttc")  # a release
+    assert rig.mem.station_set.zones == ()
+    v0 = _warned_rig(mode="v0", ttc_warning_zone_laps=5)
+    assert v0.mem.station_set.zones == ()

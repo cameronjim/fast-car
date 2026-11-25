@@ -674,13 +674,13 @@ def test_the_prototype_switches_send_nothing_at_their_defaults():
 
 
 def test_the_real_launch_declares_every_prototype_switch_the_app_sends():
-    assert REAL["dv1_variant"] == ("registered", "K1", "K2", "K3")
+    assert REAL["dv1_variant"] == ("registered", "K1", "K2", "K3", "K3s")
     assert REAL["rt_sched"] == ("off", "on")
     for name in ("dynamics_fast_mlp", "dynamics_mlp_float32", "dynamics_adaptation", "profile"):
         assert name in REAL
 
 
-@pytest.mark.parametrize("variant", ["K1", "K2", "K3"])
+@pytest.mark.parametrize("variant", ["K1", "K2", "K3", "K3s"])
 def test_a_dv1_variant_is_sent_with_lap_mode_v1(variant):
     assert build(lap(**V1, dv1_variant=variant), launch=REAL).endswith(f" dv1_variant:={variant}")
 

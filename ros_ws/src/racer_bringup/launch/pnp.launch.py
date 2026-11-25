@@ -494,6 +494,12 @@ _DV1_COMMON_LAP = {
     "reset_on_change": True,
     "reset_length_share": 0.08,
 }
+#: K3s values, chosen on development cases only (docs/notes/pnp-dv1-k3s-dev-2026-11.md): the
+#: planner's gate aware cost weight (default 3.0) and TTC margin (default 1.1, times the gate's
+#: warning time), and how many laps a TTC warning zone holds (100: the rest of a run).
+K3S_W_GATE = 9.0
+K3S_GATE_TTC_MARGIN = 1.3
+K3S_TTC_ZONE_LAPS = 100
 DV1_VARIANTS: dict[str, tuple[dict, dict]] = {
     "registered": ({}, {}),
     "K1": (
@@ -507,6 +513,25 @@ DV1_VARIANTS: dict[str, tuple[dict, dict]] = {
     "K3": (
         {**_DV1_COMMON_LAP, "value_profile_mode": "freeze_after_first_clean_lap"},
         {"lap_station_mode": "track", "lap_reward_mode": "replace"},
+    ),
+    # K3s (development fix candidate after B11, unregistered): K3 with a heavier gate aware cost
+    # and a wider TTC margin (the value term drove the car into the safety gate's TTC warning
+    # band in corners), a caution zone held for the run where a TTC warning still happens (the
+    # bound stops rising there), and the station bound of the lap after a doubtful lap held at
+    # that lap's.
+    "K3s": (
+        {
+            **_DV1_COMMON_LAP,
+            "value_profile_mode": "freeze_after_first_clean_lap",
+            "bound_hold_after_doubtful": True,
+            "ttc_warning_zone_laps": K3S_TTC_ZONE_LAPS,
+        },
+        {
+            "lap_station_mode": "track",
+            "lap_reward_mode": "replace",
+            "w_gate": K3S_W_GATE,
+            "gate_ttc_margin": K3S_GATE_TTC_MARGIN,
+        },
     ),
 }
 
@@ -1156,9 +1181,11 @@ def generate_launch_description() -> LaunchDescription:
                 default_value=_ProfileDefault("dv1_variant", "registered"),
                 choices=list(DV1_VARIANTS),
                 description=(
-                    "lap_mode:=v1 only: registered (D v1 of brief 26) or a brief 53 candidate K1, "
-                    "K2, K3. Ignored for v0 and observe. Development runs, not a registered "
-                    "result (owner decision 29)."
+                    "lap_mode:=v1 only: registered (D v1 of brief 26), a brief 53 candidate K1, "
+                    "K2, K3, or K3s (K3 with a heavier gate cost and margin, TTC warning zones "
+                    "and the bound held after a doubtful lap, a development fix after B11). "
+                    "Ignored for v0 and observe. Development runs, not a registered result "
+                    "(owner decision 29)."
                 ),
             ),
             DeclareLaunchArgument(

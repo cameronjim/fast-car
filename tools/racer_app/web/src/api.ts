@@ -102,7 +102,7 @@ export interface BagsReply {
 
 export type LapMode = "v0" | "v1" | "observe";
 /** pnp.launch.py dv1_variant: the registered D v1 or a brief 53 candidate (development runs). */
-export type Dv1Variant = "registered" | "K1" | "K2" | "K3";
+export type Dv1Variant = "registered" | "K1" | "K2" | "K3" | "K3s";
 export type LapSource = "start_scan" | "map_pose" | "camera";
 
 /** The owner's saved drive settings (the Tune tab), kept on the car. null: the profile's own. */

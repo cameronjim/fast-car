@@ -309,7 +309,12 @@ class StationSet:
     # -- zones -----------------------------------------------------------------------------
 
     def add_zone(
-        self, centre_m: float, speed_mps: float, created_lap: int, reason: str
+        self,
+        centre_m: float,
+        speed_mps: float,
+        created_lap: int,
+        reason: str,
+        hold_laps: int | None = None,
     ) -> CautionZone | None:
         """A caution zone ending at `centre_m` (station of the event). Needs the reference length
         (a zone before the first closure has no grid to live on and is not stored)."""
@@ -321,7 +326,11 @@ class StationSet:
         for k, old in enumerate(self._zones if self.zone_merge else ()):
             gap = abs(old.centre_m - centre)
             gap = min(gap, self._l_ref - gap)
-            if old.created_lap == int(created_lap) and gap <= 0.5 * self.caution_before_m:
+            if (
+                old.created_lap == int(created_lap)
+                and gap <= 0.5 * self.caution_before_m
+                and old.hold_laps == (self.caution_laps if hold_laps is None else int(hold_laps))
+            ):
                 # the same spot again on the same lap (a state that flickers): one zone, the
                 # lower speed
                 merged = CautionZone(
@@ -339,7 +348,7 @@ class StationSet:
             length_m=self.caution_before_m,
             speed_mps=max(0.0, float(speed_mps)),
             created_lap=int(created_lap),
-            hold_laps=self.caution_laps,
+            hold_laps=self.caution_laps if hold_laps is None else int(hold_laps),
             reason=reason,
         )
         self._zones.append(zone)

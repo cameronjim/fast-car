@@ -129,7 +129,7 @@ def test_argument_defaults() -> None:
     assert declared["dynamics_mlp_float32"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
-    assert declared["dv1_variant"].choices == ["registered", "K1", "K2", "K3"]
+    assert declared["dv1_variant"].choices == ["registered", "K1", "K2", "K3", "K3s"]
     assert declared["lap_source"].choices == ["start_scan", "map_pose", "camera", "truth"]
 
 
@@ -1154,7 +1154,7 @@ def test_lap_memory_parameters_still_accept_truth_for_the_sim_runner(tmp_path) -
         assert params["lap_mode"] == "v1" and params["lap_source"] == source
 
 
-@pytest.mark.parametrize("variant", ["registered", "K1", "K2", "K3"])
+@pytest.mark.parametrize("variant", ["registered", "K1", "K2", "K3", "K3s"])
 def test_lap_mode_v1_with_the_camera_launches_with_each_variant(
     monkeypatch, tmp_path, variant
 ) -> None:
@@ -1192,6 +1192,25 @@ def test_the_dv1_variant_changes_nothing_outside_v1(monkeypatch, tmp_path, mode)
     b = m._make_actions(_context(**base, dv1_variant="K2"))
     assert _flat_params(_laps_nodes(a)[0]) == _flat_params(_laps_nodes(b)[0])
     assert _flat_params(_planner_of(a)) == _flat_params(_planner_of(b))
+
+
+def test_k3s_is_k3_with_the_gate_weight_ttc_zones_and_the_bound_hold_only() -> None:
+    m = _module()
+    k3_lap, k3_planner = m.DV1_VARIANTS["K3"]
+    lap, planner = m.DV1_VARIANTS["K3s"]
+    assert lap == {
+        **k3_lap,
+        "bound_hold_after_doubtful": True,
+        "ttc_warning_zone_laps": m.K3S_TTC_ZONE_LAPS,
+    }
+    assert m.K3S_TTC_ZONE_LAPS > 0
+    assert planner == {
+        **k3_planner,
+        "w_gate": m.K3S_W_GATE,
+        "gate_ttc_margin": m.K3S_GATE_TTC_MARGIN,
+    }
+    # heavier and wider than the planner defaults (3.0 and 1.1)
+    assert m.K3S_W_GATE > 3.0 and m.K3S_GATE_TTC_MARGIN > 1.1
 
 
 def test_an_unknown_dv1_variant_is_refused(monkeypatch, tmp_path) -> None:

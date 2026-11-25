@@ -115,6 +115,14 @@ class LapConfig:
     reset_length_share: float = 0.08
     #: `cap_wins` (owner decision 5): no caution zone bound is lifted to the floor (D v1).
     zone_floor_mode: str = "floor_wins"
+    #: K3s (development, owner decision 29): after a doubtful lap, no station of the next lap's
+    #: published bound is above what the doubtful lap published in the same 0.10 m station bin
+    #: (D v1). False is the behaviour before it.
+    bound_hold_after_doubtful: bool = False
+    #: K3s (development): a TTC warning of the safety gate (advisory, no command change) makes a
+    #: caution zone held for this many laps (0: off, the behaviour before it). It stops the
+    #: bound rising where the car already reached the gate's warning band (D v1).
+    ttc_warning_zone_laps: int = 0
 
     def __post_init__(self) -> None:
         if self.lap_source not in LAP_SOURCES:
@@ -136,6 +144,8 @@ class LapConfig:
             raise ValueError(f"value_profile_mode must be one of {VALUE_PROFILE_MODES}")
         if self.zone_floor_mode not in ZONE_FLOOR_MODES:
             raise ValueError(f"zone_floor_mode must be one of {ZONE_FLOOR_MODES}")
+        if self.ttc_warning_zone_laps < 0:
+            raise ValueError("ttc_warning_zone_laps must not be negative")
         if not (
             self.station_uncertainty_rate >= 0.0
             and self.station_uncertainty_cap_m >= 0.0
@@ -259,6 +269,12 @@ class LapMemory:
         self._clock_s = math.nan
         self.start_unanswered = False
         self._odom_tail: deque[tuple[float, float]] = deque(maxlen=200)
+        # bound_hold_after_doubtful: the highest published min(cap, bound) per station bin of the
+        # lap in progress and the highest cap published with no arrays; after a doubtful lap,
+        # that lap's record is the hold of the next lap.
+        self._bound_bins: dict[int, float] = {}
+        self._bound_cap_only: float | None = None
+        self._bound_hold: tuple[dict[int, float], float | None] | None = None
 
     # -- inputs ----------------------------------------------------------------------------
 
@@ -287,6 +303,16 @@ class LapMemory:
     def on_safety_event(self, phase: int, severity: int, source: str = "ttc") -> None:
         """A /safety/events record. `source` defaults to an obstacle gate so a caller that does
         not know it is conservative."""
+        if (
+            self.cfg.ttc_warning_zone_laps > 0
+            and self.cfg.lap_mode == "v1"
+            and self._started
+            and phase == PHASE_ENGAGE
+            and severity != SEVERITY_BRAKE
+            and source == "ttc"
+        ):
+            self._note_zone("ttc_warning", hold_laps=self.cfg.ttc_warning_zone_laps)
+            return
         if not (self._started and phase == PHASE_ENGAGE and severity == SEVERITY_BRAKE):
             return
         obstacle = source in OBSTACLE_SOURCES
@@ -462,7 +488,7 @@ class LapMemory:
         # The planner may already have left DRIVING between the report and this scan.
         self._recorder.note_planner(self._state, self._clearance)
 
-    def _note_zone(self, reason: str) -> None:
+    def _note_zone(self, reason: str, hold_laps: int | None = None) -> None:
         """A caution zone before the car's current station, speed from the last metre."""
         gate = self.gate
         if gate is None or not gate.started:
@@ -474,7 +500,7 @@ class LapMemory:
         if not math.isfinite(speed):
             return
         self._zone_count += 1
-        if self.station_set.add_zone(s, speed, self.lap_in_progress, reason) is None:
+        if self.station_set.add_zone(s, speed, self.lap_in_progress, reason, hold_laps) is None:
             self._pending_zones.append((s, speed, reason))
 
     def _close_station_lap(self, crossing: GateCrossing) -> LapResult:
@@ -523,6 +549,9 @@ class LapMemory:
                 next_cap = self.schedule.cap_mps
                 stored = False
         self.station_set.expire_zones(crossing.lap_index + 1)
+        if self.cfg.bound_hold_after_doubtful:
+            self._bound_hold = (self._bound_bins, self._bound_cap_only) if crossing.missed else None
+            self._bound_bins, self._bound_cap_only = {}, None
         self._lap_t0 = crossing.t_cross_s
         self._recent.clear()
         self._cap_this_lap = self._driven_cap()
@@ -783,7 +812,7 @@ class LapMemory:
                 or self.station_set.n_laps < 1
                 or self._uncertain()
             ):
-                return empty
+                return self._held(empty)
             s, v, q = self.station_set.arrays(
                 self.gate.station_m,
                 self.cfg.guidance_horizon_m,
@@ -797,8 +826,8 @@ class LapMemory:
                 ),
             )
             if s.shape[0] < 2:
-                return empty
-            return Guidance(self.lap_in_progress, self._cap_for_guidance(), s, v, q)
+                return self._held(empty)
+            return self._held(Guidance(self.lap_in_progress, self._cap_for_guidance(), s, v, q))
         cap = self._cap_this_lap
         if not self.detector.started or self.detector.laps_completed < 1:
             return Guidance(self.lap_in_progress, cap)
@@ -806,6 +835,38 @@ class LapMemory:
             self.detector.path_since_crossing_m, self.cfg.guidance_horizon_m
         )
         return Guidance(self.lap_in_progress, cap, s, v, c)
+
+    def _held(self, g: Guidance) -> Guidance:
+        """bound_hold_after_doubtful: clamp the bound of the lap after a doubtful lap to what
+        that lap published in the same station bin (its cap alone where it published no arrays
+        there; the lap-1 cap where it published neither), and record what is published."""
+        if not self.cfg.bound_hold_after_doubtful or self.cfg.lap_mode != "v1":
+            return g
+        if g.s_m.shape[0] == 0:
+            cap = float(g.v_cap_mps)
+            prev = self._bound_cap_only
+            self._bound_cap_only = cap if prev is None else max(prev, cap)
+            return g
+        bins = np.floor(g.s_m / GUIDANCE_SPACING_M + 1e-6).astype(np.int64)
+        v = g.v_ref_mps
+        if self._bound_hold is not None:
+            hold_bins, hold_cap = self._bound_hold
+            ref = np.array(
+                [
+                    max(
+                        hold_bins.get(int(b), -math.inf),
+                        -math.inf if hold_cap is None else hold_cap,
+                    )
+                    for b in bins
+                ]
+            )
+            ref = np.where(np.isfinite(ref), ref, self.cfg.v_cap_start_mps)
+            v = np.minimum(v, ref)
+        eff = np.minimum(float(g.v_cap_mps), v)
+        for b, e in zip(bins.tolist(), eff.tolist(), strict=True):
+            if math.isfinite(e):
+                self._bound_bins[b] = max(self._bound_bins.get(b, -math.inf), e)
+        return Guidance(g.lap_index, g.v_cap_mps, g.s_m, v, g.cost_to_go_s)
 
     def _cap_for_guidance(self) -> float:
         if self.gate is None:

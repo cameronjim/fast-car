@@ -311,6 +311,27 @@ class LapMemoryNode(Node):
             "D v1: floor_wins (registered) or cap_wins (owner decision 5: a caution zone bound is "
             "never lifted to the floor; below it is published as 0).",
         )
+        bound_hold = bool(
+            self.declare_parameter(
+                "bound_hold_after_doubtful",
+                _DEFAULTS.bound_hold_after_doubtful,
+                ParameterDescriptor(
+                    description="D v1 (K3s, development): after a doubtful lap, no station bound "
+                    "of the next lap above what the doubtful lap published in the same 0.10 m "
+                    "station bin."
+                ),
+            ).value
+        )
+        ttc_zone_laps = int(
+            self.declare_parameter(
+                "ttc_warning_zone_laps",
+                _DEFAULTS.ttc_warning_zone_laps,
+                ParameterDescriptor(
+                    description="D v1 (K3s, development): a TTC warning of the safety gate makes "
+                    "a caution zone held this many laps. 0: off."
+                ),
+            ).value
+        )
         gate = GateConfig(
             wheelbase_m=1.0,  # replaced below once vehicle_params is loaded
             min_lap_length_m=float(min_len),
@@ -577,6 +598,8 @@ class LapMemoryNode(Node):
             reset_on_change=reset_on_change,
             reset_length_share=float(reset_share),
             zone_floor_mode=zone_floor_mode,
+            bound_hold_after_doubtful=bound_hold,
+            ttc_warning_zone_laps=ttc_zone_laps,
             gate=gate if lap_source == "start_scan" or external else None,
             external=(
                 ExternalConfig(

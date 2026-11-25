@@ -119,6 +119,8 @@ def test_argument_defaults() -> None:
         "dynamics_adaptation": "false",
         "dynamics_fast_mlp": "false",
         "dynamics_mlp_float32": "false",
+        "driving_reference": "false",
+        "lap_gate_ratio": "0.85",
         "params_file": "",
     }
     assert declared["profile"].choices == ["none", "prototype"]

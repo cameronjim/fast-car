@@ -56,6 +56,10 @@ Prototype switch (owner decision 29, default off):
   dyn-v0.7p residual) with a vectorised tanh, a few 1e-16 from the exact pass, checked against the
   bundle's golden rollouts at load; about 2.6x faster solves with dyn-v0.7p. No effect on a
   bundle without a learned block (dyn-v0.1). With false the planner gets no extra parameter.
+* `driving_reference` (default false, S4) and `lap_gate_ratio` (0.85): passed to the lap counter this
+  launch starts (not to one already in the graph). The peak frame of lap 1 becomes a second
+  reference and the counter's distance gate is the ratio times the lap length (alias guard);
+  events say which reference scored. With false nothing extra is passed. Not part of any profile.
 * `dynamics_mlp_float32` (default false, owner decision 30): the planner evaluates the learned MLP
   in single precision, about 1e-7 relative from the double pass, checked against the bundle's
   golden rollouts at load. Combines with `dynamics_fast_mlp`. The next fallback when the solve
@@ -596,7 +600,16 @@ def _log_exit(label: str, note: str):
     return handler
 
 
-def lap_counter_actions(require: bool, rate_hz: float = 15.0) -> list:
+DRIVING_REFERENCE_ARG = "driving_reference"
+LAP_GATE_RATIO_ARG = "lap_gate_ratio"
+
+
+def lap_counter_actions(
+    require: bool,
+    rate_hz: float = 15.0,
+    driving_reference: bool = False,
+    lap_gate_ratio: float = 0.85,
+) -> list:
     """Start the camera lap counter and reset it once. A failure of the counter (OpenCV missing,
     exit code 3, or the package absent) is logged and never stops the driver."""
     from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
@@ -612,7 +625,19 @@ def lap_counter_actions(require: bool, rate_hz: float = 15.0) -> list:
         ]
     include = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(Path(share) / "launch" / "lap_counter.launch.py")),
-        launch_arguments=[("rate_hz", repr(float(rate_hz)))],
+        # S4 (default off): nothing extra is passed unless the switch is on, so the counter this
+        # launch starts is the registered one.
+        launch_arguments=[
+            ("rate_hz", repr(float(rate_hz))),
+            *(
+                [
+                    ("driving_reference", "true"),
+                    ("lap_gate_ratio", repr(float(lap_gate_ratio))),
+                ]
+                if driving_reference
+                else []
+            ),
+        ],
     )
 
     def on_exit(event, context):
@@ -873,6 +898,15 @@ def _make_actions(context: LaunchContext) -> list:
     deskew_node = deskew_node_for(arg("params_file")) if deskew_on else None
     lap_counter = _bool(arg("lap_counter"), "lap_counter")
     require_counter = _bool(arg("require_lap_counter"), "require_lap_counter")
+    driving_reference = _bool(
+        LaunchConfiguration(DRIVING_REFERENCE_ARG, default="false").perform(context).strip(),
+        DRIVING_REFERENCE_ARG,
+    )
+    lap_gate_ratio = float(
+        LaunchConfiguration(LAP_GATE_RATIO_ARG, default="0.85").perform(context).strip()
+    )
+    if not 0.0 < lap_gate_ratio <= 1.0:
+        raise RuntimeError(f"pnp.launch.py: lap_gate_ratio must be in (0, 1], got {lap_gate_ratio}")
     lap_rate_hz = float(arg("lap_rate_hz"))
     if not math.isfinite(lap_rate_hz):
         raise RuntimeError(f"pnp.launch.py: lap_rate_hz must be finite, got {lap_rate_hz}")
@@ -1056,7 +1090,9 @@ def _make_actions(context: LaunchContext) -> list:
                 LogInfo(msg="[pnp.launch.py] a lap_counter_node is already running: not started")
             )
         else:
-            actions += lap_counter_actions(require_counter, lap_rate_hz)
+            actions += lap_counter_actions(
+                require_counter, lap_rate_hz, driving_reference, lap_gate_ratio
+            )
         if camera_topic is None:
             actions.append(lap_counter_reset_action())
     chain = None
@@ -1283,6 +1319,22 @@ def generate_launch_description() -> LaunchDescription:
                     "vectorised tanh (golden rollouts checked at load), for a bundle with a "
                     "residual such as dyn-v0.7p. false (default): the planner is unchanged."
                 ),
+            ),
+            DeclareLaunchArgument(
+                DRIVING_REFERENCE_ARG,
+                default_value="false",
+                choices=["true", "false"],
+                description=(
+                    "true: the camera lap counter this launch starts adds the peak frame of lap 1 "
+                    "as a second reference and gates a lap at lap_gate_ratio times the lap length "
+                    "(S4 alias guard). Only for the counter started here. false (default): the "
+                    "registered counter, nothing extra passed."
+                ),
+            ),
+            DeclareLaunchArgument(
+                LAP_GATE_RATIO_ARG,
+                default_value="0.85",
+                description="With driving_reference: the distance gate as a share of the lap length.",
             ),
             DeclareLaunchArgument(
                 MLP_FLOAT32_PARAM,

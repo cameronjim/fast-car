@@ -676,7 +676,13 @@ def test_the_prototype_switches_send_nothing_at_their_defaults():
 def test_the_real_launch_declares_every_prototype_switch_the_app_sends():
     assert REAL["dv1_variant"] == ("registered", "K1", "K2", "K3", "K3s")
     assert REAL["rt_sched"] == ("off", "on")
-    for name in ("dynamics_fast_mlp", "dynamics_mlp_float32", "dynamics_adaptation", "profile"):
+    for name in (
+        "dynamics_fast_mlp",
+        "dynamics_mlp_float32",
+        "driving_reference",
+        "dynamics_adaptation",
+        "profile",
+    ):
         assert name in REAL
 
 
@@ -781,3 +787,17 @@ def test_the_prefs_default_the_switches_off_and_reject_a_bad_variant():
     assert Prefs.model_validate({"pnp": {"dv1_variant": "K3"}}).pnp.dv1_variant == "K3"
     with pytest.raises(ValueError):
         Prefs.model_validate({"pnp": {"dv1_variant": "K9"}})
+
+
+def test_the_driving_reference_switch_is_sent_only_when_on_and_only_if_declared():
+    assert "driving_reference" not in build(lap(), launch=REAL)
+    assert " driving_reference:=true" in build(lap(driving_reference=True), launch=REAL)
+    with pytest.raises(cmd.CommandError, match="must be true or false"):
+        build(lap(driving_reference="true"), launch=REAL)
+    with pytest.raises(cmd.CommandError, match="driving_reference is not available"):
+        build(lap(driving_reference=True), launch=DECL_RATE)
+
+
+def test_the_prefs_default_the_driving_reference_off():
+    assert Prefs().pnp.driving_reference is False
+    assert Prefs.model_validate({"pnp": {"driving_reference": True}}).pnp.driving_reference

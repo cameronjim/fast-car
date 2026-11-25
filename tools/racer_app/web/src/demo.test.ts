@@ -123,6 +123,7 @@ describe("demo fake agent", () => {
       { pnp_lap_mode: "v1", pnp_dv1_variant: "K9" },
       { pnp_dynamics_fast_mlp: "true" },
       { pnp_dynamics_mlp_float32: 1 },
+      { pnp_driving_reference: 1 },
       { pnp_rt_sched: 1 },
     ]) {
       await expect(api.startDrive({ ...base, ...bad } as never)).rejects.toMatchObject({ status: 400 });

@@ -64,6 +64,7 @@ class PnpPrefs(_Strict):
     dv1_variant: Literal["registered", "K1", "K2", "K3", "K3s"] = "registered"
     dynamics_fast_mlp: bool = False
     dynamics_mlp_float32: bool = False
+    driving_reference: bool = False
     dynamics_adaptation: bool = False
     rt_sched: bool = False
 

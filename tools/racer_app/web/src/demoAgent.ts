@@ -324,7 +324,7 @@ export class DemoCar {
     const rate = b.pnp_lap_rate_hz ?? 0;
     if (typeof rate !== "number" || !(rate >= 0 && rate <= 30)) return "pnp lap counter rate must be a number from 0 to 30 Hz";
     if (rate !== 0 && b.pnp_lap_counter === false) return "pnp lap counter rate needs the lap counter on";
-    for (const k of ["pnp_dynamics_fast_mlp", "pnp_dynamics_mlp_float32", "pnp_dynamics_adaptation", "pnp_rt_sched"] as const) {
+    for (const k of ["pnp_dynamics_fast_mlp", "pnp_dynamics_mlp_float32", "pnp_driving_reference", "pnp_dynamics_adaptation", "pnp_rt_sched"] as const) {
       if (b[k] !== undefined && !isBool(b[k])) return `${k} must be true or false`;
     }
     const variant = b.pnp_dv1_variant ?? "registered";

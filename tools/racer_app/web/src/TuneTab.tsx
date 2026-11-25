@@ -205,7 +205,7 @@ export function TuneTab() {
               setPnp(n.v_max_mps > max ? { dynamics, v_max_mps: max } : { dynamics });
             }} aria-label="ML driver dynamics bundle">
               <option value="">{pnp?.dynamics.length === 1 ? `auto (${pnp.dynamics[0]})` : "choose"}</option>
-              {pnp?.dynamics.map((x) => <option key={x} value={x}>{x}</option>)}
+              {pnp?.dynamics.map((x) => <option key={x} value={x}>{bundleLabel(x)}</option>)}
             </select>
           </Field>
           {n.backend === "net" && (

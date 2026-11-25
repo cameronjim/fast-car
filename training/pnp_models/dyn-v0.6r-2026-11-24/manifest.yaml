@@ -1,0 +1,39 @@
+bundle_schema_version: 1.1.0
+kind: dynamics
+model_id: dyn-v0.6r-2026-11-24
+created_utc: '2026-11-25T06:28:45Z'
+git_sha: 3c4540c5875b6f717f09c6d5b84378d8f96297de
+training_config_sha256: 774650a0b954f3f577ea15e4f7660ca07940597b8c5d7224bec35e898e6d259d
+vehicle_params: {schema_version: 0.17.0, sysid_session_id: none-preliminary}
+payload:
+- {file: residual_mlp.f32, sha256: e45f2df9b9eaf4e0948d2b031ef4e9f78b28477905fc67e1b85467f62c7be02e}
+- {file: golden_rollouts.csv, sha256: ca16b8a1020389f82019689a7850f5973ef74b3a0bf923b01392af1e2deeff42}
+io:
+  state: [x_m, y_m, yaw_rad, v_mps, delta_rad]
+  control: [speed_cmd_mps, steering_cmd_rad]
+  dt_s: 0.05
+  nominal: {speed_gain: 0.9482438088762631, speed_deadband_mps: 0.22, speed_tau_s: 0.22460632746810144,
+    accel_max_mps2: 2.0, decel_max_mps2: 0.6731081096112491, steer_gain_left: 0.9166243626015708,
+    steer_gain_right: 1.0114633713998802, steer_offset_rad: 0.015222998571431204,
+    steer_tau_s: 0.02787697420940658, command_delay_s: 0.0, understeer_s2_per_m2: 0.10938200992093731}
+  residual:
+    enabled: true
+    inputs: [v_mps, delta_rad, speed_cmd_mps, steering_cmd_rad]
+    outputs: [dv_dt_mps2, dyaw_dt_rad_per_s]
+    layers:
+    - [4, 32]
+    - [32, 32]
+    - [32, 2]
+    activation: tanh
+    input_mean: [0.6116242097951549, 0.09584374482872424, 0.6495900338752194, 0.10063325687676196]
+    input_std: [0.28478050122014964, 0.33868247867134404, 0.28633558646577373, 0.3521688088211878]
+    output_scale: [0.0, 0.08937278009616041]
+    file: residual_mlp.f32
+  validity: {v_min_mps: 0.0, v_max_mps: 1.3}
+  golden: golden_rollouts.csv
+data: ['train role under T2: every v0.5 train role and the 2026-11-22 train parts,
+    constants db62eaac18ba655bf00e4ff7c8e8b287cd7e042b6ea671014ebb404032d00e0c', session
+    file 6b791ac5bcc5c0b150b86420574f4d704453963e9d1fdb1502aa09f0447516f5, 'selection:
+    the 2026-11-14 held-out segments and the 2026-11-15 held-out parts']
+metrics: {GP2g-R: FAIL, heading_outcome: no named outcome, P1_ratio: 0.9928881137388499,
+  Y1_ratio: 0.9608763614827903}

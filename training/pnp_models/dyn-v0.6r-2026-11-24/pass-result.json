@@ -1,0 +1,648 @@
+{
+  "freeze_sha": "3c4540c5875b6f717f09c6d5b84378d8f96297de",
+  "constants_sha256": "db62eaac18ba655bf00e4ff7c8e8b287cd7e042b6ea671014ebb404032d00e0c",
+  "session_sha256": "6b791ac5bcc5c0b150b86420574f4d704453963e9d1fdb1502aa09f0447516f5",
+  "windows": 525,
+  "windows_only_under_T2": 0,
+  "windows_only_under_T2s": 0,
+  "direction_windows": {
+    "ccw": 285,
+    "cw": 240
+  },
+  "strata": {
+    "ccw:0.25-0.6": 8,
+    "ccw:0.6-0.85": 37,
+    "ccw:0.85-1.25": 240,
+    "cw:0.25-0.6": 46,
+    "cw:0.6-1.25": 194
+  },
+  "strata_merges": [
+    {
+      "direction": "cw",
+      "from": "0.85-1.25",
+      "windows": 10,
+      "into": "0.6-0.85"
+    }
+  ],
+  "gate": {
+    "outcome": "FAIL",
+    "enough_data": {
+      "gate": "GP2g-R item 0 enough data",
+      "passed": true,
+      "items": [
+        {
+          "name": "0a windows",
+          "value": 525.0,
+          "comparison": ">=",
+          "threshold": 400.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "0b windows ccw",
+          "value": 285.0,
+          "comparison": ">=",
+          "threshold": 150.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "0b windows cw",
+          "value": 240.0,
+          "comparison": ">=",
+          "threshold": 150.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "0c strata with 30 windows",
+          "value": 4.0,
+          "comparison": ">=",
+          "threshold": 4.0,
+          "passed": true,
+          "note": ""
+        }
+      ]
+    },
+    "decision": {
+      "gate": "GP2g-R yaw-only residual R6",
+      "passed": false,
+      "items": [
+        {
+          "name": "1a P1 ratio R6 / dyn-v0.1",
+          "value": 0.9928881137388499,
+          "comparison": "<=",
+          "threshold": 0.95,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "1b upper end of the bootstrap interval of the P1 ratio",
+          "value": 1.000867835631418,
+          "comparison": "<",
+          "threshold": 1.0,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "2a Y1 ratio",
+          "value": 0.9608763614827903,
+          "comparison": "<=",
+          "threshold": 0.9,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "2b S1(R6) minus S1(dyn-v0.1)",
+          "value": 0.0,
+          "comparison": "<=",
+          "threshold": 1e-06,
+          "passed": true,
+          "note": "absolute difference in m/s"
+        },
+        {
+          "name": "3 seed 0 P1 ratio",
+          "value": 0.9931219138169032,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "3 seed 1 P1 ratio",
+          "value": 0.9968139326753624,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "3 seed 2 P1 ratio",
+          "value": 0.9928881137388499,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum ccw:0.25-0.6 position RMSE ratio",
+          "value": 8.0,
+          "comparison": "n/a",
+          "threshold": 30.0,
+          "passed": true,
+          "note": "cannot be applied: 8 windows, at least 30 needed"
+        },
+        {
+          "name": "4 stratum ccw:0.6-0.85 position RMSE ratio (37 windows)",
+          "value": 0.9625179229445142,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum ccw:0.85-1.25 position RMSE ratio (240 windows)",
+          "value": 1.0235361008374386,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum cw:0.25-0.6 position RMSE ratio (46 windows)",
+          "value": 0.9935572596733963,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum cw:0.6-1.25 position RMSE ratio (194 windows)",
+          "value": 0.9981966644697996,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "5 random sweep of the validity box: finite, inside the state bounds",
+          "value": 0.0,
+          "comparison": "<=",
+          "threshold": 0.0,
+          "passed": true,
+          "note": "100000 rollouts of 30 steps; max v 1.300 m/s"
+        },
+        {
+          "name": "6 Yp ratio (G1b, T2b; a re-read)",
+          "value": 0.7052146753734913,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "7 ccw P1 ratio",
+          "value": 0.9918599656809791,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "7 ccw Y1 ratio",
+          "value": 1.0156073803503896,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "7 cw P1 ratio",
+          "value": 0.9960997098606591,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "7 cw Y1 ratio",
+          "value": 0.7217892777358492,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "8a C1 ratio",
+          "value": 1.0460933208359222,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "8b A1 ratio",
+          "value": 0.9811284194432367,
+          "comparison": "<=",
+          "threshold": 1.02,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "9 near-limit left position RMSE ratio",
+          "value": 0.0,
+          "comparison": "n/a",
+          "threshold": 30.0,
+          "passed": true,
+          "note": "cannot be applied: 0 windows, at least 30 needed"
+        },
+        {
+          "name": "9 near-limit right position RMSE ratio (163 windows)",
+          "value": 0.9905805288229989,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "9 transition position RMSE ratio (78 windows)",
+          "value": 1.0013036052776716,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "10 P1 ratio under T2s",
+          "value": 0.9933078791847135,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "11 share of held-out steps with the residual output at or above 0.9 of its bound",
+          "value": 0.0,
+          "comparison": "<=",
+          "threshold": 0.01,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "12 mppi_bench p50 solve time ratio R6 / dyn-v0.1",
+          "value": 13.845724907063197,
+          "comparison": "<=",
+          "threshold": 1.25,
+          "passed": false,
+          "note": "7.449 ms against 0.538 ms. mppi_bench 'planner solve()' p50, default settings (512 samples, fast MLP off), Linux ros-dev:ci container on the Mac, Release build, median of 3 interleaved runs of 1000 solves (R6 7.395, 7.449, 8.071; dyn-v0.1 0.580, 0.530, 0.538). Every scene is 13 to 15 times. For information only: with --fast-mlp R6 4.438 ms against 0.572 ms (7.8 times). Bench copy of the frozen weights, cache/v06-bench."
+        },
+        {
+          "name": "13 L5 PnP canary with the R6 bundle: every case completes, 0 wall contacts",
+          "value": 0.0,
+          "comparison": "<=",
+          "threshold": 0.0,
+          "passed": true,
+          "note": "22 of 22 cases completed, 0 wall contacts. tests/l5_pnp unedited, run by .github/scripts/l5_pnp_test.sh in ros-dev:ci with the R6 bundle bind-mounted read-only over config/pnp/fixtures/dyn-car-2026-11-12 (the planner bundle the canary loads; it is dyn-v0.1's nominal with the residual off). 22 passed, 36 skipped, 0 failed, 0 wall contacts; one starvation rerun of the no-perception case (attempt 3 passed). The 2 contract 2 cases load their own bundle, not R6."
+        }
+      ]
+    }
+  },
+  "heading_outcome": {
+    "label": "no named outcome",
+    "items": [
+      {
+        "name": "Y1 ratio",
+        "value": 0.9608763614827903,
+        "comparison": "<=",
+        "threshold": 0.8,
+        "passed": false,
+        "note": ""
+      },
+      {
+        "name": "lateral position RMSE ratio at 1.0 s",
+        "value": 1.0460933208359222,
+        "comparison": "<=",
+        "threshold": 0.9,
+        "passed": false,
+        "note": ""
+      },
+      {
+        "name": "upper end of the bootstrap interval of the lateral ratio",
+        "value": 1.098187017398021,
+        "comparison": "<",
+        "threshold": 1.0,
+        "passed": false,
+        "note": ""
+      },
+      {
+        "name": "P1 ratio",
+        "value": 0.9928881137388499,
+        "comparison": "<=",
+        "threshold": 1.0,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "stratum ccw:0.25-0.6 position RMSE ratio",
+        "value": 0.9920461931657429,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "stratum ccw:0.6-0.85 position RMSE ratio",
+        "value": 0.9625179229445142,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "stratum ccw:0.85-1.25 position RMSE ratio",
+        "value": 1.0235361008374386,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "stratum cw:0.25-0.6 position RMSE ratio",
+        "value": 0.9935572596733963,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "stratum cw:0.6-1.25 position RMSE ratio",
+        "value": 0.9981966644697996,
+        "comparison": "<=",
+        "threshold": 1.05,
+        "passed": true,
+        "note": ""
+      }
+    ]
+  },
+  "bootstrap_P1": {
+    "ratio": 0.9928881137388499,
+    "lo": 0.953439651829041,
+    "hi": 1.000867835631418,
+    "resamples": 2000,
+    "blocks": 30,
+    "seed": 0,
+    "empty_stratum_share": 0.0008
+  },
+  "bootstrap_across": {
+    "ratio": 1.0460933208359222,
+    "lo": 0.9141121037534602,
+    "hi": 1.098187017398021,
+    "resamples": 2000,
+    "blocks": 30,
+    "seed": 0,
+    "empty_stratum_share": 0.0008
+  },
+  "sweep": {
+    "samples": 100000,
+    "steps": 30,
+    "nonfinite": 0,
+    "steering_violations": 0,
+    "speed_violations": 0,
+    "max_speed_mps": 1.2999814831915344,
+    "max_abs_delta_rad": 0.4489969477297093,
+    "passed": true
+  },
+  "saturation": {
+    "share": 0.0,
+    "steps": 15750,
+    "bound": [
+      0.0,
+      1.286968353759187
+    ],
+    "max_abs": [
+      0.0,
+      0.5785784509774958
+    ]
+  },
+  "solve_and_canary": {
+    "solve": {
+      "candidate_p50_ms": 7.449,
+      "nominal_p50_ms": 0.538,
+      "note": "mppi_bench 'planner solve()' p50, default settings (512 samples, fast MLP off), Linux ros-dev:ci container on the Mac, Release build, median of 3 interleaved runs of 1000 solves (R6 7.395, 7.449, 8.071; dyn-v0.1 0.580, 0.530, 0.538). Every scene is 13 to 15 times. For information only: with --fast-mlp R6 4.438 ms against 0.572 ms (7.8 times). Bench copy of the frozen weights, cache/v06-bench."
+    },
+    "canary": {
+      "cases": 22,
+      "completed": 22,
+      "wall_contacts": 0,
+      "note": "tests/l5_pnp unedited, run by .github/scripts/l5_pnp_test.sh in ros-dev:ci with the R6 bundle bind-mounted read-only over config/pnp/fixtures/dyn-car-2026-11-12 (the planner bundle the canary loads; it is dyn-v0.1's nominal with the residual off). 22 passed, 36 skipped, 0 failed, 0 wall contacts; one starvation rerun of the no-perception case (attempt 3 passed). The 2 contract 2 cases load their own bundle, not R6."
+    }
+  },
+  "metrics": {
+    "dyn-v0.1": {
+      "macro": {
+        "P1": 0.16319289199704004,
+        "A1": 0.13948933791681342,
+        "C1": 0.08252665192487946,
+        "Y1": 0.18472345812284993,
+        "S1": 0.1591674661790233
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.4494041429038012,
+        "ccw:0.6-0.85": 0.0889414199911817,
+        "ccw:0.85-1.25": 0.07974557283490415,
+        "cw:0.25-0.6": 0.08943633882622574,
+        "cw:0.6-1.25": 0.10843698542908743
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.206030378576629,
+          "Y1": 0.25052343898736557
+        },
+        "cw": {
+          "P1": 0.09893666212765659,
+          "Y1": 0.08602348682607651
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.0401709526830782,
+        "cw": -0.06793227612719846
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.10886042380367189
+        ]
+      },
+      "transition": [
+        78,
+        0.15152383037910366
+      ],
+      "p1_alt": 0.16365224197235104,
+      "pp": 0.0982416934134908,
+      "yp": 0.025668317434183553,
+      "fast": {}
+    },
+    "R6 seed 0": {
+      "macro": {
+        "P1": 0.1620704372214156,
+        "A1": 0.13710604983860442,
+        "C1": 0.08592642440696942,
+        "Y1": 0.17383321560823256,
+        "S1": 0.1591674661790233
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.4460196164782645,
+        "ccw:0.6-0.85": 0.08597715447507935,
+        "ccw:0.85-1.25": 0.08205374760362673,
+        "cw:0.25-0.6": 0.08831751150532527,
+        "cw:0.6-1.25": 0.1079841560447821
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.20468350618565687,
+          "Y1": 0.2527422938639598
+        },
+        "cw": {
+          "P1": 0.09815083377505368,
+          "Y1": 0.055469598224641675
+        }
+      },
+      "yaw_bias": {
+        "ccw": 0.027393198641211352,
+        "cw": -0.010773861916425476
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.10738483724013714
+        ]
+      },
+      "transition": [
+        78,
+        0.15141152250632003
+      ],
+      "p1_alt": 0.1625925432246307,
+      "pp": 0.07969792056314358,
+      "yp": 0.017913904084481243,
+      "fast": {}
+    },
+    "R6 seed 1": {
+      "macro": {
+        "P1": 0.16267294845623517,
+        "A1": 0.13782534090114967,
+        "C1": 0.08583272240610437,
+        "Y1": 0.17940630808763586,
+        "S1": 0.1591674661790233
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.446250438953216,
+        "ccw:0.6-0.85": 0.08514625985429712,
+        "ccw:0.85-1.25": 0.08374039035242367,
+        "cw:0.25-0.6": 0.08981683762658534,
+        "cw:0.6-1.25": 0.10841081549465381
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.20504569638664558,
+          "Y1": 0.25543373903468813
+        },
+        "cw": {
+          "P1": 0.09911382656061957,
+          "Y1": 0.06536516166705747
+        }
+      },
+      "yaw_bias": {
+        "ccw": 0.03708771385495185,
+        "cw": 0.01662977147633902
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.10721879859439856
+        ]
+      },
+      "transition": [
+        78,
+        0.15212788991161544
+      ],
+      "p1_alt": 0.16318913071716423,
+      "pp": 0.07879618850286435,
+      "yp": 0.01895024471963242,
+      "fast": {}
+    },
+    "R6 seed 2": {
+      "macro": {
+        "P1": 0.16203228271052894,
+        "A1": 0.1368569536395067,
+        "C1": 0.08633057936956741,
+        "Y1": 0.17749640432160263,
+        "S1": 0.1591674661790233
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.4458296691606295,
+        "ccw:0.6-0.85": 0.0856077108336479,
+        "ccw:0.85-1.25": 0.08162247267848576,
+        "cw:0.25-0.6": 0.08886012371940623,
+        "cw:0.6-1.25": 0.10824143716047534
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.2043532842242544,
+          "Y1": 0.254433453586329
+        },
+        "cw": {
+          "P1": 0.09855078043994078,
+          "Y1": 0.062090830424513105
+        }
+      },
+      "yaw_bias": {
+        "ccw": 0.024477649438835656,
+        "cw": -0.010730657504437236
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.10783501617933708
+        ]
+      },
+      "transition": [
+        78,
+        0.15172135764407887
+      ],
+      "p1_alt": 0.16255706139737958,
+      "pp": 0.07727711864970596,
+      "yp": 0.01810167414673148,
+      "fast": {}
+    }
+  },
+  "reported_v02_heldout_T2": {
+    "dyn-v0.1": {
+      "P1": 0.08866860901627503,
+      "A1": 0.0690247079134059,
+      "C1": 0.053997584924667524,
+      "Y1": 0.07393622579584501,
+      "S1": 0.03869356258269287
+    },
+    "R6 seed 0": {
+      "P1": 0.08602832545816258,
+      "A1": 0.0711641748363418,
+      "C1": 0.04688176633758353,
+      "Y1": 0.039940638926340324,
+      "S1": 0.03869356258269287
+    },
+    "R6 seed 1": {
+      "P1": 0.08544192119597048,
+      "A1": 0.07054925225347161,
+      "C1": 0.046656652605153996,
+      "Y1": 0.040319352529083446,
+      "S1": 0.03869356258269287
+    },
+    "R6 seed 2": {
+      "P1": 0.08582662574113782,
+      "A1": 0.07140857913735608,
+      "C1": 0.0462353121283568,
+      "Y1": 0.04066185133759626,
+      "S1": 0.03869356258269287
+    }
+  },
+  "shipping": {
+    "config": "yaw_multi_step_from_one_wd1e-2",
+    "seed": 2
+  }
+}

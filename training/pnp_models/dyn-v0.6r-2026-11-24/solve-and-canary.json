@@ -1,0 +1,13 @@
+{
+  "solve": {
+    "candidate_p50_ms": 7.449,
+    "nominal_p50_ms": 0.538,
+    "note": "mppi_bench 'planner solve()' p50, default settings (512 samples, fast MLP off), Linux ros-dev:ci container on the Mac, Release build, median of 3 interleaved runs of 1000 solves (R6 7.395, 7.449, 8.071; dyn-v0.1 0.580, 0.530, 0.538). Every scene is 13 to 15 times. For information only: with --fast-mlp R6 4.438 ms against 0.572 ms (7.8 times). Bench copy of the frozen weights, cache/v06-bench."
+  },
+  "canary": {
+    "cases": 22,
+    "completed": 22,
+    "wall_contacts": 0,
+    "note": "tests/l5_pnp unedited, run by .github/scripts/l5_pnp_test.sh in ros-dev:ci with the R6 bundle bind-mounted read-only over config/pnp/fixtures/dyn-car-2026-11-12 (the planner bundle the canary loads; it is dyn-v0.1's nominal with the residual off). 22 passed, 36 skipped, 0 failed, 0 wall contacts; one starvation rerun of the no-perception case (attempt 3 passed). The 2 contract 2 cases load their own bundle, not R6."
+  }
+}

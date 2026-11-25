@@ -129,6 +129,7 @@ def _describe_laps(params: dict[str, Any]) -> str:
     for key, label in (
         ("fast_mlp", "dynamics_fast_mlp"),
         ("mlp_float32", "dynamics_mlp_float32"),
+        ("driving_reference", "driving_reference"),
         ("adaptation", "dynamics_adaptation"),
         ("rt_sched", "rt_sched"),
     ):
@@ -1037,6 +1038,7 @@ class Controller:
         pnp_dv1_variant: Any = "registered",
         pnp_dynamics_fast_mlp: Any = False,
         pnp_dynamics_mlp_float32: Any = False,
+        pnp_driving_reference: Any = False,
         pnp_dynamics_adaptation: Any = False,
         pnp_rt_sched: Any = False,
         max_speed_mps: float | None = None,
@@ -1097,6 +1099,7 @@ class Controller:
                         pnp_dv1_variant,
                         pnp_dynamics_fast_mlp,
                         pnp_dynamics_mlp_float32,
+                        pnp_driving_reference,
                         pnp_dynamics_adaptation,
                         pnp_rt_sched,
                     ),
@@ -1393,6 +1396,7 @@ class Controller:
             dv1_variant,
             fast_mlp,
             mlp_float32,
+            driving_reference,
             adaptation,
             rt_sched,
         ) = lap
@@ -1416,6 +1420,7 @@ class Controller:
             dv1_variant=dv1_variant,
             dynamics_fast_mlp=fast_mlp,
             dynamics_mlp_float32=mlp_float32,
+            driving_reference=driving_reference,
             dynamics_adaptation=adaptation,
             rt_sched=rt_sched,
             shadow_container_path=cmd.container_path(self.s.repo_dir, models / shadow)
@@ -1462,6 +1467,7 @@ class Controller:
                     "dv1_variant": dv1_variant,
                     "fast_mlp": fast_mlp,
                     "mlp_float32": mlp_float32,
+                    "driving_reference": driving_reference,
                     "adaptation": adaptation,
                     "rt_sched": rt_sched,
                 },
@@ -1774,6 +1780,7 @@ class Controller:
                     dv1_variant=n.dv1_variant,
                     dynamics_fast_mlp=n.dynamics_fast_mlp,
                     dynamics_mlp_float32=n.dynamics_mlp_float32,
+                    driving_reference=n.driving_reference,
                     dynamics_adaptation=n.dynamics_adaptation,
                     rt_sched=n.rt_sched,
                     shadow_container_path=shadow if n.shadow_perception else "",

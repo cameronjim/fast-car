@@ -379,6 +379,48 @@ def test_dynamics_mlp_float32_bad_value_is_refused(monkeypatch) -> None:
         m._make_actions(_context(dynamics_mlp_float32="yes"))
 
 
+def _counter_include_args(m, **kw):
+    inc = next(
+        (
+            a
+            for a in m.lap_counter_actions(False, 30.0, **kw)
+            if type(a).__name__ == "IncludeLaunchDescription"
+        ),
+        None,
+    )
+    if inc is None:
+        pytest.skip("racer_perception is not installed here (a colcon workspace has it)")
+    return {k: v for k, v in inc.launch_arguments}
+
+
+def test_driving_reference_passes_nothing_to_the_counter_by_default() -> None:
+    m = _module()
+    assert _counter_include_args(m) == {"rate_hz": "30.0"}
+
+
+def test_driving_reference_on_passes_the_switch_and_the_ratio_to_the_counter() -> None:
+    m = _module()
+    args = _counter_include_args(m, driving_reference=True, lap_gate_ratio=0.8)
+    assert args == {"rate_hz": "30.0", "driving_reference": "true", "lap_gate_ratio": "0.8"}
+
+
+def test_driving_reference_launch_args_default_off_and_bad_values_are_refused(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    decl = {
+        d.name: d
+        for d in m.generate_launch_description().entities
+        if type(d).__name__ == "DeclareLaunchArgument"
+    }
+    assert "".join(s.text for s in decl["driving_reference"].default_value) == "false"
+    assert "".join(s.text for s in decl["lap_gate_ratio"].default_value) == "0.85"
+    with pytest.raises(RuntimeError):
+        m._make_actions(_context(driving_reference="yes"))
+    with pytest.raises(RuntimeError):
+        m._make_actions(_context(lap_gate_ratio="1.5"))
+    m._make_actions(_context(driving_reference="true", lap_gate_ratio="0.8"))
+
+
 def test_lap_memory_is_off_by_default(monkeypatch) -> None:
     m = _module()
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)

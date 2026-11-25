@@ -525,6 +525,7 @@ class PnpLap:
     dv1_variant: object = "registered"
     dynamics_fast_mlp: object = False
     dynamics_mlp_float32: object = False
+    driving_reference: object = False
     dynamics_adaptation: object = False
     rt_sched: object = False
 
@@ -638,6 +639,7 @@ def _pnp_lap_args(
     for name, value in (
         ("pnp_dynamics_fast_mlp", lap.dynamics_fast_mlp),
         ("pnp_dynamics_mlp_float32", lap.dynamics_mlp_float32),
+        ("pnp_driving_reference", lap.driving_reference),
         ("pnp_dynamics_adaptation", lap.dynamics_adaptation),
         ("pnp_rt_sched", lap.rt_sched),
     ):
@@ -701,6 +703,8 @@ def _pnp_lap_args(
         used.append(("dynamics_fast_mlp", "true", None))
     if lap.dynamics_mlp_float32:
         used.append(("dynamics_mlp_float32", "true", None))
+    if lap.driving_reference:
+        used.append(("driving_reference", "true", None))
     if lap.dynamics_adaptation:
         used.append(("dynamics_adaptation", "true", None))
     if lap.rt_sched:

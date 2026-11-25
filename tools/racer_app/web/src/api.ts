@@ -144,6 +144,7 @@ export interface Prefs {
     dv1_variant: Dv1Variant;
     dynamics_fast_mlp: boolean;
     dynamics_mlp_float32: boolean;
+    driving_reference: boolean;
     dynamics_adaptation: boolean;
     rt_sched: boolean;
   };
@@ -337,6 +338,7 @@ export class Api {
     pnp_dv1_variant?: Dv1Variant;
     pnp_dynamics_fast_mlp?: boolean;
     pnp_dynamics_mlp_float32?: boolean;
+    pnp_driving_reference?: boolean;
     pnp_dynamics_adaptation?: boolean;
     pnp_rt_sched?: boolean;
     max_speed_mps?: number;

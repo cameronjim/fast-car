@@ -44,6 +44,13 @@ ARGUMENTS = {
     "min_lap_time_s": ("2.0", "Time floor between laps, seconds.", float),
     "min_lap_distance_m": ("3.0", "Shortest possible lap, metres of odometry.", float),
     "start_speed_mps": ("0.3", "Capture the reference at the first frame at this speed.", float),
+    "driving_reference": (
+        "false",
+        "S4: the peak frame of lap 1 becomes a second reference and the distance gate scales "
+        "with the lap length. Off by default: the registered counter.",
+        bool,
+    ),
+    "lap_gate_ratio": ("0.85", "With driving_reference: gate = this times the lap length.", float),
 }
 
 

@@ -340,3 +340,41 @@ def test_30_hz_is_delivered_from_a_60_hz_source(make_harness):
     rate = len(h.thumbs) / seconds
     # a loaded CI machine can lose frames, never gain them: 30 is the ceiling, 25 the floor
     assert 25.0 <= rate <= 30.5, rate
+
+
+def _one_lap(h):
+    a, b, c = _texture(10), _texture(11), _texture(12)
+    h.odom(1.0, 0.0)
+    h.spin_for(0.1)
+    h.frame(a)
+    for i, img in enumerate((b, c, b, c)):
+        h.odom(1.0, 0.2 * (i + 1))
+        h.frame(img)
+    h.frame(a)
+    h.frame(b)
+    assert h.spin_until(lambda: len(h.events) >= 1)
+
+
+def test_default_event_and_status_say_nothing_of_a_driving_reference(make_harness):
+    h = make_harness(165, **_NO_GATES)
+    assert h.connected()
+    _one_lap(h)
+    assert "reference" not in h.events[0]
+    assert h.spin_until(lambda: bool(h.statuses))
+    assert "driving_reference" not in h.statuses[-1] and "lap_gate_m" not in h.statuses[-1]
+
+
+def test_driving_reference_event_names_the_reference_and_status_has_the_gate(make_harness):
+    h = make_harness(166, **{**_NO_GATES, "driving_reference": True, "lap_gate_ratio": 0.8})
+    assert h.connected()
+    _one_lap(h)
+    assert h.events[0]["reference"] == "standing"
+    assert h.spin_until(
+        lambda: h.statuses and h.statuses[-1].get("driving_reference") is True
+    )
+    assert h.statuses[-1]["lap_gate_m"] == pytest.approx(0.8 * h.events[0]["distance_m"], abs=0.01)
+
+
+def test_a_gate_ratio_outside_zero_to_one_is_a_hard_refusal(make_harness):
+    with pytest.raises((ValueError, Exception)):
+        make_harness(167, lap_gate_ratio=1.5)

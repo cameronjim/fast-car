@@ -1392,7 +1392,7 @@ def test_profile_prototype_sets_the_learned_defaults() -> None:
     assert c["dynamics_adaptation"] == "false"
     assert c["dynamics_mlp_float32"] == "false"  # not part of the profile
     assert c["lap_memory"] == "true"
-    assert c["lap_mode"] == "v1" and c["dv1_variant"] == "K3"
+    assert c["lap_mode"] == "v1" and c["dv1_variant"] == "K3s"
     assert c["lap_source"] == "camera" and c["lap_counter"] == "true"
     assert float(c["lap_rate_hz"]) == 30.0
     assert (float(c["lap_length_ratio_min"]), float(c["lap_length_ratio_max"])) == (0.75, 1.5)
@@ -1437,7 +1437,7 @@ def test_profile_prototype_builds_the_whole_learned_stack(monkeypatch, tmp_path)
     assert q["use_lap_guidance"] is True and q["v_max_mps"] == 1.3
     assert q["v_no_guidance_mps"] == 0.5
     assert p["lap_mode"] == "v1" and p["lap_source"] == "camera"
-    lap, planner = m.DV1_VARIANTS["K3"]
+    lap, planner = m.DV1_VARIANTS["K3s"]
     for k, v in lap.items():
         assert p[k] == v, k
     for k, v in planner.items():

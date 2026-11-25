@@ -24,6 +24,13 @@ which is enough for local labels:
    the half body width on at least 95 percent of its points, otherwise the label is dropped.
    `path_containment` scores any predicted track the same way.
 
+Fast RMS gate (owner decision 35, off by default so earlier label sets reproduce): with
+`--rms-gate-fast M --rms-fast-speed V`, an ICP interval whose speed is above V m/s passes the RMS
+item at M instead of 0.02 m (at or below V it stays 0.02). The speed of an interval is the
+moving-test speed (/odom/wheel, or the ICP ground speed for a bag without it; latest sample at or
+before the time, absolute value) at the interval's midpoint stamp. Only the quality flag changes: the ICP itself, its seeding, the inlier
+share item, the dt item and every label gate are the same, and the cached ICP results are reused.
+
 With `--split` only the scans inside a segment of the pre-registered split are candidates, and a
 label whose submap window (first to last scan of the window) is not inside ONE segment is dropped
 with reason `segment_edge`. Every kept label then carries its segment, its role and the bag time
@@ -42,6 +49,8 @@ The label is geometry seen later by the same sensor. It is not the steering anyo
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import itertools
 import json
 import logging
 import math
@@ -75,6 +84,9 @@ ICP_MIN_RANGE_M = 0.12
 INLIER_M = 0.05
 RMS_MAX_M = 0.02
 INLIER_SHARE_MIN = 0.7
+
+# Speed bands of the yield breakdown in the manifest (moving-test speed of the labelled scan).
+SPEED_BAND_EDGES_MPS = (0.0, 0.5, 0.8, 1.0, 1.2, math.inf)
 
 # Submap.
 BEHIND_M = 1.0
@@ -330,6 +342,75 @@ def extend_motion(
         merge(series.inlier_share, new.inlier_share),
         np.where(take, new.ok, series.ok),
     )
+
+
+@dataclass(frozen=True)
+class RmsGate:
+    """The RMS item of the interval quality flag: `RMS_MAX_M` everywhere, or (decision 35)
+    `fast_m` for intervals whose speed is above `fast_speed_mps`."""
+
+    fast_m: float | None = None
+    fast_speed_mps: float | None = None
+
+    @property
+    def on(self) -> bool:
+        return self.fast_m is not None
+
+    def limits(self, interval_speed_mps: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Per interval RMS limit. A NaN speed gets the default limit."""
+        limit = np.full(len(interval_speed_mps), RMS_MAX_M)
+        if self.fast_m is None:
+            return limit
+        assert self.fast_speed_mps is not None
+        with np.errstate(invalid="ignore"):
+            fast = np.asarray(interval_speed_mps) > self.fast_speed_mps
+        limit[fast] = self.fast_m
+        return limit
+
+
+def speed_at(
+    t: NDArray[np.float64], speed_t: NDArray[np.float64], speed: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """|speed| of the latest speed sample at or before each time of `t` (the sample rule of the
+    moving test, `eval_bags.moving_mask`). NaN before the first sample or without samples."""
+    t = np.asarray(t, dtype=np.float64)
+    if len(speed_t) == 0 or len(t) == 0:
+        return np.full(len(t), math.nan)
+    order = np.argsort(speed_t)
+    st, sv = np.asarray(speed_t)[order], np.asarray(speed)[order]
+    idx = np.searchsorted(st, t, side="right") - 1
+    return np.where(idx >= 0, np.abs(sv[np.clip(idx, 0, None)]), math.nan)
+
+
+def interval_speed(
+    scans: ScanSet, speed_t: NDArray[np.float64], speed: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Speed of every scan interval: the moving-test speed (`speed_at`) at the midpoint of its
+    two stamps."""
+    if len(scans) < 2:
+        return np.zeros(0)
+    return speed_at(0.5 * (scans.stamp_s[:-1] + scans.stamp_s[1:]), speed_t, speed)
+
+
+def regate(
+    series: MotionSeries, scans: ScanSet, speeds: NDArray[np.float64], gate: RmsGate
+) -> MotionSeries:
+    """`series` with its quality flag recomputed under `gate` (the flag of `compute_motion` with
+    the RMS item per interval). The motions themselves are unchanged."""
+    if not gate.on:
+        return series
+    dt = np.diff(scans.stamp_s)
+    motion = np.stack(
+        [series.dx_m, series.dy_m, series.dyaw_rad, series.rms_m, series.inlier_share], axis=1
+    )
+    with np.errstate(invalid="ignore"):
+        ok = (
+            np.isfinite(motion).all(axis=1)
+            & (np.abs(dt - SCAN_DT_S) < DT_TOLERANCE_S)
+            & (series.rms_m <= gate.limits(speeds))
+            & (series.inlier_share >= INLIER_SHARE_MIN)
+        )
+    return dataclasses.replace(series, ok=ok)
 
 
 def save_motion(path: Path, series: MotionSeries) -> None:
@@ -610,6 +691,8 @@ class SelfLabels:
     segment: NDArray[np.str_] | None = None
     role: NDArray[np.str_] | None = None
     per_segment: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # With scan speeds: per speed band (see `speed_band`) the moving scans, kept and drop counts.
+    per_speed_band: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.index)
@@ -638,6 +721,20 @@ class SelfLabels:
             path_containment=self.path_containment,
             path_xy=self.path_xy,
         )
+
+
+def _band_name(lo: float, hi: float) -> str:
+    return f"{lo:.1f}+" if math.isinf(hi) else f"{lo:.1f}-{hi:.1f}"
+
+
+SPEED_BANDS = tuple(_band_name(lo, hi) for lo, hi in itertools.pairwise(SPEED_BAND_EDGES_MPS))
+
+
+def speed_band(v: float) -> str:
+    """Name of the speed band of `SPEED_BAND_EDGES_MPS` holding v (lower edge inclusive)."""
+    k = int(np.searchsorted(SPEED_BAND_EDGES_MPS, v, side="right")) - 1
+    k = min(max(k, 0), len(SPEED_BANDS) - 1)
+    return SPEED_BANDS[k]
 
 
 def scan_points_list(scans: ScanSet, live: LiveVehicle, want: NDArray[np.bool_]) -> list[Any]:
@@ -681,6 +778,7 @@ def make_labels(
     candidates: NDArray[np.bool_],
     cfg: geometric.GeometricConfig | None = None,
     segmenter: Segmenter | None = None,
+    scan_speed: NDArray[np.float64] | None = None,
 ) -> SelfLabels:
     """Self-labels for every candidate scan (the moving scans). With a `segmenter`, a window not
     inside one segment is dropped as `segment_edge` before anything else is computed."""
@@ -698,6 +796,15 @@ def make_labels(
     dropped: Counter[str] = Counter()
     seg_meta: list[tuple[float, float, float, str, str]] = []
     per_segment: dict[str, dict[str, Any]] = {}
+    per_band: dict[str, dict[str, Any]] = {}
+
+    def band_stats(i: int) -> dict[str, Any] | None:
+        if scan_speed is None:
+            return None
+        name = speed_band(float(scan_speed[i]))
+        return per_band.setdefault(
+            name, {"moving_scans": 0, "kept": 0, "dropped": dict.fromkeys(REASONS, 0)}
+        )
 
     def seg_stats(seg: Segment) -> dict[str, Any]:
         return per_segment.setdefault(
@@ -706,6 +813,9 @@ def make_labels(
         )
 
     for i in np.flatnonzero(candidates):
+        band = band_stats(int(i))
+        if band is not None:
+            band["moving_scans"] += 1
         own = segmenter.scan_segment(int(i)) if segmenter is not None else None
         if own is not None:
             seg_stats(own)["moving_scans"] += 1
@@ -715,12 +825,16 @@ def make_labels(
             window = segmenter.window_segment(lo, hi)
             if window is None:
                 dropped["segment_edge"] += 1
+                if band is not None:
+                    band["dropped"]["segment_edge"] += 1
                 if own is not None:
                     seg_stats(own)["dropped"]["segment_edge"] += 1
                 continue
         out = label_scan(chain, points, int(i), live, cfg)
         if out.reason is not None:
             dropped[out.reason] += 1
+            if band is not None:
+                band["dropped"][out.reason] += 1
             if own is not None:
                 seg_stats(own)["dropped"][out.reason] += 1
             continue
@@ -737,6 +851,8 @@ def make_labels(
                 )
             )
         assert out.track is not None and out.path is not None
+        if band is not None:
+            band["kept"] += 1
         kept["index"].append(int(i))
         kept["tensor"].append(
             preprocess.scan_to_tensor(
@@ -775,6 +891,7 @@ def make_labels(
         segment=np.array([r[3] for r in seg_meta], dtype=np.str_) if segmenter else None,
         role=np.array([r[4] for r in seg_meta], dtype=np.str_) if segmenter else None,
         per_segment=per_segment,
+        per_speed_band={k: per_band[k] for k in SPEED_BANDS if k in per_band},
     )
 
 
@@ -940,7 +1057,9 @@ def label_bag(
     workers: int,
     live: LiveVehicle,
     split: Split | None = None,
+    gate: RmsGate | None = None,
 ) -> dict[str, Any]:
+    gate = gate or RmsGate()
     scans, speed_t, speed = load_scanset(bag_dir, out_dir / "cache", live, workers)
     moving = moving_scans(scans, speed_t, speed, moving_mps)
     segmenter = None
@@ -956,7 +1075,9 @@ def label_bag(
         log.info("%s: ICP over %d of %d intervals", bag_dir.name, int(want.sum()), len(want))
         series = compute_motion(scans, live, want, workers)
     save_motion(motion_path, series)
-    labels = make_labels(scans, series, live, moving, segmenter=segmenter)
+    series = regate(series, scans, interval_speed(scans, speed_t, speed), gate)
+    scan_speed = speed_at(scans.stamp_s, speed_t, speed)
+    labels = make_labels(scans, series, live, moving, segmenter=segmenter, scan_speed=scan_speed)
     labels.save(out_dir / f"{bag_dir.name}.npz")
     log.info("%s: kept %d of %d moving scans", bag_dir.name, len(labels), labels.candidates)
     entry: dict[str, Any] = {
@@ -968,7 +1089,14 @@ def label_bag(
         "dropped": labels.dropped,
         "icp_intervals": int(want.sum()),
         "icp_ok": int(series.ok[want].sum()),
+        "speed_bands": labels.per_speed_band,
     }
+    if gate.on:
+        entry["rms_gate"] = {
+            "default_m": RMS_MAX_M,
+            "fast_m": gate.fast_m,
+            "fast_speed_mps": gate.fast_speed_mps,
+        }
     if split is not None:
         seg_scans = {
             name: int(
@@ -1008,7 +1136,22 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="the digest a split other than pnp-v0.2 was stated with (default: the v0.2 one)",
     )
+    parser.add_argument(
+        "--rms-gate-fast",
+        type=float,
+        default=None,
+        help="ICP RMS limit (m) for intervals faster than --rms-fast-speed (decision 35; off)",
+    )
+    parser.add_argument(
+        "--rms-fast-speed",
+        type=float,
+        default=None,
+        help="speed (m/s) above which --rms-gate-fast applies",
+    )
     args = parser.parse_args(argv)
+    if (args.rms_gate_fast is None) != (args.rms_fast_speed is None):
+        parser.error("--rms-gate-fast and --rms-fast-speed go together")
+    gate = RmsGate(args.rms_gate_fast, args.rms_fast_speed)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     live = load_live_vehicle()
     split = (
@@ -1027,7 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
                 log.info("%s: unused in the split, skipped", bag.name)
                 continue
         manifest["bags"][bag.name] = label_bag(
-            bag, args.out, args.moving_mps, args.workers, live, split
+            bag, args.out, args.moving_mps, args.workers, live, split, gate
         )
     args.out.mkdir(parents=True, exist_ok=True)
     manifest_path = args.out / "manifest.json"

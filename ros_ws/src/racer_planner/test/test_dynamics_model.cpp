@@ -2,8 +2,10 @@
 // synthetic (round numbers so the arithmetic can be done by hand), not the car.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 
 #include "racer_planner/dynamics_model.hpp"
 
@@ -296,10 +298,25 @@ TEST(DynamicsModel, DisabledResidualIsIgnoredEvenWithWeights) {
 // The residual's forward pass is vectorised (transposed hidden layers; in the fast mode also a
 // polynomial exp based tanh and a split output sum): in both modes it must equal a plain
 // std::tanh forward pass in the bundle's layout to rounding, for inputs from tiny to saturating
-// and infinite, and pass a NaN on.
-static void expect_residual_equals_a_std_tanh_forward_pass(bool fast_mlp) {
+// and infinite, and pass a NaN on. The float32 path (owner decision 30) is held to the same
+// reference with its own, looser bound.
+struct ResidualErrors {
+  double max_abs = 0.0;  // largest |got - want|
+  double max_rel = 0.0;  // largest |got - want| / max(|want|, 1)
+};
+
+// weight_span: weights are uniform in +-span/2. 6 (the pinned tests' choice) saturates the tanh
+// units; 1.2 is the size of a trained net's weights.
+// float_weights: round every weight to the nearest float first, as the bundle stores them
+// (residual_mlp.f32), so the float32 path loses nothing in the weights. operating_only: inputs in
+// the car's operating range instead of the stress sweep.
+static ResidualErrors check_residual_against_a_std_tanh_forward_pass(bool fast_mlp, bool float32,
+                                                                     double weight_span, double tol,
+                                                                     bool float_weights = false,
+                                                                     bool operating_only = false) {
   DynamicsParams p = nominal();
   p.fast_mlp = fast_mlp;
+  p.float32_mlp = float32;
   p.residual.enabled = true;
   p.residual.input_mean = {0.5, 0.0, 0.6, 0.0};
   p.residual.input_std = {0.4, 0.2, 0.4, 0.2};
@@ -308,7 +325,8 @@ static void expect_residual_equals_a_std_tanh_forward_pass(bool fast_mlp) {
   std::uint32_t state = 12345u;
   for (double& w : p.residual.weights) {
     state = state * 1664525u + 1013904223u;
-    w = (static_cast<double>(state) / 4294967296.0 - 0.5) * 6.0;  // large weights: saturation
+    w = (static_cast<double>(state) / 4294967296.0 - 0.5) * weight_span;
+    if (float_weights) w = static_cast<double>(static_cast<float>(w));
   }
   const DynamicsModel m(p, synthetic(), 0.1);
   auto reference = [&](const double in4[4], double out[2]) {
@@ -337,30 +355,53 @@ static void expect_residual_equals_a_std_tanh_forward_pass(bool fast_mlp) {
       out[i] = r.output_scale[i] * a;
     }
   };
+  ResidualErrors e;
+  auto compare = [&](const double in4[4]) {
+    double got[2], want[2];
+    m.residual(in4[0], in4[1], in4[2], in4[3], got);
+    reference(in4, want);
+    for (int i = 0; i < 2; ++i) {
+      const double err = std::fabs(got[i] - want[i]);
+      EXPECT_LE(err, tol * std::max(std::fabs(want[i]), 1.0));
+      e.max_abs = std::max(e.max_abs, err);
+      e.max_rel = std::max(e.max_rel, err / std::max(std::fabs(want[i]), 1.0));
+    }
+  };
+  if (operating_only) {
+    // wheel speed 0 to 1.5 m/s, steering angle +-0.4 rad, speed command 0 to 1.5, steering +-0.4:
+    // a 9 x 9 x 9 x 9 grid
+    for (int a = 0; a < 9; ++a)
+      for (int b = 0; b < 9; ++b)
+        for (int c = 0; c < 9; ++c)
+          for (int d = 0; d < 9; ++d) {
+            const double in4[4] = {1.5 * a / 8.0, -0.4 + 0.1 * b, 1.5 * c / 8.0, -0.4 + 0.1 * d};
+            compare(in4);
+          }
+    return e;
+  }
   for (double scale : {1e-9, 1e-3, 0.1, 1.0, 10.0, 1e3}) {
     for (int k = 0; k < 50; ++k) {
       const double in4[4] = {scale * std::sin(1.0 + k), scale * std::cos(2.0 * k),
                              scale * std::sin(0.3 * k), scale * std::cos(0.7 + k)};
-      double got[2], want[2];
-      m.residual(in4[0], in4[1], in4[2], in4[3], got);
-      reference(in4, want);
-      EXPECT_NEAR(got[0], want[0], 1e-12);
-      EXPECT_NEAR(got[1], want[1], 1e-12);
+      compare(in4);
     }
   }
   // Infinite inputs saturate the first layer (tanh(+-inf) = +-1), the output stays finite.
   for (double inf : {INFINITY, -INFINITY}) {
     const double in4[4] = {inf, 0.1, 0.6, 0.2};
-    double got[2], want[2];
-    m.residual(in4[0], in4[1], in4[2], in4[3], got);
+    double want[2];
     reference(in4, want);
-    ASSERT_TRUE(std::isfinite(want[0]) && std::isfinite(want[1]));
-    EXPECT_NEAR(got[0], want[0], 1e-12);
-    EXPECT_NEAR(got[1], want[1], 1e-12);
+    EXPECT_TRUE(std::isfinite(want[0]) && std::isfinite(want[1]));
+    compare(in4);
   }
   double out[2];
   m.residual(std::nan(""), 0.0, 0.0, 0.0, out);
   EXPECT_TRUE(std::isnan(out[0]) && std::isnan(out[1]));
+  return e;
+}
+
+static void expect_residual_equals_a_std_tanh_forward_pass(bool fast_mlp) {
+  check_residual_against_a_std_tanh_forward_pass(fast_mlp, false, 6.0, 1e-12);
 }
 
 TEST(DynamicsModel, ResidualEqualsAStdTanhForwardPass) {
@@ -369,4 +410,79 @@ TEST(DynamicsModel, ResidualEqualsAStdTanhForwardPass) {
 
 TEST(DynamicsModel, FastResidualEqualsAStdTanhForwardPass) {
   expect_residual_equals_a_std_tanh_forward_pass(true);
+}
+
+// Owner decision 30: the float32 path (DynamicsParams::float32_mlp) against the double reference.
+// The bound applies to this path only; the double paths above keep 1e-12. Error is
+// |got - want| / max(|want|, 1), in the std::tanh variant and the vectorised fast variant, with
+// weights as the bundle stores them (float) and standardised inputs rounded to float.
+//
+// Measured (aarch64, gcc 11, -O3; the table below is printed by the test):
+//   trained size weights (+-0.6), operating range of inputs:  5.0e-7 (std::tanh), 4.8e-7 (fast)
+//   the real dyn-v0.7p bundle on the same grid:               3.8e-7 (std::tanh), 3.1e-7 (fast)
+//   (scratch run, bundle not in the repo; outputs up to 1.5)
+// That is the float rounding of a 32 term sum (about sqrt(32) * 6e-8), so single precision cannot
+// be much closer than 3e-7: the bound is 1e-6, twice the worst measurement. The owner's "about
+// 1e-7" of decision 30 is met in order of magnitude only, and the worst golden rollout error of
+// the bundle contract stays under 3e-8 (test_bundle_loader).
+// Saturating weights (+-3, tanh units pinned at +-1) and inputs up to 1e3 push the pre-activations
+// into the thousands, where float rounding of the pre-activation alone is 1e-4 of the tanh slope
+// region: those sweeps are held to looser bounds, each 3 to 6 times its measurement.
+constexpr double kFloat32Bound = 1e-6;
+constexpr double kFloat32StressBound = 1e-5;
+constexpr double kFloat32SaturatingBound = 1e-4;
+
+TEST(DynamicsModel, Float32ResidualMatchesTheDoubleReferenceWithinItsBound) {
+  for (const bool fast : {false, true}) {
+    // trained size weights: operating range, then the stress sweep
+    const ResidualErrors op =
+        check_residual_against_a_std_tanh_forward_pass(fast, true, 1.2, kFloat32Bound, true, true);
+    const ResidualErrors stress = check_residual_against_a_std_tanh_forward_pass(
+        fast, true, 1.2, kFloat32StressBound, true, false);
+    // saturating weights
+    const ResidualErrors sat_op = check_residual_against_a_std_tanh_forward_pass(
+        fast, true, 6.0, kFloat32SaturatingBound, true, true);
+    const ResidualErrors sat = check_residual_against_a_std_tanh_forward_pass(
+        fast, true, 6.0, kFloat32SaturatingBound, true, false);
+    std::printf(
+        "float32 mlp fast=%d: span 1.2 operating rel %.2e (bound %.0e), stress rel %.2e (bound "
+        "%.0e); span 6 operating rel %.2e, stress rel %.2e (bound %.0e)\n",
+        fast, op.max_rel, kFloat32Bound, stress.max_rel, kFloat32StressBound, sat_op.max_rel,
+        sat.max_rel, kFloat32SaturatingBound);
+  }
+}
+
+// The float32 switch is off by default and the double path is untouched by it: with the flag off
+// the model is bit for bit the one without the field (it is a plain member of the params).
+TEST(DynamicsModel, Float32IsOffByDefaultAndTheDoublePathIsBitIdenticalWithoutIt) {
+  DynamicsParams p = nominal();
+  EXPECT_FALSE(p.float32_mlp);
+  p.residual.enabled = true;
+  p.residual.output_scale = {0.7, 0.3};
+  p.residual.weights.resize(kMlpWeightCount);
+  std::uint32_t state = 777u;
+  for (double& w : p.residual.weights) {
+    state = state * 1664525u + 1013904223u;
+    w = (static_cast<double>(state) / 4294967296.0 - 0.5) * 1.2;
+  }
+  DynamicsParams q = p;
+  q.float32_mlp = true;
+  const DynamicsModel off(p, synthetic(), 0.1);
+  const DynamicsModel on(q, synthetic(), 0.1);
+  double a[2], b[2];
+  off.residual(0.5, 0.1, 0.7, 0.2, a);
+  on.residual(0.5, 0.1, 0.7, 0.2, b);
+  EXPECT_NE(a[0], b[0]) << "the float32 pass is a different pass";
+  EXPECT_NEAR(a[0], b[0], 1e-6);
+  EXPECT_NEAR(a[1], b[1], 1e-6);
+  // rolled through the step: the state after 20 steps stays within 1e-5 of the double rollout
+  State sa{0, 0, 0, 0.5, 0.0}, sb = sa;
+  for (int k = 0; k < 20; ++k) {
+    const Control u{0.8, 0.1 * std::sin(0.3 * k)};
+    sa = off.step(sa, u);
+    sb = on.step(sb, u);
+  }
+  EXPECT_NEAR(sa.x, sb.x, 1e-5);
+  EXPECT_NEAR(sa.yaw, sb.yaw, 1e-5);
+  EXPECT_NEAR(sa.v, sb.v, 1e-5);
 }

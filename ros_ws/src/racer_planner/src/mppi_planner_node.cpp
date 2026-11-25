@@ -435,6 +435,12 @@ class MppiPlannerNode : public rclcpp::Node {
         "fast tanh, a few 1e-16 from the exact pass and checked against the golden rollouts "
         "at load (DynamicsParams::fast_mlp). false: the exact forward pass. No effect on a "
         "bundle without a learned block.");
+    const bool float32_mlp = declare_bool(
+        "dynamics_mlp_float32", false,
+        "true: evaluate the bundle's learned MLP (residual or ground block) in single precision, "
+        "about 1e-7 relative from the double pass and checked against the golden rollouts at "
+        "load (DynamicsParams::float32_mlp, owner decision 30). Combines with dynamics_fast_mlp. "
+        "false: the double pass, unchanged. No effect on a bundle without a learned block.");
     const bool yaw_from_params =
         declare_bool("laser_yaw_from_vehicle_params", true,
                      "true (the car): LiDAR yaw from vehicle_params. false: SIMULATOR AND "
@@ -492,7 +498,8 @@ class MppiPlannerNode : public rclcpp::Node {
       RCLCPP_WARN(get_logger(), "debug_stall_profile with %zu stalls: SIMULATION ONLY",
                   stalls_.size());
     }
-    const LoadResult loaded = load_dynamics_bundle(bundle_dir, geometry_, lg.v_max_mps, fast_mlp);
+    const LoadResult loaded =
+        load_dynamics_bundle(bundle_dir, geometry_, lg.v_max_mps, fast_mlp, float32_mlp);
     if (!loaded.ok()) {
       const std::string m =
           std::string(refusal_code_name(loaded.refusal->code)) + ": " + loaded.refusal->message;
@@ -502,12 +509,12 @@ class MppiPlannerNode : public rclcpp::Node {
     model_id_ = loaded.bundle->model_id;
     RCLCPP_INFO(get_logger(),
                 "dynamics bundle %s loaded from %s (golden max error %.2e, step contract %d, "
-                "residual %s, learned ground motion %s, mlp %s)",
+                "residual %s, learned ground motion %s, mlp %s%s)",
                 model_id_.c_str(), bundle_dir.c_str(), loaded.bundle->golden_max_abs_error,
                 loaded.bundle->params.step_contract,
                 loaded.bundle->params.residual.enabled ? "enabled" : "off",
                 loaded.bundle->params.ground.learned_enabled ? "enabled" : "off",
-                fast_mlp ? "fast" : "exact");
+                fast_mlp ? "fast" : "exact", float32_mlp ? " float32" : "");
     for (const auto& p : loaded.bundle->payload) {
       RCLCPP_INFO(get_logger(), "  payload %s sha256 %s", p.file.c_str(), p.sha256.c_str());
     }

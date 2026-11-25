@@ -118,6 +118,7 @@ def test_argument_defaults() -> None:
         "rt_sched": "off",
         "dynamics_adaptation": "false",
         "dynamics_fast_mlp": "false",
+        "dynamics_mlp_float32": "false",
         "params_file": "",
     }
     assert declared["profile"].choices == ["none", "prototype"]
@@ -125,6 +126,7 @@ def test_argument_defaults() -> None:
     assert declared["deskew"].choices == ["true", "false"]
     assert declared["dynamics_adaptation"].choices == ["true", "false"]
     assert declared["dynamics_fast_mlp"].choices == ["true", "false"]
+    assert declared["dynamics_mlp_float32"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
     assert declared["dv1_variant"].choices == ["registered", "K1", "K2", "K3"]
@@ -344,6 +346,37 @@ def test_dynamics_fast_mlp_bad_value_is_refused(monkeypatch) -> None:
     monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
     with pytest.raises(RuntimeError):
         m._make_actions(_context(dynamics_fast_mlp="yes"))
+
+
+def test_dynamics_mlp_float32_is_off_by_default_and_adds_nothing(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    for ctx in (_context(), _context(dynamics_mlp_float32="false")):
+        planner = next(
+            a for a in m._make_actions(ctx) if getattr(a, "node_package", "") == "racer_planner"
+        )
+        assert m.MLP_FLOAT32_PARAM not in _flat_params(planner)
+
+
+def test_dynamics_mlp_float32_true_switches_the_planner_parameter_on(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    actions = m._make_actions(_context(dynamics_mlp_float32="true"))
+    planner = next(a for a in actions if getattr(a, "node_package", "") == "racer_planner")
+    params = _flat_params(planner)
+    assert params[m.MLP_FLOAT32_PARAM] is True
+    assert m.FAST_MLP_PARAM not in params  # independent of the fast switch
+    perception = next(
+        a for a in actions if getattr(a, "node_package", "") == "racer_track_perception"
+    )
+    assert m.MLP_FLOAT32_PARAM not in _flat_params(perception)
+
+
+def test_dynamics_mlp_float32_bad_value_is_refused(monkeypatch) -> None:
+    m = _module()
+    monkeypatch.setattr(m, "recorder_in_graph", lambda *a, **k: True)
+    with pytest.raises(RuntimeError):
+        m._make_actions(_context(dynamics_mlp_float32="yes"))
 
 
 def test_lap_memory_is_off_by_default(monkeypatch) -> None:
@@ -1294,6 +1327,7 @@ def test_profile_prototype_sets_the_learned_defaults() -> None:
     assert c["dynamics_bundle"].endswith("/dyn-v0.7p-2026-11-24")
     assert c["dynamics_fast_mlp"] == "true"
     assert c["dynamics_adaptation"] == "false"
+    assert c["dynamics_mlp_float32"] == "false"  # not part of the profile
     assert c["lap_memory"] == "true"
     assert c["lap_mode"] == "v1" and c["dv1_variant"] == "K3"
     assert c["lap_source"] == "camera" and c["lap_counter"] == "true"

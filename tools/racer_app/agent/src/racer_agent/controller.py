@@ -128,6 +128,7 @@ def _describe_laps(params: dict[str, Any]) -> str:
         text += f" dv1_variant={lap['dv1_variant']}"
     for key, label in (
         ("fast_mlp", "dynamics_fast_mlp"),
+        ("mlp_float32", "dynamics_mlp_float32"),
         ("adaptation", "dynamics_adaptation"),
         ("rt_sched", "rt_sched"),
     ):
@@ -1035,6 +1036,7 @@ class Controller:
         pnp_lap_rate_hz: Any = 0.0,
         pnp_dv1_variant: Any = "registered",
         pnp_dynamics_fast_mlp: Any = False,
+        pnp_dynamics_mlp_float32: Any = False,
         pnp_dynamics_adaptation: Any = False,
         pnp_rt_sched: Any = False,
         max_speed_mps: float | None = None,
@@ -1094,6 +1096,7 @@ class Controller:
                         pnp_lap_rate_hz,
                         pnp_dv1_variant,
                         pnp_dynamics_fast_mlp,
+                        pnp_dynamics_mlp_float32,
                         pnp_dynamics_adaptation,
                         pnp_rt_sched,
                     ),
@@ -1389,6 +1392,7 @@ class Controller:
             rate_hz,
             dv1_variant,
             fast_mlp,
+            mlp_float32,
             adaptation,
             rt_sched,
         ) = lap
@@ -1411,6 +1415,7 @@ class Controller:
             rate_hz=rate_hz,
             dv1_variant=dv1_variant,
             dynamics_fast_mlp=fast_mlp,
+            dynamics_mlp_float32=mlp_float32,
             dynamics_adaptation=adaptation,
             rt_sched=rt_sched,
             shadow_container_path=cmd.container_path(self.s.repo_dir, models / shadow)
@@ -1456,6 +1461,7 @@ class Controller:
                     "rate_hz": rate_hz,
                     "dv1_variant": dv1_variant,
                     "fast_mlp": fast_mlp,
+                    "mlp_float32": mlp_float32,
                     "adaptation": adaptation,
                     "rt_sched": rt_sched,
                 },
@@ -1767,6 +1773,7 @@ class Controller:
                     rate_hz=n.lap_rate_hz,
                     dv1_variant=n.dv1_variant,
                     dynamics_fast_mlp=n.dynamics_fast_mlp,
+                    dynamics_mlp_float32=n.dynamics_mlp_float32,
                     dynamics_adaptation=n.dynamics_adaptation,
                     rt_sched=n.rt_sched,
                     shadow_container_path=shadow if n.shadow_perception else "",

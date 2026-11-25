@@ -89,6 +89,48 @@ inline void tanh_inplace(double* a, int n) {
   }
 }
 
+// The float version of tanh_inplace (float32_mlp together with fast_mlp): the same construction
+// in single precision. exp(y) for y in [0, 20] is 2^k * exp(r), |r| <= ln2 / 2, with a degree 8
+// Taylor polynomial (truncation error about 2e-10 relative, far below a float ulp); 2^k is built
+// from the exponent bits of k + (2^23 + 127). 2|x| above 20 is held at 20, where 1 - 2 / (e^20 + 1)
+// is 1 in float, so saturation is exact (and tanh(+-inf) = +-1). A NaN stays NaN.
+inline void tanh_inplace_f32(float* a, int n) {
+  constexpr float kLog2e = 1.44269504f;
+  constexpr float kLn2Hi = 6.93145752e-01f;  // cephes' split of ln 2, hi has trailing zero bits
+  constexpr float kLn2Lo = 1.42860677e-06f;
+  constexpr float kShift = 8388608.0f + 127.0f;  // 2^23 + exponent bias
+  for (int i = 0; i < n; ++i) {
+    const float x = a[i];
+    float y = 2.0f * std::fabs(x);
+    y = std::fmin(y, 20.0f);  // a NaN becomes 20 here and is put back at the end
+    const float k = std::floor(y * kLog2e + 0.5f);
+    const float r = (y - k * kLn2Hi) - k * kLn2Lo;
+    float p = 1.0f / 40320.0f;
+    p = p * r + 1.0f / 5040.0f;
+    p = p * r + 1.0f / 720.0f;
+    p = p * r + 1.0f / 120.0f;
+    p = p * r + 1.0f / 24.0f;
+    p = p * r + 1.0f / 6.0f;
+    p = p * r + 0.5f;
+    p = p * r + 1.0f;
+    p = p * r + 1.0f;
+    const float t = k + kShift;
+    std::uint32_t bits;
+    std::memcpy(&bits, &t, sizeof bits);
+    bits <<= 23;
+    float scale;
+    std::memcpy(&scale, &bits, sizeof scale);
+    const float e = p * scale;
+    const float th = std::copysign(1.0f - 2.0f / (e + 1.0f), x);
+    std::uint32_t xb, tb;
+    std::memcpy(&xb, &x, sizeof xb);
+    std::memcpy(&tb, &th, sizeof tb);
+    const std::uint32_t nan = 0 - static_cast<std::uint32_t>((xb & 0x7fffffffU) > 0x7f800000U);
+    tb = (tb & ~nan) | (xb & nan);
+    std::memcpy(&a[i], &tb, sizeof tb);
+  }
+}
+
 }  // namespace
 
 DynamicsModel::DynamicsModel(const DynamicsParams& params, const VehicleGeometry& geometry,
@@ -111,6 +153,12 @@ DynamicsModel::DynamicsModel(const DynamicsParams& params, const VehicleGeometry
   // block off); pack_mlp_weights leaves zeros for a missing block.
   pack_mlp_weights(params_.residual.weights, &residual_packed_);
   pack_mlp_weights(params_.ground.weights, &ground_packed_);
+  for (int k = 0; k < kMlpWeightCount; ++k) {
+    residual_packed_f32_[static_cast<std::size_t>(k)] =
+        static_cast<float>(residual_packed_[static_cast<std::size_t>(k)]);
+    ground_packed_f32_[static_cast<std::size_t>(k)] =
+        static_cast<float>(ground_packed_[static_cast<std::size_t>(k)]);
+  }
 }
 
 namespace {
@@ -193,9 +241,65 @@ void DynamicsModel::mlp(const double* packed, const double in[kMlpIn], double ou
   }
 }
 
-void DynamicsModel::run_mlp(const double* packed, const double in[kMlpIn],
+template <bool kFast>
+void DynamicsModel::mlp_f32(const float* packed, const double in[kMlpIn], double out[kMlpOut]) {
+  alignas(16) float h1[kMlpHidden];
+  alignas(16) float h2[kMlpHidden];
+  const float* w1t = packed + kOffW1;
+  const float* b1 = packed + kOffB1;
+  const float* w2t = packed + kOffW2;
+  const float* b2 = packed + kOffB2;
+  const float* w3 = packed + kOffW3;
+  const float* b3 = packed + kOffB3;
+  for (int i = 0; i < kMlpHidden; ++i) h1[i] = b1[i];
+  for (int j = 0; j < kMlpIn; ++j) {
+    const float xj = static_cast<float>(in[j]);
+    const float* wj = w1t + j * kMlpHidden;
+    for (int i = 0; i < kMlpHidden; ++i) h1[i] += wj[i] * xj;
+  }
+  if (kFast) {
+    tanh_inplace_f32(h1, kMlpHidden);
+  } else {
+    for (int i = 0; i < kMlpHidden; ++i) h1[i] = std::tanh(h1[i]);
+  }
+  for (int i = 0; i < kMlpHidden; ++i) h2[i] = b2[i];
+  for (int j = 0; j < kMlpHidden; ++j) {
+    const float hj = h1[j];
+    const float* wj = w2t + j * kMlpHidden;
+    for (int i = 0; i < kMlpHidden; ++i) h2[i] += wj[i] * hj;
+  }
+  if (kFast) {
+    tanh_inplace_f32(h2, kMlpHidden);
+  } else {
+    for (int i = 0; i < kMlpHidden; ++i) h2[i] = std::tanh(h2[i]);
+  }
+  for (int i = 0; i < kMlpOut; ++i) {
+    const float* wi = w3 + i * kMlpHidden;
+    if (kFast) {
+      // Eight interleaved partial sums (j mod 8): one float vector pair instead of 32 dependent
+      // adds.
+      float acc[8] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+      for (int j = 0; j < kMlpHidden; j += 8)
+        for (int k = 0; k < 8; ++k) acc[k] += wi[j + k] * h2[j + k];
+      out[i] = static_cast<double>(b3[i] + (((acc[0] + acc[1]) + (acc[2] + acc[3])) +
+                                            ((acc[4] + acc[5]) + (acc[6] + acc[7]))));
+    } else {
+      float acc = b3[i];
+      for (int j = 0; j < kMlpHidden; ++j) acc += wi[j] * h2[j];
+      out[i] = static_cast<double>(acc);
+    }
+  }
+}
+
+void DynamicsModel::run_mlp(const double* packed, const float* packed_f32, const double in[kMlpIn],
                             double out[kMlpOut]) const {
-  if (params_.fast_mlp) {
+  if (params_.float32_mlp) {
+    if (params_.fast_mlp) {
+      mlp_f32<true>(packed_f32, in, out);
+    } else {
+      mlp_f32<false>(packed_f32, in, out);
+    }
+  } else if (params_.fast_mlp) {
     mlp<true>(packed, in, out);
   } else {
     mlp<false>(packed, in, out);
@@ -218,7 +322,7 @@ void DynamicsModel::ground_factors(double v, double delta, double speed_cmd, dou
                                (speed_cmd - gm.input_mean[2]) / gm.input_std[2],
                                (steering_cmd - gm.input_mean[3]) / gm.input_std[3]};
     double m[kMlpOut];
-    run_mlp(ground_packed_.data(), in, m);
+    run_mlp(ground_packed_.data(), ground_packed_f32_.data(), in, m);
     a = clamp_double(a + gm.d_alpha_max * std::tanh(m[0]), gm.alpha_min, gm.alpha_max);
     r = gm.rho_max * std::tanh(m[1]);
   }
@@ -265,7 +369,7 @@ void DynamicsModel::residual(double v, double delta, double speed_cmd, double st
                              (speed_cmd - r.input_mean[2]) / r.input_std[2],
                              (steering_cmd - r.input_mean[3]) / r.input_std[3]};
   double raw[kMlpOut];
-  run_mlp(residual_packed_.data(), in, raw);
+  run_mlp(residual_packed_.data(), residual_packed_f32_.data(), in, raw);
   for (int i = 0; i < kMlpOut; ++i) out[i] = r.output_scale[i] * raw[i];
 }
 

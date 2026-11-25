@@ -225,6 +225,7 @@ export function TuneTab() {
           {(
             [
               ["dynamics_fast_mlp", "Fast MLP", "ML driver fast MLP"],
+              ["dynamics_mlp_float32", "Float32 MLP", "ML driver float32 MLP"],
               ["dynamics_adaptation", "Adaptation", "ML driver dynamics adaptation"],
               ["rt_sched", "RT scheduling", "ML driver rt_sched"],
             ] as const

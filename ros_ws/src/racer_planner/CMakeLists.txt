@@ -210,7 +210,7 @@ if(BUILD_TESTING)
   foreach(t test_planner_node_launch test_planner_node_silence_launch test_planner_node_refusal_launch
                  test_planner_node_start_gate_launch test_planner_node_shutdown_launch
                  test_planner_node_params_file_launch test_planner_node_adaptation_launch
-                 test_planner_node_fast_mlp_launch)
+                 test_planner_node_fast_mlp_launch test_planner_node_float32_mlp_launch)
     add_launch_test(test/${t}.py TARGET ${t} TIMEOUT 180)
   endforeach()
 endif()

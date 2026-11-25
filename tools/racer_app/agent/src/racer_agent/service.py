@@ -83,6 +83,7 @@ class DriveBody(Body):
     pnp_lap_rate_hz: Any = 0.0
     pnp_dv1_variant: Any = "registered"
     pnp_dynamics_fast_mlp: Any = False
+    pnp_dynamics_mlp_float32: Any = False
     pnp_dynamics_adaptation: Any = False
     pnp_rt_sched: Any = False
     max_speed_mps: float | None = None

@@ -63,6 +63,7 @@ class PnpPrefs(_Strict):
     # Prototype switches (owner decision 29): the defaults send nothing.
     dv1_variant: Literal["registered", "K1", "K2", "K3"] = "registered"
     dynamics_fast_mlp: bool = False
+    dynamics_mlp_float32: bool = False
     dynamics_adaptation: bool = False
     rt_sched: bool = False
 

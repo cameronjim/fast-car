@@ -123,6 +123,14 @@ struct DynamicsParams {
   // and about 2.6x faster solves with dyn-v0.7p. The golden rollouts are checked with the
   // mode the node runs (load_dynamics_bundle), so the bundle contract holds in both.
   bool fast_mlp = false;
+  // Not part of the bundle either (launch dynamics_mlp_float32, default off, owner decision 30):
+  // true evaluates the learned MLP in single precision (weights, activations and sums in float,
+  // twice the lanes per vector), about 1e-7 relative from the double pass (test_dynamics_model
+  // states the measured error and the bound). With fast_mlp also true the float pass uses the
+  // vectorised float tanh and the split output sum; with fast_mlp false it uses std::tanh of a
+  // float. false (the default): the double pass above, unchanged to the last bit. The golden
+  // rollouts are checked with the mode the node runs, so the bundle contract holds in all four.
+  bool float32_mlp = false;
 };
 
 inline double clamp_double(double x, double lo, double hi) {
@@ -252,7 +260,12 @@ class DynamicsModel {
   // order, bit for bit the plain forward pass. kFast true (fast_mlp): see DynamicsParams.
   template <bool kFast>
   static void mlp(const double* packed, const double in[kMlpIn], double out[kMlpOut]);
-  void run_mlp(const double* packed, const double in[kMlpIn], double out[kMlpOut]) const;
+  // The single precision pass (float32_mlp): the same layout in float, inputs rounded to float.
+  // kFast true: vectorised float tanh and the split output sum, as in the double fast mode.
+  template <bool kFast>
+  static void mlp_f32(const float* packed, const double in[kMlpIn], double out[kMlpOut]);
+  void run_mlp(const double* packed, const float* packed_f32, const double in[kMlpIn],
+               double out[kMlpOut]) const;
 
   DynamicsParams params_;
   double dt_;
@@ -268,6 +281,9 @@ class DynamicsModel {
   // The residual's and the ground block's weights packed for mlp() (zeros when absent).
   alignas(16) std::array<double, kMlpWeightCount> residual_packed_{};
   alignas(16) std::array<double, kMlpWeightCount> ground_packed_{};
+  // The same weights rounded to float, for mlp_f32() (only read when float32_mlp is set).
+  alignas(16) std::array<float, kMlpWeightCount> residual_packed_f32_{};
+  alignas(16) std::array<float, kMlpWeightCount> ground_packed_f32_{};
 };
 
 }  // namespace racer_planner

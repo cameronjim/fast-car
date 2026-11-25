@@ -36,6 +36,7 @@ export const DEFAULT_PREFS: Prefs = {
     lap_rate_hz: 0,
     dv1_variant: "registered",
     dynamics_fast_mlp: false,
+    dynamics_mlp_float32: false,
     dynamics_adaptation: false,
     rt_sched: false,
   },
@@ -122,6 +123,7 @@ export function prototypePatch(options: Options | null): Partial<Prefs["pnp"]> {
     lap_length_ratio_max: RATIO_BAND.max,
     dv1_variant: "K3",
     dynamics_fast_mlp: true,
+    dynamics_mlp_float32: false,
     dynamics_adaptation: false,
     rt_sched: false,
   };
@@ -318,6 +320,7 @@ export function pnpBody(p: Prefs, options: Options | null) {
     pnp_lap_rate_hz: n.lap_counter && n.lap_rate_hz !== 0 ? n.lap_rate_hz : undefined,
     pnp_dv1_variant: on && n.lap_mode === "v1" && n.dv1_variant !== "registered" ? n.dv1_variant : undefined,
     pnp_dynamics_fast_mlp: n.dynamics_fast_mlp ? true : undefined,
+    pnp_dynamics_mlp_float32: n.dynamics_mlp_float32 ? true : undefined,
     pnp_dynamics_adaptation: n.dynamics_adaptation ? true : undefined,
     pnp_rt_sched: n.rt_sched ? true : undefined,
     ...(ratioSent(n) ? { pnp_lap_length_ratio_min: n.lap_length_ratio_min, pnp_lap_length_ratio_max: n.lap_length_ratio_max } : {}),
@@ -384,6 +387,7 @@ export function pnpSummary(p: Prefs, options: Options | null = null): string {
   parts.push(n.lap_counter ? (n.require_lap_counter ? "lap counter required" : "lap counter on") : "lap counter off");
   if (n.lap_counter && n.lap_rate_hz !== 0) parts.push(`counter ${n.lap_rate_hz} Hz`);
   if (n.dynamics_fast_mlp) parts.push("fast MLP");
+  if (n.dynamics_mlp_float32) parts.push("float32 MLP");
   if (n.dynamics_adaptation) parts.push("adaptation");
   if (n.rt_sched) parts.push("rt_sched");
   const shadow = pnpBody(p, options).pnp_shadow_perception;

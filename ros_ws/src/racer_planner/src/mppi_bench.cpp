@@ -5,7 +5,8 @@
 // exit code 1 when a scene's solve p99 is above --budget-ms (default 12, the Jetson budget) or the
 // field build p99 is above --field-budget-ms (default 3).
 // --fast-mlp evaluates the learned MLP in the fast mode (DynamicsParams::fast_mlp, launch
-// dynamics_fast_mlp).
+// dynamics_fast_mlp). --float32-mlp evaluates it in single precision (DynamicsParams::float32_mlp,
+// launch dynamics_mlp_float32); the two combine.
 // --background-threads N (or --background-load: one per CPU) runs busy threads for the length of
 // the run, to measure the solve with
 // the rest of the stack competing for cores.
@@ -38,7 +39,8 @@ void usage() {
   std::fprintf(stderr,
                "usage: mppi_bench --bundle DIR [--samples 512] [--solves 2000] [--horizon 30]\n"
                "                  [--speed 0.6] [--budget-ms 12] [--field-budget-ms 3]\n"
-               "                  [--background-threads 0 | --background-load] [--fast-mlp]\n");
+               "                  [--background-threads 0 | --background-load] [--fast-mlp] "
+               "[--float32-mlp]\n");
 }
 
 struct Stats {
@@ -63,7 +65,7 @@ void print_stats(const char* what, const Stats& s, double budget_ms) {
 int main(int argc, char** argv) {
   std::string bundle;
   int samples = 512, solves = 2000, horizon = 30, background_threads = 0;
-  bool fast_mlp = false;
+  bool fast_mlp = false, float32_mlp = false;
   double speed = 0.6, budget_ms = 12.0, field_budget_ms = 3.0;
   for (int i = 1; i < argc; ++i) {
     auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : ""; };
@@ -87,6 +89,8 @@ int main(int argc, char** argv) {
       background_threads = std::atoi(next());
     else if (!std::strcmp(argv[i], "--fast-mlp"))
       fast_mlp = true;
+    else if (!std::strcmp(argv[i], "--float32-mlp"))
+      float32_mlp = true;
     else {
       usage();
       return 2;
@@ -103,7 +107,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "mppi_bench: %s\n", why.c_str());
     return 2;
   }
-  const LoadResult loaded = load_dynamics_bundle(bundle, *geometry, speed, fast_mlp);
+  const LoadResult loaded = load_dynamics_bundle(bundle, *geometry, speed, fast_mlp, float32_mlp);
   if (!loaded.ok()) {
     std::fprintf(stderr, "mppi_bench: %s: %s\n", refusal_code_name(loaded.refusal->code),
                  loaded.refusal->message.c_str());
@@ -204,7 +208,11 @@ int main(int argc, char** argv) {
   std::printf(
       "mppi_bench: model %s, samples %d, horizon %d, solves %d, background threads %d, mlp %s\n",
       loaded.bundle->model_id.c_str(), samples, horizon, solves, background_threads,
-      dyn.residual.enabled || dyn.ground.learned_enabled ? (fast_mlp ? "fast" : "exact") : "none");
+      dyn.residual.enabled || dyn.ground.learned_enabled
+          ? (float32_mlp ? (fast_mlp ? "float32+fast" : "float32") : (fast_mlp ? "fast" : "exact"))
+          : "none");
+  std::printf("mppi_bench: golden rollouts max abs error %.3e\n",
+              loaded.bundle->golden_max_abs_error);
 
   struct Scene {
     const char* name;

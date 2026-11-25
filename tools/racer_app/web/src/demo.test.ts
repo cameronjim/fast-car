@@ -122,11 +122,12 @@ describe("demo fake agent", () => {
       { pnp_dv1_variant: "K3" },
       { pnp_lap_mode: "v1", pnp_dv1_variant: "K9" },
       { pnp_dynamics_fast_mlp: "true" },
+      { pnp_dynamics_mlp_float32: 1 },
       { pnp_rt_sched: 1 },
     ]) {
       await expect(api.startDrive({ ...base, ...bad } as never)).rejects.toMatchObject({ status: 400 });
     }
-    await api.startDrive({ ...base, pnp_lap_mode: "v1", pnp_lap_source: "camera", pnp_dv1_variant: "K3", pnp_dynamics_fast_mlp: true } as never);
+    await api.startDrive({ ...base, pnp_lap_mode: "v1", pnp_lap_source: "camera", pnp_dv1_variant: "K3", pnp_dynamics_fast_mlp: true, pnp_dynamics_mlp_float32: true } as never);
     expect((await api.status()).drive.mode).toBe("pnp");
   });
 

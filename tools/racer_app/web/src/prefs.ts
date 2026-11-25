@@ -98,7 +98,7 @@ export const PROTOTYPE = {
 } as const;
 
 /** Bundles that did not pass their rule and are on the car only to be tried (decision 29). */
-export const CANDIDATE_BUNDLES: readonly string[] = ["trackperc-v3-2026-11-23"];
+export const CANDIDATE_BUNDLES: readonly string[] = ["trackperc-v3-2026-11-23", "dyn-v0.6r-2026-11-24"];
 
 /** A bundle name as the pickers show it. */
 export const bundleLabel = (id: string): string => (CANDIDATE_BUNDLES.includes(id) ? `${id} (candidate)` : id);

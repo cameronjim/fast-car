@@ -441,4 +441,9 @@ describe("prototype switches (owner decision 29)", () => {
     expect(bundleLabel("trackperc-v3-2026-11-23")).toBe("trackperc-v3-2026-11-23 (candidate)");
     expect(bundleLabel(PROTOTYPE.perception)).toBe(PROTOTYPE.perception);
   });
+  it("marks the R6 dynamics bundle as a candidate (GP2g-R failed), not dyn-v0.1 or the prototype", () => {
+    expect(bundleLabel("dyn-v0.6r-2026-11-24")).toBe("dyn-v0.6r-2026-11-24 (candidate)");
+    expect(bundleLabel("dyn-v0.1-2026-11-12")).toBe("dyn-v0.1-2026-11-12");
+    expect(bundleLabel(PROTOTYPE.dynamics)).toBe(PROTOTYPE.dynamics);
+  });
 });

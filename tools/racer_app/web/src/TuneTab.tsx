@@ -169,7 +169,7 @@ export function TuneTab() {
               <button onClick={() => setPnp(prototypePatch(options))}>Prototype (all learned parts)</button>
             </div>
           </div>
-          <div class="sub">Net perception, dyn-v0.7p with fast MLP, D v1 K3 on the camera source, the session 2 lap settings. Development runs: keep the speed cap, owner on the kill switch.</div>
+          <div class="sub">Net perception, dyn-v0.7p with fast MLP, D v1 K3s on the camera source, the session 2 lap settings. Development runs: keep the speed cap, owner on the kill switch.</div>
           <NumRow
             label="Speed cap"
             unit="m/s"

@@ -106,6 +106,12 @@ struct MppiParams {
   double w_gate_barrier = 0.0;
   double gate_barrier_margin = 1.1;
   int gate_barrier_steps = 6;
+  // gate_barrier_predicted (K5, default false): on steps 1 and later the barrier judges the
+  // in-path distance from the PREDICTED pose of that step, by marching the commanded arc in the
+  // planner's distance field until a forward footprint circle is within the gate's corridor
+  // margin (corridor half width less the body half width), instead of reusing the scan's table
+  // from the current pose less the path travelled. Step 0 keeps the table (what the gate judges).
+  bool gate_barrier_predicted = false;
   // Check the final sequence (the smoothed weighted mean) for collision and fall back to the best
   // evaluated collision-free sample of the chosen class when it fails (claude-docs/13 17.4.1).
   // false is the behaviour of main f5db7f1 and exists only so planner_replay_cli can measure M-C1
@@ -294,14 +300,20 @@ class MppiSolver {
     double gate_travel_m = 0.0;   // sanitised SolveInput::gate_travel_since_scan_m
     double gate_ttc_ref_s = 0.0;  // gate_ttc_margin * ttc_warning_s
     double gate_clear_ref_m = 0.0;
-    double gate_barrier_ref_s = 0.0;  // gate_barrier_margin * ttc_warning_s
-    bool lap_track_station = false;   // lap_station_mode kTrack with the track in use
-    bool use_curv = false;            // terminal_curvature_bound with the track in use
+    double gate_barrier_ref_s = 0.0;      // gate_barrier_margin * ttc_warning_s
+    double gate_corridor_margin_m = 0.0;  // corridor half width less the footprint half width
+    double gate_max_steer_rad = 0.0;
+    bool lap_track_station = false;  // lap_station_mode kTrack with the track in use
+    bool use_curv = false;           // terminal_curvature_bound with the track in use
     int curv_n = 0;
     double curv_s[kTrackStations] = {};   // arc length of the visible stations
     double curv_v2[kTrackStations] = {};  // a_lat / kappa at each, m^2/s^2 (large on a straight)
   };
   Ctx make_ctx(const SolveInput& in) const;
+  // gate_barrier_predicted: true when an obstacle is within `max_m` of arc length along the arc
+  // of `steering` from the rear axle pose (x, y, cos, sin), by the corridor margin rule above.
+  bool arc_blocked_within(const DistanceField& field, double x, double y, double cs, double sn,
+                          double steering, double max_m, double corridor_margin_m) const;
   double evaluate(const SolveInput& in, const Ctx& ctx, const Control* u, CostBreakdown* bd,
                   Pose2* poses) const;
   void build_samples(const SolveInput& in, double v_cap);

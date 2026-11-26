@@ -2004,3 +2004,56 @@ TEST(MppiK4, BarrierStepsLimitsTheCountToTheFirstSteps) {
     EXPECT_NEAR(bd.gate, 5.0 * n, 1e-12) << steps;
   }
 }
+
+TEST(MppiK5, PredictedBarrierJudgesStepsOneOnFromThePredictedPoseInTheField) {
+  // The gate's scan table sees a wall 6 m ahead (never in the band); the planner's own field has
+  // a wall just ahead of the body. Only the predicted mode sees that wall, on steps 1 and later.
+  GateEnv e(6.0);
+  MppiParams p = only_weights();
+  p.w_gate = 0.0;
+  p.w_gate_barrier = 7.0;
+  p.gate_barrier_margin = 1.1;
+  EXPECT_FALSE(p.gate_barrier_predicted) << "off by default";
+  const double v = 1.5;
+  const auto seq = e.constant(v, 0.0);
+  const double x_front = e.g.body_max_x_m();
+  e.set_points(wall_across(x_front + 0.5));
+  CostBreakdown off, on, far_bd;
+  e.solver(p).evaluate_sequence(e.gate_input(v), seq.data(), &off);
+  EXPECT_EQ(off.gate, 0.0) << "the table alone: far from the band";
+  MppiParams pp = p;
+  pp.gate_barrier_predicted = true;
+  e.solver(pp).evaluate_sequence(e.gate_input(v), seq.data(), &on);
+  // 1.1 * 0.71 s at 1.5 m/s is about 1.17 m of arc, the wall is under 0.5 m ahead on every step
+  EXPECT_NEAR(on.gate, 7.0 * (kGateCostSteps - 1), 1e-12);
+  // a wall well past the band costs nothing
+  e.set_points(wall_across(x_front + 3.0));
+  e.solver(pp).evaluate_sequence(e.gate_input(v), seq.data(), &far_bd);
+  EXPECT_EQ(far_bd.gate, 0.0);
+  // a stop costs nothing, a slow enough approach stays out of the band
+  e.set_points(wall_across(x_front + 0.5));
+  CostBreakdown stop, crawl;
+  const auto braking = e.constant(0.0, 0.0);
+  e.solver(pp).evaluate_sequence(e.gate_input(0.0), braking.data(), &stop);
+  EXPECT_EQ(stop.gate, 0.0);
+  const auto slow = e.constant(0.2, 0.0);  // 0.17 m of arc: the wall stays outside it
+  e.solver(pp).evaluate_sequence(e.gate_input(0.2), slow.data(), &crawl);
+  EXPECT_EQ(crawl.gate, 0.0);
+}
+
+TEST(MppiK5, PredictedBarrierKeepsStepZeroOnTheTable) {
+  GateEnv e(1.0);  // the table sees a wall 1 m ahead, the field is empty
+  MppiParams p = only_weights();
+  p.w_gate = 0.0;
+  p.w_gate_barrier = 7.0;
+  p.gate_barrier_margin = 1.1;
+  p.gate_barrier_predicted = true;
+  const double v = 1.5;
+  const auto seq = e.constant(v, 0.0);
+  CostBreakdown bd;
+  e.solver(p).evaluate_sequence(e.gate_input(v), seq.data(), &bd);
+  const double d0 = e.table.distance(0.0);
+  const bool step0_in = d0 / v < 1.1 * e.cfg.limits.ttc_warning_s;
+  ASSERT_TRUE(step0_in);
+  EXPECT_NEAR(bd.gate, 7.0, 1e-12) << "step 0 from the table, steps 1 on see an empty field";
+}

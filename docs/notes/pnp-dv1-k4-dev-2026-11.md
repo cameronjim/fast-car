@@ -79,3 +79,57 @@ Over all 18 runs K4 is 0.937 of D v0 with 1 engagement, 0 brakes, 0 contacts. Tw
 
 Shipped as `dv1_variant:=K4` (lap_mode v1 only, default off, app variant select; D v0, K3s and
 every other variant unchanged; planner switches default off and bit for bit as before).
+
+## K5: the barrier judged from the predicted pose (after K4)
+
+K4's reading said the barrier over-charges because steps 1 to 5 reuse the scan table of the
+current pose. K5 (new planner switch `gate_barrier_predicted`, default off) keeps step 0 on the
+table (what the gate judges next) and judges steps 1 and later from the predicted pose of that
+step: the commanded arc (steering clamped like the gate) is sphere traced in the planner's exact
+distance field, and the step is in the band when a leading footprint circle (front body circle,
+front corners) comes within the gate's corridor margin (corridor half width less the body half
+width, both from vehicle_params) inside margin times warning time times the judged speed. Same
+weight and margin as K4 (10, 1.0, 6 steps).
+
+A first version marched every 0.04 m and was slow (45 sample-count halvings per run against 0 for
+K4); under host load (load about 19 from other agents) 5 of its 12 check runs starved three times
+and it was not judged (7 valid check runs, 0 engagements; selection 0.861, 0 engagements). The
+sphere traced version (K5b) had 0 halvings and was rerun on all 18 dev runs.
+
+Engagements below are TTC only. K5b's runs also had 7 timing engagements (4 watchdog, 3
+rate_limit: /drive_raw gaps under host load, counted by B11 item 6 but not TTC); K3s's and
+K4's runs had none.
+
+| variant | runs | median T_late / c | check-set median (K3s 0.927) | paired vs K3s (check set) | TTC eng | brakes | contacts | clearance 8-10 median (c) |
+|---|---|---|---|---|---|---|---|---|
+| K4 | 18 | 0.937 | 0.967 | | 1 | 0 | 0 | 0.240 (0.246) |
+| **K5b** | 18 | **0.873** | **0.909** | median 0.976, faster in 7 of 12 | **0** | 0 | 0 | 0.231 (0.246) |
+
+K5b meets the bar written for K4 (below 0.927 on the check set, 0 TTC engagements on all 18, 0
+contacts), but the paired gain over K3s is within the run to run spread (7 of 12, median 0.976).
+After the coordinator asked that B12 wait for a version that CLEARLY beats K3s, "clearly" was
+written down before the next runs: paired median K / K3s at most 0.95 and faster in at least 9 of
+the 12 check runs, 0 TTC on all 18, 0 contacts. K5b does not meet it, so B12 was not run.
+
+Where K5b loses: on the wide cases (S1, N3) K3 itself has 0 TTC warnings, yet K5b is slower than
+K3 there (S1 cw 13 late laps 10.0 s against 9.2 s, the planner below the cap on 58 percent of
+ticks against D v0's 33): the barrier still charges later plan steps that MPPI will replan.
+
+## K6: the predicted barrier on the first 4 plan steps (after K5)
+
+K6 is K5 with `gate_barrier_steps` 4 (0.2 s) instead of 6, so plan steps that MPPI replans before
+they are commanded are no longer charged. All 18 dev runs, 3 workers (one run, T cw 11, starved on
+3 attempts and was rerun alone, as M-D1b does).
+
+| variant | runs | median T_late / c | check-set median (K3s 0.927) | paired vs K3s (check set) | TTC eng | other eng | brakes | contacts | clearance 8-10 median (c 0.246) | lowest |
+|---|---|---|---|---|---|---|---|---|---|---|
+| K5b | 18 | 0.873 | 0.909 | 0.976, faster in 7 of 12 | 0 | 7 timing | 0 | 0 | 0.231 | 0.177 |
+| **K6** | 18 | **0.872** | **0.881** | **0.944, faster in 9 of 12** | **0** | 0 | 0 | 0 | 0.227 | 0.168 |
+
+K6 meets the "clearly beats K3s" rule written before it ran (paired median at most 0.95, faster
+in at least 9 of 12, 0 TTC on all 18, 0 contacts). Under the coordinator's rule it becomes the
+prototype default (`profile:=prototype`, the app's Prototype preset) in place of K3s, and B12 is
+pre-registered and run once on its own branch (`feat/dv1-b12`, not merged; decision 28 style).
+Not measured: the cost of the predicted barrier's arc tracing on the Jetson (0 sample-count
+halvings in these sims with the dyn-car fixture; the planner halves its samples on its own when a
+solve is over budget).

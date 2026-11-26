@@ -383,6 +383,10 @@ class MppiPlannerNode : public rclcpp::Node {
       mp.gate_barrier_steps = static_cast<int>(declare_int(
           "gate_barrier_steps", mp.gate_barrier_steps, 1, kGateCostSteps,
           "The gate barrier counts only the first this many steps (0.05 s each) of a plan."));
+      mp.gate_barrier_predicted = declare_bool(
+          "gate_barrier_predicted", false,
+          "Gate barrier on steps 1 and later: the in-path distance along the commanded arc from "
+          "the predicted pose (planner distance field), not the scan table of the current pose.");
     }
     cfg.drivability.stall_hold_s = declare_double(
         "stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0,

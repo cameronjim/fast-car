@@ -70,7 +70,7 @@ Prototype profile (owner decision 29, default none):
 
 * `profile:=prototype` turns every learned part on together as development runs: `backend:=net`
   with trackperc-v2, dyn-v0.7p with `dynamics_fast_mlp:=true` (`dynamics_adaptation` stays false),
-  `lap_mode:=v1` with `dv1_variant:=K3s`, `lap_source:=camera` and the session 2 lap settings
+  `lap_mode:=v1` with `dv1_variant:=K6`, `lap_source:=camera` and the session 2 lap settings
   (`lap_rate_hz` 30, ratio 0.75 / 1.5, `v_lap1_mps` 0.5, `v_max_mps` 1.3). It only changes the
   DEFAULTS of those arguments (PROFILES below); any argument given on the command line wins.
   `profile:=none` (default) changes nothing. `rt_sched` is not part of it.
@@ -138,8 +138,9 @@ from launch_ros.actions import Node
 _RT_SCHED_FILE = Path(__file__).resolve().with_name("rt_sched.py")
 
 
-# profile:=prototype (decision 29): the defaults of the arguments below, nothing else. D v1 K3s (decision 36) replaces K3,
-# which was "unsafe in sim" on B11; it runs capped (v_max_mps) with the owner on the kill switch.
+# profile:=prototype (decision 29): the defaults of the arguments below, nothing else. D v1 K6 replaces K3s (decision 36)
+# by the coordinator's rule of decision 37b (it beat K3s on speed at 0 TTC warnings on the dev runs,
+# docs/notes/pnp-dv1-k4-dev-2026-11.md); it runs capped (v_max_mps) with the owner on the kill switch.
 PROFILE_NONE = "none"
 PROFILES: dict[str, dict[str, str]] = {
     PROFILE_NONE: {},
@@ -151,7 +152,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "dynamics_adaptation": "false",
         "lap_memory": "true",
         "lap_mode": "v1",
-        "dv1_variant": "K3s",
+        "dv1_variant": "K6",
         "lap_source": "camera",
         "lap_counter": "true",
         "lap_rate_hz": "30.0",
@@ -510,6 +511,8 @@ K3S_TTC_ZONE_LAPS = 100
 K4_W_GATE_BARRIER = 10.0
 K4_GATE_BARRIER_MARGIN = 1.0
 K4_GATE_BARRIER_STEPS = 6
+#: K6 (docs/notes/pnp-dv1-k4-dev-2026-11.md): K5 with the barrier on the first 4 plan steps (0.2 s).
+K6_GATE_BARRIER_STEPS = 4
 DV1_VARIANTS: dict[str, tuple[dict, dict]] = {
     "registered": ({}, {}),
     "K1": (
@@ -559,6 +562,43 @@ DV1_VARIANTS: dict[str, tuple[dict, dict]] = {
             "w_gate_barrier": K4_W_GATE_BARRIER,
             "gate_barrier_margin": K4_GATE_BARRIER_MARGIN,
             "gate_barrier_steps": K4_GATE_BARRIER_STEPS,
+        },
+    ),
+    # K5 (development candidate after K4, unregistered): K4 with the barrier's later steps judged
+    # from the predicted pose of each step (the commanded arc in the planner's distance field)
+    # instead of the current pose's scan table less the path travelled.
+    "K5": (
+        {
+            **_DV1_COMMON_LAP,
+            "value_profile_mode": "freeze_after_first_clean_lap",
+            "bound_hold_after_doubtful": True,
+            "ttc_warning_zone_laps": K3S_TTC_ZONE_LAPS,
+        },
+        {
+            "lap_station_mode": "track",
+            "lap_reward_mode": "replace",
+            "w_gate_barrier": K4_W_GATE_BARRIER,
+            "gate_barrier_margin": K4_GATE_BARRIER_MARGIN,
+            "gate_barrier_steps": K4_GATE_BARRIER_STEPS,
+            "gate_barrier_predicted": True,
+        },
+    ),
+    # K6 (development candidate after K5, unregistered): K5 with the barrier on the first 4 plan
+    # steps only (later steps are replanned and over-charged speed on wide lanes).
+    "K6": (
+        {
+            **_DV1_COMMON_LAP,
+            "value_profile_mode": "freeze_after_first_clean_lap",
+            "bound_hold_after_doubtful": True,
+            "ttc_warning_zone_laps": K3S_TTC_ZONE_LAPS,
+        },
+        {
+            "lap_station_mode": "track",
+            "lap_reward_mode": "replace",
+            "w_gate_barrier": K4_W_GATE_BARRIER,
+            "gate_barrier_margin": K4_GATE_BARRIER_MARGIN,
+            "gate_barrier_steps": K6_GATE_BARRIER_STEPS,
+            "gate_barrier_predicted": True,
         },
     ),
 }
@@ -1139,7 +1179,7 @@ def generate_launch_description() -> LaunchDescription:
                 choices=list(PROFILES),
                 description=(
                     "prototype: the defaults of every learned part together (net perception with "
-                    "trackperc-v2, dyn-v0.7p with dynamics_fast_mlp, lap_mode v1 K3s on the camera "
+                    "trackperc-v2, dyn-v0.7p with dynamics_fast_mlp, lap_mode v1 K6 on the camera "
                     "source, the session 2 lap settings, v_max_mps 1.3); development runs "
                     "(owner decision 29). An argument given explicitly overrides it. none "
                     "(default): nothing changes."
@@ -1245,7 +1285,8 @@ def generate_launch_description() -> LaunchDescription:
                     "K2, K3, K3s (K3 with a heavier gate cost and margin, TTC warning zones "
                     "and the bound held after a doubtful lap, a development fix after B11), or "
                     "K4 (K3s's lap node parts with a gate barrier in the planner instead of the "
-                    "heavier gate cost). "
+                    "heavier gate cost), K5 (K4 with the barrier judged from the predicted "
+                    "pose of each plan step), or K6 (K5 on the first 4 plan steps). "
                     "Ignored for v0 and observe. Development runs, not a registered result "
                     "(owner decision 29)."
                 ),

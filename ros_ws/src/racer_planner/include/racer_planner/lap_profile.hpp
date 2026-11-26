@@ -56,6 +56,14 @@ enum class LapProfileStatus {
 //   7. the age now_s - stamp_s is in [0, 0.5] seconds, both ends inclusive.
 // out->active is false unless the result is kOk; out is not otherwise touched on kNone or kBad
 // except for the active flag.
+// The time make_lap_profile judges a profile's age at. On simulated time every node gets /clock on
+// its own, so the lap node can stamp guidance one or a few sim steps ahead of the planner's clock
+// (age -0.01 s in sim; on the car both read the one system clock and the age is never negative).
+// With `sim_skew_tolerance_s` > 0 (the node allows it only with use_sim_time) a stamp at most that
+// far ahead is judged at the stamp itself (age 0); otherwise, and always with 0, it is `now_s`, so
+// rule 7 of make_lap_profile is unchanged.
+double lap_profile_judge_time(double stamp_s, double now_s, double sim_skew_tolerance_s);
+
 LapProfileStatus make_lap_profile(const float* s, const float* v, const float* q, std::size_t n_s,
                                   std::size_t n_v, std::size_t n_q, double stamp_s, double now_s,
                                   LapProfile* out);

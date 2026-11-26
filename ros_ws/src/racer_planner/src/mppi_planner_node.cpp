@@ -257,6 +257,12 @@ class MppiPlannerNode : public rclcpp::Node {
         "TEST ONLY: 'T:D,T:D,...' makes the solve thread sleep D s once the planner has been "
         "driving for T s. The node refuses to start with a non-empty profile unless "
         "use_sim_time is true.");
+    sim_guidance_clock_skew_s_ = declare_double(
+        "sim_guidance_clock_skew_s", 0.0, 0.0, 0.1,
+        "SIMULATION ONLY: a lap guidance profile stamped at most this far ahead of the planner's "
+        "clock is judged at age 0 (on simulated time each node gets /clock on its own). 0 "
+        "(default) "
+        "keeps the age >= 0 rule; the node refuses a non-zero value unless use_sim_time is true.");
     const double rate_hz =
         declare_double("control_rate_hz", 50.0, 20.0, 100.0, "Control tick rate (Hz).");
     cfg.tick_s = 1.0 / rate_hz;
@@ -491,6 +497,15 @@ class MppiPlannerNode : public rclcpp::Node {
       const std::string m =
           "ParameterInvalid: scan_hard_timeout_s must be at least scan_timeout_s and "
           "odom_hard_timeout_s at least odom_timeout_s";
+      RCLCPP_FATAL(get_logger(), "%s", m.c_str());
+      throw std::runtime_error(m);
+    }
+    if (sim_guidance_clock_skew_s_ > 0.0 && !get_parameter("use_sim_time").as_bool()) {
+      // On the car every node reads the one system clock: a profile from the future is a fault
+      // there, so the tolerance can never be on by accident outside simulation.
+      const std::string m =
+          "SimClockSkewRefused: sim_guidance_clock_skew_s is set and use_sim_time is false; the "
+          "tolerance is for simulation only";
       RCLCPP_FATAL(get_logger(), "%s", m.c_str());
       throw std::runtime_error(m);
     }
@@ -757,10 +772,13 @@ class MppiPlannerNode : public rclcpp::Node {
     has_guidance_ = true;
     // The per station profile (empty in D v0). A refused one is counted and logged at most once
     // per second; the planner then runs without a profile (the speed cap above still holds).
-    const LapProfileStatus st =
-        make_lap_profile(msg->s_m.data(), msg->v_ref_mps.data(), msg->cost_to_go_s.data(),
-                         msg->s_m.size(), msg->v_ref_mps.size(), msg->cost_to_go_s.size(),
-                         stamp_or_now(msg->header.stamp), now_s, &lap_profile_);
+    const double profile_stamp_s = stamp_or_now(msg->header.stamp);
+    const double judge_s =
+        lap_profile_judge_time(profile_stamp_s, now_s, sim_guidance_clock_skew_s_);
+    if (judge_s != now_s) guidance_skew_bridged_.fetch_add(1, std::memory_order_relaxed);
+    const LapProfileStatus st = make_lap_profile(
+        msg->s_m.data(), msg->v_ref_mps.data(), msg->cost_to_go_s.data(), msg->s_m.size(),
+        msg->v_ref_mps.size(), msg->cost_to_go_s.size(), profile_stamp_s, judge_s, &lap_profile_);
     guidance_profile_bad_ = st == LapProfileStatus::kBad;
     if (st == LapProfileStatus::kBad) {
       ++guidance_profile_bad_count_;
@@ -920,12 +938,14 @@ class MppiPlannerNode : public rclcpp::Node {
           get_logger(),
           "freshness by stamp (a stamp not later than the last accepted one is dropped by "
           "design, so a looped replay hits NO_ODOM): odom not later %u, odom zero stamp %u, "
-          "guidance not later %u, guidance zero stamp %u; actuator estimate from /drive: corrected "
+          "guidance not later %u, guidance zero stamp %u, guidance sim clock skew bridged %u; "
+          "actuator estimate from /drive: corrected "
           "%u, equal "
           "%u, fallback to published %u",
           odom_stale_stamp_.load(), odom_zero_stamp_.load(), guidance_stale_stamp_.load(),
-          guidance_zero_stamp_.load(), planner_->gated_corrected_ticks(),
-          planner_->gated_equal_ticks(), planner_->gated_fallback_ticks());
+          guidance_zero_stamp_.load(), guidance_skew_bridged_.load(),
+          planner_->gated_corrected_ticks(), planner_->gated_equal_ticks(),
+          planner_->gated_fallback_ticks());
     }
 
     const TickOutput out = planner_->publish(pin);
@@ -1168,6 +1188,8 @@ class MppiPlannerNode : public rclcpp::Node {
   std::atomic<std::uint32_t> odom_zero_stamp_{0};
   std::atomic<std::uint32_t> guidance_stale_stamp_{0};
   std::atomic<std::uint32_t> guidance_zero_stamp_{0};
+  std::atomic<std::uint32_t> guidance_skew_bridged_{0};  // sim_guidance_clock_skew_s accepted
+  double sim_guidance_clock_skew_s_ = 0.0;
   bool has_odom_ = false;
   double guidance_v_cap_mps_ = 0.0;
   double guidance_stamp_s_ = 0.0;

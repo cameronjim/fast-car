@@ -194,6 +194,37 @@ TEST(LapProfileMake, AgeMustBeInZeroToHalfASecondInclusive) {
   EXPECT_FALSE(p.active);
 }
 
+TEST(LapProfileJudgeTime, ZeroToleranceKeepsTheAgeRule) {
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(10.01, 10.0, 0.0), 10.0);
+  LapProfile p;
+  Msg m;
+  m.stamp = 10.01;
+  m.now = lap_profile_judge_time(m.stamp, 10.0, 0.0);
+  EXPECT_EQ(m.make(&p), LapProfileStatus::kBad) << "from the future, no tolerance";
+}
+
+TEST(LapProfileJudgeTime, AStampSlightlyAheadIsJudgedAtAgeZeroWithTheSimTolerance) {
+  LapProfile p;
+  Msg m;
+  m.stamp = 10.01;
+  m.now = lap_profile_judge_time(m.stamp, 10.0, 0.05);
+  EXPECT_DOUBLE_EQ(m.now, 10.01);
+  EXPECT_EQ(m.make(&p), LapProfileStatus::kOk) << "one sim step ahead, inside 0.05 s";
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(0.05, 0.0, 0.05), 0.05) << "exactly at the tolerance";
+}
+
+TEST(LapProfileJudgeTime, FurtherAheadOrBehindOrNonFiniteIsNow) {
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(10.2, 10.0, 0.05), 10.0) << "beyond the tolerance";
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(9.9, 10.0, 0.05), 10.0) << "an ordinary positive age";
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(10.0, 10.0, 0.05), 10.0);
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(std::nan(""), 10.0, 0.05), 10.0);
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(10.01, 10.0, std::nan("")), 10.0);
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(10.01, 10.0, -1.0), 10.0);
+  const double inf = std::numeric_limits<double>::infinity();
+  EXPECT_DOUBLE_EQ(lap_profile_judge_time(inf, 10.0, 0.05), 10.0);
+  EXPECT_TRUE(std::isnan(lap_profile_judge_time(10.0, std::nan(""), 0.05)));
+}
+
 TEST(LapProfileLookup, AtBetweenAndBeyondStations) {
   Msg m;  // s 1.0 .. 7.0, v 1, q 5 .. -1
   m.v[10] = 2.0f;

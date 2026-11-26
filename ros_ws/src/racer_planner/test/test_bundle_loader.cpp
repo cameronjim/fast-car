@@ -165,6 +165,48 @@ TEST(BundleLoader, IoContractMismatchLayerShapes) {
   expect_refusal(load(b), RefusalCode::IoContractMismatch);
 }
 
+// dyn-v0.8 on: a 4 -> 16 -> 16 -> 2 residual (the second implementation in make_fixture.py)
+// loads and reproduces its golden rollouts in every MLP mode; the loaded width is 16.
+TEST(BundleLoader, NarrowResidualFixtureLoadsInEveryMlpMode) {
+  const std::string dir = test::fixture_h16_dir();
+  const auto geometry = test::fixture_geometry(dir);
+  const auto exact = load_dynamics_bundle(dir, geometry, 0.5, false, false);
+  ASSERT_TRUE(exact.ok()) << (exact.refusal ? exact.refusal->message : "");
+  EXPECT_EQ(exact.bundle->params.residual.hidden, 16);
+  EXPECT_EQ(static_cast<int>(exact.bundle->params.residual.weights.size()), mlp_weight_count(16));
+  EXPECT_TRUE(exact.bundle->params.residual.enabled);
+  EXPECT_GT(exact.bundle->golden_max_abs_error, 0.0);
+  EXPECT_LT(exact.bundle->golden_max_abs_error, kGoldenTolerance);
+  for (const bool fast : {false, true}) {
+    for (const bool f32 : {false, true}) {
+      const auto r = load_dynamics_bundle(dir, geometry, 0.5, fast, f32);
+      ASSERT_TRUE(r.ok()) << fast << f32 << ": " << (r.refusal ? r.refusal->message : "");
+      EXPECT_LT(r.bundle->golden_max_abs_error, kGoldenTolerance);
+      EXPECT_NEAR(r.bundle->golden_max_abs_error, exact.bundle->golden_max_abs_error,
+                  f32 ? 1e-6 : 1e-9);
+    }
+  }
+  // the 16 wide weights under a 32 wide manifest: refused for the file size
+  BundleCopy b(dir);
+  b.edit_manifest("layers: [[4, 16], [16, 16], [16, 2]]", "layers: [[4, 32], [32, 32], [32, 2]]");
+  expect_refusal(load_dynamics_bundle(b.dir(), geometry, 0.5), RefusalCode::IoContractMismatch);
+}
+
+// A width the planner does not implement is refused for its shape, even with a weight file of
+// the size that width implies (12: 4*12+12+144+12+24+2 = 242 floats).
+TEST(BundleLoader, IoContractMismatchUnsupportedResidualWidth) {
+  BundleCopy b;
+  b.edit_manifest("layers: [[4, 32], [32, 32], [32, 2]]", "layers: [[4, 12], [12, 12], [12, 2]]");
+  b.rewrite_payload("residual_mlp.f32", std::string(4 * mlp_weight_count(12), '\0'));
+  const auto r = load(b);
+  expect_refusal(r, RefusalCode::IoContractMismatch);
+  EXPECT_NE(r.refusal->message.find("hidden width"), std::string::npos) << r.refusal->message;
+  // inconsistent shapes (H changes between layers) are refused too
+  BundleCopy c;
+  c.edit_manifest("layers: [[4, 32], [32, 32], [32, 2]]", "layers: [[4, 16], [32, 32], [32, 2]]");
+  expect_refusal(load(c), RefusalCode::IoContractMismatch);
+}
+
 TEST(BundleLoader, IoContractMismatchWeightFileSize) {
   BundleCopy b;
   b.rewrite_payload("residual_mlp.f32", std::string(100, '\0'));

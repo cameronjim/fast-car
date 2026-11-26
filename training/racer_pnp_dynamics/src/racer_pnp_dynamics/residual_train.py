@@ -61,12 +61,20 @@ class ResidualConfig:
     out_cap: tuple[float, float] | None = None  # bound on |dv/dt| (m/s2) and |dyaw/dt| (rad/s)
     # v0.3: the speed output is switched off exactly (output_scale[0] = 0, masked out of the loss)
     yaw_only: bool = False
+    # width of both hidden layers (4-H-H-2); 32 is every bundle before dyn-v0.8
+    hidden: int = 32
+    # weights of the (speed, yaw, position) terms of the multi step loss; (1, 1, 1) before dyn-v0.8
+    loss_weights: tuple[float, float, float] = (1.0, 1.0, 1.0)
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
             raise ValueError(f"mode {self.mode!r} not in {MODES}")
         if self.norm not in ("standardise", "none"):
             raise ValueError(f"norm {self.norm!r}")
+        if self.hidden < 1:
+            raise ValueError(f"hidden {self.hidden} must be positive")
+        if len(self.loss_weights) != 3 or min(self.loss_weights) < 0 or sum(self.loss_weights) <= 0:
+            raise ValueError(f"loss_weights {self.loss_weights} must be 3 weights, >= 0, not all 0")
 
 
 # The candidate grid. Fixed in code before any held-out number was read; the winner is picked on
@@ -146,12 +154,18 @@ def cap_weights(weights: MlpWeights, cap_normalised: np.ndarray | None) -> MlpWe
     return replace(weights, w3=weights.w3 * factor[:, None], b3=weights.b3 * factor)
 
 
-def _init_weights(rng: np.random.Generator, out_scale: float = 1.0) -> MlpWeights:
+def residual_layers(hidden: int = 32) -> tuple[tuple[int, int], ...]:
+    """The 4-H-H-2 layer shapes ((in, out) per layer); hidden 32 is `RESIDUAL_LAYERS`."""
+    return ((4, hidden), (hidden, hidden), (hidden, 2))
+
+
+def _init_weights(rng: np.random.Generator, out_scale: float = 1.0, hidden: int = 32) -> MlpWeights:
+    layers = residual_layers(hidden)
     arrays: list[np.ndarray] = []
-    for k, (n_in, n_out) in enumerate(RESIDUAL_LAYERS):
+    for k, (n_in, n_out) in enumerate(layers):
         bound = np.sqrt(6.0 / (n_in + n_out))
         w = rng.uniform(-bound, bound, (n_out, n_in))
-        arrays += [w * (out_scale if k == len(RESIDUAL_LAYERS) - 1 else 1.0), np.zeros(n_out)]
+        arrays += [w * (out_scale if k == len(layers) - 1 else 1.0), np.zeros(n_out)]
     return MlpWeights(*arrays)
 
 
@@ -174,6 +188,7 @@ def train_numpy(
     batch: int = 256,
     cap_normalised: np.ndarray | None = None,
     loss_mask: np.ndarray | None = None,
+    hidden: int = 32,
 ) -> MlpWeights:
     """AdamW on the mean squared one step error with early stopping on the validation error.
     Hand written backpropagation of the 4-32-32-2 tanh network, float64. `loss_mask` (2,) is 1
@@ -181,7 +196,7 @@ def train_numpy(
     speed output gets no gradient and does not enter the validation loss)."""
     mask = np.ones(2) if loss_mask is None else np.asarray(loss_mask, dtype=float)
     rng = np.random.default_rng(seed)
-    w = _init_weights(rng)
+    w = _init_weights(rng, hidden=hidden)
     params = list(w.arrays())
     m = [np.zeros_like(p) for p in params]
     v = [np.zeros_like(p) for p in params]
@@ -257,6 +272,7 @@ def _numpy_trainer(cfg: ResidualConfig, cap_norm: np.ndarray | None):
         return train_numpy(
             x, y, xv, yv, seed, epochs=cfg.max_epochs * 2, patience=cfg.patience * 2, lr=cfg.lr,
             weight_decay=cfg.weight_decay, cap_normalised=cap_norm, loss_mask=loss_mask_of(cfg),
+            hidden=cfg.hidden,
         )  # fmt: skip
 
     return trainer
@@ -329,7 +345,7 @@ def _torch_one_step_trainer(cfg: ResidualConfig, cap_norm):  # pragma: no cover 
     def trainer(x, y, xv, yv, seed):
         w = train_torch(
             x, y, xv, yv, seed, epochs=cfg.max_epochs * 4, patience=cfg.patience * 2, lr=cfg.lr,
-            weight_decay=cfg.weight_decay, loss_mask=loss_mask_of(cfg),
+            weight_decay=cfg.weight_decay, loss_mask=loss_mask_of(cfg), hidden=cfg.hidden,
         )  # fmt: skip
         return cap_weights(w, cap_norm)
 
@@ -356,10 +372,11 @@ def train_multi_step_torch(  # pragma: no cover - needs torch (dependency group 
 
     torch.manual_seed(seed)
     torch.set_num_threads(2)
+    h = cfg.hidden
     net = torch.nn.Sequential(
-        torch.nn.Linear(4, 32), torch.nn.Tanh(),
-        torch.nn.Linear(32, 32), torch.nn.Tanh(),
-        torch.nn.Linear(32, 2),
+        torch.nn.Linear(4, h), torch.nn.Tanh(),
+        torch.nn.Linear(h, h), torch.nn.Tanh(),
+        torch.nn.Linear(h, 2),
     ).double()  # fmt: skip
     if init is not None:
         for layer, (w, b) in zip((net[0], net[2], net[4]), _pairs(init), strict=True):
@@ -395,7 +412,7 @@ def train_multi_step_torch(  # pragma: no cover - needs torch (dependency group 
         if idx is not None:
             s0, cm, vt, ps = s0[idx], cm[idx], vt[idx], ps[idx]
         st = rollout(s0, cm)
-        return _rollout_loss(torch, st, vt, ps, sigmas)
+        return _rollout_loss(torch, st, vt, ps, sigmas, cfg.loss_weights)
 
     opt = torch.optim.AdamW(net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     gen = torch.Generator().manual_seed(seed)
@@ -491,6 +508,11 @@ def _nominal_sigmas(torch, rollout, tr, net):  # pragma: no cover - needs torch
     return tuple(float(t.mean()) + 1e-12 for t in (sp, yw, pp))
 
 
-def _rollout_loss(torch, states, v_true, poses, sigmas):  # pragma: no cover - needs torch
+def _rollout_loss(
+    torch, states, v_true, poses, sigmas, weights=(1.0, 1.0, 1.0)
+):  # pragma: no cover
     sp, yw, ps = _rollout_terms(torch, states, v_true, poses)
-    return sp.mean() / sigmas[0] + yw.mean() / sigmas[1] + ps.mean() / sigmas[2]
+    w = weights
+    return (
+        w[0] * sp.mean() / sigmas[0] + w[1] * yw.mean() / sigmas[1] + w[2] * ps.mean() / sigmas[2]
+    )

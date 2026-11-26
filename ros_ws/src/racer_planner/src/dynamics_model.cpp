@@ -154,7 +154,7 @@ DynamicsModel::DynamicsModel(const DynamicsParams& params, const VehicleGeometry
                         static_cast<int>(params.residual.weights.size()) ==
                             mlp_weight_count(params.residual.hidden)),
       residual_hidden_(mlp_hidden_supported(params.residual.hidden) ? params.residual.hidden
-                                                                     : kMlpHidden),
+                                                                    : kMlpHidden),
       ground_enabled_(params.step_contract == 2 && params.ground.enabled &&
                       static_cast<int>(params.ground.weights.size()) == kMlpWeightCount) {
   // Packed whenever the weights are there (residual() may be called on a model whose step has the

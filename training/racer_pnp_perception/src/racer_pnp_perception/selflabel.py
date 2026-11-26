@@ -69,6 +69,7 @@ from racer_track_perception import track as tr
 from racer_track_perception.vehicle import LiveVehicle, find_repo_root, load_live_vehicle
 from scipy.spatial import cKDTree
 
+from racer_pnp_perception import arc_label
 from racer_pnp_perception.eval_bags import clearance_deficit
 from racer_pnp_perception.split import SPLIT_SHA256, Segment, Split, load_split
 
@@ -102,6 +103,8 @@ MIN_VALID_COUNT = 12
 MAX_INTRUSION = 0.03
 MAX_DEFICIT_P90_M = 0.05
 STATION0_TOL_M = 0.01
+# --corner-smooth-m default (with --arc-length-stations), chosen on train-role labels.
+CORNER_SMOOTH_M = 0.1
 
 # Driven path.
 PATH_LENGTH_M = 2.0
@@ -629,12 +632,23 @@ class LabelOutcome:
     containment: float = math.nan
 
 
+@dataclass(frozen=True)
+class LabelGeometry:
+    """How the label track is made from the submap: the plain tracer (default, earlier label sets
+    reproduce), or with `arc` the arc-length stations and rounded corners of arc_label.py,
+    smoothed over `smooth_m` of arc (`--arc-length-stations`, `--corner-smooth-m`)."""
+
+    arc: bool = False
+    smooth_m: float = 0.0
+
+
 def label_scan(
     chain: Chain,
     points: list[NDArray[np.floating]],
     i: int,
     live: LiveVehicle,
     cfg: geometric.GeometricConfig | None = None,
+    geom: LabelGeometry | None = None,
 ) -> LabelOutcome:
     """Run steps 2 to 4 for scan i. `points[j]` are the base_link points of scan j."""
     lo, hi = window_bounds(chain, i)
@@ -645,7 +659,10 @@ def label_scan(
     if path is None:
         return LabelOutcome("path_short")
     sub = build_submap(points[lo : hi + 1], relative_poses(chain, i, lo, hi))
-    track = geometric.trace(sub, live.body.half_width_m, SIGMA_MAX_M, cfg)
+    if geom is not None and geom.arc:
+        track = arc_label.arc_track(sub, live.body.half_width_m, SIGMA_MAX_M, geom.smooth_m, cfg)
+    else:
+        track = geometric.trace(sub, live.body.half_width_m, SIGMA_MAX_M, cfg)
     out = LabelOutcome(None, track, sub, path)
     if track.valid_count < MIN_VALID_COUNT:
         out.reason = "valid_count"
@@ -779,6 +796,7 @@ def make_labels(
     cfg: geometric.GeometricConfig | None = None,
     segmenter: Segmenter | None = None,
     scan_speed: NDArray[np.float64] | None = None,
+    geom: LabelGeometry | None = None,
 ) -> SelfLabels:
     """Self-labels for every candidate scan (the moving scans). With a `segmenter`, a window not
     inside one segment is dropped as `segment_edge` before anything else is computed."""
@@ -830,7 +848,7 @@ def make_labels(
                 if own is not None:
                     seg_stats(own)["dropped"]["segment_edge"] += 1
                 continue
-        out = label_scan(chain, points, int(i), live, cfg)
+        out = label_scan(chain, points, int(i), live, cfg, geom)
         if out.reason is not None:
             dropped[out.reason] += 1
             if band is not None:
@@ -1058,6 +1076,7 @@ def label_bag(
     live: LiveVehicle,
     split: Split | None = None,
     gate: RmsGate | None = None,
+    geom: LabelGeometry | None = None,
 ) -> dict[str, Any]:
     gate = gate or RmsGate()
     scans, speed_t, speed = load_scanset(bag_dir, out_dir / "cache", live, workers)
@@ -1077,7 +1096,9 @@ def label_bag(
     save_motion(motion_path, series)
     series = regate(series, scans, interval_speed(scans, speed_t, speed), gate)
     scan_speed = speed_at(scans.stamp_s, speed_t, speed)
-    labels = make_labels(scans, series, live, moving, segmenter=segmenter, scan_speed=scan_speed)
+    labels = make_labels(
+        scans, series, live, moving, segmenter=segmenter, scan_speed=scan_speed, geom=geom
+    )
     labels.save(out_dir / f"{bag_dir.name}.npz")
     log.info("%s: kept %d of %d moving scans", bag_dir.name, len(labels), labels.candidates)
     entry: dict[str, Any] = {
@@ -1091,6 +1112,8 @@ def label_bag(
         "icp_ok": int(series.ok[want].sum()),
         "speed_bands": labels.per_speed_band,
     }
+    if geom is not None and geom.arc:
+        entry["label_geometry"] = {"arc_length_stations": True, "corner_smooth_m": geom.smooth_m}
     if gate.on:
         entry["rms_gate"] = {
             "default_m": RMS_MAX_M,
@@ -1148,6 +1171,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="speed (m/s) above which --rms-gate-fast applies",
     )
+    parser.add_argument(
+        "--arc-length-stations",
+        action="store_true",
+        help="label stations 0.20 m apart in a straight line with rounded corners (arc_label.py; "
+        "off: the plain tracer)",
+    )
+    parser.add_argument(
+        "--corner-smooth-m",
+        type=float,
+        default=CORNER_SMOOTH_M,
+        help="Gaussian smoothing of the label centre along the arc (m), with --arc-length-stations",
+    )
     args = parser.parse_args(argv)
     if (args.rms_gate_fast is None) != (args.rms_fast_speed is None):
         parser.error("--rms-gate-fast and --rms-fast-speed go together")
@@ -1170,7 +1205,14 @@ def main(argv: list[str] | None = None) -> int:
                 log.info("%s: unused in the split, skipped", bag.name)
                 continue
         manifest["bags"][bag.name] = label_bag(
-            bag, args.out, args.moving_mps, args.workers, live, split, gate
+            bag,
+            args.out,
+            args.moving_mps,
+            args.workers,
+            live,
+            split,
+            gate,
+            LabelGeometry(args.arc_length_stations, args.corner_smooth_m),
         )
     args.out.mkdir(parents=True, exist_ok=True)
     manifest_path = args.out / "manifest.json"

@@ -1,0 +1,140 @@
+# trackperc-v6 RECORD: recipe, data roles, internal screen and the rule it would have been scored
+# against (2026-11-25, owner decisions 29 and 37a, iteration after v5; an unregistered development
+# candidate behind the existing backend:=net / bundle switch). Written after the internal screen and
+# committed before any held-out set was opened for v6 (none was). Not a gate. Do not edit after the
+# first commit; a change is a new file.
+#
+# Held-out scoring count BEFORE v6: H-layout scored 3 times (v3, v4, v5), H-session 3 times (v3, v4,
+# v5). v6 is scored on them at most once, and only if it passes the internal screen below.
+#
+# Bags, segments and roles: exactly those of w2-trackperc-v5-2026-11-25.yaml (copied unchanged;
+# only split_id differs). Labels: car-data/pnp/labels/selflabels-v4-fast, as v4 and v5.
+#
+# Internal validation plan w2-v6 (real.VAL_PLANS; train-role labels only): the last 45 percent of
+# every session 2 train segment, the last 40 percent of every 2026-11-16 bag, the last 15 percent of
+# every other train segment. 3159 labels (session 2: 334, 2026-11-16: 864, older bags: 1961), against
+# 2341 (43 session 2) in v5. Every number below and every design choice comes from this part (or the
+# simulation validation set); scored through TrackPerceiver with the scan refinement, as the node
+# runs the bundle. On it, v5's recipe retrained on the w2-v6 train part (v5-dev) shows the H-session
+# gap: session 2 V 14.86 against v2 15.34 (H-session: 14.85 against 15.27).
+#
+# Diagnosis on the internal part (racer_pnp_perception.internal_val plus a decomposition of each
+# scan's refined V into a geometry-only count, sigma forced valid, and a sigma-only count, no
+# refinement): after v5's sigma refit the session 2 gap is geometric. The scan refinement resamples
+# the net's polyline at 0.20 m from the point nearest the car, so its valid count is limited by the
+# polyline's arc length (16 stations need 2.95 m). v4/v5 polylines are short on the new bags
+# (arc 2.81 m on session 2 and 2.82 m on 2026-11-16, v2 2.89 / 2.93; spacing shrinks to 0.175 to
+# 0.185 m at stations 8 to 14): the regression of uncertain far stations towards the car. Session 2
+# geometry-only V: v5-dev 14.99, v2 15.40; sigma-only V: v5-dev 15.86, v2 15.93.
+#
+# Recipe changes (chosen on the internal part only; screened: spacing weight 0.1 and 0.3, sigma
+# floor 0.10, 0.15, 0.10 plus a 0.10 m far ramp, a weight average of the three seeds):
+#   1. Stage 1 (v4 recipe, init v2 seed 1, 6 epochs, w2-v6 plan) adds the station-spacing prior of
+#      the output contract: train --spacing-weight 0.1 (mean of ((|p_k+1 - p_k| - 0.20) / 0.01)^2
+#      over labelled pairs, all samples). Session 2 geometry-only V 14.99 -> 15.44.
+#   2. Stage 2, the v5 sigma-head refit (1 epoch, only the log_sigma rows of fc1), with the real
+#      label noise floor raised from 0.10 to 0.15 m (train --real-label-sigma-near 0.15): with the
+#      spacing prior the 0.10 floor left session 2 sigma-only V at 15.50.
+#   Seeds 0 1 2; the seed with the lowest final raw internal E_c (train.select_seed): seed 2.
+#
+# Internal screen (written before any spacing-plus-refit candidate was scored on the w2-v6 part;
+# kept in car-data/pnp/runs-v6/internal_screen_rule.txt at the time, committed here). Selected seed
+# against v5-dev (selected seed 2) and v2, refined:
+#   1. V(v6) >= V(v5-dev) + 0.20 on session 2 and on 2026-11-16
+#   2. V(v6) >= V(v2) - 0.10 on session 2 and on 2026-11-16, and >= V(v2) - 0.25 on the older bags
+#   3. E_c(v6) <= E_c(v2) on session 2, 2026-11-16 and the older bags
+#   4. E_c(v6) <= 1.03 E_c(v5-dev) on all three
+# Result: items 1 and 2 pass (session 2 V 15.39, 2026-11-16 15.30, older 15.57; v5-dev 14.86 /
+# 14.87 / 15.36; v2 15.34 / 15.18 / 15.40). Item 3 FAILS on the older bags (E_c 0.0757 vs v2
+# 0.0743; v5-dev 0.0751 fails it too: v2 trained on most of those bags' cuts) and item 4 FAILS on
+# session 2 (0.1672 vs 1.03 x 0.1596 = 0.1644). So v6 is NOT scored on H-layout or H-session.
+# H counts after v6: H-layout 3, H-session 3.
+#
+# Ship rule had it been scored: the v4/v5 rule unchanged and unloosened, v6 in v5's place:
+#   on H-layout: E_c(v6) <= E_c(v2) and V(v6) >= V(v2) - 0.25 and C95(v6) >= C95(v2) - 0.02 and
+#                mean intrusion(v6) <= max(0.02, intrusion(v2) + 0.005);
+#   on H-session: at least 300 labelled scans, E_c(v6) <= 1.05 E_c(v2) and V(v6) >= V(v2) - 0.25;
+#   p99 latency of preprocess + net + refinement on the dev Mac at most 1.2 times v2's.
+# Candidate bundle car-data/pnp/models-candidate/trackperc-v6-2026-11-25, "(candidate)" in the app.
+split_id: w2-trackperc-v6-2026-11-25
+bags_root: /Users/cameronjim/code/car-data/bags
+bags:
+  # v0.2 split: every perception segment of the 2026-11-13 loop becomes train (its heldout
+  # segments were read by v1 and v2 already and decide nothing here).
+  2026-11-13T22-00-40_car_teleop:
+    first_scan_log_time_s: 1794607244.974
+    segments:
+      - {name: G1a, from: 109.2, to: 540.0, driver: gap_follow, direction: ccw, cap_mps: 0.60, perception: train}
+      - {name: G1b, from: 542.0, to: 650.0, driver: gap_follow, direction: ccw, cap_mps: 0.60, perception: train}
+      - {name: G2, from: 667.2, to: 825.4, driver: gap_follow, direction: cw, cap_mps: 0.56, perception: train}
+      - {name: G3a, from: 856.3, to: 877.6, driver: gap_follow_race, direction: cw, cap_mps: 1.51, perception: train}
+      - {name: G3b, from: 879.6, to: 895.0, driver: gap_follow_race, direction: cw, cap_mps: 1.51, perception: train}
+  2026-11-13T22-20-18_car_teleop:
+    first_scan_log_time_s: 1794608422.462
+    segments:
+      - {name: P0, from: 16.6, to: 113.9, driver: gap_follow, direction: cw, cap_mps: 0.54, perception: train}
+      - {name: R0, from: 430.1, to: 481.4, driver: pnp, direction: cw, cap_mps: 0.5, perception: train}
+      - {name: R1, from: 501.5, to: 552.9, driver: pnp, direction: ccw, cap_mps: 0.5, perception: train}
+      - {name: R2, from: 626.1, to: 645.8, driver: pnp, direction: ccw, cap_mps: 1.0, perception: train}
+      - {name: R3, from: 2729.7, to: 2786.3, driver: pnp, direction: ccw, cap_mps: 0.5, perception: train}
+      - {name: R4, from: 2812.7, to: 2852.8, driver: pnp, direction: cw, cap_mps: 0.5, perception: train}
+      - {name: R5, from: 2868.6, to: 2895.5, driver: pnp, direction: cw, cap_mps: 0.7, perception: train}
+      - {name: R6, from: 2914.6, to: 2940.6, driver: pnp, direction: ccw, cap_mps: 0.7, perception: train}
+      - {name: R7a, from: 2967.2, to: 2980.6, driver: pnp, direction: cw, cap_mps: 1.0, perception: train}
+      - {name: R7b, from: 2982.6, to: 2991.6, driver: pnp, direction: cw, cap_mps: 1.0, perception: train}
+      - {name: R8, from: 3012.4, to: 3029.7, driver: pnp, direction: ccw, cap_mps: 1.0, perception: train}
+  2026-11-13T23-19-51_car_teleop:
+    first_scan_log_time_s: 1794611995.155
+    segments:
+      - {name: M0, from: 343.0, to: 356.2, driver: pnp, direction: ccw, cap_mps: 0.5, perception: train}
+  2026-11-13T23-27-23_car_teleop:
+    first_scan_log_time_s: 1794612448.196
+    segments:
+      - {name: T0, from: 458.7, to: 683.6, driver: tracker, direction: ccw, cap_mps: 0.5, perception: train}
+      - {name: T1, from: 1158.0, to: 1222.3, driver: tracker, direction: ccw, cap_mps: 1.0, perception: train}
+      - {name: T2a, from: 1230.9, to: 1244.1, driver: tracker, direction: ccw, cap_mps: 1.5, perception: train}
+      - {name: T2b, from: 1246.1, to: 1254.9, driver: tracker, direction: ccw, cap_mps: 1.5, perception: train}
+      - {name: T3a, from: 1264.3, to: 1310.1, driver: tracker, direction: ccw, cap_mps: 2.0, perception: train}
+      - {name: T3b, from: 1312.1, to: 1347.6, driver: tracker, direction: ccw, cap_mps: 2.0, perception: train}
+  2026-11-11T03-54-11_car_teleop_cw:
+    whole_bag: {perception: train}
+  2026-11-11T04-20-19_car_teleop_v3:
+    whole_bag: {perception: train}
+  2026-10-24T23-13-18_car_teleop:
+    whole_bag: {perception: train}
+  2026-10-25T19-27-08_car_teleop:
+    whole_bag: {perception: train}
+  # H-layout.
+  2026-11-12T03-04-56_car_teleop:
+    whole_bag: {perception: heldout_layout}
+  2026-11-12T02-57-50_car_teleop:
+    whole_bag: {perception: heldout_layout}
+  # 2026-11-16 (development in pnp-v0.6-perception-fused.yaml): train, moving scans of the whole bag.
+  2026-11-16T02-18-54_car_teleop:
+    whole_bag: {perception: train}
+  2026-11-16T02-29-27_car_teleop:
+    whole_bag: {perception: train}
+  2026-11-16T22-38-47_car_teleop:
+    whole_bag: {perception: train}
+  2026-11-16T22-45-39_car_teleop:
+    whole_bag: {perception: train}
+  2026-11-16T23-04-09_car_teleop:
+    whole_bag: {perception: train}
+  # 2026-11-23 session (session-2026-11-23/2026-11-24T04-36-54_car_teleop, all four runs; the two
+  # short bags before it hold no run and are unused). A run is first non-zero /drive_raw to last
+  # /pnp/planner/status. Cut: first 55 percent train, 2.0 s guard, rest H-session.
+  2026-11-24T04-36-54_car_teleop:
+    first_scan_log_time_s: 1795495017.971
+    segments:
+      # observe cw, geometric, 43.0 to 87.8
+      - {name: S0a, from: 43.0, to: 67.6, driver: pnp, direction: cw, cap_mps: 1.3, perception: train}
+      - {name: S0b, from: 69.6, to: 87.8, driver: pnp, direction: cw, cap_mps: 1.3, perception: heldout}
+      # D v0 cw, geometric, 202.1 to 397.1
+      - {name: S1a, from: 202.1, to: 309.4, driver: pnp, direction: cw, cap_mps: 1.3, perception: train}
+      - {name: S1b, from: 311.4, to: 397.1, driver: pnp, direction: cw, cap_mps: 1.3, perception: heldout}
+      # D v0 ccw, net v2, 671.2 to 817.2
+      - {name: S2a, from: 671.2, to: 751.5, driver: pnp, direction: ccw, cap_mps: 1.3, perception: train}
+      - {name: S2b, from: 753.5, to: 817.2, driver: pnp, direction: ccw, cap_mps: 1.3, perception: heldout}
+      # D v0 cw, net v2, 967.8 to 1098.5
+      - {name: S3a, from: 967.8, to: 1039.7, driver: pnp, direction: cw, cap_mps: 1.3, perception: train}
+      - {name: S3b, from: 1041.7, to: 1098.5, driver: pnp, direction: cw, cap_mps: 1.3, perception: heldout}

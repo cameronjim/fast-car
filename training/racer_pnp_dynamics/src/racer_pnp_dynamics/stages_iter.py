@@ -103,6 +103,16 @@ VERSIONS: dict[str, Version] = {
             "multi_step_from_one_capped_wd1e-2_h8",
         ),
     ),
+    # dyn-v0.9: v0.8 plus the contract 1 ground scale learned with the residual (bundle 1.2.0)
+    "v0.9": Version(
+        "v0.9",
+        "dyn-v0.9-2026-11-25",
+        (
+            "multi_step_from_one_capped_wd1e-2_gs",
+            "multi_step_from_one_capped_wd1e-2_gs_h16",
+            "multi_step_from_one_capped_wd1e-2_gs_h8",
+        ),
+    ),
 }
 
 

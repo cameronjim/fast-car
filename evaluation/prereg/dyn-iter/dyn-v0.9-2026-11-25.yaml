@@ -1,0 +1,72 @@
+# Rule of dyn-v0.9, the second version of the dynamics iteration on dyn-v0.7p's line.
+# Unregistered development model (owner decision 29). Written and committed BEFORE its one pass
+# (training/racer_pnp_dynamics iter_rule.py reads it and refuses a loosened GP2g-R threshold).
+# Decisions are made on train and validation data only (iter_roles.py).
+rule_id: dyn-v0.9-2026-11-25
+written: 2026-11-25
+reference: dyn-v0.7p-2026-11-24          # the prototype bundle, residual on, fast_mlp for item 12
+also_reported: dyn-v0.1-2026-11-12       # for information only, decides nothing here
+
+candidate:
+  model_id: dyn-v0.9-2026-11-25
+  change: >-
+    dyn-v0.8 (dyn-v0.7p's recipe on every allowed train bag, no session 2 bag) plus the contract 1
+    ground scale: one learned constant, ground distance per wheel distance, trained with the
+    residual by the multi step loss, inside [0.60, 1.05]; the position moves by ground_scale * v
+    while v stays the wheel speed. Bundle schema 1.2.0 (io.residual.ground_scale); the planner,
+    its dead reckoning and the loader implement it. Residual width 32, 16 or 8.
+  configs: [multi_step_from_one_capped_wd1e-2_gs, multi_step_from_one_capped_wd1e-2_gs_h16, multi_step_from_one_capped_wd1e-2_gs_h8]
+  seeds: [0, 1, 2]
+  chosen_by: >-
+    iter_rule.select_cost_aware on validation P1 (measured heading direction): the narrowest config
+    whose mean over seeds is within 1 percent of the best mean, then its seed with the lowest P1
+  validity_v_max_mps: 1.3
+
+heldout:
+  decides: >-
+    H1, the GP2g-R held-out parts of the 2026-11-22 runs (brief 54, evaluation/prereg/sessions/
+    2026-11-22-dynamics-v06.yaml), under T2 and T2s, read once in this version's pass
+  h1_times_scored_before_this_pass: 2      # the R6 pass of PR 250, the dyn-v0.8 pass of this iteration
+  reported_only: >-
+    H2, dyn-v0.7p's development parts of the 2026-11-15 session bags (PR 245 table form); read
+    before by the v0.5 pass (overlapping parts), R6's selection, PR 245's development score and
+    the dyn-v0.8 pass
+  never_read: "every bag of the 2026-11-23 session (session 2), confirmation only"
+
+gate:                                     # GP2g-R's items with dyn-v0.7p in place of dyn-v0.1
+  item_0_enough_data: {min_windows_total: 400, min_windows_per_direction: 150, min_strata_with_30_windows: 4, not_met: INSUFFICIENT}
+  max_p1_ratio: 0.95
+  max_p1_ratio_bootstrap_upper: 1.0
+  max_y1_ratio: 0.9
+  max_s1_ratio: 1.0                       # replaces GP2g-R's S1 equality (both models learn the speed channel)
+  max_seed_p1_ratio: 1.0
+  max_stratum_ratio: 1.05
+  sweep_samples: 100000
+  max_pose_yaw_ratio: 1.0
+  per_direction: {max_p1_ratio: 1.0, max_y1_ratio: 1.0}
+  max_cross_ratio: 1.0
+  max_along_ratio: 1.02
+  max_near_limit_ratio: 1.0
+  max_transition_ratio: 1.0
+  max_p1_ratio_alt_truth: 1.0
+  saturation: {level: 0.9, max_heldout_step_share: 0.01}
+  max_fast_solve_ratio_to_reference: 1.0  # replaces GP2g-R's 1.25 x dyn-v0.1: mppi_bench planner solve p50 with --fast-mlp, vs dyn-v0.7p with --fast-mlp
+
+metrics:
+  horizons_s: [0.5, 1.0, 1.5]
+  window_start_period_s: 0.25
+  min_start_speed_mps: 0.25
+  speed_bins_mps: [0.25, 0.6, 0.85, 1.25]
+  min_windows_per_stratum: 30
+  bootstrap: {block_s: 5.0, resamples: 2000, seed: 0}
+  near_limit: {min_mean_abs_steering_share: 0.85, min_windows_per_side: 30}
+  transition: {min_speed_command_change_mps: 0.2, min_windows: 30}
+  pose_check_segments: [G1b, T2b]
+
+outcomes:
+  pass: >-
+    beats dyn-v0.7p: becomes the prototype profile's dynamics_bundle after the L5 PnP canary with
+    the bundle (every case completes, 0 wall contacts) and the full Linux suites
+  fail: >-
+    ships as "(candidate)" in the app's dynamics picker under models-candidate; the prototype keeps
+    dyn-v0.7p; the table is the result

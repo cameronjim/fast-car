@@ -88,7 +88,7 @@ export const DV1_VARIANTS = ["registered", "K1", "K2", "K3", "K3s", "K4", "K5", 
 
 /**
  * The Prototype preset (owner decision 29): every learned part together, as development runs. The
- * same defaults as `profile:=prototype` of pnp.launch.py. D v1 K3s (decision 36) replaces K3, which was "unsafe in sim" on B11; it
+ * same defaults as `profile:=prototype` of pnp.launch.py. D v1 K6 (decision 40) replaces K3s (0 TTC warnings on the prototype stack where K3s warned); it
  * runs under the speed cap with the owner on the kill switch.
  */
 export const PROTOTYPE = {
@@ -132,7 +132,7 @@ export function prototypePatch(options: Options | null): Partial<Prefs["pnp"]> {
     lap_rate_hz: PROTOTYPE.lap_rate_hz,
     lap_length_ratio_min: RATIO_BAND.min,
     lap_length_ratio_max: RATIO_BAND.max,
-    dv1_variant: "K3s",
+    dv1_variant: "K6",
     dynamics_fast_mlp: true,
     dynamics_mlp_float32: false,
     driving_reference: false,

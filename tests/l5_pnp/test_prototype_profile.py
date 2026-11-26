@@ -3,7 +3,7 @@
 One short fixed scenario through tests/l5_reactive_bench/track_family_runner.py with
 `--pnp-profile prototype`, so every learned part runs as `pnp.launch.py profile:=prototype` starts
 it on the car: net perception (trackperc-v2), learned dynamics dyn-v0.7p with dynamics_fast_mlp,
-D v1 variant K3s, the session 2 lap settings (lap 1 cap 0.5, ceiling 1.3, length check 0.75 to
+D v1 variant K6, the session 2 lap settings (lap 1 cap 0.5, ceiling 1.3, length check 0.75 to
 1.5). The camera lap source has no sim counterpart: the simulator's lap oracle stands in for it
 (tests/l5_reactive_bench/pnp_profile.py). The bundles are committed copies under
 fixtures/prototype; the test fails when the profile names a bundle that is not there, so a

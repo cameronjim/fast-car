@@ -24,7 +24,6 @@ from .model import (
     CONTROL_NAMES,
     DT_S,
     RESIDUAL_INPUTS,
-    RESIDUAL_LAYERS,
     RESIDUAL_OUTPUTS,
     STATE_NAMES,
     Nominal,
@@ -267,7 +266,7 @@ def build_manifest(
                 "enabled": bool(residual.enabled),
                 "inputs": list(RESIDUAL_INPUTS),
                 "outputs": list(RESIDUAL_OUTPUTS),
-                "layers": [list(layer) for layer in RESIDUAL_LAYERS],
+                "layers": residual.weights.layers(),
                 "activation": "tanh",
                 "input_mean": [float(v) for v in residual.input_mean],
                 "input_std": [float(v) for v in residual.input_std],
@@ -313,7 +312,8 @@ def write_bundle(
     weights_bytes = weights_flat.astype("<f4").tobytes()
     # The weights are stored as float32: the golden rollouts must come from the weights a loader
     # will actually read, or the Python round trip (and the C++ check) sees the rounding.
-    stored = replace(residual, weights=unpack_weights(weights_flat))
+    layers = tuple(tuple(layer) for layer in residual.weights.layers())
+    stored = replace(residual, weights=unpack_weights(weights_flat, layers))
     rows = golden_rows(nominal, stored, vehicle, v_max_mps, None, golden_residual_rollouts)
     payload_files = {RESIDUAL_FILE: weights_bytes}
     # Build the golden text in memory so the manifest can be validated before any write.

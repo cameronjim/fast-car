@@ -34,6 +34,11 @@ inline VehicleGeometry binding_geometry() {
 
 inline std::string fixture_dir() { return std::string(RACER_PLANNER_FIXTURE_DIR) + "/dyn_fixture"; }
 
+// The contract 1 fixture with a 16 wide residual (make_fixture.py --hidden 16, dyn-v0.8 on).
+inline std::string fixture_h16_dir() {
+  return std::string(RACER_PLANNER_FIXTURE_DIR) + "/dyn_fixture_h16";
+}
+
 // The synthetic step contract 2 fixture (make_fixture.py --contract 2): learned block on, table
 // with a node on each bound, 10^4 random step cases in step_v2_random.csv, and a sidecar.
 inline std::string fixture_v2_dir() {

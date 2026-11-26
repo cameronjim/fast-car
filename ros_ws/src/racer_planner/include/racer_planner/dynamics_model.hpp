@@ -62,20 +62,28 @@ struct NominalParams {
   double understeer_s2_per_m2 = 0.0;
 };
 
-// Fixed network shape of this version: 4 -> 32 -> 32 -> 2, tanh hidden, linear output.
+// Network shape: 4 -> H -> H -> 2, tanh hidden, linear output. The contract 2 ground block is
+// always H = 32 (kMlpHidden); a 1.x residual may also be narrower (mlp_hidden_supported, from
+// dyn-v0.8: fewer multiply adds and tanh per rollout step, a cheaper solve).
 constexpr int kMlpIn = 4;
 constexpr int kMlpHidden = 32;
 constexpr int kMlpOut = 2;
-// W1 [32,4], b1 [32], W2 [32,32], b2 [32], W3 [2,32], b3 [2]
-constexpr int kMlpWeightCount = kMlpHidden * kMlpIn + kMlpHidden + kMlpHidden * kMlpHidden +
-                                kMlpHidden + kMlpOut * kMlpHidden + kMlpOut;
+// W1 [H,4], b1 [H], W2 [H,H], b2 [H], W3 [2,H], b3 [2]
+constexpr int mlp_weight_count(int h) {
+  return h * kMlpIn + h + h * h + h + kMlpOut * h + kMlpOut;
+}
+constexpr int kMlpWeightCount = mlp_weight_count(kMlpHidden);
+// The residual widths the planner implements: multiples of 8 so the split output sums of the
+// fast modes cover every unit. A bundle with any other width is refused by the loader.
+constexpr bool mlp_hidden_supported(int h) { return h == 8 || h == 16 || h == 24 || h == 32; }
 
 struct ResidualParams {
   bool enabled = false;
+  int hidden = kMlpHidden;  // H of the 4 -> H -> H -> 2 residual
   std::array<double, kMlpIn> input_mean{{0.0, 0.0, 0.0, 0.0}};
   std::array<double, kMlpIn> input_std{{1.0, 1.0, 1.0, 1.0}};
   std::array<double, kMlpOut> output_scale{{1.0, 1.0}};
-  std::vector<double> weights;  // kMlpWeightCount entries when enabled
+  std::vector<double> weights;  // mlp_weight_count(hidden) entries when enabled
 };
 
 // Step contract 2 constants of the pre-registered addendum 1 (evaluation/prereg/
@@ -253,18 +261,21 @@ class DynamicsModel {
                     double* yaw_rate_out, double* alpha_out) const;
   // Bilinear table lookup, constant outside the grid (the Python reference's table_alpha).
   double table_alpha(double delta, double v) const;
-  // 4 -> 32 -> 32 -> 2 network on already standardised inputs, raw output. `packed` is the
+  // 4 -> H -> H -> 2 network on already standardised inputs, raw output. `packed` is the
   // bundle's weights in the layout of pack_mlp_weights (dynamics_model.cpp): the hidden layers
-  // transposed so each layer is one loop over the 32 units, vectorised by the compiler, with the
+  // transposed so each layer is one loop over the H units, vectorised by the compiler, with the
   // same operations per unit as the plain loop. kFast false: std::tanh and the output sums in
   // order, bit for bit the plain forward pass. kFast true (fast_mlp): see DynamicsParams.
-  template <bool kFast>
+  template <int H, bool kFast>
   static void mlp(const double* packed, const double in[kMlpIn], double out[kMlpOut]);
   // The single precision pass (float32_mlp): the same layout in float, inputs rounded to float.
   // kFast true: vectorised float tanh and the split output sum, as in the double fast mode.
-  template <bool kFast>
+  template <int H, bool kFast>
   static void mlp_f32(const float* packed, const double in[kMlpIn], double out[kMlpOut]);
-  void run_mlp(const double* packed, const float* packed_f32, const double in[kMlpIn],
+  template <int H>
+  void run_mlp_h(const double* packed, const float* packed_f32, const double in[kMlpIn],
+                 double out[kMlpOut]) const;
+  void run_mlp(const double* packed, const float* packed_f32, int hidden, const double in[kMlpIn],
                double out[kMlpOut]) const;
 
   DynamicsParams params_;
@@ -274,6 +285,7 @@ class DynamicsModel {
   double a_d_, a_v_;
   double rate_dt_, accel_dt_, decel_dt_;
   bool residual_enabled_;
+  int residual_hidden_;
   bool ground_enabled_;
   SpeedCorrection correction_{};
   double correction_bias_dt_ = 0.0;

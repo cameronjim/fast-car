@@ -1815,10 +1815,14 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     except RuntimeError as e:
         result["error"] = str(e)
     finally:
+        # which nodes were still running when the run ended, before anything is stopped (a
+        # traceback a node prints while it is being stopped is not a crash of the run)
+        alive_at_end = {name: p.poll() is None for name, p in processes}
         node.destroy_node()
         rclpy.shutdown()
         base._stop([p for _, p in processes])
         if args.driver == "pnp":
+            result["alive_at_end"] = alive_at_end
             result["node_logs"] = pprof.node_log_summary(work, [name for name, _ in processes])
     return result
 

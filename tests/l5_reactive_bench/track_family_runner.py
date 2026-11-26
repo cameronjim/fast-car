@@ -165,7 +165,12 @@ def plant_overrides(args: argparse.Namespace) -> dict:
         (args.plant_steer_tau, "plant_steer_tau_s"),
         (args.plant_command_delay, "plant_command_delay_s"),
     )
-    return {key: float(value) for value, key in flags if value is not None}
+    out = {key: float(value) for value, key in flags if value is not None}
+    if getattr(args, "plant_mirror_reverse", False):
+        # the gym's speed controller brakes a reversing car 20 times more weakly than a forward
+        # one (conversions.mirrored_speed_to_accel); nothing about the car says it does
+        out["mirror_reverse_speed_control"] = True
+    return out
 
 
 def bridge_track_parameters(track: str, track_params: dict, seed: int, reverse: bool) -> dict:
@@ -1864,6 +1869,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="the /drive command acts this long after it arrives (s); overrides --plant-bundle",
+    )
+    parser.add_argument(
+        "--plant-mirror-reverse",
+        action="store_true",
+        help="bridge mirror_reverse_speed_control: a reversing car brakes like a forward one (the "
+        "gym's own controller brakes it 20 times more weakly, so a planner recovery reverse rolls "
+        "on about 0.5 m after a zero command); default off, as before",
     )
     parser.add_argument(
         "--no-perception",

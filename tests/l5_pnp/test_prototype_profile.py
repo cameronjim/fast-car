@@ -10,7 +10,8 @@ fixtures/prototype; the test fails when the profile names a bundle that is not t
 profile change brings its fixture with it.
 
 Scenario: stadium lane 1.0 m, straight 2.0 m, island radius 0.4 m (B11's T), counter-clockwise,
-seed 11, the car-like plant (dyn-car-2026-11-12 actuation, 0.22 m/s dead zone, steering lag),
+seed 11, the car-like plant (dyn-car-2026-11-12 actuation, 0.22 m/s dead zone, steering lag,
+reverse braking like forward),
 5 laps on simulated time.
 
 Pass, never loosened to get green: 5 laps, 0 wall contacts, every driver node still running when
@@ -86,6 +87,7 @@ def test_prototype_profile(tmp_path, capsys):
         "0.02787697420940658",
         "--plant-command-delay",
         "0.0",
+        "--plant-mirror-reverse",
         "--car",
         "params",
         "--seed",

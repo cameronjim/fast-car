@@ -65,3 +65,38 @@ def test_flags_win_over_the_bundle(tmp_path):
     }
     assert merged["plant_speed_deadband_mps"] == 0.2
     assert merged["plant_accel_max_mps2"] == pytest.approx(2.0)  # the rest still from the bundle
+
+
+def test_mirror_reverse_is_off_unless_asked():
+    assert "mirror_reverse_speed_control" not in runner.plant_overrides(flags())
+    assert "mirror_reverse_speed_control" not in runner.plant_overrides(
+        flags(plant_mirror_reverse=False)
+    )
+    assert runner.plant_overrides(flags(plant_mirror_reverse=True)) == {
+        "mirror_reverse_speed_control": True
+    }
+
+
+def test_the_parser_takes_the_launch_switches_with_their_off_defaults():
+    args = runner.build_parser().parse_args(["--track", "stadium"])
+    assert args.plant_mirror_reverse is False
+    assert args.dv1_variant == "registered"
+    assert (args.dynamics_fast_mlp, args.dynamics_mlp_float32, args.dynamics_adaptation) == (
+        False,
+        False,
+        False,
+    )
+    assert tuple(args.lap_length_ratio) == (0.0, 0.0)
+    assert args.pnp_profile == "none"
+
+
+def test_parse_args_expands_the_prototype_profile_and_an_explicit_argument_wins():
+    args, notes = runner.parse_args(
+        ["--track", "stadium", "--pnp-profile", "prototype", "--v-max-mps", "0.9"]
+    )
+    assert notes["profile"] == "prototype"
+    assert args.v_max_mps == pytest.approx(0.9)
+    assert args.lap_source == "truth" and args.sim_time
+    assert args.dynamics_fast_mlp is True and args.lap_memory == "v1"
+    plain, none = runner.parse_args(["--track", "stadium"])
+    assert none == {} and plain.lap_memory == "none"

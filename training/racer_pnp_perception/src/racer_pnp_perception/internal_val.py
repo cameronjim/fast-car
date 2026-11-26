@@ -102,12 +102,22 @@ def group_of(bag: str) -> str:
 
 
 def summarise_groups(rows: list[gp1.ScanRow], backends: list[str]) -> dict[str, Any]:
-    """`summarise_rows` over all rows and per group (GROUPS, the rest as "old")."""
-    out = {"all": summarise_rows(rows, backends)}
+    """`summarise_rows` over all rows and per group (GROUPS, the rest as "old"), with the
+    report-only E_c on the stations every net backend keeps (`e_c_common_report_only`)."""
+    nets = [b for b in backends if b != BACKEND_GEOMETRIC]
+
+    def one(sub: list[gp1.ScanRow]) -> dict[str, Any]:
+        d = summarise_rows(sub, backends)
+        if len(nets) >= 2:
+            for b, v in gp1.common_station_ec(sub, nets).items():
+                d[b]["e_c_common_report_only"] = v
+        return d
+
+    out = {"all": one(rows)}
     for group in [*GROUPS, "old"]:
         sub = [r for r in rows if group_of(r.bag) == group]
         if sub:
-            out[group] = summarise_rows(sub, backends)
+            out[group] = one(sub)
     return out
 
 

@@ -84,7 +84,7 @@ export type PnpField =
   | "lap_rate_hz"
   | "dv1_variant";
 
-export const DV1_VARIANTS = ["registered", "K1", "K2", "K3", "K3s", "K4"] as const;
+export const DV1_VARIANTS = ["registered", "K1", "K2", "K3", "K3s", "K4", "K5", "K6"] as const;
 
 /**
  * The Prototype preset (owner decision 29): every learned part together, as development runs. The

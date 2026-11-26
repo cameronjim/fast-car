@@ -61,7 +61,7 @@ class PnpPrefs(_Strict):
     # pnp.launch.py lap_rate_hz (the camera lap counter's rate); 0: the launch default (15).
     lap_rate_hz: float = Field(default=0.0, ge=0.0, le=30.0)
     # Prototype switches (owner decision 29): the defaults send nothing.
-    dv1_variant: Literal["registered", "K1", "K2", "K3", "K3s", "K4"] = "registered"
+    dv1_variant: Literal["registered", "K1", "K2", "K3", "K3s", "K4", "K5", "K6"] = "registered"
     dynamics_fast_mlp: bool = False
     dynamics_mlp_float32: bool = False
     driving_reference: bool = False

@@ -131,7 +131,7 @@ def test_argument_defaults() -> None:
     assert declared["dynamics_mlp_float32"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
-    assert declared["dv1_variant"].choices == ["registered", "K1", "K2", "K3", "K3s", "K4"]
+    assert declared["dv1_variant"].choices == ["registered", "K1", "K2", "K3", "K3s", "K4", "K5", "K6"]
     assert declared["lap_source"].choices == ["start_scan", "map_pose", "camera", "truth"]
 
 
@@ -1198,7 +1198,7 @@ def test_lap_memory_parameters_still_accept_truth_for_the_sim_runner(tmp_path) -
         assert params["lap_mode"] == "v1" and params["lap_source"] == source
 
 
-@pytest.mark.parametrize("variant", ["registered", "K1", "K2", "K3", "K3s", "K4"])
+@pytest.mark.parametrize("variant", ["registered", "K1", "K2", "K3", "K3s", "K4", "K5", "K6"])
 def test_lap_mode_v1_with_the_camera_launches_with_each_variant(
     monkeypatch, tmp_path, variant
 ) -> None:
@@ -1273,6 +1273,23 @@ def test_k4_is_k3s_lap_parts_with_the_gate_barrier_instead_of_the_heavier_gate_c
     assert "w_gate" not in planner and "gate_ttc_margin" not in planner
     assert m.K4_W_GATE_BARRIER > 0.0 and m.K4_GATE_BARRIER_MARGIN >= 1.0
     assert 1 <= m.K4_GATE_BARRIER_STEPS <= 6
+
+
+def test_k5_is_k4_with_the_predicted_pose_barrier_only() -> None:
+    m = _module()
+    k4_lap, k4_planner = m.DV1_VARIANTS["K4"]
+    lap, planner = m.DV1_VARIANTS["K5"]
+    assert lap == k4_lap
+    assert planner == {**k4_planner, "gate_barrier_predicted": True}
+
+
+def test_k6_is_k5_with_the_barrier_on_the_first_four_steps_only() -> None:
+    m = _module()
+    k5_lap, k5_planner = m.DV1_VARIANTS["K5"]
+    lap, planner = m.DV1_VARIANTS["K6"]
+    assert lap == k5_lap
+    assert planner == {**k5_planner, "gate_barrier_steps": m.K6_GATE_BARRIER_STEPS}
+    assert m.K6_GATE_BARRIER_STEPS == 4
 
 
 def test_an_unknown_dv1_variant_is_refused(monkeypatch, tmp_path) -> None:

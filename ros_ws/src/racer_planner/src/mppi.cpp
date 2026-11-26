@@ -96,6 +96,9 @@ MppiSolver::Ctx MppiSolver::make_ctx(const SolveInput& in) const {
     ctx.gate_ttc_ref_s = p_.gate_ttc_margin * in.gate->limits().ttc_warning_s;
     ctx.gate_clear_ref_m = p_.gate_clear_margin * in.gate->limits().min_forward_clearance_m;
     ctx.gate_barrier_ref_s = p_.gate_barrier_margin * in.gate->limits().ttc_warning_s;
+    ctx.gate_corridor_margin_m =
+        std::max(0.0, in.gate->geometry().corridor_half_width_m - footprint_.radius());
+    ctx.gate_max_steer_rad = in.gate->geometry().max_steering_angle_rad;
   }
   if (ctx.use_track && p_.terminal_curvature_bound && p_.curvature_bound_a_lat_mps2 > 0.0) {
     ctx.use_curv = true;
@@ -115,6 +118,65 @@ MppiSolver::Ctx MppiSolver::make_ctx(const SolveInput& in) const {
     ctx.lap_q_now = in.lap->q_at(ctx.lap_s_now);
   }
   return ctx;
+}
+
+bool MppiSolver::arc_blocked_within(const DistanceField& field, double x, double y, double cs,
+                                    double sn, double steering, double max_m,
+                                    double corridor_margin_m) const {
+  // Sphere tracing along the arc (the field is an exact distance transform): the leading
+  // circles (front body circle and the two front corners, the parts that lead along the arc)
+  // cannot reach an obstacle before their clearance less the margin is used up, and no body
+  // point moves farther than `stretch` times the rear axle's arc length. kGuardM covers the
+  // bilinear lookup's error; kMinStepM bounds the number of lookups. The rear axle moves on a
+  // circle of curvature tan(steering) / wheelbase; the caller clamps the steering like the gate.
+  constexpr double kGuardM = 0.025;
+  constexpr double kMinStepM = 0.02;
+  if (!(max_m > 0.0) || !std::isfinite(max_m) || !std::isfinite(steering)) return false;
+  const auto& circ = footprint_.circles();
+  const int lead[3] = {2, 3, 4};
+  const double kappa = std::tan(steering) / wheelbase_m_;
+  double stretch = 1.0;
+  if (std::fabs(kappa) > 1e-9) {
+    const double r = 1.0 / std::fabs(kappa);
+    double far = 0.0;
+    for (int k : lead) {
+      const Circle& c = circ[static_cast<std::size_t>(k)];
+      far = std::max(far, std::hypot(c.x, r + std::fabs(c.y)));
+    }
+    stretch = far / r;
+  }
+  double l = 0.0;
+  for (int iter = 0; iter < 64; ++iter) {
+    const double dyaw = kappa * l;
+    double px = x, py = y, c2 = cs, s2 = sn;
+    if (l > 0.0) {
+      double bx, by;
+      if (std::fabs(dyaw) < 1e-9) {
+        bx = l;
+        by = 0.0;
+      } else {
+        const double r = 1.0 / kappa;
+        bx = r * std::sin(dyaw);
+        by = r * (1.0 - std::cos(dyaw));
+      }
+      px = x + bx * cs - by * sn;
+      py = y + bx * sn + by * cs;
+      const double cd = std::cos(dyaw), sd = std::sin(dyaw);
+      c2 = cs * cd - sn * sd;
+      s2 = sn * cd + cs * sd;
+    }
+    double clear = 1e9;
+    for (int k : lead) {
+      const Circle& c = circ[static_cast<std::size_t>(k)];
+      const double wx = px + c.x * c2 - c.y * s2;
+      const double wy = py + c.x * s2 + c.y * c2;
+      clear = std::min(clear, field.distance(wx, wy) - c.r);
+    }
+    if (clear < corridor_margin_m) return true;
+    if (l >= max_m) return false;
+    l = std::min(max_m, l + std::max((clear - corridor_margin_m - kGuardM) / stretch, kMinStepM));
+  }
+  return false;
 }
 
 double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control* u,
@@ -165,7 +227,19 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
       const double a = std::max(0.0, 1.0 - ttc_k / ctx.gate_ttc_ref_s);
       const double b = std::max(0.0, 1.0 - d_k / ctx.gate_clear_ref_m);
       j_gate += a * a + b * b;
-      if (t < p_.gate_barrier_steps && ttc_k < ctx.gate_barrier_ref_s) ++n_barrier;
+      if (t < p_.gate_barrier_steps && p_.w_gate_barrier > 0.0) {
+        if (p_.gate_barrier_predicted && t > 0) {
+          const double v_judge = std::max(std::max(ut.speed_cmd, v_k), 1e-3);
+          const double steer =
+              clamp_double(ut.steering_cmd, -ctx.gate_max_steer_rad, ctx.gate_max_steer_rad);
+          if (arc_blocked_within(field, s.x, s.y, cs, sn, steer, ctx.gate_barrier_ref_s * v_judge,
+                                 ctx.gate_corridor_margin_m)) {
+            ++n_barrier;
+          }
+        } else if (ttc_k < ctx.gate_barrier_ref_s) {
+          ++n_barrier;
+        }
+      }
     }
     const bool moving = !collided;
     const double yaw_before = s.yaw;

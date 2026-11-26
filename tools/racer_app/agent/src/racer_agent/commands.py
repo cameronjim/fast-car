@@ -54,7 +54,7 @@ PNP_LAP_MODES = ("v0", "v1", "observe")
 PNP_LAP_SOURCES = ("start_scan", "map_pose", "camera")
 #: D v1 variants of pnp.launch.py `dv1_variant` (brief 53; development runs, owner decision 29). Only
 #: with lap mode v1; `registered` is the launch default and is not sent.
-PNP_DV1_VARIANTS = ("registered", "K1", "K2", "K3", "K3s", "K4")
+PNP_DV1_VARIANTS = ("registered", "K1", "K2", "K3", "K3s", "K4", "K5", "K6")
 #: Sources pnp.launch.py declares that the app never offers: `truth` is the simulator's line
 #: crossing (brief 51) and the car has no truth. The app's sources are the launch's choices minus this.
 PNP_SIM_ONLY_LAP_SOURCES = frozenset({"truth"})

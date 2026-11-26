@@ -394,6 +394,8 @@ describe("prototype switches (owner decision 29)", () => {
     expect(pnpBody(withP({ ...v1, dv1_variant: "K3" }), options)).toMatchObject({ pnp_dv1_variant: "K3", pnp_lap_mode: "v1", pnp_lap_source: "camera" });
     expect(pnpBody(withP({ ...v1, dv1_variant: "K3s" }), options)).toMatchObject({ pnp_dv1_variant: "K3s", pnp_lap_mode: "v1" });
     expect(pnpBody(withP({ ...v1, dv1_variant: "K4" }), options)).toMatchObject({ pnp_dv1_variant: "K4", pnp_lap_mode: "v1" });
+    expect(pnpBody(withP({ ...v1, dv1_variant: "K5" }), options)).toMatchObject({ pnp_dv1_variant: "K5", pnp_lap_mode: "v1" });
+    expect(pnpBody(withP({ ...v1, dv1_variant: "K6" }), options)).toMatchObject({ pnp_dv1_variant: "K6", pnp_lap_mode: "v1" });
     expect(pnpBody(withP({ dynamics_fast_mlp: true, dynamics_mlp_float32: true, dynamics_adaptation: true, rt_sched: true }), options)).toMatchObject({
       pnp_dynamics_fast_mlp: true,
       pnp_dynamics_mlp_float32: true,
@@ -407,6 +409,8 @@ describe("prototype switches (owner decision 29)", () => {
     expect(e({ ...v1, dv1_variant: "K3" })).toEqual({});
     expect(e({ ...v1, dv1_variant: "K3s" })).toEqual({});
     expect(e({ ...v1, dv1_variant: "K4" })).toEqual({});
+    expect(e({ ...v1, dv1_variant: "K5" })).toEqual({});
+    expect(e({ ...v1, dv1_variant: "K6" })).toEqual({});
     expect(e({ ...v1, dv1_variant: "K9" as never }).dv1_variant).toContain("must be one of");
   });
   it("show up in the summary", () => {

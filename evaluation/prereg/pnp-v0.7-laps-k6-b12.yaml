@@ -1,0 +1,128 @@
+# Pre-registered constants for battery B12: D v1 candidate K6 against D v0 at equal safety, on fresh
+# held-out cases and seeds. Owner decision 37b (claude-docs/owner-decisions-2026-11-16.md): "a B12 prereg
+# on fresh held-out cases/seeds, frozen before any B12 run. B12 may run once if the K4 dev numbers beat
+# K3s on speed at 0 TTC warnings"; the coordinator extended it to later versions (K5, K6, ...) with B12
+# waiting for a version that CLEARLY beats K3s on dev runs. K6 did (docs/notes/pnp-dv1-k4-dev-2026-11.md).
+# Written 2026-11-25 by the K4 implementer BEFORE any B12 run. Modelled on pnp-v0.6-laps-dv1.yaml (B11):
+# same conditions, run counts, pairing, drop rule, validity rules, fault plan and every threshold
+# unchanged; only the cases, the seeds and the candidate are new. The B11 file and its addendum 1 are
+# unchanged; D11-S4 of addendum 1 applies to B12 unchanged (as D12-S4). Do not edit after its commit.
+# Rules: docs/notes/preregistration-pnp-v0.7-laps-k6-b12.md.
+schema: pnp-prereg-laps/5
+prereg_id: pnp-v0.7-laps-k6-b12
+written: 2026-11-25
+supersedes: nothing
+owner_decision: {source: claude-docs/owner-decisions-2026-11-16.md, item: 37b}
+v06_laps_dv1_file: evaluation/prereg/pnp-v0.6-laps-dv1.yaml
+v06_laps_dv1_sha256: a75b088fb15f791d0ba23087708e0e8ebdfbbe759af6e4342e620f1b38d06c4b
+v06_addendum_file: evaluation/prereg/pnp-v0.6-laps-dv1-addendum-1.yaml
+v06_addendum_sha256: e5cee1c64b9ac9232a1c819f65188eee0947dcffe5e8e30237de4e58952576fa
+v05_laps_camera_2_file: evaluation/prereg/pnp-v0.5-laps-camera-2.yaml
+v05_laps_camera_2_sha256: 823f641c8a40337e1a81aaa440d55976585d19984ae2db55f06f0eee1289bdcd
+v04_addendum_file: evaluation/prereg/pnp-v0.4-addendum-1.yaml
+v04_addendum_sha256: ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824
+
+common:                     # unchanged from pnp-v0.6-laps-dv1.yaml common
+  lap_source: truth
+  source_rule: pnp-v0.5-laps-camera-2.yaml source_rule, unchanged (a test compares the blocks)
+  lap1_cap_mps: 0.5
+  ceiling: dynamics bundle validity v_max_mps (config/pnp/fixtures/dyn-car-2026-11-12)
+  plant: car-like (as pnp-v0.3.yaml lap_battery), scan noise on
+  laps_judged: 12
+  laps_driven: 13
+  late_laps: [8, 9, 10]
+  validity: {min_real_time_factor: 0.8, max_scan_wait_s: 0.25, max_attempts: 3,
+             invalid_counts_as: failed_to_execute, starved_attempt: rerun_alone_all_attempts_kept}
+  caution_zone_rule: cap_wins_hold_below_floor
+
+development:                # where K4 to K6 were chosen (car-data/pnp/battery/v0.6-k4-dev); decides no gate
+  seeds: [11, 12, 13]
+  cases: [T, S1, S2, S3, S4, ND, N1, N2, N3, P1, P2, P3, V1, V2, V3]   # as pnp-v0.6-laps-dv1.yaml
+  minimum_cases: [T, S1, S2, S3, N1, N3]
+  directions: [ccw, cw]
+  candidate:
+    name: K6
+    chosen_by: >-
+      dev runs only (seeds 11 to 13, minimum cases, both directions); rule written before K6 ran:
+      paired median T_late(K) / T_late(K3s) at most 0.95 and faster in at least 9 of the 12 K3s check
+      runs, 0 TTC engagements on all 18 dev runs, 0 contacts. K6: 0.944, 9 of 12, 0, 0.
+    lap: K3 of pnp-v0.6-laps-dv1.yaml (cap_wins, station uncertainty 0.02 / 0.5 m, reset on change 0.08,
+         value profile frozen after the first clean lap) plus bound_hold_after_doubtful true and
+         ttc_warning_zone_laps 100
+    planner: lap_station_mode track, lap_reward_mode replace, w_gate_barrier 10, gate_barrier_margin 1.0,
+             gate_barrier_steps 4, gate_barrier_predicted true (w_gate, gate_ttc_margin at defaults)
+    launch: pnp.launch.py dv1_variant K6 (the same parameters; a test compares them)
+  freeze: {branch: feat/dv1-b12, file: evaluation/prereg/freeze/b12.json,
+           records: [commit_sha, main_sha_contained, candidate, tuned_values]}
+
+lap_battery_b12:
+  id: B12
+  runs_once: true
+  seeds: [93, 94]
+  directions: [ccw, cw]
+  cases:                    # fresh: no development case, no W case of B11
+    X1: {track: stadium, lane_width_m: 1.1, straight_length_m: 3.0, island_radius_m: 0.5}
+    X2: {track: rounded_rect, lane_width_m: 1.05, straight_length_m: 2.4, island_width_m: 1.5, island_radius_m: 0.42}
+    X3: {track: stadium, lane_width_m: 1.2, straight_length_m: 1.6, island_radius_m: 0.62}
+    X4: {track: stadium, lane_width_m: 0.98, straight_length_m: 3.6, island_radius_m: 0.45}
+  never_run_before_the_freeze: {cases: [X1, X2, X3, X4], seeds: [93, 94]}
+  spent_never_used: {seeds: [21, 22, 23, 31, 32, 41, 42, 61, 62, 63, 71, 72, 81, 82, 91, 92]}
+  drop_rule: {condition: a, seed: 93, min_laps: 3, either_direction: true, max_dropped: 1, min_cases_left: 3}
+  conditions:
+    a: {lap_memory: off, cap_mps: 0.5, seeds: [93]}
+    b: {lap_memory: off, cap: ceiling}
+    c: {lap_memory: v0}
+    k: {lap_memory: v1, config: frozen_candidate}
+    t: {lap_memory: off, cap: ceiling, terminal_curvature_bound: on}
+    kf: {lap_memory: v1, config: frozen_candidate, faults: fault_plan}
+  fault_plan: pnp-v0.5-laps-camera-2.yaml lap_battery_b10.fault_plan, unchanged
+  oracle_ready_after_s: {93: 0.0, 94: 6.0}
+  runs_planned: 88            # a 8, then b, c, k, t, kf at 16 each
+  pairing: same case, direction and seed
+  thresholds:               # every value as pnp-v0.6-laps-dv1.yaml lap_battery_b11 thresholds, unchanged
+    s0: D10-S0 items 1 to 5 of pnp-v0.5-laps-camera-2.yaml, unchanged, on every c and k run
+    s1:
+      contacts_allowed: 0
+      min_complete: {of_16: 15, of_12: 11}
+      complete_laps: 10
+      reach_ratio_to_b: 1.05
+      reach_min_runs: {of_16: 15, of_12: 11}
+      median_r_max: 0.80
+      fail_means: "no result: the D v0 baseline failed, D v1 is not judged"
+    s2:
+      contacts_allowed_k: 0
+      min_complete_k: {of_16: 15, of_12: 11}
+      complete_k_not_fewer_than_c: true
+      stalls_over_s: 5.0
+      stalled_k_runs_allowed: 0
+      median_paired_t_late_ratio_k_over_c_max: 0.95
+      worst_paired_t_late_ratio_k_over_c_max: 1.03
+      mean_ttc_or_obstacle_brakes_per_lap_late_max: 0.2
+      safety_engagements: {count: PHASE_ENGAGE records of /safety/events, laps: [2, 12],
+                           sum_over_k_runs_at_most: sum over the paired c runs}
+      clearance: {metric: lowest body to wall clearance of the run on laps 8 to 10,
+                  median_over_k_runs_at_least: median over c runs minus 0.03 m}
+      lap1: speed command on lap 1 never above lap1_cap_mps plus 0.01
+      ceiling: speed command never above the ceiling plus 0.01
+    s3:
+      contacts_allowed: 0
+      min_complete_12_truth_laps: {of_16: 15, of_12: 11}
+      mean_ttc_or_obstacle_brakes_per_lap_all_laps_max: 0.2
+      cap_after_doubtful: not_above_cap_of_doubtful_lap
+      overdue_min_guidance_cap: lap1_cap
+      speed_bound_after_doubtful: no station bound of the lap after a doubtful lap above that station's bound in the doubtful lap
+    s4: pnp-v0.6-laps-dv1-addendum-1.yaml lap_battery_b11.s4, unchanged, on the B12 k and c runs
+  reported_no_threshold:
+    - paired T_late(t) / T_late(k) and T_late(k) / T_late(b)
+    - sum of lap times 2 to 10 per condition
+    - laps to first reach 1.05 x T_late(b)
+    - resets and their reasons, share of ticks limited by the memory bound
+    - item 6 split by source (ttc against timing: watchdog, rate_limit), the count itself unchanged
+  outcomes:
+    pass: "D v1 (K6) faster than the schedule in sim at equal safety"
+    fail_s2_ratio_only: "no better than the schedule in sim"
+    fail_s2_safety_or_s3: "unsafe in sim"
+    fail_s0: "lap bookkeeping failed, not judged"
+    note_if_t_within_0.02_of_k: "gain not shown to need memory"
+  on_pass: {car: none_yet, next: owner decision, launch: "dv1_variant:=K6 stays a development switch"}
+  on_fail: The result stands. X cases and seeds 93, 94 are spent.

@@ -1,0 +1,28 @@
+# Addendum 1 to pnp-v0.6-laps-dv1.yaml: a second D11 criterion, the sum of laps 2 to 10 (learning
+# speed), gate D11-S4. Owner decision 28 item 2 (claude-docs/owner-decisions-2026-11-16.md, 2026-11-23):
+# "D11 also gates on the sum of laps 2 to 10 (learning speed), registered before the freeze".
+# Written 2026-11-23 by the implementer of brief 53 BEFORE any D v1 code, any M-D1b run and any B11
+# run, in the commit after the one that added pnp-v0.6-laps-dv1.yaml byte for byte. That file is
+# unchanged and stays in force; this file adds a gate and changes no threshold, run, case, seed,
+# pairing, drop rule or outcome of it. Do not edit after its first commit.
+# Rules: docs/notes/preregistration-pnp-v0.6-laps-dv1.md section "Addendum 1".
+prereg_id: pnp-v0.6-laps-dv1-addendum-1
+written: 2026-11-23
+owner_decision: {source: claude-docs/owner-decisions-2026-11-16.md, item: 28}
+v06_laps_dv1_file: evaluation/prereg/pnp-v0.6-laps-dv1.yaml
+v06_laps_dv1_sha256: a75b088fb15f791d0ba23087708e0e8ebdfbbe759af6e4342e620f1b38d06c4b
+
+lap_battery_b11:
+  s4:                       # learning speed: D v1 against D v0 on the sum of laps 2 to 10
+    id: D11-S4
+    runs: the k runs and their paired c runs of B11, no new run (same case, direction and seed)
+    metric: sum of the truth lap times of laps 2 to 10 (truth crossings 1 to 10), per run
+    pair_without_all_of_laps_2_to_10: counts as a pair above worst_paired_sum_ratio_max
+    median_paired_sum_ratio_k_over_c_max: 0.95     # the D-S2, D3-S2 and D11-S2 item 3 bar
+    worst_paired_sum_ratio_k_over_c_max: 1.03      # the D11-S2 item 4 bar
+    counts: drop rule of lap_battery_b11 applies unchanged (pairs "of 16" or "of 12")
+    needs_also: [D11-S0, D11-S1, "D11-S2 items 1, 2, 4, 5, 6, 7 and 8", D11-S3]
+  outcomes_s4:              # reported next to the registered outcome, which is unchanged
+    pass: "D v1 learns faster than the schedule in sim at equal safety"
+    fail_s4_only: "D v1 does not learn faster than the schedule in sim"
+    not_judged: "not judged" # D11-S0 or D11-S1 failed, or a needs_also item failed

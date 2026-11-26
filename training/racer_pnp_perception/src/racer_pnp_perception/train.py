@@ -18,7 +18,10 @@ rest is simulation. Stations past a real label's valid_count carry no loss. Each
 the sim validation loss and the internal validation centreline error E_c (the GP1 definition, on
 the net's own valid stations), which is what model selection uses. With `--seeds` one run per seed
 goes to `<out>/seed<k>`, and `<out>/selection.json` names the seed with the lowest final internal
-validation E_c: decided from the internal validation alone. `--select-only` writes that file for
+validation E_c: decided from the internal validation alone. With `--no-real-sigma` the real
+samples train x, y and the widths but not the sigma head (their log_sigma is detached in the
+loss), so validity (sigma under the node's 0.25 m gate) is learned from simulation only
+(trackperc-v5). `--select-only` writes that file for
 seed runs made one by one (`--seed k --out <out>/seed<k>`, for example in parallel).
 """
 
@@ -45,6 +48,14 @@ SELECTION_KEY = "val_real_ec_m"
 def station_weights(valid_count: NDArray[np.int64]) -> NDArray[np.float32]:
     """[n, 16] weights: 1 for the stations of a label that are valid, 0 past valid_count."""
     return (np.arange(16)[None, :] < valid_count[:, None]).astype(np.float32)
+
+
+def label_noise_ramp(far_sigma_m: float, near_sigma_m: float = 0.0) -> NDArray[np.float32]:
+    """[16] assumed self-label noise per station: a constant `near_sigma_m` and a part rising
+    linearly to `far_sigma_m` at the last station, added in quadrature (station k:
+    sqrt(near^2 + (far * (k + 1) / 16)^2))."""
+    ramp = far_sigma_m * (np.arange(16) + 1) / 16
+    return np.sqrt(near_sigma_m**2 + ramp**2).astype(np.float32)
 
 
 def internal_validation(net: Any, val: real.RealSet, batch: int = 1000) -> dict[str, float]:
@@ -94,6 +105,10 @@ def train(
     fold: str | None = None,
     device: str = "cpu",
     split_sha256: str | None = None,
+    real_sigma: bool = True,
+    real_label_sigma_m: float = 0.0,
+    real_label_sigma_near_m: float = 0.0,
+    sigma_head_only: bool = False,
 ) -> dict[str, Any]:
     import torch
 
@@ -156,7 +171,22 @@ def train(
         net.load_state_dict(torch.load(init, map_location="cpu"))
     net.to(dev)
     log.info("parameters: %d", model.count_parameters(net))
-    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    sigma_rows = None
+    if sigma_head_only:
+        # Refit only the log_sigma outputs: every layer frozen except the fc1 rows that produce
+        # column 4 of each station; x, y and the half widths stay exactly those of `init`.
+        if init is None:
+            raise ValueError("--sigma-head-only needs --init")
+        for prm in net.parameters():
+            prm.requires_grad_(False)
+        net.fc1.weight.requires_grad_(True)
+        net.fc1.bias.requires_grad_(True)
+        sigma_rows = torch.zeros(model.STATIONS * model.OUT_PER_STATION, dtype=torch.bool)
+        sigma_rows[4 :: model.OUT_PER_STATION] = True
+        sigma_rows = sigma_rows.to(dev)
+        opt = torch.optim.Adam([net.fc1.weight, net.fc1.bias], lr=lr)
+    else:
+        opt = torch.optim.Adam(net.parameters(), lr=lr)
     steps_per_epoch = len(x_train) // n_sim
     sched = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=lr, total_steps=epochs * steps_per_epoch, pct_start=0.1
@@ -202,9 +232,31 @@ def train(
                         ]
                     )
                 ).to(dev)
-            loss = model.loss_fn(net(xb), yb, station_weight=weight)
+            frozen = None
+            if n_real > 0 and not real_sigma:
+                frozen = torch.arange(len(xb), device=dev) >= n_sim
+            noise = None
+            if n_real > 0 and (real_label_sigma_m > 0.0 or real_label_sigma_near_m > 0.0):
+                noise = torch.from_numpy(
+                    np.concatenate(
+                        [
+                            np.zeros((n_sim, 16), np.float32),
+                            np.broadcast_to(
+                                label_noise_ramp(real_label_sigma_m, real_label_sigma_near_m),
+                                (n_real, 16),
+                            ),
+                        ]
+                    )
+                ).to(dev)
+            loss = model.loss_fn(
+                net(xb), yb, station_weight=weight, sigma_frozen=frozen, label_sigma=noise
+            )
             opt.zero_grad()
             loss.backward()
+            if sigma_rows is not None:
+                assert net.fc1.weight.grad is not None and net.fc1.bias.grad is not None
+                net.fc1.weight.grad[~sigma_rows] = 0.0
+                net.fc1.bias.grad[~sigma_rows] = 0.0
             opt.step()
             sched.step()
             running += float(loss.detach())
@@ -241,6 +293,10 @@ def train(
         "real_fraction": real_fraction,
         "init": str(init) if init else None,
         "scale_aug": scale_aug,
+        "real_sigma": real_sigma,
+        "real_label_sigma_m": real_label_sigma_m,
+        "real_label_sigma_near_m": real_label_sigma_near_m,
+        "sigma_head_only": sigma_head_only,
         "scale_probability": scale_probability,
         "scale_range": list(scale_range) if scale_range else None,
         "fold": fold,
@@ -312,6 +368,29 @@ def main(argv: list[str] | None = None) -> int:
         "--fold", default=None, help="a fold of pnp-v0.3.yaml: its held-out bags are not trained on"
     )
     parser.add_argument(
+        "--no-real-sigma",
+        action="store_true",
+        help="real labels train x, y and widths but not the sigma (validity) head (trackperc-v5)",
+    )
+    parser.add_argument(
+        "--real-label-sigma",
+        type=float,
+        default=0.0,
+        help="assumed self-label noise at the last station (m, linear ramp from the first); "
+        "added in quadrature to the predicted sigma for real samples only (trackperc-v5)",
+    )
+    parser.add_argument(
+        "--real-label-sigma-near",
+        type=float,
+        default=0.0,
+        help="constant part of the assumed self-label noise (m, every station, in quadrature)",
+    )
+    parser.add_argument(
+        "--sigma-head-only",
+        action="store_true",
+        help="train only the log_sigma outputs of --init (everything else frozen; trackperc-v5)",
+    )
+    parser.add_argument(
         "--select-only",
         action="store_true",
         help="only write <out>/selection.json from the <out>/seed<k> runs that exist",
@@ -343,6 +422,10 @@ def main(argv: list[str] | None = None) -> int:
             args.fold,
             args.device,
             args.split_sha256,
+            not args.no_real_sigma,
+            args.real_label_sigma,
+            args.real_label_sigma_near,
+            args.sigma_head_only,
         )
         return result["history"]
 

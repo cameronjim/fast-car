@@ -103,6 +103,7 @@ export const PROTOTYPE = {
 export const CANDIDATE_BUNDLES: readonly string[] = [
   "trackperc-v3-2026-11-23",
   "trackperc-v4-2026-11-25",
+  "trackperc-v5-2026-11-25",
   "dyn-v0.6r-2026-11-24",
 ];
 

@@ -68,6 +68,59 @@ def test_select_from_dir_reads_seed_runs_made_one_by_one(tmp_path: Path) -> None
 
 
 @pytest.mark.torch
+def test_sigma_frozen_samples_train_xy_but_not_sigma_and_keep_the_loss_value() -> None:
+    rng = np.random.default_rng(1)
+    base = torch.from_numpy(rng.normal(size=(4, 16, 5)).astype(np.float32))
+    target = torch.from_numpy(rng.normal(size=(4, 16, 5)).astype(np.float32))
+    frozen = torch.tensor([False, False, True, True])
+    pred = base.clone().requires_grad_(True)
+    loss = model.loss_fn(pred, target, sigma_frozen=frozen)
+    assert torch.allclose(loss, model.loss_fn(base, target), atol=1e-6)  # value unchanged
+    loss.backward()
+    grad = pred.grad
+    assert grad is not None
+    assert torch.all(grad[2:, :, 4] == 0.0)  # frozen samples: no sigma gradient
+    assert torch.all(grad[2:, :, 0:2].abs().sum(-1) > 0.0)  # x, y still trained
+    assert torch.all(grad[:2, :, 4].abs() > 0.0)  # the others still train sigma
+    plain = base.clone().requires_grad_(True)
+    model.loss_fn(plain, target).backward()
+    assert plain.grad is not None
+    assert torch.allclose(grad[..., :4], plain.grad[..., :4], atol=1e-7)
+
+
+@pytest.mark.torch
+def test_label_sigma_adds_label_noise_in_quadrature_and_zero_is_the_plain_loss() -> None:
+    rng = np.random.default_rng(2)
+    pred = torch.from_numpy(rng.normal(size=(3, 16, 5)).astype(np.float32))
+    target = torch.from_numpy(rng.normal(size=(3, 16, 5)).astype(np.float32))
+    zero = torch.zeros(3, 16)
+    assert torch.allclose(
+        model.loss_fn(pred, target, label_sigma=zero), model.loss_fn(pred, target), atol=1e-5
+    )
+    # With label noise s, the sigma the loss prefers for an error e is sqrt(e^2 / 2 - s^2)
+    # (variance = predicted^2 + s^2), smaller than without it.
+    e, s = 0.3, 0.1
+    target1 = torch.zeros(1, 16, 5)
+    best = {}
+    for name, ls in (("plain", None), ("noise", torch.full((1, 16), s))):
+        grid = torch.linspace(-4.0, 0.0, 4001)
+        losses = []
+        for g in grid:
+            p = torch.zeros(1, 16, 5)
+            p[..., 0] = e
+            p[..., 4] = g
+            losses.append(float(model.loss_fn(p, target1, label_sigma=ls)))
+        best[name] = float(torch.exp(grid[int(np.argmin(losses))]))
+    assert best["plain"] == pytest.approx(e / np.sqrt(2.0), rel=0.01)
+    assert best["noise"] == pytest.approx(np.sqrt(e**2 / 2.0 - s**2), rel=0.01)
+    ramp = train.label_noise_ramp(0.16)
+    assert ramp.shape == (16,) and ramp[-1] == pytest.approx(0.16)
+    assert ramp[0] == pytest.approx(0.01)
+    both = train.label_noise_ramp(0.16, 0.12)
+    assert both[-1] == pytest.approx(0.2) and both[0] == pytest.approx(np.hypot(0.12, 0.01))
+
+
+@pytest.mark.torch
 def test_a_run_with_real_labels_records_its_segments_and_never_sees_heldout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -113,8 +166,11 @@ def test_a_run_with_real_labels_records_its_segments_and_never_sees_heldout(
         real_paths=[labels / "bagA.npz", labels / "bagL.npz"],
         real_fraction=0.25,
         split_path=tmp_path / "split.yaml",
+        real_sigma=False,
+        real_label_sigma_m=0.1,
     )
     cfg = json.loads((out / "config.json").read_text())
+    assert cfg["real_sigma"] is False and cfg["real_label_sigma_m"] == 0.1
     assert result["config"]["real"] == cfg["real"]
     assert cfg["real"]["roles_used"] == ["train"]
     assert cfg["real"]["segments_used"] == ["bagA/T"]
@@ -138,3 +194,37 @@ def test_real_fraction_without_real_labels_is_an_error(tmp_path: Path) -> None:
         train.train(
             tmp_path / "t.npz", tmp_path / "t.npz", tmp_path / "r", epochs=1, real_fraction=0.5
         )
+
+
+@pytest.mark.torch
+def test_sigma_head_only_changes_sigma_and_nothing_else(tmp_path: Path) -> None:
+    rng = np.random.default_rng(3)
+    n = 512
+    sim = {
+        "tensor": rng.uniform(size=(n, 2, 360)).astype(np.float32),
+        "label": rng.normal(size=(n, 16, 5)).astype(np.float32) * 0.3,
+    }
+    dataset.save(tmp_path / "t.npz", sim)
+    torch.manual_seed(0)
+    init_net = model.build_model()
+    torch.save(init_net.state_dict(), tmp_path / "init.pt")
+    with pytest.raises(ValueError, match="needs --init"):
+        train.train(tmp_path / "t.npz", tmp_path / "t.npz", tmp_path / "x", sigma_head_only=True)
+    out = tmp_path / "run"
+    train.train(
+        tmp_path / "t.npz",
+        tmp_path / "t.npz",
+        out,
+        epochs=1,
+        batch_size=64,
+        init=tmp_path / "init.pt",
+        sigma_head_only=True,
+    )
+    after = model.build_model()
+    after.load_state_dict(torch.load(out / "model.pt"))
+    x = torch.from_numpy(sim["tensor"][:32])
+    with torch.no_grad():
+        before_out, after_out = init_net(x), after(x)
+    assert torch.equal(before_out[..., :4], after_out[..., :4])
+    assert not torch.allclose(before_out[..., 4], after_out[..., 4])
+    assert json.loads((out / "config.json").read_text())["sigma_head_only"] is True

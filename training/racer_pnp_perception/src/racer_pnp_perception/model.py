@@ -102,17 +102,30 @@ def loss_fn(
     width_huber_delta: float = 0.1,
     width_weight: float = 5.0,
     station_weight: Any = None,
+    sigma_frozen: Any = None,
+    label_sigma: Any = None,
 ) -> Any:
     """Gaussian negative log likelihood on (x, y) with the predicted sigma of each station, plus a
     Huber loss on the two half widths. pred and target are [B, 16, 5]; the target's log_sigma
     column is unused. `station_weight` [B, 16] (0 or 1) leaves out stations that have no label,
-    as the stations past a real self-label's valid_count; the loss is then the weighted mean."""
+    as the stations past a real self-label's valid_count; the loss is then the weighted mean.
+    `sigma_frozen` [B] (bool) marks samples whose error trains x and y but not the sigma: their
+    predicted log_sigma is detached, so the validity (sigma) head learns only from the other
+    samples (simulation, whose labels are exact). `label_sigma` [B, 16] (metres, 0 for exact
+    labels) is the label's own noise: the likelihood uses the variance sigma^2 + label_sigma^2,
+    so the predicted sigma describes the net's error, not the self-label's (trackperc-v5)."""
     import torch
     from torch.nn import functional
 
     log_sigma = pred[..., 4].clamp(-7.0, 3.0)
+    if sigma_frozen is not None:
+        log_sigma = torch.where(sigma_frozen[:, None], log_sigma.detach(), log_sigma)
     err2 = (pred[..., 0] - target[..., 0]) ** 2 + (pred[..., 1] - target[..., 1]) ** 2
-    nll = 2.0 * log_sigma + err2 / (2.0 * torch.exp(2.0 * log_sigma))
+    if label_sigma is None:
+        nll = 2.0 * log_sigma + err2 / (2.0 * torch.exp(2.0 * log_sigma))
+    else:
+        var = torch.exp(2.0 * log_sigma) + label_sigma**2
+        nll = torch.log(var) + err2 / (2.0 * var)
     huber = functional.huber_loss(
         pred[..., 2:4], target[..., 2:4], delta=width_huber_delta, reduction="none"
     ).sum(-1)

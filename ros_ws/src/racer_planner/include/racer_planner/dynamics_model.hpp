@@ -62,20 +62,31 @@ struct NominalParams {
   double understeer_s2_per_m2 = 0.0;
 };
 
-// Fixed network shape of this version: 4 -> 32 -> 32 -> 2, tanh hidden, linear output.
+// Network shape: 4 -> H -> H -> 2, tanh hidden, linear output. The contract 2 ground block is
+// always H = 32 (kMlpHidden); a 1.x residual may also be narrower (mlp_hidden_supported, from
+// dyn-v0.8: fewer multiply adds and tanh per rollout step, a cheaper solve).
 constexpr int kMlpIn = 4;
 constexpr int kMlpHidden = 32;
 constexpr int kMlpOut = 2;
-// W1 [32,4], b1 [32], W2 [32,32], b2 [32], W3 [2,32], b3 [2]
-constexpr int kMlpWeightCount = kMlpHidden * kMlpIn + kMlpHidden + kMlpHidden * kMlpHidden +
-                                kMlpHidden + kMlpOut * kMlpHidden + kMlpOut;
+// W1 [H,4], b1 [H], W2 [H,H], b2 [H], W3 [2,H], b3 [2]
+constexpr int mlp_weight_count(int h) { return h * kMlpIn + h + h * h + h + kMlpOut * h + kMlpOut; }
+constexpr int kMlpWeightCount = mlp_weight_count(kMlpHidden);
+// The residual widths the planner implements: multiples of 8 so the split output sums of the
+// fast modes cover every unit. A bundle with any other width is refused by the loader.
+constexpr bool mlp_hidden_supported(int h) { return h == 8 || h == 16 || h == 24 || h == 32; }
 
 struct ResidualParams {
   bool enabled = false;
+  int hidden = kMlpHidden;  // H of the 4 -> H -> H -> 2 residual
   std::array<double, kMlpIn> input_mean{{0.0, 0.0, 0.0, 0.0}};
   std::array<double, kMlpIn> input_std{{1.0, 1.0, 1.0, 1.0}};
   std::array<double, kMlpOut> output_scale{{1.0, 1.0}};
-  std::vector<double> weights;  // kMlpWeightCount entries when enabled
+  std::vector<double> weights;  // mlp_weight_count(hidden) entries when enabled
+  // Bundle 1.2 (dyn-v0.9): ground distance per wheel distance of the contract 1 step, a learned
+  // constant in [kGroundAlphaMin, kGroundAlphaMax]. The position moves by ground_scale * v; v
+  // stays the wheel speed (so the speed adaptation still fits the wheel speed). 1.0 (the default,
+  // every 1.0 and 1.1 bundle) is the plain step bit for bit. Read only with the residual enabled.
+  double ground_scale = 1.0;
 };
 
 // Step contract 2 constants of the pre-registered addendum 1 (evaluation/prereg/
@@ -172,15 +183,16 @@ class DynamicsModel {
     }
     if (correction_active_ && target > 0.0)
       dv = dv * (1.0 + correction_.gain) + correction_bias_dt_;
+    const double v_ground = s.v * ground_scale_;  // s.v exactly when the scale is 1
     State out;
-    out.x = s.x + s.v * cos_yaw * dt_;
-    out.y = s.y + s.v * sin_yaw * dt_;
+    out.x = s.x + v_ground * cos_yaw * dt_;
+    out.y = s.y + v_ground * sin_yaw * dt_;
     out.yaw = s.yaw + yaw_rate * dt_;
     out.v = s.v + dv;
     if (out.v < 0.0) out.v = 0.0;  // max(0, v); NaN passes through
     out.delta = s.delta + d_delta;
     if (yaw_rate_out != nullptr) *yaw_rate_out = yaw_rate;
-    if (alpha_out != nullptr) *alpha_out = 1.0;
+    if (alpha_out != nullptr) *alpha_out = ground_scale_;
     return out;
   }
 
@@ -207,6 +219,9 @@ class DynamicsModel {
     return w;
   }
   bool has_residual() const { return residual_enabled_; }
+  // Ground distance per wheel distance of a contract 1 step: the bundle's ground_scale with the
+  // residual enabled, else 1. Dead reckoning (EgoMotion) translates by ground_scale() * v.
+  double ground_scale() const { return ground_scale_; }
 
   // Residual MLP: output_scale * MLP((inputs - mean) / std). No shared scratch (thread safe).
   void residual(double v, double delta, double speed_cmd, double steering_cmd,
@@ -253,18 +268,21 @@ class DynamicsModel {
                     double* yaw_rate_out, double* alpha_out) const;
   // Bilinear table lookup, constant outside the grid (the Python reference's table_alpha).
   double table_alpha(double delta, double v) const;
-  // 4 -> 32 -> 32 -> 2 network on already standardised inputs, raw output. `packed` is the
+  // 4 -> H -> H -> 2 network on already standardised inputs, raw output. `packed` is the
   // bundle's weights in the layout of pack_mlp_weights (dynamics_model.cpp): the hidden layers
-  // transposed so each layer is one loop over the 32 units, vectorised by the compiler, with the
+  // transposed so each layer is one loop over the H units, vectorised by the compiler, with the
   // same operations per unit as the plain loop. kFast false: std::tanh and the output sums in
   // order, bit for bit the plain forward pass. kFast true (fast_mlp): see DynamicsParams.
-  template <bool kFast>
+  template <int H, bool kFast>
   static void mlp(const double* packed, const double in[kMlpIn], double out[kMlpOut]);
   // The single precision pass (float32_mlp): the same layout in float, inputs rounded to float.
   // kFast true: vectorised float tanh and the split output sum, as in the double fast mode.
-  template <bool kFast>
+  template <int H, bool kFast>
   static void mlp_f32(const float* packed, const double in[kMlpIn], double out[kMlpOut]);
-  void run_mlp(const double* packed, const float* packed_f32, const double in[kMlpIn],
+  template <int H>
+  void run_mlp_h(const double* packed, const float* packed_f32, const double in[kMlpIn],
+                 double out[kMlpOut]) const;
+  void run_mlp(const double* packed, const float* packed_f32, int hidden, const double in[kMlpIn],
                double out[kMlpOut]) const;
 
   DynamicsParams params_;
@@ -274,6 +292,8 @@ class DynamicsModel {
   double a_d_, a_v_;
   double rate_dt_, accel_dt_, decel_dt_;
   bool residual_enabled_;
+  int residual_hidden_;
+  double ground_scale_;
   bool ground_enabled_;
   SpeedCorrection correction_{};
   double correction_bias_dt_ = 0.0;

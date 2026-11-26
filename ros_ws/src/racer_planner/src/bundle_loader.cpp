@@ -523,17 +523,27 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
       expect_string_list(res["inputs"], {"v_mps", "delta_rad", "speed_cmd_mps", "steering_cmd_rad"},
                          "residual.inputs");
       expect_string_list(res["outputs"], {"dv_dt_mps2", "dyaw_dt_rad_per_s"}, "residual.outputs");
+      // 4 -> H -> H -> 2 with H one of the widths the planner implements (mlp_hidden_supported;
+      // 32 for every bundle before dyn-v0.8).
       const YAML::Node layers = res["layers"];
-      const int expect_layers[3][2] = {
-          {kMlpIn, kMlpHidden}, {kMlpHidden, kMlpHidden}, {kMlpHidden, kMlpOut}};
-      if (!layers.IsSequence() || layers.size() != 3) refuse(iom, "residual.layers shape differs");
+      if (!layers.IsSequence() || layers.size() != 3 || !layers[0].IsSequence() ||
+          layers[0].size() != 2) {
+        refuse(iom, "residual.layers shape differs");
+      }
+      const double h_d = double_of(layers[0][1], iom, "layer");
+      const int hidden = static_cast<int>(h_d);
+      if (static_cast<double>(hidden) != h_d || !mlp_hidden_supported(hidden)) {
+        refuse(iom, "residual.layers hidden width is not one of 8, 16, 24, 32");
+      }
+      const int expect_layers[3][2] = {{kMlpIn, hidden}, {hidden, hidden}, {hidden, kMlpOut}};
       for (int i = 0; i < 3; ++i) {
         if (!layers[i].IsSequence() || layers[i].size() != 2 ||
             double_of(layers[i][0], iom, "layer") != expect_layers[i][0] ||
             double_of(layers[i][1], iom, "layer") != expect_layers[i][1]) {
-          refuse(iom, "residual.layers shape differs from [[4,32],[32,32],[32,2]]");
+          refuse(iom, "residual.layers shape differs from [[4,H],[H,H],[H,2]]");
         }
       }
+      params.residual.hidden = hidden;
       if (scalar_of(res["activation"], iom, "residual.activation") != "tanh") {
         refuse(iom, "residual.activation is not tanh");
       }
@@ -543,6 +553,16 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
           double_array<kMlpOut>(res["output_scale"], "residual.output_scale");
       for (double s : params.residual.input_std) {
         if (s == 0.0) refuse(iom, "residual.input_std has a zero entry");
+      }
+      // Bundle 1.2 (dyn-v0.9): the contract 1 ground scale, optional (absent: 1.0). A planner
+      // before 1.2 ignores the key and then fails the golden rollouts, so it cannot run such a
+      // bundle with the wrong step.
+      if (res["ground_scale"].IsDefined()) {
+        const double gs = double_of(res["ground_scale"], iom, "residual.ground_scale");
+        if (!std::isfinite(gs) || gs < kGroundAlphaMin || gs > kGroundAlphaMax) {
+          refuse(iom, "residual.ground_scale is outside [0.60, 1.05]");
+        }
+        params.residual.ground_scale = gs;
       }
       const std::string residual_file = scalar_of(res["file"], iom, "residual.file");
       golden_file = scalar_of(io["golden"], iom, "io.golden");
@@ -568,12 +588,13 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
       std::vector<unsigned char> bytes;
       if (!read_file_bytes(dir + residual_file, &bytes))
         refuse(RefusalCode::PayloadMissing, residual_file + " cannot be read");
-      if (bytes.size() != static_cast<std::size_t>(kMlpWeightCount) * 4) {
+      const int n_weights = mlp_weight_count(params.residual.hidden);
+      if (bytes.size() != static_cast<std::size_t>(n_weights) * 4) {
         refuse(iom, residual_file + " has " + std::to_string(bytes.size()) +
-                        " bytes, layers imply " + std::to_string(kMlpWeightCount * 4));
+                        " bytes, layers imply " + std::to_string(n_weights * 4));
       }
-      params.residual.weights.resize(kMlpWeightCount);
-      for (int i = 0; i < kMlpWeightCount; ++i) {
+      params.residual.weights.resize(static_cast<std::size_t>(n_weights));
+      for (int i = 0; i < n_weights; ++i) {
         const std::uint32_t u =
             std::uint32_t(bytes[4 * i]) | (std::uint32_t(bytes[4 * i + 1]) << 8) |
             (std::uint32_t(bytes[4 * i + 2]) << 16) | (std::uint32_t(bytes[4 * i + 3]) << 24);

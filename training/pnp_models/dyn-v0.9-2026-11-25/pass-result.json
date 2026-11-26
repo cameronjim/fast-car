@@ -1,0 +1,762 @@
+{
+  "version": "v0.9",
+  "model_id": "dyn-v0.9-2026-11-25",
+  "freeze_sha": "1321fcd5bd4081a5161dff9b0daa8d8dd44539aa",
+  "rule_sha256": "24eb652eafcc2f81f6ac1a33a421beb74bd29ea1b449f37552d38f955a94767a",
+  "windows": 525,
+  "direction_windows": {
+    "ccw": 285,
+    "cw": 240
+  },
+  "strata": {
+    "ccw:0.25-0.6": 8,
+    "ccw:0.6-0.85": 37,
+    "ccw:0.85-1.25": 240,
+    "cw:0.25-0.6": 46,
+    "cw:0.6-1.25": 194
+  },
+  "gate": {
+    "outcome": "FAIL",
+    "enough_data": {
+      "gate": "item 0 enough data",
+      "passed": true,
+      "items": [
+        {
+          "name": "0a windows",
+          "value": 525.0,
+          "comparison": ">=",
+          "threshold": 400.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "0b windows ccw",
+          "value": 285.0,
+          "comparison": ">=",
+          "threshold": 150.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "0b windows cw",
+          "value": 240.0,
+          "comparison": ">=",
+          "threshold": 150.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "0c strata with 30 windows",
+          "value": 4.0,
+          "comparison": ">=",
+          "threshold": 4.0,
+          "passed": true,
+          "note": ""
+        }
+      ]
+    },
+    "decision": {
+      "gate": "dyn-iter rule against dyn-v0.7p",
+      "passed": false,
+      "items": [
+        {
+          "name": "1a P1 ratio / dyn-v0.7p",
+          "value": 0.8600644879328916,
+          "comparison": "<=",
+          "threshold": 0.95,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "1b upper end of the bootstrap interval of the P1 ratio",
+          "value": 0.9002619807518871,
+          "comparison": "<",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "2a Y1 ratio",
+          "value": 1.040886157084916,
+          "comparison": "<=",
+          "threshold": 0.9,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "2b S1 ratio (replaces GP2g-R's equality)",
+          "value": 0.9787346005244615,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "3 seed 0 P1 ratio",
+          "value": 0.8600644879328916,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "3 seed 1 P1 ratio",
+          "value": 0.8685996231905528,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "3 seed 2 P1 ratio",
+          "value": 0.8589695910419561,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum ccw:0.25-0.6 position RMSE ratio",
+          "value": 8.0,
+          "comparison": "n/a",
+          "threshold": 30.0,
+          "passed": true,
+          "note": "cannot be applied: 8 windows, at least 30 needed"
+        },
+        {
+          "name": "4 stratum ccw:0.6-0.85 position RMSE ratio (37 windows)",
+          "value": 0.7199424323674076,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum ccw:0.85-1.25 position RMSE ratio (240 windows)",
+          "value": 0.8581945996087393,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum cw:0.25-0.6 position RMSE ratio (46 windows)",
+          "value": 0.7765933843264066,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "4 stratum cw:0.6-1.25 position RMSE ratio (194 windows)",
+          "value": 0.6859598750572993,
+          "comparison": "<=",
+          "threshold": 1.05,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "5 random sweep of the validity box: finite, inside the state bounds",
+          "value": 0.0,
+          "comparison": "<=",
+          "threshold": 0.0,
+          "passed": true,
+          "note": "100000 rollouts of 30 steps; max v 1.317 m/s"
+        },
+        {
+          "name": "6 Yp ratio (G1b, T2b; a re-read)",
+          "value": 0.862132718364014,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "7 ccw P1 ratio",
+          "value": 0.8983596116056124,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "7 ccw Y1 ratio",
+          "value": 1.029275724811484,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "7 cw P1 ratio",
+          "value": 0.7273163103446553,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "7 cw Y1 ratio",
+          "value": 1.112769553938078,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": false,
+          "note": ""
+        },
+        {
+          "name": "8a C1 ratio",
+          "value": 0.932513903288212,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "8b A1 ratio",
+          "value": 0.8182986055827559,
+          "comparison": "<=",
+          "threshold": 1.02,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "9 near-limit left position RMSE ratio",
+          "value": 0.0,
+          "comparison": "n/a",
+          "threshold": 30.0,
+          "passed": true,
+          "note": "cannot be applied: 0 windows, at least 30 needed"
+        },
+        {
+          "name": "9 near-limit right position RMSE ratio (163 windows)",
+          "value": 0.7085211752281305,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "9 transition position RMSE ratio (78 windows)",
+          "value": 0.8017988650996031,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "10 P1 ratio under T2s",
+          "value": 0.8574190893323709,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "11 share of held-out steps with the residual output at or above 0.9 of its bound",
+          "value": 0.0,
+          "comparison": "<=",
+          "threshold": 0.01,
+          "passed": true,
+          "note": ""
+        },
+        {
+          "name": "12 planner solve p50 with fast_mlp / dyn-v0.7p's (replaces GP2g-R's 1.25 x dyn-v0.1)",
+          "value": 1.0753238927387767,
+          "comparison": "<=",
+          "threshold": 1.0,
+          "passed": false,
+          "note": "3.569 ms against 3.319 ms. mppi_bench planner solve p50, track c=1.0, 512 samples, --fast-mlp, Linux ros-dev:ci on the Mac, median of 5 interleaved runs of 1000 solves (candidate [5.043, 3.569, 3.151, 3.902, 3.218], dyn-v0.7p [4.844, 3.619, 3.319, 3.295, 3.227])"
+        }
+      ]
+    }
+  },
+  "bootstrap_P1_vs_v07p": {
+    "ratio": 0.8600644879328916,
+    "lo": 0.8342571953298731,
+    "hi": 0.9002619807518871,
+    "resamples": 2000,
+    "blocks": 30,
+    "seed": 0,
+    "empty_stratum_share": 0.0008
+  },
+  "bootstrap_P1_vs_v01": {
+    "ratio": 0.7572997605739509,
+    "lo": 0.6920863565216687,
+    "hi": 0.8012367433927473,
+    "resamples": 2000,
+    "blocks": 30,
+    "seed": 0,
+    "empty_stratum_share": 0.0008
+  },
+  "sweep": {
+    "samples": 100000,
+    "steps": 30,
+    "nonfinite": 0,
+    "steering_violations": 0,
+    "speed_violations": 0,
+    "max_speed_mps": 1.3168774499494924,
+    "max_abs_delta_rad": 0.4489969477297093,
+    "passed": true
+  },
+  "saturation": {
+    "share": 0.0,
+    "steps": 15750,
+    "bound": [
+      1.9999999999999996,
+      0.4999999999999999
+    ],
+    "max_abs": [
+      1.4072470466437192,
+      0.16152189693531824
+    ]
+  },
+  "solve": {
+    "solve": {
+      "candidate_p50_ms": 3.569,
+      "reference_p50_ms": 3.319,
+      "note": "mppi_bench planner solve p50, track c=1.0, 512 samples, --fast-mlp, Linux ros-dev:ci on the Mac, median of 5 interleaved runs of 1000 solves (candidate [5.043, 3.569, 3.151, 3.902, 3.218], dyn-v0.7p [4.844, 3.619, 3.319, 3.295, 3.227])"
+    },
+    "info": {
+      "candidate_exact_p50_ms": 11.07,
+      "dyn_v01_p50_ms": 0.612,
+      "runs_exact": [
+        12.324,
+        11.07,
+        9.376,
+        8.97,
+        23.319
+      ],
+      "runs_v01": [
+        0.612,
+        0.595,
+        0.937,
+        0.579,
+        0.868
+      ]
+    }
+  },
+  "metrics": {
+    "dyn-v0.1": {
+      "macro": {
+        "P1": 0.16319289199704004,
+        "A1": 0.13948933791681342,
+        "C1": 0.08252665192487946,
+        "Y1": 0.18472345812284993,
+        "S1": 0.1591674661790233
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.4494041429038012,
+        "ccw:0.6-0.85": 0.0889414199911817,
+        "ccw:0.85-1.25": 0.07974557283490415,
+        "cw:0.25-0.6": 0.08943633882622574,
+        "cw:0.6-1.25": 0.10843698542908743
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.206030378576629,
+          "Y1": 0.25052343898736557
+        },
+        "cw": {
+          "P1": 0.09893666212765659,
+          "Y1": 0.08602348682607651
+        }
+      },
+      "yaw_bias": {
+        "ccw": -0.0401709526830782,
+        "cw": -0.06793227612719846
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.10886042380367189
+        ]
+      },
+      "transition": [
+        78,
+        0.15152383037910366
+      ],
+      "p1_alt": 0.16365224197235104,
+      "pp": 0.0982416934134908,
+      "yp": 0.025668317434183553,
+      "fast": {}
+    },
+    "dyn-v0.7p": {
+      "macro": {
+        "P1": 0.14369380409341131,
+        "A1": 0.12165623714754703,
+        "C1": 0.07476545161526586,
+        "Y1": 0.16218636537017833,
+        "S1": 0.15545001371696712
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.4352027044229614,
+        "ccw:0.6-0.85": 0.055975198193228694,
+        "ccw:0.85-1.25": 0.06643208513243605,
+        "cw:0.25-0.6": 0.07340062445616903,
+        "cw:0.6-1.25": 0.08745840826226152
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.1858699959162087,
+          "Y1": 0.23272192663882899
+        },
+        "cw": {
+          "P1": 0.08042951635921528,
+          "Y1": 0.056383023467202364
+        }
+      },
+      "yaw_bias": {
+        "ccw": 0.011092193110489989,
+        "cw": -0.010088717488911632
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.08952691733028206
+        ]
+      },
+      "transition": [
+        78,
+        0.11354857235598137
+      ],
+      "p1_alt": 0.1441961290956171,
+      "pp": 0.08961072257446895,
+      "yp": 0.020150421088348722,
+      "fast": {}
+    },
+    "dyn-v0.9-2026-11-25 seed 0": {
+      "macro": {
+        "P1": 0.12358593803672904,
+        "A1": 0.09955112921828281,
+        "C1": 0.06971982311685752,
+        "Y1": 0.168817542581735,
+        "S1": 0.15214430707679788
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.4036237149803806,
+        "ccw:0.6-0.85": 0.040298920339480786,
+        "ccw:0.85-1.25": 0.057011656701404644,
+        "cw:0.25-0.6": 0.057002439358087915,
+        "cw:0.6-1.25": 0.05999295880429118
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.16697809734042202,
+          "Y1": 0.23953502972070573
+        },
+        "cw": {
+          "P1": 0.05849769908118955,
+          "Y1": 0.06274131187327896
+        }
+      },
+      "yaw_bias": {
+        "ccw": 0.024577408249263563,
+        "cw": -0.011108190764830363
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.06343171668140313
+        ]
+      },
+      "transition": [
+        78,
+        0.09104311644870602
+      ],
+      "p1_alt": 0.123636513694417,
+      "pp": 0.06521949393941806,
+      "yp": 0.017372337309077637,
+      "fast": {}
+    },
+    "dyn-v0.9-2026-11-25 seed 1": {
+      "macro": {
+        "P1": 0.1248123840903542,
+        "A1": 0.1001668998609723,
+        "C1": 0.07122103802648463,
+        "Y1": 0.16911315655980305,
+        "S1": 0.15404407531080716
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.4082088189409346,
+        "ccw:0.6-0.85": 0.03984865804829569,
+        "ccw:0.85-1.25": 0.057566998676813294,
+        "cw:0.25-0.6": 0.058283458446569965,
+        "cw:0.6-1.25": 0.06015398633915744
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.16854149188868117,
+          "Y1": 0.24311919138247476
+        },
+        "cw": {
+          "P1": 0.0592187223928637,
+          "Y1": 0.05810410432579545
+        }
+      },
+      "yaw_bias": {
+        "ccw": 0.028523138333255753,
+        "cw": -0.0167990895987511
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.06409131435115868
+        ]
+      },
+      "transition": [
+        78,
+        0.09130077079544244
+      ],
+      "p1_alt": 0.12490560664844386,
+      "pp": 0.06467170906305722,
+      "yp": 0.0174657344291774,
+      "fast": {}
+    },
+    "dyn-v0.9-2026-11-25 seed 2": {
+      "macro": {
+        "P1": 0.12342860813738048,
+        "A1": 0.0993719303851993,
+        "C1": 0.06979408194757605,
+        "Y1": 0.16849930975684568,
+        "S1": 0.1517643650652292
+      },
+      "stratum_pos": {
+        "ccw:0.25-0.6": 0.4032974567843534,
+        "ccw:0.6-0.85": 0.04028483242893299,
+        "ccw:0.85-1.25": 0.056393219754193646,
+        "cw:0.25-0.6": 0.05887552690925158,
+        "cw:0.6-1.25": 0.058292004810170765
+      },
+      "direction": {
+        "ccw": {
+          "P1": 0.16665850298916002,
+          "Y1": 0.23987223909871366
+        },
+        "cw": {
+          "P1": 0.05858376585971117,
+          "Y1": 0.06143991574404373
+        }
+      },
+      "yaw_bias": {
+        "ccw": 0.02602905394961125,
+        "cw": -0.005543647523170966
+      },
+      "near_limit": {
+        "left": [
+          0,
+          null
+        ],
+        "right": [
+          163,
+          0.062080790551454844
+        ]
+      },
+      "transition": [
+        78,
+        0.0913787796646352
+      ],
+      "p1_alt": 0.12348750206373445,
+      "pp": 0.06450388876751695,
+      "yp": 0.017456205538563793,
+      "fast": {}
+    }
+  },
+  "h2_windows": 566,
+  "h2_rows": [
+    {
+      "group": "all",
+      "model": "dyn-v0.1",
+      "windows": 566,
+      "P1": 0.11623,
+      "Y1": 0.10465,
+      "S1": 0.09483,
+      "P1_ratio": 1.3084,
+      "Y1_ratio": 1.4923,
+      "S1_ratio": 1.2266
+    },
+    {
+      "group": "all",
+      "model": "dyn-v0.7p",
+      "windows": 566,
+      "P1": 0.08883,
+      "Y1": 0.07013,
+      "S1": 0.07732,
+      "P1_ratio": 1.0,
+      "Y1_ratio": 1.0,
+      "S1_ratio": 1.0
+    },
+    {
+      "group": "all",
+      "model": "dyn-v0.9-2026-11-25 seed 0",
+      "windows": 566,
+      "P1": 0.07608,
+      "Y1": 0.06834,
+      "S1": 0.07065,
+      "P1_ratio": 0.8565,
+      "Y1_ratio": 0.9745,
+      "S1_ratio": 0.9139
+    },
+    {
+      "group": "all",
+      "model": "dyn-v0.9-2026-11-25 seed 1",
+      "windows": 566,
+      "P1": 0.07685,
+      "Y1": 0.06784,
+      "S1": 0.07147,
+      "P1_ratio": 0.8651,
+      "Y1_ratio": 0.9673,
+      "S1_ratio": 0.9244
+    },
+    {
+      "group": "all",
+      "model": "dyn-v0.9-2026-11-25 seed 2",
+      "windows": 566,
+      "P1": 0.07584,
+      "Y1": 0.06746,
+      "S1": 0.07082,
+      "P1_ratio": 0.8537,
+      "Y1_ratio": 0.962,
+      "S1_ratio": 0.916
+    },
+    {
+      "group": "cw",
+      "model": "dyn-v0.1",
+      "windows": 182,
+      "P1": 0.1397,
+      "Y1": 0.11035,
+      "S1": 0.10737,
+      "P1_ratio": 1.3013,
+      "Y1_ratio": 1.4562,
+      "S1_ratio": 1.1963
+    },
+    {
+      "group": "cw",
+      "model": "dyn-v0.7p",
+      "windows": 182,
+      "P1": 0.10735,
+      "Y1": 0.07578,
+      "S1": 0.08975,
+      "P1_ratio": 1.0,
+      "Y1_ratio": 1.0,
+      "S1_ratio": 1.0
+    },
+    {
+      "group": "cw",
+      "model": "dyn-v0.9-2026-11-25 seed 0",
+      "windows": 182,
+      "P1": 0.08918,
+      "Y1": 0.07761,
+      "S1": 0.08328,
+      "P1_ratio": 0.8307,
+      "Y1_ratio": 1.0242,
+      "S1_ratio": 0.9278
+    },
+    {
+      "group": "cw",
+      "model": "dyn-v0.9-2026-11-25 seed 1",
+      "windows": 182,
+      "P1": 0.08943,
+      "Y1": 0.0751,
+      "S1": 0.08306,
+      "P1_ratio": 0.833,
+      "Y1_ratio": 0.991,
+      "S1_ratio": 0.9254
+    },
+    {
+      "group": "cw",
+      "model": "dyn-v0.9-2026-11-25 seed 2",
+      "windows": 182,
+      "P1": 0.08812,
+      "Y1": 0.07639,
+      "S1": 0.08289,
+      "P1_ratio": 0.8208,
+      "Y1_ratio": 1.0081,
+      "S1_ratio": 0.9236
+    },
+    {
+      "group": "ccw",
+      "model": "dyn-v0.1",
+      "windows": 384,
+      "P1": 0.08494,
+      "Y1": 0.09705,
+      "S1": 0.07811,
+      "P1_ratio": 1.3243,
+      "Y1_ratio": 1.5505,
+      "S1_ratio": 1.2862
+    },
+    {
+      "group": "ccw",
+      "model": "dyn-v0.7p",
+      "windows": 384,
+      "P1": 0.06414,
+      "Y1": 0.0626,
+      "S1": 0.06073,
+      "P1_ratio": 1.0,
+      "Y1_ratio": 1.0,
+      "S1_ratio": 1.0
+    },
+    {
+      "group": "ccw",
+      "model": "dyn-v0.9-2026-11-25 seed 0",
+      "windows": 384,
+      "P1": 0.05863,
+      "Y1": 0.05598,
+      "S1": 0.05383,
+      "P1_ratio": 0.9141,
+      "Y1_ratio": 0.8943,
+      "S1_ratio": 0.8863
+    },
+    {
+      "group": "ccw",
+      "model": "dyn-v0.9-2026-11-25 seed 1",
+      "windows": 384,
+      "P1": 0.06007,
+      "Y1": 0.05815,
+      "S1": 0.05602,
+      "P1_ratio": 0.9366,
+      "Y1_ratio": 0.9291,
+      "S1_ratio": 0.9224
+    },
+    {
+      "group": "ccw",
+      "model": "dyn-v0.9-2026-11-25 seed 2",
+      "windows": 384,
+      "P1": 0.05947,
+      "Y1": 0.05556,
+      "S1": 0.05472,
+      "P1_ratio": 0.9272,
+      "Y1_ratio": 0.8876,
+      "S1_ratio": 0.901
+    }
+  ],
+  "h2_bootstrap_P1_vs_v07p": {
+    "ratio": 0.8564915752531862,
+    "lo": 0.7765199185173604,
+    "hi": 0.975007123394818,
+    "resamples": 2000,
+    "blocks": 40,
+    "seed": 0,
+    "empty_stratum_share": 0.00035714285714285714
+  },
+  "shipping": {
+    "config": "multi_step_from_one_capped_wd1e-2_gs",
+    "seed": 0,
+    "hidden": 32
+  }
+}

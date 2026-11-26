@@ -146,6 +146,7 @@ def train_torch(  # pragma: no cover - needs torch (dependency group `train`), r
     weight_decay: float = 1e-2,
     batch: int = 256,
     loss_mask: np.ndarray | None = None,
+    hidden: int = 32,
 ) -> MlpWeights:
     import torch
 
@@ -154,9 +155,9 @@ def train_torch(  # pragma: no cover - needs torch (dependency group `train`), r
         mask = torch.as_tensor(np.asarray(loss_mask, dtype=np.float64))
     torch.manual_seed(seed)
     net = torch.nn.Sequential(
-        torch.nn.Linear(4, 32), torch.nn.Tanh(),
-        torch.nn.Linear(32, 32), torch.nn.Tanh(),
-        torch.nn.Linear(32, 2),
+        torch.nn.Linear(4, hidden), torch.nn.Tanh(),
+        torch.nn.Linear(hidden, hidden), torch.nn.Tanh(),
+        torch.nn.Linear(hidden, 2),
     ).double()  # fmt: skip
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay)
     xt, yt = torch.as_tensor(x), torch.as_tensor(y)

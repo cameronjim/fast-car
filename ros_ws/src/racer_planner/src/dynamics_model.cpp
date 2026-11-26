@@ -8,30 +8,35 @@ namespace racer_planner {
 
 namespace {
 
-// Packed layout of the 4 -> 32 -> 32 -> 2 weights for DynamicsModel::mlp(). The bundle's layout
-// (the Python reference's) is W1 [32,4], b1, W2 [32,32], b2, W3 [2,32], b3, row major; the hidden
-// layers are stored transposed here (W1^T [4,32], W2^T [32,32]) so a layer is "acc[i] += w[j][i] *
-// x[j]" over the 32 units i, which vectorises, while each unit still sums b[i] + w[i][0] x[0] +
+// Packed layout of the 4 -> H -> H -> 2 weights for DynamicsModel::mlp(). The bundle's layout
+// (the Python reference's) is W1 [H,4], b1, W2 [H,H], b2, W3 [2,H], b3, row major; the hidden
+// layers are stored transposed here (W1^T [4,H], W2^T [H,H]) so a layer is "acc[i] += w[j][i] *
+// x[j]" over the H units i, which vectorises, while each unit still sums b[i] + w[i][0] x[0] +
 // w[i][1] x[1] + ... in the bundle's order (the same operations as the plain loop).
-constexpr int kOffW1 = 0;
-constexpr int kOffB1 = kOffW1 + kMlpHidden * kMlpIn;
-constexpr int kOffW2 = kOffB1 + kMlpHidden;
-constexpr int kOffB2 = kOffW2 + kMlpHidden * kMlpHidden;
-constexpr int kOffW3 = kOffB2 + kMlpHidden;
-constexpr int kOffB3 = kOffW3 + kMlpOut * kMlpHidden;
-static_assert(kOffB3 + kMlpOut == kMlpWeightCount, "packed layout covers every weight");
+template <int H>
+struct MlpLayout {
+  static constexpr int kW1 = 0;
+  static constexpr int kB1 = kW1 + H * kMlpIn;
+  static constexpr int kW2 = kB1 + H;
+  static constexpr int kB2 = kW2 + H * H;
+  static constexpr int kW3 = kB2 + H;
+  static constexpr int kB3 = kW3 + kMlpOut * H;
+  static_assert(kB3 + kMlpOut == mlp_weight_count(H), "packed layout covers every weight");
+  static_assert(H % 8 == 0, "the split output sums need a multiple of 8 units");
+};
 
-void pack_mlp_weights(const std::vector<double>& w, std::array<double, kMlpWeightCount>* out) {
-  if (static_cast<int>(w.size()) != kMlpWeightCount) return;
+void pack_mlp_weights(const std::vector<double>& w, int h,
+                      std::array<double, kMlpWeightCount>* out) {
+  if (!mlp_hidden_supported(h) || static_cast<int>(w.size()) != mlp_weight_count(h)) return;
+  const int b1 = h * kMlpIn, w2 = b1 + h, b2 = w2 + h * h, w3 = b2 + h;
   double* p = out->data();
-  for (int i = 0; i < kMlpHidden; ++i)
-    for (int j = 0; j < kMlpIn; ++j) p[kOffW1 + j * kMlpHidden + i] = w[kOffW1 + i * kMlpIn + j];
-  for (int i = 0; i < kMlpHidden; ++i)
-    for (int j = 0; j < kMlpHidden; ++j)
-      p[kOffW2 + j * kMlpHidden + i] = w[kOffW2 + i * kMlpHidden + j];
-  for (int i = 0; i < kMlpHidden; ++i) p[kOffB1 + i] = w[kOffB1 + i];
-  for (int i = 0; i < kMlpHidden; ++i) p[kOffB2 + i] = w[kOffB2 + i];
-  for (int k = kOffW3; k < kMlpWeightCount; ++k) p[k] = w[k];  // W3 and b3 as they are
+  for (int i = 0; i < h; ++i)
+    for (int j = 0; j < kMlpIn; ++j) p[j * h + i] = w[i * kMlpIn + j];
+  for (int i = 0; i < h; ++i)
+    for (int j = 0; j < h; ++j) p[w2 + j * h + i] = w[w2 + i * h + j];
+  for (int i = 0; i < h; ++i) p[b1 + i] = w[b1 + i];
+  for (int i = 0; i < h; ++i) p[b2 + i] = w[b2 + i];
+  for (int k = w3; k < mlp_weight_count(h); ++k) p[k] = w[k];  // W3 and b3 as they are
 }
 
 // The fast mode's tanh (DynamicsParams::fast_mlp) of each of the n entries of a, in place,
@@ -145,14 +150,22 @@ DynamicsModel::DynamicsModel(const DynamicsParams& params, const VehicleGeometry
       rate_dt_(geometry.steering_max_rate_rad_per_s * dt_s),
       accel_dt_(params.nominal.accel_max_mps2 * dt_s),
       decel_dt_(params.nominal.decel_max_mps2 * dt_s),
-      residual_enabled_(params.residual.enabled &&
-                        static_cast<int>(params.residual.weights.size()) == kMlpWeightCount),
+      residual_enabled_(params.residual.enabled && mlp_hidden_supported(params.residual.hidden) &&
+                        static_cast<int>(params.residual.weights.size()) ==
+                            mlp_weight_count(params.residual.hidden)),
+      residual_hidden_(mlp_hidden_supported(params.residual.hidden) ? params.residual.hidden
+                                                                    : kMlpHidden),
+      ground_scale_(residual_enabled_ && std::isfinite(params.residual.ground_scale) &&
+                            params.residual.ground_scale >= kGroundAlphaMin &&
+                            params.residual.ground_scale <= kGroundAlphaMax
+                        ? params.residual.ground_scale
+                        : 1.0),
       ground_enabled_(params.step_contract == 2 && params.ground.enabled &&
                       static_cast<int>(params.ground.weights.size()) == kMlpWeightCount) {
   // Packed whenever the weights are there (residual() may be called on a model whose step has the
   // block off); pack_mlp_weights leaves zeros for a missing block.
-  pack_mlp_weights(params_.residual.weights, &residual_packed_);
-  pack_mlp_weights(params_.ground.weights, &ground_packed_);
+  pack_mlp_weights(params_.residual.weights, residual_hidden_, &residual_packed_);
+  pack_mlp_weights(params_.ground.weights, kMlpHidden, &ground_packed_);
   for (int k = 0; k < kMlpWeightCount; ++k) {
     residual_packed_f32_[static_cast<std::size_t>(k)] =
         static_cast<float>(residual_packed_[static_cast<std::size_t>(k)]);
@@ -192,117 +205,138 @@ double DynamicsModel::table_alpha(double delta, double v) const {
          wi * (1 - wj) * at(i1, j0) + wi * wj * at(i1, j1);
 }
 
-template <bool kFast>
+template <int H, bool kFast>
 void DynamicsModel::mlp(const double* packed, const double in[kMlpIn], double out[kMlpOut]) {
-  alignas(16) double h1[kMlpHidden];
-  alignas(16) double h2[kMlpHidden];
-  const double* w1t = packed + kOffW1;
-  const double* b1 = packed + kOffB1;
-  const double* w2t = packed + kOffW2;
-  const double* b2 = packed + kOffB2;
-  const double* w3 = packed + kOffW3;
-  const double* b3 = packed + kOffB3;
-  for (int i = 0; i < kMlpHidden; ++i) h1[i] = b1[i];
+  using L = MlpLayout<H>;
+  alignas(16) double h1[H];
+  alignas(16) double h2[H];
+  const double* w1t = packed + L::kW1;
+  const double* b1 = packed + L::kB1;
+  const double* w2t = packed + L::kW2;
+  const double* b2 = packed + L::kB2;
+  const double* w3 = packed + L::kW3;
+  const double* b3 = packed + L::kB3;
+  for (int i = 0; i < H; ++i) h1[i] = b1[i];
   for (int j = 0; j < kMlpIn; ++j) {
     const double xj = in[j];
-    const double* wj = w1t + j * kMlpHidden;
-    for (int i = 0; i < kMlpHidden; ++i) h1[i] += wj[i] * xj;
+    const double* wj = w1t + j * H;
+    for (int i = 0; i < H; ++i) h1[i] += wj[i] * xj;
   }
   if (kFast) {
-    tanh_inplace(h1, kMlpHidden);
+    tanh_inplace(h1, H);
   } else {
-    for (int i = 0; i < kMlpHidden; ++i) h1[i] = std::tanh(h1[i]);
+    for (int i = 0; i < H; ++i) h1[i] = std::tanh(h1[i]);
   }
-  for (int i = 0; i < kMlpHidden; ++i) h2[i] = b2[i];
-  for (int j = 0; j < kMlpHidden; ++j) {
+  for (int i = 0; i < H; ++i) h2[i] = b2[i];
+  for (int j = 0; j < H; ++j) {
     const double hj = h1[j];
-    const double* wj = w2t + j * kMlpHidden;
-    for (int i = 0; i < kMlpHidden; ++i) h2[i] += wj[i] * hj;
+    const double* wj = w2t + j * H;
+    for (int i = 0; i < H; ++i) h2[i] += wj[i] * hj;
   }
   if (kFast) {
-    tanh_inplace(h2, kMlpHidden);
+    tanh_inplace(h2, H);
   } else {
-    for (int i = 0; i < kMlpHidden; ++i) h2[i] = std::tanh(h2[i]);
+    for (int i = 0; i < H; ++i) h2[i] = std::tanh(h2[i]);
   }
   for (int i = 0; i < kMlpOut; ++i) {
-    const double* wi = w3 + i * kMlpHidden;
+    const double* wi = w3 + i * H;
     if (kFast) {
-      // Four interleaved partial sums (j mod 4) instead of one chain of 32 dependent adds: a
+      // Four interleaved partial sums (j mod 4) instead of one chain of H dependent adds: a
       // different rounding order, a few 1e-16 apart, like the tanh above.
       double acc[4] = {0.0, 0.0, 0.0, 0.0};
-      for (int j = 0; j < kMlpHidden; j += 4)
+      for (int j = 0; j < H; j += 4)
         for (int k = 0; k < 4; ++k) acc[k] += wi[j + k] * h2[j + k];
       out[i] = b3[i] + ((acc[0] + acc[1]) + (acc[2] + acc[3]));
     } else {
       double acc = b3[i];
-      for (int j = 0; j < kMlpHidden; ++j) acc += wi[j] * h2[j];
+      for (int j = 0; j < H; ++j) acc += wi[j] * h2[j];
       out[i] = acc;
     }
   }
 }
 
-template <bool kFast>
+template <int H, bool kFast>
 void DynamicsModel::mlp_f32(const float* packed, const double in[kMlpIn], double out[kMlpOut]) {
-  alignas(16) float h1[kMlpHidden];
-  alignas(16) float h2[kMlpHidden];
-  const float* w1t = packed + kOffW1;
-  const float* b1 = packed + kOffB1;
-  const float* w2t = packed + kOffW2;
-  const float* b2 = packed + kOffB2;
-  const float* w3 = packed + kOffW3;
-  const float* b3 = packed + kOffB3;
-  for (int i = 0; i < kMlpHidden; ++i) h1[i] = b1[i];
+  using L = MlpLayout<H>;
+  alignas(16) float h1[H];
+  alignas(16) float h2[H];
+  const float* w1t = packed + L::kW1;
+  const float* b1 = packed + L::kB1;
+  const float* w2t = packed + L::kW2;
+  const float* b2 = packed + L::kB2;
+  const float* w3 = packed + L::kW3;
+  const float* b3 = packed + L::kB3;
+  for (int i = 0; i < H; ++i) h1[i] = b1[i];
   for (int j = 0; j < kMlpIn; ++j) {
     const float xj = static_cast<float>(in[j]);
-    const float* wj = w1t + j * kMlpHidden;
-    for (int i = 0; i < kMlpHidden; ++i) h1[i] += wj[i] * xj;
+    const float* wj = w1t + j * H;
+    for (int i = 0; i < H; ++i) h1[i] += wj[i] * xj;
   }
   if (kFast) {
-    tanh_inplace_f32(h1, kMlpHidden);
+    tanh_inplace_f32(h1, H);
   } else {
-    for (int i = 0; i < kMlpHidden; ++i) h1[i] = std::tanh(h1[i]);
+    for (int i = 0; i < H; ++i) h1[i] = std::tanh(h1[i]);
   }
-  for (int i = 0; i < kMlpHidden; ++i) h2[i] = b2[i];
-  for (int j = 0; j < kMlpHidden; ++j) {
+  for (int i = 0; i < H; ++i) h2[i] = b2[i];
+  for (int j = 0; j < H; ++j) {
     const float hj = h1[j];
-    const float* wj = w2t + j * kMlpHidden;
-    for (int i = 0; i < kMlpHidden; ++i) h2[i] += wj[i] * hj;
+    const float* wj = w2t + j * H;
+    for (int i = 0; i < H; ++i) h2[i] += wj[i] * hj;
   }
   if (kFast) {
-    tanh_inplace_f32(h2, kMlpHidden);
+    tanh_inplace_f32(h2, H);
   } else {
-    for (int i = 0; i < kMlpHidden; ++i) h2[i] = std::tanh(h2[i]);
+    for (int i = 0; i < H; ++i) h2[i] = std::tanh(h2[i]);
   }
   for (int i = 0; i < kMlpOut; ++i) {
-    const float* wi = w3 + i * kMlpHidden;
+    const float* wi = w3 + i * H;
     if (kFast) {
-      // Eight interleaved partial sums (j mod 8): one float vector pair instead of 32 dependent
+      // Eight interleaved partial sums (j mod 8): one float vector pair instead of H dependent
       // adds.
       float acc[8] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
-      for (int j = 0; j < kMlpHidden; j += 8)
+      for (int j = 0; j < H; j += 8)
         for (int k = 0; k < 8; ++k) acc[k] += wi[j + k] * h2[j + k];
       out[i] = static_cast<double>(b3[i] + (((acc[0] + acc[1]) + (acc[2] + acc[3])) +
                                             ((acc[4] + acc[5]) + (acc[6] + acc[7]))));
     } else {
       float acc = b3[i];
-      for (int j = 0; j < kMlpHidden; ++j) acc += wi[j] * h2[j];
+      for (int j = 0; j < H; ++j) acc += wi[j] * h2[j];
       out[i] = static_cast<double>(acc);
     }
   }
 }
 
-void DynamicsModel::run_mlp(const double* packed, const float* packed_f32, const double in[kMlpIn],
-                            double out[kMlpOut]) const {
+template <int H>
+void DynamicsModel::run_mlp_h(const double* packed, const float* packed_f32,
+                              const double in[kMlpIn], double out[kMlpOut]) const {
   if (params_.float32_mlp) {
     if (params_.fast_mlp) {
-      mlp_f32<true>(packed_f32, in, out);
+      mlp_f32<H, true>(packed_f32, in, out);
     } else {
-      mlp_f32<false>(packed_f32, in, out);
+      mlp_f32<H, false>(packed_f32, in, out);
     }
   } else if (params_.fast_mlp) {
-    mlp<true>(packed, in, out);
+    mlp<H, true>(packed, in, out);
   } else {
-    mlp<false>(packed, in, out);
+    mlp<H, false>(packed, in, out);
+  }
+}
+
+void DynamicsModel::run_mlp(const double* packed, const float* packed_f32, int hidden,
+                            const double in[kMlpIn], double out[kMlpOut]) const {
+  switch (hidden) {
+    case 8:
+      run_mlp_h<8>(packed, packed_f32, in, out);
+      break;
+    case 16:
+      run_mlp_h<16>(packed, packed_f32, in, out);
+      break;
+    case 24:
+      run_mlp_h<24>(packed, packed_f32, in, out);
+      break;
+    default:
+      run_mlp_h<kMlpHidden>(packed, packed_f32, in, out);
+      break;
   }
 }
 
@@ -322,7 +356,7 @@ void DynamicsModel::ground_factors(double v, double delta, double speed_cmd, dou
                                (speed_cmd - gm.input_mean[2]) / gm.input_std[2],
                                (steering_cmd - gm.input_mean[3]) / gm.input_std[3]};
     double m[kMlpOut];
-    run_mlp(ground_packed_.data(), ground_packed_f32_.data(), in, m);
+    run_mlp(ground_packed_.data(), ground_packed_f32_.data(), kMlpHidden, in, m);
     a = clamp_double(a + gm.d_alpha_max * std::tanh(m[0]), gm.alpha_min, gm.alpha_max);
     r = gm.rho_max * std::tanh(m[1]);
   }
@@ -369,7 +403,7 @@ void DynamicsModel::residual(double v, double delta, double speed_cmd, double st
                              (speed_cmd - r.input_mean[2]) / r.input_std[2],
                              (steering_cmd - r.input_mean[3]) / r.input_std[3]};
   double raw[kMlpOut];
-  run_mlp(residual_packed_.data(), residual_packed_f32_.data(), in, raw);
+  run_mlp(residual_packed_.data(), residual_packed_f32_.data(), residual_hidden_, in, raw);
   for (int i = 0; i < kMlpOut; ++i) out[i] = r.output_scale[i] * raw[i];
 }
 

@@ -1,0 +1,25 @@
+{
+  "solve": {
+    "candidate_p50_ms": 1.897,
+    "reference_p50_ms": 3.959,
+    "note": "mppi_bench planner solve p50, track c=1.0, 512 samples, --fast-mlp, Linux ros-dev:ci on the Mac, median of 5 interleaved runs of 1000 solves (candidate [1.897, 2.002, 1.7, 2.024, 1.701], dyn-v0.7p [3.959, 4.203, 3.606, 4.264, 3.605])"
+  },
+  "info": {
+    "candidate_exact_p50_ms": 3.452,
+    "dyn_v01_p50_ms": 0.775,
+    "runs_exact": [
+      3.763,
+      3.231,
+      3.739,
+      3.218,
+      3.452
+    ],
+    "runs_v01": [
+      0.777,
+      0.694,
+      0.778,
+      0.657,
+      0.775
+    ]
+  }
+}

@@ -377,9 +377,9 @@ class MppiPlannerNode : public rclcpp::Node {
           "w_gate_barrier", mp.w_gate_barrier, 0.0, 1e4,
           "Cost of every step of the first 0.3 s of a plan whose predicted time to collision is "
           "under gate_barrier_margin times limits.ttc_warning_s (0 off).");
-      mp.gate_barrier_margin = declare_double(
-          "gate_barrier_margin", mp.gate_barrier_margin, 0.5, 5.0,
-          "The gate barrier applies under this multiple of limits.ttc_warning_s.");
+      mp.gate_barrier_margin =
+          declare_double("gate_barrier_margin", mp.gate_barrier_margin, 0.5, 5.0,
+                         "The gate barrier applies under this multiple of limits.ttc_warning_s.");
       mp.gate_barrier_steps = static_cast<int>(declare_int(
           "gate_barrier_steps", mp.gate_barrier_steps, 1, kGateCostSteps,
           "The gate barrier counts only the first this many steps (0.05 s each) of a plan."));

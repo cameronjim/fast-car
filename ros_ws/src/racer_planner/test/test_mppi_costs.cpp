@@ -1974,11 +1974,11 @@ TEST(MppiK4, TheSolverStaysOutOfTheBandWithTheBarrierAlone) {
   };
   const SolveOutput with_barrier = drive(50.0);
   const SolveOutput without = drive(0.0);
-  EXPECT_TRUE(
-      would_trip_exact(e.table, without.cmd.steering_cmd, without.cmd.speed_cmd, 1.0, e.cfg.limits));
+  EXPECT_TRUE(would_trip_exact(e.table, without.cmd.steering_cmd, without.cmd.speed_cmd, 1.0,
+                               e.cfg.limits));
   EXPECT_FALSE(with_barrier.cmd_would_trip);
-  EXPECT_FALSE(would_trip_exact(e.table, with_barrier.cmd.steering_cmd,
-                                with_barrier.cmd.speed_cmd, 1.0, e.cfg.limits));
+  EXPECT_FALSE(would_trip_exact(e.table, with_barrier.cmd.steering_cmd, with_barrier.cmd.speed_cmd,
+                                1.0, e.cfg.limits));
 }
 
 TEST(MppiK4, BarrierStepsLimitsTheCountToTheFirstSteps) {

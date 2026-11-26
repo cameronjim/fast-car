@@ -295,8 +295,8 @@ class MppiSolver {
     double gate_ttc_ref_s = 0.0;  // gate_ttc_margin * ttc_warning_s
     double gate_clear_ref_m = 0.0;
     double gate_barrier_ref_s = 0.0;  // gate_barrier_margin * ttc_warning_s
-    bool lap_track_station = false;  // lap_station_mode kTrack with the track in use
-    bool use_curv = false;           // terminal_curvature_bound with the track in use
+    bool lap_track_station = false;   // lap_station_mode kTrack with the track in use
+    bool use_curv = false;            // terminal_curvature_bound with the track in use
     int curv_n = 0;
     double curv_s[kTrackStations] = {};   // arc length of the visible stations
     double curv_v2[kTrackStations] = {};  // a_lat / kappa at each, m^2/s^2 (large on a straight)

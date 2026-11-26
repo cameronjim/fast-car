@@ -93,6 +93,9 @@ class Version:
     configs: tuple[str, ...]
     seeds: tuple[int, ...] = (0, 1, 2)
     width_tolerance: float = 0.01  # iter_rule.select_cost_aware
+    # "all": older train roles + dyn-v0.7p's split parts; "pnp": dyn-v0.7p's split parts only
+    # (the 2026-11-15 and 2026-11-22 sessions, no older bag), both without session 2
+    data: str = "all"
 
 
 VERSIONS: dict[str, Version] = {
@@ -117,13 +120,29 @@ VERSIONS: dict[str, Version] = {
             "multi_step_from_one_capped_wd1e-2_gs_h8",
         ),
     ),
+    # dyn-v0.10: v0.9 on the PnP session parts only (no older teleop bag) and the width chosen
+    # with a 3 percent tolerance (cost first: the Jetson is 2 to 5 times slower than the Mac)
+    "v0.10": Version(
+        "v0.10",
+        "dyn-v0.10-2026-11-25",
+        (
+            "multi_step_from_one_capped_wd1e-2_gs",
+            "multi_step_from_one_capped_wd1e-2_gs_h16",
+            "multi_step_from_one_capped_wd1e-2_gs_h8",
+        ),
+        width_tolerance=0.03,
+        data="pnp",
+    ),
 }
 
 
-def version(key: str) -> Version:
+def version(key: str, args=None) -> Version:
     if key not in VERSIONS:
         raise SystemExit(f"unknown version {key!r}; known {sorted(VERSIONS)}")
-    return VERSIONS[key]
+    v = VERSIONS[key]
+    if args is not None:
+        args.data = v.data  # a version's data mix is part of the version, not an option
+    return v
 
 
 def cache_dir(args) -> Path:
@@ -155,7 +174,11 @@ class IterContext:  # pragma: no cover - real data
         proto_args = replace_args(args, truth_only=False)
         w1 = stages_proto.bag_segments(proto_args, fit, iter_roles.FIT_ROLES, self.vehicle)
         w1 = [s for s in w1 if s.split in iter_roles.FIT_ROLES]
-        self.train = [*self.stage1.train, *w1]
+        data = getattr(args, "data", "all")
+        if data not in ("all", "pnp"):
+            raise SystemExit(f"--data {data!r}: all or pnp")
+        self.data = data
+        self.train = [*self.stage1.train, *w1] if data == "all" else list(w1)
         iter_roles.check_fit_segments(
             [s.name for s in self.train], [s.split for s in self.train],
             [s.run.name for s in self.train],
@@ -187,7 +210,8 @@ def val_p1(ctx: IterContext, residual) -> float:  # pragma: no cover - real data
 def cand_path(args, name: str, seed: int) -> Path:
     """One trained (config, seed). The fit is deterministic given the data, the config and the
     seed, so `explore` and `fit` share these (same train and validation data in both)."""
-    return cache_dir(args) / "cands" / f"{name}-seed{seed}.pkl"
+    tag = "" if getattr(args, "data", "all") == "all" else f"data-{args.data}/"
+    return cache_dir(args) / "cands" / f"{tag}{name}-seed{seed}.pkl"
 
 
 def train_configs(ctx, names, seeds, args):  # pragma: no cover - real data
@@ -237,10 +261,16 @@ def explore_cmd(args) -> int:  # pragma: no cover - real data
         n: contract1_window_errors(ctx.val, ctx.v01, ctx.fvehicle, r, HORIZONS_S)
         for n, r in models.items()
     }
+    pnp = np.array(
+        [ctx.val.runs[i].name.startswith(("2026-11-16T", "2026-11-23T")) for i in ctx.val.run_idx]
+    )
     groups = {
         "val": np.ones(len(ctx.val), bool),
         "cw": ctx.val.direction == "cw",
         "ccw": ctx.val.direction == "ccw",
+        "pnp-sessions": pnp,
+        "pnp-ccw": pnp & (ctx.val.direction == "ccw"),
+        "pnp-cw": pnp & (ctx.val.direction == "cw"),
     }
     rows = proto.summarise(errs, strata.label, groups, V07P)
     text = proto.render_rows(rows)
@@ -285,7 +315,7 @@ def _fit_pkl(args, v: Version) -> Path:
 
 
 def fit_cmd(args) -> int:  # pragma: no cover - real data
-    v = version(args.version)
+    v = version(args.version, args)
     ctx = IterContext(args)
     cands = train_configs(ctx, v.configs, v.seeds, args)
     config, ship, table = iter_rule.select_cost_aware(cands, v.width_tolerance)
@@ -322,7 +352,7 @@ def fit_summary_cmd(args) -> int:  # pragma: no cover - real data
     from .stages_v06 import sha256_file
     from .vehicle import repo_root
 
-    v = version(args.version)
+    v = version(args.version, args)
     fit = load_fit(args, v)
     lines = [
         f"# {v.model_id} fit, frozen before its held-out pass",
@@ -330,7 +360,8 @@ def fit_summary_cmd(args) -> int:  # pragma: no cover - real data
         "Validation numbers only; no H1 or H2 number of this version exists when this is written.",
         "",
         (
-            f"- Train segments: {fit['train_segments']} (iter_roles: older train roles, dyn-v0.7p's "
+            f"- Train segments: {fit['train_segments']} (data {v.data!r}; iter_roles: "
+            f"{'older train roles, ' if v.data == 'all' else ''}dyn-v0.7p's "
             "2026-11-15 and 2026-11-22 train and validation parts; no session 2 bag)."
         ),
         f"- Validation windows: {fit['val_windows']}.",
@@ -372,8 +403,12 @@ def write_bundle(args, v: Version, dest: Path, git_sha: str, metrics: dict):  # 
     )
     data = [
         (
-            "train and validation: older train roles (v0.2 split, legacy, 2026-11-14 train), "
-            f"{V07P_ID} development split train and validation parts of 2026-11-15 and 2026-11-22"
+            (
+                "train and validation: older train roles (v0.2 split, legacy, 2026-11-14 train), "
+                if v.data == "all"
+                else "train and validation: "
+            )
+            + f"{V07P_ID} development split train and validation parts of 2026-11-15 and 2026-11-22"
         ),
         "no bag of the 2026-11-23 session (confirmation only), truth T2",
     ]
@@ -386,7 +421,7 @@ def write_bundle(args, v: Version, dest: Path, git_sha: str, metrics: dict):  # 
 
 def bench_bundle_cmd(args) -> int:  # pragma: no cover - real data
     """A copy of the frozen weights for the solve time item (written before the pass)."""
-    v = version(args.version)
+    v = version(args.version, args)
     dest = cache_dir(args) / "bench" / v.model_id
     write_bundle(args, v, dest, "0" * 40, {"status": "bench copy for the solve item"})
     LOG.info("wrote %s", dest)
@@ -421,7 +456,7 @@ def freeze_eval_cmd(args) -> int:  # pragma: no cover - real data
     from .strata import assign_strata, block_bootstrap_ratio
     from .truth_v04 import T2, T2S
 
-    v = version(args.version)
+    v = version(args.version, args)
     ctx = IterContext(args)
     root = ctx.root
     token = check_freeze(root, args.freeze_sha, v)
@@ -547,6 +582,7 @@ def main(argv: list[str]) -> int:  # pragma: no cover - real data
     parser.add_argument("--configs", default="")
     parser.add_argument("--seeds", default="0,1,2")
     parser.add_argument("--label", default="run")
+    parser.add_argument("--data", default="all", choices=("all", "pnp"))
     parser.add_argument("--bags", type=Path, default=DATA_ROOT / "bags")
     parser.add_argument("--models", type=Path, default=DATA_ROOT / "pnp" / "models")
     parser.add_argument("--cache", type=Path, default=DATA_ROOT / "pnp" / "cache")

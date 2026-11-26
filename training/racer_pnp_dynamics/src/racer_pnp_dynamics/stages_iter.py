@@ -64,6 +64,16 @@ def config_grid():
             f"multi_step_from_one_capped_wd1e-2_posw{tag}", MULTI_STEP_FROM_ONE, h,
             loss_weights=(0.25, 1.0, 2.0),
         )  # fmt: skip
+        for wtag, w in (("pos2", (1.0, 1.0, 2.0)), ("sp05pos2", (0.5, 1.0, 2.0)),
+                        ("yaw2pos2", (1.0, 2.0, 2.0))):  # fmt: skip
+            out[f"multi_step_from_one_capped_wd1e-2_{wtag}{tag}"] = cfg(
+                f"multi_step_from_one_capped_wd1e-2_{wtag}{tag}", MULTI_STEP_FROM_ONE, h,
+                loss_weights=w,
+            )  # fmt: skip
+        out[f"multi_step_from_one_capped_wd1e-2_posw4{tag}"] = cfg(
+            f"multi_step_from_one_capped_wd1e-2_posw4{tag}", MULTI_STEP_FROM_ONE, h,
+            loss_weights=(0.25, 1.0, 4.0),
+        )  # fmt: skip
     return out
 
 

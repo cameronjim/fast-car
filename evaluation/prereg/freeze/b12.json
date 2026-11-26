@@ -1,0 +1,21 @@
+{
+  "commit_sha": "23465e0b4c1f3c664573da15698ce7ef7519d8d4",
+  "main_sha_contained": "5a2e5535c55a03be127ba0ae931de53d0fcd0186",
+  "branch": "feat/dv1-b12",
+  "yaml_sha256": "ce8de8bed33f57e84d848b7a4745ec0e8f0f7e352250e3a1ab925d64e817fd03",
+  "addendum_sha256": "e5cee1c64b9ac9232a1c819f65188eee0947dcffe5e8e30237de4e58952576fa",
+  "candidate": "K6",
+  "candidate_rule": "dev runs only (car-data/pnp/battery/v0.6-k4-dev, seeds 11-13, minimum cases, both directions). Rule written before K6 ran: paired median T_late(K)/T_late(K3s) <= 0.95 and faster in >= 9 of the 12 K3s check runs, 0 TTC engagements on all 18 dev runs, 0 contacts. K6: 0.944, 9 of 12, 0, 0.",
+  "tuned_values": {
+    "station_uncertainty_rate": 0.02,
+    "station_uncertainty_cap_m": 0.5,
+    "reset_length_share": 0.08,
+    "curvature_bound_a_lat_mps2": 2.0
+  },
+  "tuned_values_note": "B11's values, unchanged",
+  "switches": {
+    "lap": {"zone_floor_mode": "cap_wins", "station_uncertainty": true, "reset_on_change": true, "value_profile_mode": "freeze_after_first_clean_lap", "bound_hold_after_doubtful": true, "ttc_warning_zone_laps": 100},
+    "planner": {"lap_station_mode": "track", "lap_reward_mode": "replace", "w_gate_barrier": 10.0, "gate_barrier_margin": 1.0, "gate_barrier_steps": 4, "gate_barrier_predicted": true}
+  },
+  "branch_not_main": "decision 28 style: B12 freezes on this branch, unmerged"
+}

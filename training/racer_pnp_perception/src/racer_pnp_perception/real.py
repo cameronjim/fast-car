@@ -35,6 +35,15 @@ from racer_pnp_perception.split import ROLE_TRAIN, Split
 log = logging.getLogger(__name__)
 
 VAL_FRACTION = 0.15
+# Larger internal validation cuts (trackperc-v6 onward): bag-name prefix -> share of each train
+# segment of that bag, in time, that validates (the last part). Bags matching no prefix keep
+# VAL_FRACTION. "w2-v6": the last 45 percent of every session 2 train segment (the H-session cut
+# applied to the train part) and the last 40 percent of every 2026-11-16 bag, so the tight-turn
+# valid-range collapse is visible without a held-out set.
+VAL_PLANS: dict[str, dict[str, float]] = {
+    "default": {},
+    "w2-v6": {"2026-11-24T04-36-54": 0.45, "2026-11-16T": 0.40},
+}
 DROPOUT_MAX = nz.DROPOUT_MAX
 DEAD_SECTOR_MAX_RAD = nz.DEAD_SECTOR_MAX_RAD
 N_BINS = 360
@@ -196,12 +205,23 @@ def segment_span(real: RealSet, split: Split, bag: str, segment: str) -> tuple[f
     raise RoleError(f"{bag}: no segment {segment}")
 
 
+def plan_fraction(bag: str, plan: str, val_fraction: float = VAL_FRACTION) -> float:
+    """The validation share of a bag's train segments under a named plan (VAL_PLANS)."""
+    if plan not in VAL_PLANS:
+        raise ValueError(f"unknown validation plan {plan!r}; one of {sorted(VAL_PLANS)}")
+    for prefix, frac in VAL_PLANS[plan].items():
+        if bag.startswith(prefix):
+            return frac
+    return val_fraction
+
+
 def train_val_split(
-    real: RealSet, split: Split, val_fraction: float = VAL_FRACTION
+    real: RealSet, split: Split, val_fraction: float = VAL_FRACTION, plan: str = "default"
 ) -> tuple[RealSet, RealSet, dict[str, Any]]:
     """(train part, internal validation part, report): per train segment the cut is at
-    `1 - val_fraction` of its span; a label whose window lies before the cut trains, one after it
-    validates, one that crosses it is in neither."""
+    `1 - f` of its span, f = `val_fraction` or the plan's share for that bag; a label whose
+    window lies before the cut trains, one after it validates, one that crosses it is in
+    neither."""
     is_train = np.zeros(len(real), dtype=bool)
     is_val = np.zeros(len(real), dtype=bool)
     report: dict[str, Any] = {}
@@ -209,7 +229,8 @@ def train_val_split(
         for segment in sorted(set(real.segment[real.bag == bag].tolist())):
             m = (real.bag == bag) & (real.segment == segment)
             t0, t1 = segment_span(real, split, bag, segment)
-            cut = t0 + (1.0 - val_fraction) * (t1 - t0)
+            frac = plan_fraction(bag, plan, val_fraction)
+            cut = t0 + (1.0 - frac) * (t1 - t0)
             tr_m = m & (real.window_last_s <= cut)
             va_m = m & (real.window_first_s >= cut)
             is_train |= tr_m

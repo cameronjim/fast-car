@@ -228,3 +228,28 @@ def test_sigma_head_only_changes_sigma_and_nothing_else(tmp_path: Path) -> None:
     assert torch.equal(before_out[..., :4], after_out[..., :4])
     assert not torch.allclose(before_out[..., 4], after_out[..., 4])
     assert json.loads((out / "config.json").read_text())["sigma_head_only"] is True
+
+
+def test_spacing_prior_is_zero_at_the_contract_spacing_and_pulls_a_short_polyline_out() -> None:
+    target = torch.zeros(2, 16, 5)
+    pred = torch.zeros(2, 16, 5)
+    pred[..., 0] = torch.arange(16) * model.STATION_SPACING_M
+    plain = model.loss_fn(pred, target)
+    assert torch.isclose(model.loss_fn(pred, target, spacing_weight=1.0), plain)
+    short = pred.clone()
+    short[..., 0] = torch.arange(16) * 0.18
+    short.requires_grad_(True)
+    loss = model.loss_fn(short, torch.zeros(2, 16, 5), spacing_weight=1.0)
+    # (0.02 / 0.01)^2 = 4 per pair on top of the plain loss of the same prediction.
+    base = model.loss_fn(short.detach(), torch.zeros(2, 16, 5))
+    assert torch.isclose(loss - base, torch.tensor(4.0), atol=1e-4)
+    loss.backward()
+    assert short.grad is not None and float(short.grad[0, 15, 0]) < 0.0  # last station pushed out
+    # Pairs with an unlabelled station carry no spacing loss.
+    w = torch.ones(2, 16)
+    w[:, 8:] = 0.0
+    masked = model.loss_fn(short.detach(), torch.zeros(2, 16, 5), station_weight=w)
+    with_prior = model.loss_fn(
+        short.detach(), torch.zeros(2, 16, 5), station_weight=w, spacing_weight=1.0
+    )
+    assert torch.isclose(with_prior - masked, torch.tensor(4.0), atol=1e-4)

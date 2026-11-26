@@ -79,7 +79,45 @@ def summarise_rows(rows: list[gp1.ScanRow], backends: list[str]) -> dict[str, An
     for b in backends:
         lab = gp1.labelled_numbers(rows, b)
         free = gp1.label_free_numbers(rows, b)
-        out[b] = {**vars(lab), **{f"free_{k}": v for k, v in vars(free).items()}}
+        zero = [r.valid[b] == 0 for r in rows if b in r.valid]
+        out[b] = {
+            **vars(lab),
+            **{f"free_{k}": v for k, v in vars(free).items()},
+            "v_zero_share": float(sum(zero) / len(zero)) if zero else float("nan"),
+        }
+    return out
+
+
+# Groups of the internal validation labels reported apart (bag-name prefix). "session2" is the
+# train part of the 2026-11-23 session, the analogue of H-session; "1116" the 2026-11-16 bags.
+GROUPS = {"session2": "2026-11-24T04-36-54", "1116": "2026-11-16T"}
+
+
+def group_of(bag: str) -> str:
+    name = Path(bag).name
+    for group, prefix in GROUPS.items():
+        if name.startswith(prefix):
+            return group
+    return "old"
+
+
+def summarise_groups(rows: list[gp1.ScanRow], backends: list[str]) -> dict[str, Any]:
+    """`summarise_rows` over all rows and per group (GROUPS, the rest as "old")."""
+    out = {"all": summarise_rows(rows, backends)}
+    for group in [*GROUPS, "old"]:
+        sub = [r for r in rows if group_of(r.bag) == group]
+        if sub:
+            out[group] = summarise_rows(sub, backends)
+    return out
+
+
+def parse_named(items: list[str]) -> dict[str, Path]:
+    out = {}
+    for item in items:
+        name, _, path = item.partition("=")
+        if not name or not path:
+            raise SystemExit(f"{item!r}: expected NAME=DIR")
+        out[name] = Path(path)
     return out
 
 
@@ -87,11 +125,28 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--labels", type=Path, required=True)
     parser.add_argument("--split", type=Path, default=DEFAULT_SPLIT_PATH)
-    parser.add_argument("--run", type=Path, nargs="+", required=True)
+    parser.add_argument("--split-sha256", default=None, help="digest of a split other than v0.2")
+    parser.add_argument("--run", type=Path, nargs="*", default=[])
+    parser.add_argument(
+        "--bundle",
+        action="append",
+        default=[],
+        help="NAME=DIR, a bundle scored as the node runs it",
+    )
+    parser.add_argument(
+        "--val-plan", default="default", choices=sorted(real.VAL_PLANS), help="real.VAL_PLANS"
+    )
+    parser.add_argument(
+        "--refine", action="store_true", help="score --run nets with the scan refinement (as v2-v5)"
+    )
     parser.add_argument("--out", type=Path, default=Path("internal_val.json"))
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    split = load_split(args.split)
+    split = (
+        load_split(args.split, expected_sha256=args.split_sha256)
+        if args.split_sha256
+        else load_split(args.split)
+    )
     live = load_live_vehicle()
     # Only the label files of bags that have a train part; a file that also holds held-out
     # labels is filtered by role (real.load_real), exactly as in training.
@@ -101,22 +156,39 @@ def main(argv: list[str] | None = None) -> int:
         if (args.labels / f"{bag}.npz").is_file()
     ]
     train = real.load_real(files, split)
-    _tr, val, _report = real.train_val_split(train, split)
-    log.info("internal validation: %d labels", len(val))
-    result: dict[str, Any] = {"labels": len(val), "runs": {}}
-    geo = {BACKEND_GEOMETRIC: TrackPerceiver(BACKEND_GEOMETRIC, live)}
+    _tr, val, _report = real.train_val_split(train, split, plan=args.val_plan)
+    log.info("internal validation (%s): %d labels", args.val_plan, len(val))
+    perceivers: dict[str, TrackPerceiver] = {
+        BACKEND_GEOMETRIC: TrackPerceiver(BACKEND_GEOMETRIC, live)
+    }
+    if args.bundle:
+        from racer_pnp_perception import compare_v3 as cv
+
+        bundles = cv.perceivers(live, parse_named(args.bundle))
+        perceivers.update({k: v for k, v in bundles.items() if k != BACKEND_GEOMETRIC})
     for run in args.run:
-        perceivers = {
-            **geo,
-            BACKEND_NET: TrackPerceiver(
-                BACKEND_NET, live, net=net_from_run(run), model_id=run.name
+        perceivers[str(run)] = TrackPerceiver(
+            BACKEND_NET, live, net=net_from_run(run), model_id=run.name, refine_net=args.refine
+        )
+    rows = validation_rows(val, args.labels, perceivers, live)
+    groups = summarise_groups(rows, list(perceivers))
+    result: dict[str, Any] = {
+        "labels": len(val),
+        "val_plan": args.val_plan,
+        "refine_runs": args.refine,
+        "groups": groups,
+    }
+    for name in perceivers:
+        log.info(
+            "%s: %s",
+            name,
+            " ".join(
+                f"{g}: n {d[name]['scans']} V {d[name]['v']:.2f} E_c {d[name]['e_c_m']:.4f} "
+                f"V0 {d[name]['v_zero_share']:.3f}"
+                for g, d in groups.items()
             ),
-        }
-        rows = validation_rows(val, args.labels, perceivers, live)
-        result["runs"][str(run)] = summarise_rows(rows, list(perceivers))
-        log.info("%s: %s", run, json.dumps(result["runs"][str(run)][BACKEND_NET]))
+        )
     args.out.write_text(json.dumps(result, indent=2, allow_nan=True))
-    print(json.dumps(result, indent=2, allow_nan=True))
     return 0
 
 

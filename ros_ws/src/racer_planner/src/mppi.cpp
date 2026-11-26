@@ -86,7 +86,7 @@ MppiSolver::Ctx MppiSolver::make_ctx(const SolveInput& in) const {
     ctx.phi_start = in.freespace->phi(in.x0.x + wheelbase_m_ * std::cos(in.x0.yaw),
                                       in.x0.y + wheelbase_m_ * std::sin(in.x0.yaw));
   }
-  if (in.gate != nullptr && in.gate->valid() && p_.w_gate > 0.0 &&
+  if (in.gate != nullptr && in.gate->valid() && (p_.w_gate > 0.0 || p_.w_gate_barrier > 0.0) &&
       gate_limits_are_usable(in.gate->limits()) && p_.gate_ttc_margin > 0.0 &&
       p_.gate_clear_margin > 0.0) {
     ctx.use_gate = true;
@@ -95,6 +95,7 @@ MppiSolver::Ctx MppiSolver::make_ctx(const SolveInput& in) const {
                             : 0.0;
     ctx.gate_ttc_ref_s = p_.gate_ttc_margin * in.gate->limits().ttc_warning_s;
     ctx.gate_clear_ref_m = p_.gate_clear_margin * in.gate->limits().min_forward_clearance_m;
+    ctx.gate_barrier_ref_s = p_.gate_barrier_margin * in.gate->limits().ttc_warning_s;
   }
   if (ctx.use_track && p_.terminal_curvature_bound && p_.curvature_bound_a_lat_mps2 > 0.0) {
     ctx.use_curv = true;
@@ -126,6 +127,7 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   int hint = ctx.hint0;
   double j_clear = 0.0, j_bound = 0.0, j_lat = 0.0, j_du = 0.0, j_sr = 0.0;
   double j_gate = 0.0, j_trust = 0.0;
+  int n_barrier = 0;  // gate barrier: forward steps with ttc_k under gate_barrier_ref_s
   // The meaning of every speed here is listed in dynamics_model.hpp (one meaning per quantity).
   // For a contract 1 bundle alpha is 1 and both distances below are the same number.
   double path_m = 0.0;  // GROUND distance travelled by the scored steps so far (obstacles, gate)
@@ -163,6 +165,7 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
       const double a = std::max(0.0, 1.0 - ttc_k / ctx.gate_ttc_ref_s);
       const double b = std::max(0.0, 1.0 - d_k / ctx.gate_clear_ref_m);
       j_gate += a * a + b * b;
+      if (t < p_.gate_barrier_steps && ttc_k < ctx.gate_barrier_ref_s) ++n_barrier;
     }
     const bool moving = !collided;
     const double yaw_before = s.yaw;
@@ -239,6 +242,7 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
   CostBreakdown& o = bd != nullptr ? *bd : local;
   o.progress = -p_.w_progress * progress;
   o.gate = p_.w_gate * j_gate;
+  if (n_barrier > 0 && p_.w_gate_barrier > 0.0) o.gate += p_.w_gate_barrier * n_barrier;
   o.lap_trust = 0.0;
   o.lap_terminal = 0.0;
   if (ctx.use_lap) {
@@ -250,6 +254,7 @@ double MppiSolver::evaluate(const SolveInput& in, const Ctx& ctx, const Control*
           ctx.lap_track_station ? lap_track_base_m + (lap_path_m - lap_path_at_proj_m) : lap_path_m;
       const double q_end = in.lap->q_at(ctx.lap_s_now + lap_end_m);
       o.lap_terminal = -p_.w_progress * std::max(0.0, in.v_cap_mps) * (ctx.lap_q_now - q_end);
+      if (p_.lap_value_gain != 1.0) o.lap_terminal *= p_.lap_value_gain;
       o.progress = 0.0;
     }
   }

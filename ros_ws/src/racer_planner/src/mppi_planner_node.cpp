@@ -368,6 +368,21 @@ class MppiPlannerNode : public rclcpp::Node {
                          "Lateral acceleration a of terminal_curvature_bound (m/s^2).");
       mp.w_curvature_bound = declare_double("w_curvature_bound", mp.w_curvature_bound, 0.0, 1e6,
                                             "Weight of terminal_curvature_bound.");
+      // K4 switches (development, owner decisions 29 and 37b), every default the behaviour
+      // before them.
+      mp.lap_value_gain = declare_double(
+          "lap_value_gain", mp.lap_value_gain, 0.0, 10.0,
+          "Multiplies the lap profile's cost-to-go reward (lap_reward_mode replace); 1 unchanged.");
+      mp.w_gate_barrier = declare_double(
+          "w_gate_barrier", mp.w_gate_barrier, 0.0, 1e4,
+          "Cost of every step of the first 0.3 s of a plan whose predicted time to collision is "
+          "under gate_barrier_margin times limits.ttc_warning_s (0 off).");
+      mp.gate_barrier_margin = declare_double(
+          "gate_barrier_margin", mp.gate_barrier_margin, 0.5, 5.0,
+          "The gate barrier applies under this multiple of limits.ttc_warning_s.");
+      mp.gate_barrier_steps = static_cast<int>(declare_int(
+          "gate_barrier_steps", mp.gate_barrier_steps, 1, kGateCostSteps,
+          "The gate barrier counts only the first this many steps (0.05 s each) of a plan."));
     }
     cfg.drivability.stall_hold_s = declare_double(
         "stall_hold_s", cfg.drivability.stall_hold_s, 0.5, 600.0,

@@ -131,7 +131,7 @@ def test_argument_defaults() -> None:
     assert declared["dynamics_mlp_float32"].choices == ["true", "false"]
     assert declared["backend"].choices == ["net", "geometric"]
     assert declared["lap_mode"].choices == ["v0", "v1", "observe"]
-    assert declared["dv1_variant"].choices == ["registered", "K1", "K2", "K3", "K3s"]
+    assert declared["dv1_variant"].choices == ["registered", "K1", "K2", "K3", "K3s", "K4"]
     assert declared["lap_source"].choices == ["start_scan", "map_pose", "camera", "truth"]
 
 
@@ -1198,7 +1198,7 @@ def test_lap_memory_parameters_still_accept_truth_for_the_sim_runner(tmp_path) -
         assert params["lap_mode"] == "v1" and params["lap_source"] == source
 
 
-@pytest.mark.parametrize("variant", ["registered", "K1", "K2", "K3", "K3s"])
+@pytest.mark.parametrize("variant", ["registered", "K1", "K2", "K3", "K3s", "K4"])
 def test_lap_mode_v1_with_the_camera_launches_with_each_variant(
     monkeypatch, tmp_path, variant
 ) -> None:
@@ -1255,6 +1255,24 @@ def test_k3s_is_k3_with_the_gate_weight_ttc_zones_and_the_bound_hold_only() -> N
     }
     # heavier and wider than the planner defaults (3.0 and 1.1)
     assert m.K3S_W_GATE > 3.0 and m.K3S_GATE_TTC_MARGIN > 1.1
+
+
+def test_k4_is_k3s_lap_parts_with_the_gate_barrier_instead_of_the_heavier_gate_cost() -> None:
+    m = _module()
+    k3_lap, k3_planner = m.DV1_VARIANTS["K3"]
+    k3s_lap, _ = m.DV1_VARIANTS["K3s"]
+    lap, planner = m.DV1_VARIANTS["K4"]
+    assert lap == k3s_lap
+    assert planner == {
+        **k3_planner,
+        "w_gate_barrier": m.K4_W_GATE_BARRIER,
+        "gate_barrier_margin": m.K4_GATE_BARRIER_MARGIN,
+        "gate_barrier_steps": m.K4_GATE_BARRIER_STEPS,
+    }
+    # the soft gate cost stays at the planner defaults (not in the dict), the barrier is on
+    assert "w_gate" not in planner and "gate_ttc_margin" not in planner
+    assert m.K4_W_GATE_BARRIER > 0.0 and m.K4_GATE_BARRIER_MARGIN >= 1.0
+    assert 1 <= m.K4_GATE_BARRIER_STEPS <= 6
 
 
 def test_an_unknown_dv1_variant_is_refused(monkeypatch, tmp_path) -> None:

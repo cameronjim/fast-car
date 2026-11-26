@@ -573,6 +573,8 @@ class ScanRow:
     containment: dict[str, float] = field(default_factory=dict)
     # corridor polygon comparison of fused against geometric (gp1c only), else None
     coverage: dict[str, Any] | None = None
+    # per station centreline distance to the label over the stations in common (report only)
+    station_err: dict[str, NDArray[np.float64]] = field(default_factory=dict)
 
 
 def in_segment_path(
@@ -692,8 +694,12 @@ def score_row(
             c = sl.path_containment(track, row.path, live.body.half_width_m)
             row.containment[backend] = 0.0 if not math.isfinite(c) else c
         if row.label is not None:
-            ec, ef, _ = scan_centreline_errors(track, row.label, row.label_valid)
+            ec, ef, n = scan_centreline_errors(track, row.label, row.label_valid)
             row.e_c[backend], row.e_far[backend] = ec, ef
+            row.station_err[backend] = np.hypot(
+                track.x_m[:n].astype(np.float64) - row.label[:n, 0],
+                track.y_m[:n].astype(np.float64) - row.label[:n, 1],
+            )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -711,6 +717,23 @@ def labelled_numbers(rows: list[ScanRow], backend: str) -> Labelled:
         v=float(np.mean([r.valid[backend] for r in lab])) if lab else math.nan,
         c95=float(np.mean(contained)) if contained else math.nan,
     )
+
+
+def common_station_ec(rows: list[ScanRow], backends: list[str]) -> dict[str, float]:
+    """REPORT ONLY, never a pass item (coordinator, 2026-11-25): per backend the mean over labelled
+    scans of the centreline error on the stations that every backend in `backends` keeps (and the
+    label has), so nets with different valid ranges are compared on the same stations. The
+    registered E_c (`labelled_numbers`) is unchanged."""
+    per: dict[str, list[float]] = {b: [] for b in backends}
+    for r in rows:
+        if r.label is None or any(b not in r.station_err for b in backends):
+            continue
+        n = min(len(r.station_err[b]) for b in backends)
+        if n == 0:
+            continue
+        for b in backends:
+            per[b].append(float(r.station_err[b][:n].mean()))
+    return {b: nanmean(v) for b, v in per.items()}
 
 
 def label_free_numbers(rows: list[ScanRow], backend: str) -> LabelFree:

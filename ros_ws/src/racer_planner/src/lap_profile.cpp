@@ -50,6 +50,14 @@ double LapProfile::q_at(double s_m) const {
   return q[i] + f * (q[i + 1] - q[i]);
 }
 
+double lap_profile_judge_time(double stamp_s, double now_s, double sim_skew_tolerance_s) {
+  if (!(sim_skew_tolerance_s > 0.0) || !std::isfinite(stamp_s) || !std::isfinite(now_s)) {
+    return now_s;
+  }
+  const double ahead = stamp_s - now_s;
+  return (ahead > 0.0 && ahead <= sim_skew_tolerance_s) ? stamp_s : now_s;
+}
+
 LapProfileStatus make_lap_profile(const float* s, const float* v, const float* q, std::size_t n_s,
                                   std::size_t n_v, std::size_t n_q, double stamp_s, double now_s,
                                   LapProfile* out) {

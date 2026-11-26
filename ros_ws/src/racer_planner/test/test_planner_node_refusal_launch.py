@@ -71,6 +71,8 @@ _MISSING = _node("planner_no_bundle", _ROOT / "does_not_exist")
 _STALL = _node("planner_stall_profile", _GOOD, debug_stall_profile="1.0:0.4")
 _STALL_BAD = _node("planner_stall_bad", _GOOD, use_sim_time=True, debug_stall_profile="abc")
 _STALL_RANGE = _node("planner_stall_range", _GOOD, use_sim_time=True, debug_stall_profile="1:99")
+# The guidance clock skew tolerance is for simulation only as well: refused without use_sim_time.
+_SKEW = _node("planner_sim_skew", _GOOD, sim_guidance_clock_skew_s=0.05)
 
 
 @pytest.mark.launch_test
@@ -84,6 +86,7 @@ def generate_test_description():
             _STALL,
             _STALL_BAD,
             _STALL_RANGE,
+            _SKEW,
             # every process under test exits at startup; keep the launch alive for the checks
             KeepAliveProc(),
             launch_testing.actions.ReadyToTest(),
@@ -101,6 +104,7 @@ class TestPlannerNodeRefusals(unittest.TestCase):
             (_STALL, "StallProfileRefused"),
             (_STALL_BAD, "StallProfileInvalid"),
             (_STALL_RANGE, "StallProfileInvalid"),
+            (_SKEW, "SimClockSkewRefused"),
         ]
         for action, code in cases:
             proc_info.assertWaitForShutdown(process=action, timeout=30)
@@ -110,7 +114,16 @@ class TestPlannerNodeRefusals(unittest.TestCase):
 @launch_testing.post_shutdown_test()
 class TestPlannerNodeRefusalExitCodes(unittest.TestCase):
     def test_exit_codes_are_non_zero(self, proc_info):
-        for action in (_CHECKSUM, _VEHICLE, _VALIDITY, _MISSING, _STALL, _STALL_BAD, _STALL_RANGE):
+        for action in (
+            _CHECKSUM,
+            _VEHICLE,
+            _VALIDITY,
+            _MISSING,
+            _STALL,
+            _STALL_BAD,
+            _STALL_RANGE,
+            _SKEW,
+        ):
             launch_testing.asserts.assertExitCodes(
                 proc_info, allowable_exit_codes=[1], process=action
             )

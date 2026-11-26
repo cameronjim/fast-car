@@ -69,9 +69,7 @@ constexpr int kMlpIn = 4;
 constexpr int kMlpHidden = 32;
 constexpr int kMlpOut = 2;
 // W1 [H,4], b1 [H], W2 [H,H], b2 [H], W3 [2,H], b3 [2]
-constexpr int mlp_weight_count(int h) {
-  return h * kMlpIn + h + h * h + h + kMlpOut * h + kMlpOut;
-}
+constexpr int mlp_weight_count(int h) { return h * kMlpIn + h + h * h + h + kMlpOut * h + kMlpOut; }
 constexpr int kMlpWeightCount = mlp_weight_count(kMlpHidden);
 // The residual widths the planner implements: multiples of 8 so the split output sums of the
 // fast modes cover every unit. A bundle with any other width is refused by the loader.

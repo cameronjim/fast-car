@@ -126,6 +126,12 @@ they are commanded are no longer charged. All 18 dev runs, 3 workers (one run, T
 | K5b | 18 | 0.873 | 0.909 | 0.976, faster in 7 of 12 | 0 | 7 timing | 0 | 0 | 0.231 | 0.177 |
 | **K6** | 18 | **0.872** | **0.881** | **0.944, faster in 9 of 12** | **0** | 0 | 0 | 0 | 0.227 | 0.168 |
 
+Load: K5b and K6 were run at host load 8 to 25 (other agents). Under the owner's load rule K6 was
+rerun on all 18 dev runs one at a time at load 2.4 to 5.9 (`K6r`, one run whose end load was 8.4
+was rerun; loads per run in `car-data/pnp/battery/v0.6-k4-dev/K6r_load.log`): 0 engagements of
+any source, 0 brakes, 0 contacts; median 0.827 of D v0 overall, check set 0.846 (worst 0.988);
+paired against K3s 0.894, faster in 12 of 12 (K3s's runs are from the K3s note, load not logged).
+
 K6 meets the "clearly beats K3s" rule written before it ran (paired median at most 0.95, faster
 in at least 9 of 12, 0 TTC on all 18, 0 contacts), so B12 was pre-registered and run once on its
 own branch (`feat/dv1-b12`, not merged; decision 28 style).

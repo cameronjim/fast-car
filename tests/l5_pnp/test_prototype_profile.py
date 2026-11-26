@@ -11,7 +11,8 @@ profile change brings its fixture with it.
 
 Scenario: stadium lane 1.0 m, straight 2.0 m, island radius 0.4 m (B11's T), counter-clockwise,
 seed 11, the car-like plant (dyn-car-2026-11-12 actuation, 0.22 m/s dead zone, steering lag,
-reverse braking like forward),
+reverse braking like forward), the planner's sim_guidance_clock_skew_s at 0.05 s (on simulated
+time each node gets /clock on its own, PR 268),
 5 laps on simulated time.
 
 Pass, never loosened to get green: 5 laps, 0 wall contacts, every driver node still running when
@@ -46,6 +47,7 @@ PLANT = REPO_ROOT / "config" / "pnp" / "fixtures" / "dyn-car-2026-11-12"
 TRACK = {"lane_width_m": 1.0, "straight_length_m": 2.0, "island_radius_m": 0.4}
 LAPS = 5
 SEED = 11
+SIM_CLOCK_SKEW_S = 0.05
 DRIVER_NODES = ("track_perception_node", "mppi_planner_node", "lap_memory_node", "safety_node")
 
 
@@ -88,6 +90,10 @@ def test_prototype_profile(tmp_path, capsys):
         "--plant-command-delay",
         "0.0",
         "--plant-mirror-reverse",
+        # simulated time only: a lap profile stamped one sim step ahead of the planner's clock is
+        # judged at age 0 instead of refused (PR 268); the car keeps the age >= 0 rule
+        "--planner-params-json",
+        json.dumps({"sim_guidance_clock_skew_s": SIM_CLOCK_SKEW_S}),
         "--car",
         "params",
         "--seed",
@@ -120,6 +126,8 @@ def test_prototype_profile(tmp_path, capsys):
 
     def judge(result):
         assert result.get("pnp_profile", {}).get("profile") == "prototype"
+        planner = result["pnp"]["mppi_planner_node"]
+        assert planner.get("sim_guidance_clock_skew_s") == SIM_CLOCK_SKEW_S, planner
         assert result["laps"] >= LAPS, result.get("stopped_because")
         assert result["wall_contacts"] == 0
         logs = result.get("node_logs", {})

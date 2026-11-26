@@ -359,9 +359,11 @@ def test_the_ground_scale_moves_the_position_only_and_1_is_the_plain_step() -> N
 
 def test_a_ground_scale_bundle_is_1_2_and_without_one_it_stays_1_1(tmp_path) -> None:
     vehicle, nominal = load_vehicle(), _nominal()
-    kw = dict(created_utc="2026-11-25T00:00:00Z", git_sha="0" * 40, training_config_sha256="0" * 64,
-              vehicle=vehicle, nominal=nominal, v_max_mps=1.3, data=["t"], metrics={},
-              golden_residual_rollouts=True)  # fmt: skip
+    kw = {
+        "created_utc": "2026-11-25T00:00:00Z", "git_sha": "0" * 40,
+        "training_config_sha256": "0" * 64, "vehicle": vehicle, "nominal": nominal,
+        "v_max_mps": 1.3, "data": ["t"], "metrics": {}, "golden_residual_rollouts": True,
+    }  # fmt: skip
     m = write_bundle(tmp_path / "a", model_id="a", residual=_res(gs=0.94), **kw)
     assert m["bundle_schema_version"] == "1.2.0"
     assert m["io"]["residual"]["ground_scale"] == 0.94

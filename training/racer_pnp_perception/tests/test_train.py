@@ -253,3 +253,28 @@ def test_spacing_prior_is_zero_at_the_contract_spacing_and_pulls_a_short_polylin
         short.detach(), torch.zeros(2, 16, 5), station_weight=w, spacing_weight=1.0
     )
     assert torch.isclose(with_prior - masked, torch.tensor(4.0), atol=1e-4)
+
+
+@pytest.mark.torch
+def test_train_extra_appends_simulation_samples(tmp_path: Path) -> None:
+    rng = np.random.default_rng(4)
+
+    def sim(n: int) -> dict[str, np.ndarray]:
+        return {
+            "tensor": rng.uniform(size=(n, 2, 360)).astype(np.float32),
+            "label": rng.normal(size=(n, 16, 5)).astype(np.float32) * 0.3,
+        }
+
+    dataset.save(tmp_path / "a.npz", sim(128))
+    dataset.save(tmp_path / "b.npz", sim(64))
+    out = train.train(
+        tmp_path / "a.npz",
+        tmp_path / "a.npz",
+        tmp_path / "run",
+        epochs=1,
+        batch_size=64,
+        train_extra=[tmp_path / "b.npz"],
+    )
+    # 192 simulated samples at 64 per batch: 3 steps; the config names the extra set.
+    assert out["config"]["train_extra"] == [str(tmp_path / "b.npz")]
+    assert len(out["history"]) == 1

@@ -253,3 +253,12 @@ def test_a_validation_plan_moves_the_cut_only_for_its_bags(label_dir: Path) -> N
     assert real.plan_fraction("2026-11-13T22-20-18_car_teleop", "w2-v6") == real.VAL_FRACTION
     with pytest.raises(ValueError):
         real.plan_fraction("bagA", "no-such-plan")
+
+
+def test_deficit_weights_down_weight_only_noisy_labels() -> None:
+    d = np.array([0.005, 0.02, 0.04, 0.5, np.nan])
+    w = real.deficit_weights(d, 0.02, 0.25)
+    assert np.allclose(w, [1.0, 1.0, 0.5, 0.25, 1.0])
+    assert np.allclose(real.deficit_weights(d, 0.0, 0.25), 1.0)
+    with pytest.raises(ValueError):
+        real.deficit_weights(None, 0.02, 0.25)

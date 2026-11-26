@@ -124,3 +124,20 @@ def test_resample_closed_spacing() -> None:
     r = tk.resample_closed(sq, 0.1)
     d = np.hypot(*(np.roll(r, -1, axis=0) - r).T)
     assert len(r) == 80 and np.all(d <= 0.1 + 1e-9)
+
+
+def test_tight_worlds_are_valid_lanes_with_sharper_turns_and_never_held_out() -> None:
+    rng = np.random.default_rng(7)
+    tight = [tk.sample_tight_world(rng) for _ in range(30)]
+    rng = np.random.default_rng(7)
+    plain = [tk.sample_world(rng) for _ in range(30)]
+    for w in tight:
+        lo, hi = tk.TIGHT_LANE_WIDTH_RANGE_M
+        assert lo <= w.lane_width_m <= hi
+        assert len(w.walls) > 0 and np.isfinite(w.centreline).all()
+    r_tight = np.median([tk.min_curvature_radius(w.centreline) for w in tight])
+    r_plain = np.median([tk.min_curvature_radius(w.centreline) for w in plain])
+    assert r_tight < r_plain
+    for _ in range(200):
+        p = tk.sample_tight_island_params(rng)
+        assert not tk.is_held_out(p) and p.island_radius_m <= 0.3

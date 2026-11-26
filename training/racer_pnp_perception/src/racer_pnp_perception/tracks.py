@@ -230,6 +230,43 @@ def sample_world(rng: np.random.Generator, fourier_share: float = 0.5) -> World:
     return island_world(sample_island_params(rng))
 
 
+# Tight-turn worlds (trackperc-v7): small islands with sharp corners and narrower lanes, and
+# Fourier loops with larger amplitudes (the curvature and clearance tests still reject impossible
+# lanes). Where the real tracks' valid range collapses: the turns.
+TIGHT_LANE_WIDTH_RANGE_M = (0.7, 1.2)
+
+
+def sample_tight_island_params(rng: np.random.Generator) -> IslandParams:
+    """Island parameters with a short island and a corner radius of at most 0.3 m, never within
+    tolerance of a held-out track."""
+    while True:
+        lane = float(rng.uniform(*TIGHT_LANE_WIDTH_RANGE_M))
+        length = float(rng.uniform(1.0, 2.2))
+        height = float(rng.uniform(0.6, 1.4))
+        radius = float(rng.uniform(0.0, min(0.3, min(length, height) / 2.0)))
+        p = IslandParams(lane, length, height, radius)
+        if not is_held_out(p):
+            return p
+
+
+def sample_tight_fourier_world(rng: np.random.Generator) -> World:
+    while True:
+        lane = float(rng.uniform(*TIGHT_LANE_WIDTH_RANGE_M))
+        r0 = float(rng.uniform(0.8, 1.5))
+        amps = tuple(float(rng.uniform(0.0, 0.5 / k)) for k in range(1, FOURIER_MAX_K + 1))
+        phases = tuple(float(rng.uniform(0.0, 2.0 * math.pi)) for _ in range(FOURIER_MAX_K))
+        world = fourier_world(FourierParams(r0, amps, phases, lane), "fourier-tight")
+        if world is not None:
+            return world
+
+
+def sample_tight_world(rng: np.random.Generator, fourier_share: float = 0.5) -> World:
+    """One tight-turn training world: a tight Fourier loop or a tight island."""
+    if rng.uniform() < fourier_share:
+        return sample_tight_fourier_world(rng)
+    return island_world(sample_tight_island_params(rng), "island-tight")
+
+
 def held_out_worlds() -> dict[str, World]:
     return {name: island_world(p, name) for name, p in HELD_OUT_ISLANDS.items()}
 

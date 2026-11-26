@@ -111,6 +111,9 @@ def train(
     sigma_head_only: bool = False,
     val_plan: str = "default",
     spacing_weight: float = 0.0,
+    train_extra: list[Path] | None = None,
+    deficit_ref_m: float = 0.0,
+    deficit_floor: float = 0.25,
 ) -> dict[str, Any]:
     import torch
 
@@ -119,6 +122,11 @@ def train(
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     x_train, y_train = dataset.load(train_path)
+    for extra in train_extra or []:
+        # More simulation samples (for example the tight-turn worlds of trackperc-v7) appended to
+        # the simulated training set; validation stays the --val set.
+        xe, ye = dataset.load(extra)
+        x_train, y_train = np.concatenate([x_train, xe]), np.concatenate([y_train, ye])
     x_val, y_val = dataset.load(val_path)
     real_train: real.RealSet | None = None
     real_val: real.RealSet | None = None
@@ -167,6 +175,11 @@ def train(
     n_sim = batch_size - n_real
     if real_train is not None and len(real_train) == 0 and n_real > 0:
         raise ValueError("no real training labels after the role filter")
+    label_w = (
+        real.deficit_weights(real_train.deficit_p90_m, deficit_ref_m, deficit_floor)
+        if real_train is not None and deficit_ref_m > 0.0
+        else None
+    )
     # The device is how the same recipe is run, not part of it; it is recorded in config.json.
     dev = torch.device(device)
     net = model.build_model()
@@ -231,7 +244,8 @@ def train(
                     np.concatenate(
                         [
                             np.ones((n_sim, 16), np.float32),
-                            station_weights(rv),
+                            station_weights(rv)
+                            * (1.0 if label_w is None else label_w[pick][:, None]),
                         ]
                     )
                 ).to(dev)
@@ -290,6 +304,7 @@ def train(
     torch.save({k: v.cpu() for k, v in net.state_dict().items()}, out / "model.pt")
     config = {
         "train": str(train_path),
+        "train_extra": [str(p) for p in train_extra or []],
         "val": str(val_path),
         "epochs": epochs,
         "batch_size": batch_size,
@@ -306,6 +321,8 @@ def train(
         "real_label_sigma_near_m": real_label_sigma_near_m,
         "sigma_head_only": sigma_head_only,
         "spacing_weight": spacing_weight,
+        "deficit_ref_m": deficit_ref_m,
+        "deficit_floor": deficit_floor,
         "scale_probability": scale_probability,
         "scale_range": list(scale_range) if scale_range else None,
         "fold": fold,
@@ -400,6 +417,21 @@ def main(argv: list[str] | None = None) -> int:
         help="train only the log_sigma outputs of --init (everything else frozen; trackperc-v5)",
     )
     parser.add_argument(
+        "--train-extra",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="more simulated training sets appended to --train (trackperc-v7 tight-turn worlds)",
+    )
+    parser.add_argument(
+        "--deficit-ref",
+        type=float,
+        default=0.0,
+        help="down-weight real labels whose deficit p90 exceeds this (m): weight ref/deficit "
+        "(real.deficit_weights; 0 = off; trackperc-v7)",
+    )
+    parser.add_argument("--deficit-floor", type=float, default=0.25)
+    parser.add_argument(
         "--spacing-weight",
         type=float,
         default=0.0,
@@ -449,6 +481,9 @@ def main(argv: list[str] | None = None) -> int:
             args.sigma_head_only,
             args.val_plan,
             args.spacing_weight,
+            args.train_extra,
+            args.deficit_ref,
+            args.deficit_floor,
         )
         return result["history"]
 

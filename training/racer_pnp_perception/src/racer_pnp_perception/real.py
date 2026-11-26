@@ -77,6 +77,8 @@ class RealSet:
     window_last_s: NDArray[np.float64]
     scan_index: NDArray[np.int64]  # index into the bag's scans (the scan cache)
     path_xy: NDArray[np.float64]  # [n, 21, 2] the car's own next 2 m, in the scan's frame
+    # The label's clearance deficit p90 (selflabel), NaN when the file has none (trackperc-v7).
+    deficit_p90_m: NDArray[np.float64] | None = None
 
     def __len__(self) -> int:
         return len(self.valid_count)
@@ -93,6 +95,7 @@ class RealSet:
             self.window_last_s[mask],
             self.scan_index[mask],
             self.path_xy[mask],
+            None if self.deficit_p90_m is None else self.deficit_p90_m[mask],
         )
 
 
@@ -115,6 +118,9 @@ def read_label_file(path: Path) -> RealSet:
             z["window_last_s"].astype(np.float64),
             z["index"].astype(np.int64),
             z["path_xy"].astype(np.float64),
+            z["deficit_p90_m"].astype(np.float64)
+            if "deficit_p90_m" in z.files
+            else np.full(n, np.nan),
         )
 
 
@@ -132,6 +138,12 @@ def concat(sets: list[RealSet]) -> RealSet:
         np.concatenate([s.window_last_s for s in sets]),
         np.concatenate([s.scan_index for s in sets]),
         np.concatenate([s.path_xy for s in sets]),
+        np.concatenate(
+            [
+                s.deficit_p90_m if s.deficit_p90_m is not None else np.full(len(s), np.nan)
+                for s in sets
+            ]
+        ),
     )
 
 
@@ -245,6 +257,22 @@ def train_val_split(
             }
     assert not (is_train & is_val).any()
     return real.take(is_train), real.take(is_val), report
+
+
+def deficit_weights(
+    deficit_p90_m: NDArray[np.float64] | None, ref_m: float, floor: float
+) -> NDArray[np.float32]:
+    """Per-label loss weight from the label's clearance deficit p90 (trackperc-v7): 1 at or below
+    `ref_m`, ref_m / deficit above it, never under `floor`. A label without a deficit (NaN) keeps
+    weight 1. `ref_m` <= 0 turns it off (all ones)."""
+    if deficit_p90_m is None:
+        raise ValueError("no deficit_p90_m in this label set")
+    d = np.asarray(deficit_p90_m, dtype=np.float64)
+    if ref_m <= 0.0:
+        return np.ones(len(d), np.float32)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w = np.where(np.isfinite(d) & (d > ref_m), ref_m / d, 1.0)
+    return np.clip(w, floor, 1.0).astype(np.float32)
 
 
 def mirror_tensor(tensor: NDArray[np.floating]) -> NDArray[np.floating]:

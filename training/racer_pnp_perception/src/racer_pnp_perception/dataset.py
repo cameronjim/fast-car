@@ -26,7 +26,7 @@ from racer_track_perception.vehicle import LiveVehicle, load_live_vehicle
 
 from racer_pnp_perception.raycast import ScanGeometry
 from racer_pnp_perception.sample import LaneGeometry, make_sample
-from racer_pnp_perception.tracks import World, held_out_worlds, sample_world
+from racer_pnp_perception.tracks import World, held_out_worlds, sample_tight_world, sample_world
 
 log = logging.getLogger(__name__)
 
@@ -63,9 +63,11 @@ def generate_chunk(
     clean: bool = False,
     keep_ranges: bool = False,
     lidar_dr: bool = False,
+    tight: bool = False,
 ) -> dict[str, NDArray[Any]]:
     """`n` samples from random training worlds (or, with `held_out`, from that held-out track).
-    `lidar_dr` adds the LiDAR-model randomisation of `sample.make_sample`."""
+    `lidar_dr` adds the LiDAR-model randomisation of `sample.make_sample`; `tight` draws the
+    worlds from `tracks.sample_tight_world`."""
     live = _vehicle()
     geometry = ScanGeometry()
     rng = np.random.default_rng(seed)
@@ -77,7 +79,10 @@ def generate_chunk(
     lane: LaneGeometry | None = None
     for i in range(n):
         if world is None or i % SAMPLES_PER_WORLD == 0:
-            world = held[held_out] if held_out else sample_world(rng)
+            if held_out:
+                world = held[held_out]
+            else:
+                world = sample_tight_world(rng) if tight else sample_world(rng)
             lane = LaneGeometry(world.centreline)
         assert lane is not None
         s = make_sample(world, lane, rng, live.mount, geometry, clean=clean, lidar_dr=lidar_dr)
@@ -99,9 +104,11 @@ def generate_chunk(
     return out
 
 
-def _chunk_job(args: tuple[int, int, str | None, bool, bool, bool]) -> dict[str, NDArray[Any]]:
-    seed, n, held_out, clean, keep_ranges, lidar_dr = args
-    return generate_chunk(seed, n, held_out, clean, keep_ranges, lidar_dr)
+def _chunk_job(
+    args: tuple[int, int, str | None, bool, bool, bool, bool],
+) -> dict[str, NDArray[Any]]:
+    seed, n, held_out, clean, keep_ranges, lidar_dr, tight = args
+    return generate_chunk(seed, n, held_out, clean, keep_ranges, lidar_dr, tight)
 
 
 def generate(
@@ -112,12 +119,13 @@ def generate(
     clean: bool = False,
     keep_ranges: bool = False,
     lidar_dr: bool = False,
+    tight: bool = False,
 ) -> dict[str, NDArray[Any]]:
     """`n` samples in parallel chunks; deterministic in (n, seed, ...)."""
     sizes = [CHUNK] * (n // CHUNK) + ([n % CHUNK] if n % CHUNK else [])
     seeds = np.random.SeedSequence(seed).generate_state(len(sizes))
     jobs = [
-        (int(s), k, held_out, clean, keep_ranges, lidar_dr)
+        (int(s), k, held_out, clean, keep_ranges, lidar_dr, tight)
         for s, k in zip(seeds, sizes, strict=True)
     ]
     workers = workers or max((mp.cpu_count() or 2) - 1, 1)
@@ -152,8 +160,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="add the LiDAR-model randomisation (files are named trackperc-v3dr-...)",
     )
+    parser.add_argument(
+        "--tight",
+        action="store_true",
+        help="tight-turn worlds only (tracks.sample_tight_world; files named ...-tight-...)",
+    )
     args = parser.parse_args(argv)
     prefix = "trackperc-v3dr" if args.lidar_dr else "trackperc-v0"
+    if args.tight:
+        prefix += "-tight"
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     for name, n, seed in (
         ("train", args.n_train, args.seed),
@@ -161,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     ):
         path = args.out / f"{prefix}-{name}-s{args.seed}-n{n}.npz"
         log.info("generating %s: %d samples, seed %d -> %s", name, n, seed, path)
-        save(path, generate(n, seed, args.workers, lidar_dr=args.lidar_dr))
+        save(path, generate(n, seed, args.workers, lidar_dr=args.lidar_dr, tight=args.tight))
     return 0
 
 

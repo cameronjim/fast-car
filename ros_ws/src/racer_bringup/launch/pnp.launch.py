@@ -504,6 +504,12 @@ _DV1_COMMON_LAP = {
 K3S_W_GATE = 9.0
 K3S_GATE_TTC_MARGIN = 1.3
 K3S_TTC_ZONE_LAPS = 100
+#: K4 values, chosen on development cases only (docs/notes/pnp-dv1-k4-dev-2026-11.md): K3s's lap
+#: node parts (TTC warning zones, bound hold) with the planner's gate barrier in place of K3s's
+#: heavier soft gate cost (w_gate and gate_ttc_margin stay at the planner defaults).
+K4_W_GATE_BARRIER = 10.0
+K4_GATE_BARRIER_MARGIN = 1.0
+K4_GATE_BARRIER_STEPS = 6
 DV1_VARIANTS: dict[str, tuple[dict, dict]] = {
     "registered": ({}, {}),
     "K1": (
@@ -535,6 +541,24 @@ DV1_VARIANTS: dict[str, tuple[dict, dict]] = {
             "lap_reward_mode": "replace",
             "w_gate": K3S_W_GATE,
             "gate_ttc_margin": K3S_GATE_TTC_MARGIN,
+        },
+    ),
+    # K4 (development candidate after K3s, unregistered): K3s's lap node parts, and in place of
+    # its heavier soft gate cost a barrier that charges only the plan steps (of the first 0.3 s)
+    # whose predicted time to collision is inside the gate's warning band.
+    "K4": (
+        {
+            **_DV1_COMMON_LAP,
+            "value_profile_mode": "freeze_after_first_clean_lap",
+            "bound_hold_after_doubtful": True,
+            "ttc_warning_zone_laps": K3S_TTC_ZONE_LAPS,
+        },
+        {
+            "lap_station_mode": "track",
+            "lap_reward_mode": "replace",
+            "w_gate_barrier": K4_W_GATE_BARRIER,
+            "gate_barrier_margin": K4_GATE_BARRIER_MARGIN,
+            "gate_barrier_steps": K4_GATE_BARRIER_STEPS,
         },
     ),
 }
@@ -1218,8 +1242,10 @@ def generate_launch_description() -> LaunchDescription:
                 choices=list(DV1_VARIANTS),
                 description=(
                     "lap_mode:=v1 only: registered (D v1 of brief 26), a brief 53 candidate K1, "
-                    "K2, K3, or K3s (K3 with a heavier gate cost and margin, TTC warning zones "
-                    "and the bound held after a doubtful lap, a development fix after B11). "
+                    "K2, K3, K3s (K3 with a heavier gate cost and margin, TTC warning zones "
+                    "and the bound held after a doubtful lap, a development fix after B11), or "
+                    "K4 (K3s's lap node parts with a gate barrier in the planner instead of the "
+                    "heavier gate cost). "
                     "Ignored for v0 and observe. Development runs, not a registered result "
                     "(owner decision 29)."
                 ),

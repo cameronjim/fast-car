@@ -91,6 +91,21 @@ struct MppiParams {
   bool terminal_curvature_bound = false;
   double curvature_bound_a_lat_mps2 = 2.0;
   double w_curvature_bound = 200.0;
+  // K4 switches (development, owner decisions 29 and 37b), every default the behaviour before
+  // them. lap_value_gain multiplies the lap cost-to-go reward of kReplace (1.0: unchanged). The
+  // value term pays w_progress * v_cap per second of the stored lap gained, about v_cap / v_lap1
+  // times the progress term per metre when the profile is the slow first lap.
+  double lap_value_gain = 1.0;
+  // Gate barrier (0 off): over the same first kGateCostSteps steps as the gate aware cost, every
+  // forward step whose ttc_k is under gate_barrier_margin * ttc_warning_s adds w_gate_barrier.
+  // Unlike the soft hinge it costs nothing outside that band and a fixed amount inside it, so
+  // the planner keeps its speed where the gate would not warn. Needs a usable gate like w_gate.
+  // gate_barrier_steps (1 to kGateCostSteps) limits the barrier to the first steps: step 0 is the
+  // command the gate judges next, later steps reuse the scan's arc table from the current pose
+  // (less the path travelled), which is pessimistic on a turning car.
+  double w_gate_barrier = 0.0;
+  double gate_barrier_margin = 1.1;
+  int gate_barrier_steps = 6;
   // Check the final sequence (the smoothed weighted mean) for collision and fall back to the best
   // evaluated collision-free sample of the chosen class when it fails (claude-docs/13 17.4.1).
   // false is the behaviour of main f5db7f1 and exists only so planner_replay_cli can measure M-C1
@@ -279,8 +294,9 @@ class MppiSolver {
     double gate_travel_m = 0.0;   // sanitised SolveInput::gate_travel_since_scan_m
     double gate_ttc_ref_s = 0.0;  // gate_ttc_margin * ttc_warning_s
     double gate_clear_ref_m = 0.0;
-    bool lap_track_station = false;  // lap_station_mode kTrack with the track in use
-    bool use_curv = false;           // terminal_curvature_bound with the track in use
+    double gate_barrier_ref_s = 0.0;  // gate_barrier_margin * ttc_warning_s
+    bool lap_track_station = false;   // lap_station_mode kTrack with the track in use
+    bool use_curv = false;            // terminal_curvature_bound with the track in use
     int curv_n = 0;
     double curv_s[kTrackStations] = {};   // arc length of the visible stations
     double curv_v2[kTrackStations] = {};  // a_lat / kappa at each, m^2/s^2 (large on a straight)

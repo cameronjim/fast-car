@@ -1829,3 +1829,178 @@ TEST(MppiCurvatureBound, TheSolverSlowsBeforeATightBendWithTheBound) {
   }
   EXPECT_LT(v_on, v_off);
 }
+
+// ---------------------------------------------------------------------------------------------
+// K4 switches (development, owner decisions 29 and 37b): lap_value_gain and the gate barrier
+
+TEST(MppiK4, DefaultsAreOffAndLeaveTheGateAndValueTermsUnchanged) {
+  const MppiParams d;
+  EXPECT_EQ(d.lap_value_gain, 1.0);
+  EXPECT_EQ(d.w_gate_barrier, 0.0);
+  // gate: the default barrier adds nothing, bit for bit, also with the term in the band
+  GateEnv e(1.0);
+  MppiParams p = gate_only();
+  auto s = e.solver(p);
+  MppiParams pz = p;
+  pz.gate_barrier_margin = 3.0;  // a margin alone (weight 0) changes nothing
+  auto sz = e.solver(pz);
+  const auto seq = e.constant(1.5, 0.0);
+  CostBreakdown a, b;
+  s.evaluate_sequence(e.gate_input(1.5), seq.data(), &a);
+  sz.evaluate_sequence(e.gate_input(1.5), seq.data(), &b);
+  EXPECT_GT(a.gate, 0.0);
+  EXPECT_EQ(a.gate, b.gate);
+  EXPECT_EQ(a.total, b.total);
+}
+
+TEST(MppiK4, ValueGainScalesOnlyTheCostToGo) {
+  Env e;
+  MppiParams p = only_weights();
+  p.w_progress = 10.0;
+  p.w_trust = 400.0;
+  MppiParams pg = p;
+  pg.lap_value_gain = 0.4;
+  auto s1 = e.solver(p);
+  auto sg = e.solver(pg);
+  const auto bound = [](double st) { return st < 0.5 ? 1.5 : 0.5; };
+  const auto togo = [](double st) { return 9.0 - 2.0 * st; };
+  const LapProfile prof = make_profile(0.0, bound, togo);
+  const auto seq = e.constant(0.8, 0.0);
+  SolveInput in = e.input(0.8, 0.0, 1.5);
+  in.lap = &prof;
+  CostBreakdown one, gain;
+  s1.evaluate_sequence(in, seq.data(), &one);
+  sg.evaluate_sequence(in, seq.data(), &gain);
+  EXPECT_LT(one.lap_terminal, 0.0);
+  EXPECT_NEAR(gain.lap_terminal, 0.4 * one.lap_terminal, 1e-12);
+  EXPECT_EQ(gain.lap_trust, one.lap_trust);
+  EXPECT_GT(gain.lap_trust, 0.0);
+  EXPECT_EQ(gain.progress, 0.0);
+  // keep_progress: there is no cost-to-go to scale, the gain changes nothing
+  MppiParams kp = pg;
+  kp.lap_reward_mode = MppiParams::LapRewardMode::kKeepProgress;
+  MppiParams kp1 = p;
+  kp1.lap_reward_mode = MppiParams::LapRewardMode::kKeepProgress;
+  CostBreakdown k_gain, k_one;
+  e.solver(kp).evaluate_sequence(in, seq.data(), &k_gain);
+  e.solver(kp1).evaluate_sequence(in, seq.data(), &k_one);
+  EXPECT_EQ(k_gain.total, k_one.total);
+  // no profile: the plain progress term whatever the gain
+  in.lap = nullptr;
+  CostBreakdown n_gain, n_one;
+  sg.evaluate_sequence(in, seq.data(), &n_gain);
+  s1.evaluate_sequence(in, seq.data(), &n_one);
+  EXPECT_EQ(n_gain.total, n_one.total);
+}
+
+TEST(MppiK4, BarrierCountsTheStepsInsideItsBandAndNothingOutside) {
+  GateEnv e(1.0);
+  MppiParams p = only_weights();
+  p.w_gate = 0.0;  // the barrier alone
+  p.w_gate_barrier = 7.0;
+  p.gate_barrier_margin = 1.1;
+  auto s = e.solver(p);
+  const double v = 1.5;
+  const auto seq = e.constant(v, 0.0);
+  CostBreakdown bd;
+  s.evaluate_sequence(e.gate_input(v), seq.data(), &bd);
+  const double d0 = e.table.distance(0.0);
+  const double ref = 1.1 * e.cfg.limits.ttc_warning_s;
+  int n = 0;
+  for (int k = 0; k < kGateCostSteps; ++k) {
+    const double d = d0 - v * 0.05 * k;
+    const double ttc = d > 0.0 ? d / v : 0.0;
+    if (ttc < ref) ++n;
+  }
+  ASSERT_GT(n, 0) << "the scene must put the approach inside the band";
+  EXPECT_NEAR(bd.gate, 7.0 * n, 1e-12);
+  EXPECT_NEAR(bd.total, bd.gate, 1e-12) << "nothing else is on";
+  // with the soft term on as well, the barrier adds on top of it
+  MppiParams pb = gate_only();
+  MppiParams pb2 = pb;
+  pb2.w_gate_barrier = 7.0;
+  CostBreakdown soft, both;
+  e.solver(pb).evaluate_sequence(e.gate_input(v), seq.data(), &soft);
+  e.solver(pb2).evaluate_sequence(e.gate_input(v), seq.data(), &both);
+  EXPECT_NEAR(both.gate, soft.gate + 7.0 * n, 1e-9);
+  // far from the wall, braking, or steering clear: no barrier cost
+  GateEnv far(6.0);
+  CostBreakdown f;
+  far.solver(p).evaluate_sequence(far.gate_input(v), seq.data(), &f);
+  EXPECT_EQ(f.gate, 0.0);
+  CostBreakdown stop;
+  const auto braking = e.constant(0.0, 0.0);
+  s.evaluate_sequence(e.gate_input(v), braking.data(), &stop);
+  EXPECT_EQ(stop.gate, 0.0);
+  CostBreakdown arc;
+  const auto clear = e.constant(v, e.cfg.geometry.steering_max_rad);
+  s.evaluate_sequence(e.gate_input(v, e.cfg.geometry.steering_max_rad), clear.data(), &arc);
+  EXPECT_EQ(arc.gate, 0.0);
+  // a slow approach that stays above the band costs nothing, the soft hinge with a wider margin
+  // still charges it (the barrier is the narrower rule)
+  // its last scored step (k = kGateCostSteps - 1) still has 0.05 s more than the band
+  const double v_slow = d0 / (ref + 0.05 * (kGateCostSteps - 1) + 0.05);
+  const auto crawl = e.constant(v_slow, 0.0);
+  CostBreakdown slow_b, slow_soft;
+  s.evaluate_sequence(e.gate_input(v_slow), crawl.data(), &slow_b);
+  MppiParams wide = gate_only();
+  wide.gate_ttc_margin = 1.6;
+  e.solver(wide).evaluate_sequence(e.gate_input(v_slow), crawl.data(), &slow_soft);
+  EXPECT_EQ(slow_b.gate, 0.0);
+  EXPECT_GT(slow_soft.gate, 0.0);
+  // no table: no barrier
+  SolveInput in = e.gate_input(v);
+  in.gate = nullptr;
+  CostBreakdown none;
+  s.evaluate_sequence(in, seq.data(), &none);
+  EXPECT_EQ(none.gate, 0.0);
+}
+
+TEST(MppiK4, TheSolverStaysOutOfTheBandWithTheBarrierAlone) {
+  GateEnv e(0.9);
+  auto drive = [&](double w_barrier) {
+    MppiParams p;
+    p.horizon_steps = kT;
+    p.samples = 256;
+    p.speed_floor_mps = 0.2;
+    p.seed = 4;
+    p.w_gate = 0.0;
+    p.w_gate_barrier = w_barrier;
+    MppiSolver solver = e.solver(p, 256);
+    SolveInput in = e.gate_input(1.0, 0.0, 1.5);
+    SolveOutput out;
+    for (int i = 0; i < 8; ++i) out = solver.solve(in);
+    return out;
+  };
+  const SolveOutput with_barrier = drive(50.0);
+  const SolveOutput without = drive(0.0);
+  EXPECT_TRUE(would_trip_exact(e.table, without.cmd.steering_cmd, without.cmd.speed_cmd, 1.0,
+                               e.cfg.limits));
+  EXPECT_FALSE(with_barrier.cmd_would_trip);
+  EXPECT_FALSE(would_trip_exact(e.table, with_barrier.cmd.steering_cmd, with_barrier.cmd.speed_cmd,
+                                1.0, e.cfg.limits));
+}
+
+TEST(MppiK4, BarrierStepsLimitsTheCountToTheFirstSteps) {
+  GateEnv e(1.0);
+  MppiParams p = only_weights();
+  p.w_gate = 0.0;
+  p.w_gate_barrier = 5.0;
+  p.gate_barrier_margin = 1.1;
+  EXPECT_EQ(p.gate_barrier_steps, kGateCostSteps) << "default: every gate cost step";
+  const double v = 1.5;
+  const auto seq = e.constant(v, 0.0);
+  const double d0 = e.table.distance(0.0);
+  const double ref = 1.1 * e.cfg.limits.ttc_warning_s;
+  for (int steps = 1; steps <= kGateCostSteps; ++steps) {
+    p.gate_barrier_steps = steps;
+    int n = 0;
+    for (int k = 0; k < steps; ++k) {
+      const double d = d0 - v * 0.05 * k;
+      if ((d > 0.0 ? d / v : 0.0) < ref) ++n;
+    }
+    CostBreakdown bd;
+    e.solver(p).evaluate_sequence(e.gate_input(v), seq.data(), &bd);
+    EXPECT_NEAR(bd.gate, 5.0 * n, 1e-12) << steps;
+  }
+}

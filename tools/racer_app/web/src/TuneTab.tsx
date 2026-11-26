@@ -302,6 +302,7 @@ export function TuneTab() {
                   </div>
                   {n.dv1_variant === "K3" && <div class="sub">K3 was unsafe in sim (B11): start with the speed cap, owner on the kill switch.</div>}
                   {n.dv1_variant === "K3s" && <div class="sub">K3s is a development fix of K3 (heavier gate cost and TTC margin, TTC warning zones, bound held after a doubtful lap), unregistered: start with the speed cap, owner on the kill switch.</div>}
+                  {n.dv1_variant === "K4" && <div class="sub">K4 is K3s's lap parts with a gate barrier in the planner (charges only plans inside the TTC warning band) instead of the heavier gate cost, unregistered: start with the speed cap, owner on the kill switch.</div>}
                   {pErr.dv1_variant && <div class="why">{pErr.dv1_variant}</div>}
                 </>
               )}

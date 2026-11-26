@@ -462,4 +462,11 @@ describe("prototype switches (owner decision 29)", () => {
     expect(bundleLabel("dyn-v0.1-2026-11-12")).toBe("dyn-v0.1-2026-11-12");
     expect(bundleLabel(PROTOTYPE.dynamics)).toBe(PROTOTYPE.dynamics);
   });
+  it("marks dyn-v0.8 as a candidate (its rule against dyn-v0.7p failed)", () => {
+    expect(bundleLabel("dyn-v0.8-2026-11-25")).toBe("dyn-v0.8-2026-11-25 (candidate)");
+    expect(PROTOTYPE.dynamics).not.toBe("dyn-v0.8-2026-11-25");
+  });
+  it("marks dyn-v0.9 (ground scale) as a candidate (Y1 and solve items failed)", () => {
+    expect(bundleLabel("dyn-v0.9-2026-11-25")).toBe("dyn-v0.9-2026-11-25 (candidate)");
+  });
 });

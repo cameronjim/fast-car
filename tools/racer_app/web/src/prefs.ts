@@ -105,6 +105,8 @@ export const CANDIDATE_BUNDLES: readonly string[] = [
   "trackperc-v4-2026-11-25",
   "trackperc-v5-2026-11-25",
   "dyn-v0.6r-2026-11-24",
+  "dyn-v0.8-2026-11-25",
+  "dyn-v0.9-2026-11-25",
 ];
 
 /** A bundle name as the pickers show it. */

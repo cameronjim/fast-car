@@ -21,7 +21,7 @@ from typing import Any
 import jsonschema
 import yaml
 
-from racer_track_perception import fuse, preprocess
+from racer_track_perception import fuse, fuse_v2, preprocess
 from racer_track_perception import track as tr
 from racer_track_perception.errors import (
     BundleSchemaVersionMismatch,
@@ -45,7 +45,10 @@ ARCH_TYPE_REFINE_V1 = "circ_conv1d_v0_refine_v1"
 # manifest carries the frozen `fuse.FuseConfig` as io.arch.fuse; a loader that does not know this
 # value refuses it as an IoContractMismatch.
 ARCH_TYPE_FUSED_V1 = "circ_conv1d_v0_fused_v1"
-ARCH_TYPES = (ARCH_TYPE, ARCH_TYPE_REFINE_V1, ARCH_TYPE_FUSED_V1)
+# `fused-v2` (brief 55): the tracer's edge polylines, the net's centre, half widths by ray cast
+# along the output's own normals. io.arch.fuse carries a `fuse_v2.FuseV2Config`.
+ARCH_TYPE_FUSED_V2 = "circ_conv1d_v0_fused_v2"
+ARCH_TYPES = (ARCH_TYPE, ARCH_TYPE_REFINE_V1, ARCH_TYPE_FUSED_V1, ARCH_TYPE_FUSED_V2)
 MOUNT_TOLERANCE = 1e-6
 WEIGHTS_FILE = "weights.npz"
 SCHEMA_RELATIVE = Path("config") / "pnp" / "bundle.schema.json"
@@ -67,8 +70,15 @@ class Bundle:
 
     @property
     def fuse_config(self) -> fuse.FuseConfig | None:
-        """The frozen fusion settings when the bundle declares `fused-v1`, else None."""
-        if str(self.manifest["io"]["arch"]["type"]) != ARCH_TYPE_FUSED_V1:
+        """The frozen fusion settings when the bundle declares `fused-v1` (a `FuseConfig`) or
+        `fused-v2` (a `fuse_v2.FuseV2Config`, a subclass), else None."""
+        arch = str(self.manifest["io"]["arch"]["type"])
+        if arch == ARCH_TYPE_FUSED_V2:
+            try:
+                return fuse_v2.FuseV2Config.from_dict(self.manifest["io"]["arch"].get("fuse"))
+            except ValueError as exc:
+                raise IoContractMismatch(str(exc)) from exc
+        if arch != ARCH_TYPE_FUSED_V1:
             return None
         try:
             return fuse.FuseConfig.from_dict(self.manifest["io"]["arch"].get("fuse"))
@@ -174,6 +184,11 @@ def _check_io(io: dict[str, Any], vehicle: LiveVehicle) -> None:
     if arch == ARCH_TYPE_FUSED_V1:
         try:
             fuse.FuseConfig.from_dict(io["arch"].get("fuse"))
+        except ValueError as exc:
+            raise IoContractMismatch(str(exc)) from exc
+    if arch == ARCH_TYPE_FUSED_V2:
+        try:
+            fuse_v2.FuseV2Config.from_dict(io["arch"].get("fuse"))
         except ValueError as exc:
             raise IoContractMismatch(str(exc)) from exc
 

@@ -1,0 +1,97 @@
+# Pre-registered constants for the fused perception attempt of 2026-11-23: candidate fused-v2
+# (geometric corridor, net centre, half widths by ray cast, no retraining), gates GP1d and GP1d-K,
+# and the perception roles of the 2026-11-16 and 2026-11-22 bags.
+# Written 2026-11-23 by the designer after owner decision 27, BEFORE any code of this attempt.
+# Rules: claude-docs/briefs-v0.5/55-perception-fused-v2.md, copied into
+# docs/notes/preregistration-pnp-v0.6-perception-fused.md by the implementer's first commit.
+# Do not edit after the first commit. Every earlier prereg file and result is unchanged and stands:
+# GP1 "better where it trained, not shown elsewhere", GP1b FAIL, GP1c and GP1c-K "not attempted:
+# fusion cannot keep the corridor" (fused-v1 with the slope limit), M-A2 "no measured path".
+prereg_id: pnp-v0.6-perception-fused
+written: 2026-11-23
+supersedes: nothing
+owner_decision: {source: claude-docs/owner-decisions-2026-11-16.md, item: 27}
+v04_file: evaluation/prereg/pnp-v0.4.yaml
+v04_sha256: 78510c1423278f80c42511e6caab095818598af6db6a284dd5479f74a03a1d63
+v04_addendum_file: evaluation/prereg/pnp-v0.4-addendum-1.yaml
+v04_addendum_sha256: ada5a83675e5c843fb8e121a1190e4458f823b1ed2ff32a34a46c5fb4ff76824
+
+candidate:
+  name: fused-v2
+  weights: trackperc-v2-2026-11-14, frozen, no training and no fine-tuning of anything
+  arch_type: circ_conv1d_v0_fused_v2      # an existing field; a loader that does not know it refuses
+  centre: fused-v1 rule (towards the net's refined centreline, within reach, edge margin kept)
+  half_widths: distance along the OUTPUT polyline's own normal to the tracer's edge polylines (ray cast)
+  stations: resampled at 0.20 m by the LocalTrack contract (design 13 section 4.1)
+  bundle: trackperc-v2g-<date>
+  baseline: geometric-v1, the deployed backend
+  reported_as: geometric plus net centre, never as the net
+
+what_the_designer_read: [PR 187 comments, docs/notes/gp1c-not-attempted-2026-11-14.md, the slope table,
+                         docs/notes/oracle-track-2026-11.md, the run list of the 2026-11-22 bag]
+
+data_roles:                 # perception roles only
+  development:              # free to tune on
+    - sim
+    - v0.2 train roles, H-run, A-run, the 2026-11-12 layout bags
+    - folds F1 and F2 with their fold models
+    - the bags of 2026-11-16 (02-18-54, 02-29-27, 22-38-47, 22-45-39, 23-04-09), moving scans
+  heldout_14:               # never read by a perception pass (GP1c was not attempted)
+    - the perception `heldout` segments of 2026-11-14 in pnp-v0.4.yaml (H14 labelled, A14 all moving)
+  heldout_22:
+    - runs R0 to R4 of /Users/cameronjim/code/car-data/session-2026-11-22/2026-11-23T03-50-32_car_teleop, whole (H22 labelled, A22 all moving)
+  never_opened: [the `reserve` segments of 2026-11-14, every bag recorded after 2026-11-22]
+  moving_scan: wheel speed at least 0.2 m/s
+  label_rule: selflabel.py as on main; a label's submap uses no scan outside its own segment or run
+
+tuning:                     # development sets only, before the freeze
+  free: [reach_m, edge_margin_m, blend, append_far, edge_end_extension_m up to 0.20]
+  max_shift_slope_grid: [0.05, 0.10, 0.15, 0.20, 0.30, none]
+  development_margin:       # addendum 1 section 3.2, unchanged, on EVERY development set
+    max_mean_loss: 0.005
+    max_mean_excess: 0.005
+    max_p99_loss: 0.025
+    max_p99_excess: 0.025
+  pick: among settings that meet the margin on every set, the lowest mean of E_c(fused) / E_c(geometric) over the labelled development sets
+  development_benefit: {max_ratio_on_every_labelled_development_set: 0.95}
+  if_no_setting_meets_both: "GP1d not attempted"   # nothing frozen, no heldout scan read
+  corridor_measure: racer_pnp_perception.corridor as on main, definitions unchanged
+
+gate:                       # GP1d; items 1 to 5 and K on heldout_14 and on heldout_22, each by itself
+  item_1_min_labelled_scans: 300                 # fewer on a set: that set is undecided
+  item_2: {max_ec_ratio: 0.90, bootstrap_upper_below: 1.00}
+  item_3: V(fused) at least V(geometric) on the labelled set
+  item_4:
+    cells: direction by speed bin, 0.2 to 0.6, 0.6 to 0.85, 0.85 and up (lower edge in the bin)
+    min_labelled_scans: 40
+    max_ec_ratio: 1.10
+  item_5:                                        # label-free, on the all-moving set
+    max_mean_intrusion: max(0.02, geometric + 0.005)
+    max_boundary_residual_median_m: 0.10
+    max_clearance_deficit_p90_m: 0.05
+    min_c95: geometric minus 0.02
+  item_6: v0.3 section 3.3 items 1 to 5 on the development sets, reported as development
+  item_7_latency: {scans: 2000, threads: 1, max_p99_ms: 10.0, covers: preprocess plus tracer plus net plus fusion}
+  item_8_canary: {suite: tests/l5_pnp, contacts_allowed: 0, max_median_lap_ratio_to_geometric: 1.03}
+  bootstrap: as v0.2 section 2
+gate_k:                     # GP1d-K; thresholds of GP1c-K, unchanged; on A14 and on A22, each by itself
+  max_mean_loss: 0.01
+  max_p99_loss: 0.05
+  max_mean_excess: 0.01
+  max_p99_excess: 0.05
+
+one_pass: both heldout sets are scored once, together, after the freeze commit; a rerun forced by a bug is reported next to the first run
+
+outcomes:
+  pass: "candidate backend in the layout family it trained on, on two fresh sessions"   # GP1d and GP1d-K on both sets
+  pass_one_set_only: "not shown across sessions"                 # geometric stays
+  fail_2_or_3: "no better than geometric in the layout"
+  pass_2_3_fail_other: "better where it trained, not shown elsewhere"
+  gp1d_pass_k_fail: "better centre, corridor not kept"
+  undecided: a set with fewer than 300 labelled scans
+  always_said: "M-A2 measured under 3 percent of lap time for a perfect track in sim. A pass claims a more accurate centre, not a faster lap."
+
+on_the_car_after_a_pass:    # v0.2 section 2 and v0.4 section 3.4, unchanged
+  step_1: "shadow_perception_bundle:=<fused bundle>, p99 under 10 ms on the Orin"
+  step_2: "backend:=net perception_bundle:=<fused bundle>, same cap and direction as a geometric run: mean track confidence at least geometric minus 0.03, no new TTC or obstacle brake"
+  default: geometric, unchanged

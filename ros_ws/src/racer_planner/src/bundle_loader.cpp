@@ -554,6 +554,16 @@ LoadResult load_dynamics_bundle(const std::string& bundle_dir, const VehicleGeom
       for (double s : params.residual.input_std) {
         if (s == 0.0) refuse(iom, "residual.input_std has a zero entry");
       }
+      // Bundle 1.2 (dyn-v0.9): the contract 1 ground scale, optional (absent: 1.0). A planner
+      // before 1.2 ignores the key and then fails the golden rollouts, so it cannot run such a
+      // bundle with the wrong step.
+      if (res["ground_scale"].IsDefined()) {
+        const double gs = double_of(res["ground_scale"], iom, "residual.ground_scale");
+        if (!std::isfinite(gs) || gs < kGroundAlphaMin || gs > kGroundAlphaMax) {
+          refuse(iom, "residual.ground_scale is outside [0.60, 1.05]");
+        }
+        params.residual.ground_scale = gs;
+      }
       const std::string residual_file = scalar_of(res["file"], iom, "residual.file");
       golden_file = scalar_of(io["golden"], iom, "io.golden");
       if (!plain_file_name(residual_file) || !plain_file_name(golden_file)) {

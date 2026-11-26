@@ -8,6 +8,7 @@
 #include <cstdio>
 
 #include "racer_planner/dynamics_model.hpp"
+#include "racer_planner/ego_motion.hpp"
 
 using namespace racer_planner;
 
@@ -522,4 +523,57 @@ TEST(DynamicsModel, Float32IsOffByDefaultAndTheDoublePathIsBitIdenticalWithoutIt
   EXPECT_NEAR(sa.x, sb.x, 1e-5);
   EXPECT_NEAR(sa.yaw, sb.yaw, 1e-5);
   EXPECT_NEAR(sa.v, sb.v, 1e-5);
+}
+
+// Bundle 1.2 (dyn-v0.9): the contract 1 ground scale moves the position by ground_scale * v and
+// leaves the wheel speed, the steering and the yaw exactly as the step without it; alpha_out
+// reports it, and dead reckoning translates by it. It needs the residual on and a value inside
+// the contract 2 alpha bounds; otherwise the step is the plain one.
+TEST(DynamicsModel, GroundScaleMovesThePositionOnly) {
+  DynamicsParams p = nominal();
+  p.residual.enabled = true;
+  p.residual.hidden = 16;
+  p.residual.output_scale = {0.7, 0.3};
+  p.residual.weights.resize(static_cast<std::size_t>(mlp_weight_count(16)));
+  std::uint32_t state = 99u;
+  for (double& w : p.residual.weights) {
+    state = state * 1664525u + 1013904223u;
+    w = (static_cast<double>(state) / 4294967296.0 - 0.5) * 1.2;
+  }
+  DynamicsParams q = p;
+  q.residual.ground_scale = 0.94;
+  const DynamicsModel plain(p, synthetic(), 0.05);
+  const DynamicsModel scaled(q, synthetic(), 0.05);
+  EXPECT_EQ(plain.ground_scale(), 1.0);
+  EXPECT_EQ(scaled.ground_scale(), 0.94);
+  const State s{0.2, -0.1, 0.3, 0.9, 0.05};
+  const Control u{1.0, 0.2};
+  double wa, wb, aa, ab;
+  const State a = plain.step_trig(s, u, std::cos(s.yaw), std::sin(s.yaw), &wa, &aa);
+  const State b = scaled.step_trig(s, u, std::cos(s.yaw), std::sin(s.yaw), &wb, &ab);
+  EXPECT_EQ(a.v, b.v);
+  EXPECT_EQ(a.delta, b.delta);
+  EXPECT_EQ(a.yaw, b.yaw);
+  EXPECT_EQ(wa, wb);
+  EXPECT_EQ(aa, 1.0);
+  EXPECT_EQ(ab, 0.94);
+  EXPECT_NEAR(b.x - s.x, 0.94 * (a.x - s.x), 1e-15);
+  EXPECT_NEAR(b.y - s.y, 0.94 * (a.y - s.y), 1e-15);
+  // without the residual, or outside [0.60, 1.05], or not finite: the plain step
+  for (const double gs : {0.59, 1.06, std::nan("")}) {
+    DynamicsParams r = p;
+    r.residual.ground_scale = gs;
+    EXPECT_EQ(DynamicsModel(r, synthetic(), 0.05).ground_scale(), 1.0) << gs;
+  }
+  DynamicsParams off = q;
+  off.residual.enabled = false;
+  EXPECT_EQ(DynamicsModel(off, synthetic(), 0.05).ground_scale(), 1.0);
+  // dead reckoning: a straight run translates by the scaled distance
+  EgoMotion ea(&plain), eb(&scaled);
+  for (EgoMotion* e : {&ea, &eb}) {
+    e->push(0.0, 1.0, 0.0, 1.0, 0.0);
+    e->push(1.0, 1.0, 0.0, 1.0, 0.0);
+  }
+  EXPECT_NEAR(eb.relative_pose(0.0, 0.5).x, 0.94 * ea.relative_pose(0.0, 0.5).x, 1e-12);
+  EXPECT_DOUBLE_EQ(eb.distance_between(0.0, 0.5), ea.distance_between(0.0, 0.5));  // wheel distance
 }

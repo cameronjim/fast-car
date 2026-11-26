@@ -192,6 +192,34 @@ TEST(BundleLoader, NarrowResidualFixtureLoadsInEveryMlpMode) {
   expect_refusal(load_dynamics_bundle(b.dir(), geometry, 0.5), RefusalCode::IoContractMismatch);
 }
 
+// Bundle 1.2 (dyn-v0.9): a residual with a ground scale (make_fixture.py --ground-scale 0.94)
+// loads in every MLP mode and carries the scale; the golden rollouts depend on it (removing the
+// key fails them); a scale outside [0.60, 1.05] is refused.
+TEST(BundleLoader, GroundScaleFixtureLoadsAndItsGoldenRolloutsNeedTheScale) {
+  const std::string dir = test::fixture_h16_gs_dir();
+  const auto geometry = test::fixture_geometry(dir);
+  for (const bool fast : {false, true}) {
+    for (const bool f32 : {false, true}) {
+      const auto r = load_dynamics_bundle(dir, geometry, 0.5, fast, f32);
+      ASSERT_TRUE(r.ok()) << fast << f32 << ": " << (r.refusal ? r.refusal->message : "");
+      EXPECT_DOUBLE_EQ(r.bundle->params.residual.ground_scale, 0.94);
+      EXPECT_EQ(r.bundle->params.residual.hidden, 16);
+      EXPECT_LT(r.bundle->golden_max_abs_error, kGoldenTolerance);
+    }
+  }
+  {
+    BundleCopy b(dir);
+    b.edit_manifest("\n    ground_scale: 0.94", "");
+    expect_refusal(load_dynamics_bundle(b.dir(), geometry, 0.5),
+                   RefusalCode::GoldenRolloutMismatch);
+  }
+  for (const char* bad : {"0.59", "1.06", ".nan"}) {
+    BundleCopy b(dir);
+    b.edit_manifest("ground_scale: 0.94", std::string("ground_scale: ") + bad);
+    expect_refusal(load_dynamics_bundle(b.dir(), geometry, 0.5), RefusalCode::IoContractMismatch);
+  }
+}
+
 // A width the planner does not implement is refused for its shape, even with a weight file of
 // the size that width implies (12: 4*12+12+144+12+24+2 = 242 floats).
 TEST(BundleLoader, IoContractMismatchUnsupportedResidualWidth) {

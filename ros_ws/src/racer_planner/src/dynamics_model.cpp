@@ -155,6 +155,11 @@ DynamicsModel::DynamicsModel(const DynamicsParams& params, const VehicleGeometry
                             mlp_weight_count(params.residual.hidden)),
       residual_hidden_(mlp_hidden_supported(params.residual.hidden) ? params.residual.hidden
                                                                     : kMlpHidden),
+      ground_scale_(residual_enabled_ && std::isfinite(params.residual.ground_scale) &&
+                            params.residual.ground_scale >= kGroundAlphaMin &&
+                            params.residual.ground_scale <= kGroundAlphaMax
+                        ? params.residual.ground_scale
+                        : 1.0),
       ground_enabled_(params.step_contract == 2 && params.ground.enabled &&
                       static_cast<int>(params.ground.weights.size()) == kMlpWeightCount) {
   // Packed whenever the weights are there (residual() may be called on a model whose step has the

@@ -434,7 +434,7 @@ describe("prototype switches (owner decision 29)", () => {
       lap_rate_hz: 30,
       lap_length_ratio_min: 0.75,
       lap_length_ratio_max: 1.5,
-      dv1_variant: "K6",
+      dv1_variant: "K3s",
       dynamics_fast_mlp: true,
       dynamics_mlp_float32: false,
       dynamics_adaptation: false,

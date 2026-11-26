@@ -127,9 +127,50 @@ they are commanded are no longer charged. All 18 dev runs, 3 workers (one run, T
 | **K6** | 18 | **0.872** | **0.881** | **0.944, faster in 9 of 12** | **0** | 0 | 0 | 0 | 0.227 | 0.168 |
 
 K6 meets the "clearly beats K3s" rule written before it ran (paired median at most 0.95, faster
-in at least 9 of 12, 0 TTC on all 18, 0 contacts). Under the coordinator's rule it becomes the
-prototype default (`profile:=prototype`, the app's Prototype preset) in place of K3s, and B12 is
-pre-registered and run once on its own branch (`feat/dv1-b12`, not merged; decision 28 style).
-Not measured: the cost of the predicted barrier's arc tracing on the Jetson (0 sample-count
-halvings in these sims with the dyn-car fixture; the planner halves its samples on its own when a
-solve is over budget).
+in at least 9 of 12, 0 TTC on all 18, 0 contacts), so B12 was pre-registered and run once on its
+own branch (`feat/dv1-b12`, not merged; decision 28 style).
+
+## B12 (registered, run once): "unsafe in sim"
+
+`docs/notes/pnp-lap-battery-b12-2026-11.md` on `feat/dv1-b12`. Cases X1 to X4, seeds 93, 94, 88
+runs. S0, S1, S3 PASS (the station bound item that failed in B11 passes); S2 FAIL on item 4 (X3 ccw
+pairs 1.089, 1.051), item 6 (k 2 against c 0: one watchdog and one rate_limit in one run under
+host load, 0 TTC engagements in all k runs) and item 7 (clearance k 0.2568 m against c 0.2902 m
+minus 0.03, short by 0.003 m); item 3 passes (median 0.921). S4 ratio 0.920, not judged. Host load
+during B12 was 6 to 25 (other agents).
+
+## K6 on the prototype stack (after B12)
+
+`track_family_runner --pnp-profile prototype --dv1-variant K6 --plant-mirror-reverse`
+(net perception, dyn-v0.7p with the fast MLP), 22 laps, one sim at a time, host load 1.8 to 4.4
+for every run, same build for K6, K3s and D v0. Dev cases S2 cw, P1 ccw (11, 12), N1 ccw (12,
+13); probe cases N1 ccw 11, P2 ccw 11, 12 (confirm only, run once per variant, not tuned on).
+Runs in `car-data/pnp/battery/v0.7-k6-proto/`.
+
+| run | K6 TTC warn / brake | K3s TTC warn / brake | K6 / K3s laps 8-10 | K6 / K3s laps 18-22 |
+|---|---|---|---|---|
+| S2 cw 11 | 0 / 0 | 2 / 0 | 1.059 | 1.097 |
+| S2 cw 12 | 0 / 0 | 4 / 0 | 1.066 | 0.991 |
+| P1 ccw 11 | 0 / 0 | 0 / 0 | 1.089 | 1.096 |
+| P1 ccw 12 | 0 / 0 | 3 / 0 | 1.073 | 0.990 |
+| N1 ccw 12 | 0 / 0 | 5 / 0 | 1.065 | 0.947 |
+| N1 ccw 13 | 0 / 0 | 5 / 0 | 1.035 | 0.965 |
+| N1 ccw 11 (probe) | 0 / 0 | 7 / 0 | 1.046 | 0.911 |
+| P2 ccw 11 (probe) | 0 / 0 | 4 / 0 | 1.002 | 0.919 |
+| P2 ccw 12 (probe) | 0 / 0 | 4 / 0 | 1.010 | 0.939 |
+
+0 contacts everywhere. K4 for reference (proto-sim's runs, same harness, load 3 to 4): N1 ccw 11
+0 events, late laps 14.5 s (K6 13.16); P2 ccw 11 2 warnings, 11.2 s (K6 10.16); P2 ccw 12 1
+warning, 10.9 s (K6 10.13); S2 cw 11 0 events, 15.3 s (K6 13.03). D v0 (lap_mode v0, same
+harness and build) on the probes: N1 ccw 11 0 warnings, 0 brakes, laps 8-10 15.13 s; P2 ccw 11 0, 0,
+11.08 s; P2 ccw 12 0, 0, 11.04 s.
+
+Reading: K6 passes the safety half of the coordinator's gate (0 TTC warnings and 0 brakes on all
+9, probes included, where K3s has 34 warnings) and is faster than K4 everywhere, but it does not
+beat K3s on the registered late-lap measure (laps 8 to 10: median 1.059, slower in 9 of 9). It is
+faster on laps 18 to 22 (median 0.965; 0.991 on the 6 dev runs), mostly because K3s's warnings
+make caution zones that slow its later laps. By the coordinator's rule K6 is therefore NOT the
+prototype default: it stays a switch and the profile keeps K3s. Owner question: K6 trades about 6
+percent of lap 8-10 speed for 0 TTC warnings on the prototype stack.
+Not measured: the cost of the predicted barrier's arc tracing on the Jetson (solve p50 3.3 ms in
+these sims on the Mac, 0 sample cuts).

@@ -169,7 +169,7 @@ export function TuneTab() {
               <button onClick={() => setPnp(prototypePatch(options))}>Prototype (all learned parts)</button>
             </div>
           </div>
-          <div class="sub">Net perception, dyn-v0.7p with fast MLP, D v1 K6 on the camera source, the session 2 lap settings. Development runs: keep the speed cap, owner on the kill switch.</div>
+          <div class="sub">Net perception, dyn-v0.7p with fast MLP, D v1 K3s on the camera source, the session 2 lap settings. Development runs: keep the speed cap, owner on the kill switch.</div>
           <NumRow
             label="Speed cap"
             unit="m/s"
@@ -304,7 +304,7 @@ export function TuneTab() {
                   {n.dv1_variant === "K3s" && <div class="sub">K3s is a development fix of K3 (heavier gate cost and TTC margin, TTC warning zones, bound held after a doubtful lap), unregistered: start with the speed cap, owner on the kill switch.</div>}
                   {n.dv1_variant === "K4" && <div class="sub">K4 is K3s's lap parts with a gate barrier in the planner (charges only plans inside the TTC warning band) instead of the heavier gate cost, unregistered: start with the speed cap, owner on the kill switch.</div>}
                   {n.dv1_variant === "K5" && <div class="sub">K5 is K4 with the gate barrier judged from the predicted pose of each plan step, unregistered: start with the speed cap, owner on the kill switch.</div>}
-                  {n.dv1_variant === "K6" && <div class="sub">K6 is K5 with the gate barrier on the first 4 plan steps; faster than K3s at 0 TTC warnings on dev sim runs, unregistered: start with the speed cap, owner on the kill switch.</div>}
+                  {n.dv1_variant === "K6" && <div class="sub">K6 is K5 with the gate barrier on the first 4 plan steps; 0 TTC warnings in sim on the prototype stack where K3s warns, about as fast late in a run, unregistered: start with the speed cap, owner on the kill switch.</div>}
                   {pErr.dv1_variant && <div class="why">{pErr.dv1_variant}</div>}
                 </>
               )}

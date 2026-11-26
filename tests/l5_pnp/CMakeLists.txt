@@ -15,6 +15,12 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_pnp_canary test_pnp_canary.py
     TIMEOUT 4800
   )
+  # The prototype profile (owner decision 29: net perception, dyn-v0.7p with the fast MLP, D v1
+  # K3s, session 2 lap settings) end to end, one short fixed scenario of 5 laps: 0 contacts, the
+  # nodes alive and both nets publishing. Bundles: fixtures/prototype.
+  ament_add_pytest_test(test_prototype_profile test_prototype_profile.py
+    TIMEOUT 900
+  )
 endif()
 
 ament_package()

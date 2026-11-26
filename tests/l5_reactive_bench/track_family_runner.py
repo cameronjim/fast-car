@@ -61,6 +61,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO_ROOT / "tools" / "track_session"))
 
 import dv1_measures
+import pnp_profile as pprof
 import pnp_tick_summary as pts
 import reactive_bench_runner as base
 from truth_lap_source import FaultPlan, TruthLapSource
@@ -869,6 +870,10 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             args.v_max_mps,
             mounted,
         )
+        # the launch's own switches (pnp.launch.py): nothing is added while they are off
+        planner.update(pnp_launch.adaptation_parameters(args.dynamics_adaptation))
+        planner.update(pnp_launch.fast_mlp_parameters(args.dynamics_fast_mlp))
+        planner.update(pnp_launch.mlp_float32_parameters(args.dynamics_mlp_float32))
         planner.update(json.loads(args.planner_params_json))
         if args.wall_clock:
             planner["use_sim_time"] = True
@@ -899,7 +904,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 args.v_lap1_mps,
                 "v1" if args.lap_memory == "v1" else "v0",
                 args.lap_source,
+                tuple(args.lap_length_ratio),
             )
+            # D v1 variant (pnp.launch.py dv1_variant): nothing unless lap memory v1
+            dv1_lap, dv1_planner = pnp_launch.dv1_variant_parameters(
+                args.dv1_variant, "v1" if args.lap_memory == "v1" else "v0"
+            )
+            lap_params.update(dv1_lap)
+            planner.update(dv1_planner)
+            planner.update(json.loads(args.planner_params_json))
             lap_params.update(
                 {
                     # The heading the gate integrates from the gated steering command: what the
@@ -951,6 +964,9 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             stack.append((name, [base._executable(package, name)]))
         result.update(
             {
+                "dv1_variant": args.dv1_variant,
+                "dynamics_fast_mlp": args.dynamics_fast_mlp,
+                "lap_length_ratio": list(args.lap_length_ratio),
                 "backend": args.backend,
                 "v_max_mps": args.v_max_mps,
                 "v_lap1_mps": args.v_lap1_mps,
@@ -1256,11 +1272,20 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             (base._stamp_s(msg.header.stamp), received_s(), int(msg.state), missing)
         )
 
+    profile_stats = pprof.ProfileStats()
     if args.driver == "pnp":
-        from racer_pnp_msgs.msg import LapEvent, LapGuidance, PlannerStatus
+        from racer_pnp_msgs.msg import LapEvent, LapGuidance, LocalTrack, PlannerStatus
+        from std_msgs.msg import String as StatusString
 
         def on_planner(m) -> None:
             on_planner_status(m)
+            profile_stats.on_planner(
+                int(m.state),
+                float(m.solve_time_s),
+                int(m.samples),
+                str(m.dynamics_model_id),
+                str(m.perception_model_id),
+            )
             planner_ticks.append(
                 pts.Tick(
                     base._stamp_s(m.header.stamp),
@@ -1276,6 +1301,19 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 driving_first.append(node.get_clock().now().nanoseconds * 1e-9)
 
         node.create_subscription(PlannerStatus, "/pnp/planner/status", on_planner, reliable)
+        # system measures (pnp_profile.ProfileStats): V per frame and the perception status
+        node.create_subscription(
+            LocalTrack,
+            "/pnp/local_track",
+            lambda m: profile_stats.on_track(int(m.valid_count), str(m.model_id)),
+            reliable,
+        )
+        node.create_subscription(
+            StatusString,
+            "/pnp/perception/status",
+            lambda m: profile_stats.on_perception_status(m.data),
+            reliable,
+        )
         if args.lap_memory != "none":
             from std_msgs.msg import String
 
@@ -1626,6 +1664,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     json.loads(counts.read_text()) if counts.exists() else {"error": "no file"}
                 )
             result["pnp_ticks"] = pts.tick_summary(planner_ticks)
+            result["system"] = profile_stats.summary()
             result["obstacle_passes"] = pts.obstacle_passes(
                 planner_ticks,
                 recording.odom,
@@ -1779,6 +1818,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         node.destroy_node()
         rclpy.shutdown()
         base._stop([p for _, p in processes])
+        if args.driver == "pnp":
+            result["node_logs"] = pprof.node_log_summary(work, [name for name, _ in processes])
     return result
 
 
@@ -1840,6 +1881,51 @@ def build_parser() -> argparse.ArgumentParser:
         "lap (reported, no threshold)",
     )
     parser.add_argument("--v-max-mps", type=float, default=0.6, help="pnp planner speed cap")
+    parser.add_argument(
+        "--pnp-profile",
+        default="none",
+        help="driver pnp: a pnp.launch.py profile (none, prototype): its defaults go in front of "
+        "this command line, so an argument given here still wins (tests/l5_reactive_bench/"
+        "pnp_profile.py: lap_source camera runs on the simulator's lap oracle)",
+    )
+    parser.add_argument(
+        "--pnp-models-dir",
+        default=pprof.CAR_MODELS_DIR,
+        help="where the profile's bundles are (the profile names them under "
+        f"{pprof.CAR_MODELS_DIR}, the car's directory)",
+    )
+    parser.add_argument(
+        "--dv1-variant",
+        default="registered",
+        help="driver pnp, lap memory v1: pnp.launch.py dv1_variant (registered, K1, K2, K3, K3s, ...)",
+    )
+    parser.add_argument(
+        "--dynamics-fast-mlp",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="driver pnp: the planner's dynamics_fast_mlp (pnp.launch.py)",
+    )
+    parser.add_argument(
+        "--dynamics-mlp-float32",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="driver pnp: the planner's dynamics_mlp_float32 (pnp.launch.py)",
+    )
+    parser.add_argument(
+        "--dynamics-adaptation",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="driver pnp: the planner's dynamics_adaptation (pnp.launch.py)",
+    )
+    parser.add_argument(
+        "--lap-length-ratio",
+        type=float,
+        nargs=2,
+        default=(0.0, 0.0),
+        metavar=("MIN", "MAX"),
+        help="lap memory, camera or truth source: the length check as a ratio of the reference "
+        "(pnp.launch.py lap_length_ratio_min/max); 0 0 is the registered band",
+    )
     parser.add_argument(
         "--lap-memory",
         default="none",
@@ -1960,9 +2046,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, dict]:
+    """The runner's arguments with a `--pnp-profile` expanded in front of them (explicit
+    arguments win), and the profile notes ({} without a profile)."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    profiles = pprof.load_profiles(LOCALISATION_LAUNCH / "pnp.launch.py")
+    expanded, notes = pprof.expand_profile_argv(argv, profiles)
+    return build_parser().parse_args(expanded), notes
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args, notes = parse_args(argv)
     result = run_benchmark(args)
+    if notes:
+        result["pnp_profile"] = notes
     text = json.dumps(result, indent=2, sort_keys=True, default=str)
     print(text)
     if args.out:

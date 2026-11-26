@@ -75,6 +75,10 @@ def config_grid():
             f"multi_step_from_one_capped_wd1e-2_gs{tag}", MULTI_STEP_FROM_ONE, h,
             learn_ground_scale=True,
         )  # fmt: skip
+        out[f"multi_step_from_one_capped_wd1e-2_gs_yaw2{tag}"] = cfg(
+            f"multi_step_from_one_capped_wd1e-2_gs_yaw2{tag}", MULTI_STEP_FROM_ONE, h,
+            learn_ground_scale=True, loss_weights=(1.0, 2.0, 1.0),
+        )  # fmt: skip
         out[f"multi_step_from_one_capped_wd1e-2_posw4{tag}"] = cfg(
             f"multi_step_from_one_capped_wd1e-2_posw4{tag}", MULTI_STEP_FROM_ONE, h,
             loss_weights=(0.25, 1.0, 4.0),

@@ -1,0 +1,24 @@
+# The sim car's actuation for test_gap_follow_loop_canary.py: the io.nominal block of the dynamics
+# bundle dyn-v0.1-2026-11-12 (fitted on the car's bags of 2026-10-24 to 2026-11-12; the bundle
+# itself lives in the data tree, data/pnp/models/, and is not committed). track_family_runner.py's
+# --plant-bundle reads only io.nominal, so only that is copied here, unchanged.
+#
+# Why: the stock f1tenth_gym plant steers with no lag, acts on a command the moment it arrives and
+# brakes at about 9.5 m/s^2. The canary adds the lag that reproduces the floor refusals with the
+# runner's own flags (--plant-steer-tau, --plant-command-delay; the bundle's steer_tau_s and
+# command_delay_s are not read by the runner). This block adds the car's speed response on top
+# (accel 2.0, decel 0.67 m/s^2, dead band 0.22 m/s, left/right steering gain): on its own it does
+# not make the race profile brake, the lag does (docs/notes/gap-follow-loop-2026-11-16.md, ablation).
+io:
+  nominal:
+    speed_gain: 0.9482438088762631
+    speed_deadband_mps: 0.22
+    speed_tau_s: 0.22460632746810144
+    accel_max_mps2: 2.0
+    decel_max_mps2: 0.6731081096112491
+    steer_gain_left: 0.9166243626015708
+    steer_gain_right: 1.0114633713998802
+    steer_offset_rad: 0.015222998571431204
+    steer_tau_s: 0.02787697420940658
+    command_delay_s: 0.0
+    understeer_s2_per_m2: 0.10938200992093731

@@ -35,6 +35,7 @@ GAP_FOLLOW_PROFILES = (
     "lane-2026-10-25",
     "race-2026-11-12",
     "race-2026-11-13",
+    "race-2026-11-16",
 )
 PARK_PROFILES = ("none", "floor-2026-10-07")
 
@@ -72,6 +73,7 @@ GAP_FOLLOW_PROFILE_MAX_SPEED_MPS = {
     "lane-2026-10-25": 0.64,
     "race-2026-11-12": 1.0,
     "race-2026-11-13": 1.3,
+    "race-2026-11-16": 1.3,
 }
 #: The node refuses min_speed_mps > max_speed_mps and every profile uses its default 0.36, so a
 #: cap below that is refused here instead of at launch. The caller may also set min_speed_mps,

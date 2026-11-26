@@ -37,6 +37,7 @@ void EgoMotion::advance(Pose2* pose, const Sample& s, double dt) const {
                  ? model_->yaw_rate_for(s.v, s.delta, s.speed_cmd, s.steering_cmd)
                  : s.v * std::tan(s.delta) / wheelbase_ / (1.0 + understeer_ * s.v * s.v);
   double v = s.v;  // the speed the car translates by: the wheel speed, or the ground speed
+  if (model_ != nullptr) v = s.v * model_->ground_scale();  // contract 1 ground scale (1: s.v)
   if (ground_ != nullptr) {
     v = ground_->ground_speed(s.v, s.delta, s.speed_cmd, s.steering_cmd);
     w = ground_->ground_yaw_rate(s.v, s.delta, s.speed_cmd, s.steering_cmd);

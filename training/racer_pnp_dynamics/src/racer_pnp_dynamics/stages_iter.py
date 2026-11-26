@@ -70,6 +70,11 @@ def config_grid():
                 f"multi_step_from_one_capped_wd1e-2_{wtag}{tag}", MULTI_STEP_FROM_ONE, h,
                 loss_weights=w,
             )  # fmt: skip
+        # dyn-v0.9: the contract 1 ground scale learned with the residual (bundle 1.2)
+        out[f"multi_step_from_one_capped_wd1e-2_gs{tag}"] = cfg(
+            f"multi_step_from_one_capped_wd1e-2_gs{tag}", MULTI_STEP_FROM_ONE, h,
+            learn_ground_scale=True,
+        )  # fmt: skip
         out[f"multi_step_from_one_capped_wd1e-2_posw4{tag}"] = cfg(
             f"multi_step_from_one_capped_wd1e-2_posw4{tag}", MULTI_STEP_FROM_ONE, h,
             loss_weights=(0.25, 1.0, 4.0),

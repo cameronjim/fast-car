@@ -251,6 +251,7 @@
             "input_mean": {"$ref": "#/$defs/number_list"},
             "input_std": {"$ref": "#/$defs/number_list"},
             "output_scale": {"$ref": "#/$defs/number_list"},
+            "ground_scale": {"type": "number", "minimum": 0.6, "maximum": 1.05},
             "file": {"type": "string", "minLength": 1}
           }
         },

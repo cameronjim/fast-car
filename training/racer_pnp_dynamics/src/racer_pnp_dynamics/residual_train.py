@@ -41,6 +41,10 @@ from .windows import warm_state
 
 LOG = logging.getLogger(__name__)
 
+# The contract 1 ground scale's range: contract 2's alpha bounds (addendum 1), which the planner
+# loader also enforces for io.residual.ground_scale.
+GROUND_SCALE_BOUNDS = (0.60, 1.05)
+
 ONE_STEP = "one_step"
 MULTI_STEP = "multi_step"
 MULTI_STEP_FROM_ONE = "multi_step_from_one_step"
@@ -65,6 +69,9 @@ class ResidualConfig:
     hidden: int = 32
     # weights of the (speed, yaw, position) terms of the multi step loss; (1, 1, 1) before dyn-v0.8
     loss_weights: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    # dyn-v0.9: learn the contract 1 ground scale (Residual.ground_scale) with the multi step loss,
+    # inside GROUND_SCALE_BOUNDS; False keeps it at 1.0
+    learn_ground_scale: bool = False
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
@@ -73,6 +80,8 @@ class ResidualConfig:
             raise ValueError(f"norm {self.norm!r}")
         if self.hidden < 1:
             raise ValueError(f"hidden {self.hidden} must be positive")
+        if self.learn_ground_scale and self.mode == ONE_STEP:
+            raise ValueError("the ground scale is learned by the multi step loss only")
         if len(self.loss_weights) != 3 or min(self.loss_weights) < 0 or sum(self.loss_weights) <= 0:
             raise ValueError(f"loss_weights {self.loss_weights} must be 3 weights, >= 0, not all 0")
 
@@ -299,6 +308,7 @@ def fit_candidate(
     ys = lambda s: s.y / divisor
     make = one_step_trainer_fn or one_step_trainer
     weights: MlpWeights | None = None
+    ground_scale = 1.0
     if cfg.mode in (ONE_STEP, MULTI_STEP_FROM_ONE):
         weights = make(cfg, cap)(xs(train), ys(train), xs(val), ys(val), seed)
     if cfg.mode in (MULTI_STEP, MULTI_STEP_FROM_ONE):
@@ -307,8 +317,10 @@ def fit_candidate(
         weights = train_multi_step_torch(  # pragma: no cover - needs torch
             cfg, seed, nominal, vehicle, train_ms, val_ms, (mean, std, scale), cap, weights
         )
+        if cfg.learn_ground_scale:  # pragma: no cover - needs torch
+            weights, ground_scale = weights
     assert weights is not None
-    residual = Residual(True, weights, mean, std, scale)
+    residual = Residual(True, weights, mean, std, scale, ground_scale)
     return Candidate(cfg, seed, residual, validation_p1(nominal, residual, vehicle, val_set))
 
 
@@ -388,13 +400,23 @@ def train_multi_step_torch(  # pragma: no cover - needs torch (dependency group 
             net[4].bias.zero_()
     mean, std, scale = (torch.as_tensor(a) for a in norm)
     c = {k: float(v) for k, v in nominal.to_dict().items()}
+    # ground scale = mid + half * tanh(p), inside GROUND_SCALE_BOUNDS, starting at 1.0
+    lo, hi = GROUND_SCALE_BOUNDS
+    mid, half = 0.5 * (lo + hi), 0.5 * (hi - lo)
+    gs_param = torch.nn.Parameter(torch.tensor(float(np.arctanh((1.0 - mid) / half))).double())
+
+    def ground_scale():
+        if not cfg.learn_ground_scale:
+            return None
+        return mid + half * torch.tanh(gs_param)
 
     def rollout(d_state0, d_cmds):
         state = d_state0
         out = [state]
+        gs = ground_scale()
         for k in range(d_cmds.shape[1]):
             state = _torch_step(
-                torch, state, d_cmds[:, k, :], c, vehicle, net, mean, std, scale, DT_S
+                torch, state, d_cmds[:, k, :], c, vehicle, net, mean, std, scale, DT_S, gs
             )
             out.append(state)
         return torch.stack(out, dim=1)
@@ -414,7 +436,10 @@ def train_multi_step_torch(  # pragma: no cover - needs torch (dependency group 
         st = rollout(s0, cm)
         return _rollout_loss(torch, st, vt, ps, sigmas, cfg.loss_weights)
 
-    opt = torch.optim.AdamW(net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    groups = [{"params": list(net.parameters())}]
+    if cfg.learn_ground_scale:
+        groups.append({"params": [gs_param], "weight_decay": 0.0})
+    opt = torch.optim.AdamW(groups, lr=cfg.lr, weight_decay=cfg.weight_decay)
     gen = torch.Generator().manual_seed(seed)
     best, best_state, bad = float("inf"), None, 0
     cap_t = None if cap_normalised is None else torch.as_tensor(cap_normalised)
@@ -436,6 +461,7 @@ def train_multi_step_torch(  # pragma: no cover - needs torch (dependency group 
         if val_loss < best - 1e-6:
             best, bad = val_loss, 0
             best_state = {k: v.clone() for k, v in net.state_dict().items()}
+            best_gs = float(mid + half * torch.tanh(gs_param.detach()))
         else:
             bad += 1
             if bad >= cfg.patience:
@@ -443,14 +469,17 @@ def train_multi_step_torch(  # pragma: no cover - needs torch (dependency group 
     assert best_state is not None
     net.load_state_dict(best_state)
     p = [t.detach().numpy().copy() for t in net.parameters()]
-    return MlpWeights(p[0], p[1], p[2], p[3], p[4], p[5])
+    w = MlpWeights(p[0], p[1], p[2], p[3], p[4], p[5])
+    return (w, best_gs) if cfg.learn_ground_scale else w
 
 
 def _pairs(w: MlpWeights):  # pragma: no cover - needs torch
     return ((w.w1, w.b1), (w.w2, w.b2), (w.w3, w.b3))
 
 
-def _torch_step(torch, state, ctrl, c, veh, net, mean, std, scale, dt):  # pragma: no cover
+def _torch_step(
+    torch, state, ctrl, c, veh, net, mean, std, scale, dt, ground_scale=None
+):  # pragma: no cover
     """model.step in torch, residual included (same equations, float64)."""
     x, y, yaw, v, delta = state.unbind(-1)
     speed_cmd, steer_cmd = ctrl[..., 0], ctrl[..., 1]
@@ -473,10 +502,11 @@ def _torch_step(torch, state, ctrl, c, veh, net, mean, std, scale, dt):  # pragm
     r = scale * net((torch.stack([v, delta, speed_cmd, steer_cmd], dim=-1) - mean) / std)
     dv = dv + r[..., 0] * dt
     yaw_rate = yaw_rate + r[..., 1]
+    vg = v if ground_scale is None else ground_scale * v
     return torch.stack(
         [
-            x + v * torch.cos(yaw) * dt,
-            y + v * torch.sin(yaw) * dt,
+            x + vg * torch.cos(yaw) * dt,
+            y + vg * torch.sin(yaw) * dt,
             yaw + yaw_rate * dt,
             torch.clamp(v + dv, min=0.0),
             delta_next,

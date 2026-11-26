@@ -123,7 +123,7 @@ def mlp(weights: np.ndarray, x: np.ndarray, layers=None) -> np.ndarray:
     return h
 
 
-def step(state, control, nom, veh, dt, residual=None):
+def step(state, control, nom, veh, dt, residual=None, ground_scale=1.0):
     x, y, yaw, v, delta = state
     speed_cmd, steering_cmd = control
     g = nom["steer_gain_left"] if steering_cmd >= 0 else nom["steer_gain_right"]
@@ -149,9 +149,10 @@ def step(state, control, nom, veh, dt, residual=None):
         r = scale * mlp(weights, x_in, layers_of(hidden_of(len(weights))))
         dv += float(r[0]) * dt
         yaw_rate += float(r[1])
+    vg = v * ground_scale if residual is not None else v  # bundle 1.2 ground scale
     return (
-        x + v * math.cos(yaw) * dt,
-        y + v * math.sin(yaw) * dt,
+        x + vg * math.cos(yaw) * dt,
+        y + vg * math.sin(yaw) * dt,
         yaw + yaw_rate * dt,
         max(0.0, v + dv),
         delta_next,
@@ -195,6 +196,7 @@ def make_bundle(
     dt: float = 0.05,
     model_id: str = "dyn-fixture-v0-2026-11-12",
     hidden: int = 32,
+    ground_scale: float = 1.0,
 ) -> None:
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
@@ -223,14 +225,16 @@ def make_bundle(
                 u = (0.0, 0.0)  # the last row's controls are not applied
             rows.append(f"{r},{k}," + ",".join(f"{c:.9g}" for c in (*u, *state)))
             if k < n:
-                state = step(state, u, nominal, vehicle, dt, residual)
+                state = step(state, u, nominal, vehicle, dt, residual, ground_scale)
     (out / "golden_rollouts.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     def sha(name: str) -> str:
         return hashlib.sha256((out / name).read_bytes()).hexdigest()
 
     nom_lines = "\n".join(f"    {k}: {v}" for k, v in nominal.items())
-    manifest = f"""bundle_schema_version: "1.1.0"
+    version = "1.1.0" if ground_scale == 1.0 else "1.2.0"
+    gs_line = "" if ground_scale == 1.0 else f"\n    ground_scale: {ground_scale!r}"
+    manifest = f"""bundle_schema_version: "{version}"
 kind: dynamics
 model_id: "{model_id}"
 created_utc: "2026-11-12T00:00:00Z"
@@ -256,7 +260,7 @@ io:
     activation: tanh
     input_mean: [{", ".join(repr(float(m)) for m in mean)}]
     input_std: [{", ".join(repr(float(s)) for s in std)}]
-    output_scale: [{", ".join(repr(float(s)) for s in scale)}]
+    output_scale: [{", ".join(repr(float(s)) for s in scale)}]{gs_line}
     file: residual_mlp.f32
   validity: {{v_min_mps: 0.0, v_max_mps: {v_max}}}
   golden: golden_rollouts.csv
@@ -473,6 +477,7 @@ def main() -> None:
     ap.add_argument("--sidecar", action="store_true")
     ap.add_argument("--contract", type=int, choices=[1, 2], default=1)
     ap.add_argument("--hidden", type=int, default=32, help="contract 1: residual width H")
+    ap.add_argument("--ground-scale", type=float, default=1.0, help="contract 1: bundle 1.2 scale")
     ap.add_argument(
         "--random-states",
         type=Path,
@@ -504,9 +509,10 @@ def main() -> None:
         v_max=args.v_max,
         seed=args.seed,
         hidden=args.hidden,
+        ground_scale=args.ground_scale,
         model_id="dyn-fixture-v0-2026-11-12"
-        if args.hidden == 32
-        else f"dyn-fixture-h{args.hidden}-2026-11-25",
+        if args.hidden == 32 and args.ground_scale == 1.0
+        else f"dyn-fixture-h{args.hidden}{'-gs' if args.ground_scale != 1.0 else ''}-2026-11-25",
     )
     if args.sidecar:
         write_sidecar(args.out, vehicle)

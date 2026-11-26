@@ -139,6 +139,10 @@ class Residual:
     input_mean: np.ndarray
     input_std: np.ndarray
     output_scale: np.ndarray
+    # dyn-v0.9 (bundle 1.2): ground distance per wheel distance of a contract 1 step, a learned
+    # constant; the position moves by ground_scale * v while v stays the wheel speed. 1.0 (every
+    # bundle before 1.2) is the plain contract 1 step, bit for bit.
+    ground_scale: float = 1.0
 
     @classmethod
     def disabled(cls) -> Residual:
@@ -202,14 +206,17 @@ def step(
         params.accel_max_mps2 * dt,
     )
     yaw_rate = v * np.tan(delta) / vehicle.wheelbase_m / (1.0 + params.understeer_s2_per_m2 * v * v)
+    v_ground = v
     if residual is not None and residual.enabled:
         r = residual.forward(np.stack([v, delta, speed_cmd, steer_cmd], axis=-1))
         dv = dv + r[..., 0] * dt
         yaw_rate = yaw_rate + r[..., 1]
+        if residual.ground_scale != 1.0:
+            v_ground = residual.ground_scale * v
     return np.stack(
         [
-            x + v * np.cos(yaw) * dt,
-            y + v * np.sin(yaw) * dt,
+            x + v_ground * np.cos(yaw) * dt,
+            y + v_ground * np.sin(yaw) * dt,
             yaw + yaw_rate * dt,
             np.maximum(0.0, v + dv),
             delta_next,

@@ -319,3 +319,58 @@ def test_a_capped_narrow_residual_is_bounded_by_its_weights_for_any_input(hidden
     w = cap_weights(_init_weights(np.random.default_rng(seed), out_scale=5.0, hidden=hidden), cap)
     out = mlp_forward(w, np.asarray(x, dtype=float))
     assert np.all(np.abs(out) <= cap + 1e-9)
+
+
+# ---- the contract 1 ground scale (bundle 1.2, dyn-v0.9) ------------------------------------------
+
+
+def _nominal():
+    from racer_pnp_dynamics.cli import read_pointer_nominal
+
+    return read_pointer_nominal(
+        ROOT / "training/pnp_models/dyn-v0.1-2026-11-12/manifest.yaml"
+    ).nominal
+
+
+def _res(hidden: int = 16, gs: float = 1.0) -> Residual:
+    w = cap_weights(
+        _init_weights(np.random.default_rng(3), out_scale=0.3, hidden=hidden), np.array([2.0, 0.5])
+    )
+    return Residual(True, w, np.array([0.6, 0.0, 0.6, 0.0]), np.array([0.3, 0.2, 0.3, 0.2]),
+                    np.array([1.0, 1.0]), gs)  # fmt: skip
+
+
+def test_the_ground_scale_moves_the_position_only_and_1_is_the_plain_step() -> None:
+    from racer_pnp_dynamics.model import step
+
+    vehicle, nominal = load_vehicle(), _nominal()
+    s = np.array([0.2, -0.1, 0.3, 0.9, 0.05])
+    u = np.array([1.0, 0.2])
+    a = step(s, u, nominal, vehicle, _res())
+    b = step(s, u, nominal, vehicle, _res(gs=0.94))
+    np.testing.assert_array_equal(a[2:], b[2:])
+    np.testing.assert_allclose(b[:2] - s[:2], 0.94 * (a[:2] - s[:2]), atol=1e-15)
+    # a disabled residual ignores it
+    off = replace(_res(gs=0.94), enabled=False)
+    np.testing.assert_array_equal(step(s, u, nominal, vehicle, off), step(s, u, nominal, vehicle))
+    with pytest.raises(ValueError, match="multi step"):
+        ResidualConfig("x", "one_step", learn_ground_scale=True)
+
+
+def test_a_ground_scale_bundle_is_1_2_and_without_one_it_stays_1_1(tmp_path) -> None:
+    vehicle, nominal = load_vehicle(), _nominal()
+    kw = dict(created_utc="2026-11-25T00:00:00Z", git_sha="0" * 40, training_config_sha256="0" * 64,
+              vehicle=vehicle, nominal=nominal, v_max_mps=1.3, data=["t"], metrics={},
+              golden_residual_rollouts=True)  # fmt: skip
+    m = write_bundle(tmp_path / "a", model_id="a", residual=_res(gs=0.94), **kw)
+    assert m["bundle_schema_version"] == "1.2.0"
+    assert m["io"]["residual"]["ground_scale"] == 0.94
+    assert read_bundle(tmp_path / "a").residual.ground_scale == 0.94
+    m = write_bundle(tmp_path / "b", model_id="b", residual=_res(), **kw)
+    assert m["bundle_schema_version"] == "1.1.0" and "ground_scale" not in m["io"]["residual"]
+    assert read_bundle(tmp_path / "b").residual.ground_scale == 1.0
+    # the schema bounds it to contract 2's alpha range
+    from racer_pnp_dynamics.export import BundleInvalid
+
+    with pytest.raises((BundleInvalid, ValueError)):
+        write_bundle(tmp_path / "c", model_id="c", residual=_res(gs=1.2), **kw)

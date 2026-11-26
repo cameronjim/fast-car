@@ -237,3 +237,19 @@ def test_drop_bins_leaves_the_input_alone_and_drops_something() -> None:
     dropped = out[:, 1] == 0
     assert dropped.any() and not dropped.all()
     assert (out[:, 0][dropped] == 1.0).all() and (out[:, 0][~dropped] == 0.4).all()
+
+
+def test_a_validation_plan_moves_the_cut_only_for_its_bags(label_dir: Path) -> None:
+    got = real.load_real([label_dir / "bagA.npz", label_dir / "bagW.npz"], SPLIT)
+    real.VAL_PLANS["test-plan"] = {"bagW": 0.5}
+    try:
+        _tr, _va, report = real.train_val_split(got, SPLIT, plan="test-plan")
+    finally:
+        del real.VAL_PLANS["test-plan"]
+    assert math.isclose(report["bagA/T"]["cut_s"], 85.0)  # no prefix match: VAL_FRACTION
+    assert math.isclose(report["bagW/whole_bag"]["cut_s"], 50.0)
+    assert real.plan_fraction("2026-11-24T04-36-54_car_teleop", "w2-v6") == 0.45
+    assert real.plan_fraction("2026-11-16T22-38-47_car_teleop", "w2-v6") == 0.40
+    assert real.plan_fraction("2026-11-13T22-20-18_car_teleop", "w2-v6") == real.VAL_FRACTION
+    with pytest.raises(ValueError):
+        real.plan_fraction("bagA", "no-such-plan")

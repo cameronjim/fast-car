@@ -109,6 +109,8 @@ def train(
     real_label_sigma_m: float = 0.0,
     real_label_sigma_near_m: float = 0.0,
     sigma_head_only: bool = False,
+    val_plan: str = "default",
+    spacing_weight: float = 0.0,
 ) -> dict[str, Any]:
     import torch
 
@@ -141,7 +143,7 @@ def train(
                 "heldout_bags": list(fold_def.heldout_bags),
                 "heldout_labels_removed": len(provenance),
             }
-        real_train, real_val, cut_report = real.train_val_split(everything, split)
+        real_train, real_val, cut_report = real.train_val_split(everything, split, plan=val_plan)
         real_info = {
             "files": [str(p) for p in real_paths],
             "split_sha256": split.sha256,
@@ -149,6 +151,7 @@ def train(
             "segments_used": sorted(
                 {f"{b}/{s}" for b, s in zip(everything.bag, everything.segment, strict=True)}
             ),
+            "val_plan": val_plan,
             "train_labels": len(real_train),
             "val_labels": len(real_val),
             "segment_cuts": cut_report,
@@ -249,7 +252,12 @@ def train(
                     )
                 ).to(dev)
             loss = model.loss_fn(
-                net(xb), yb, station_weight=weight, sigma_frozen=frozen, label_sigma=noise
+                net(xb),
+                yb,
+                station_weight=weight,
+                sigma_frozen=frozen,
+                label_sigma=noise,
+                spacing_weight=spacing_weight,
             )
             opt.zero_grad()
             loss.backward()
@@ -297,6 +305,7 @@ def train(
         "real_label_sigma_m": real_label_sigma_m,
         "real_label_sigma_near_m": real_label_sigma_near_m,
         "sigma_head_only": sigma_head_only,
+        "spacing_weight": spacing_weight,
         "scale_probability": scale_probability,
         "scale_range": list(scale_range) if scale_range else None,
         "fold": fold,
@@ -391,6 +400,18 @@ def main(argv: list[str] | None = None) -> int:
         help="train only the log_sigma outputs of --init (everything else frozen; trackperc-v5)",
     )
     parser.add_argument(
+        "--spacing-weight",
+        type=float,
+        default=0.0,
+        help="weight of the 0.20 m station-spacing prior in the loss (model.loss_fn; trackperc-v6)",
+    )
+    parser.add_argument(
+        "--val-plan",
+        default="default",
+        choices=sorted(real.VAL_PLANS),
+        help="internal validation cut (real.VAL_PLANS; w2-v6: larger session 2 and 11-16 parts)",
+    )
+    parser.add_argument(
         "--select-only",
         action="store_true",
         help="only write <out>/selection.json from the <out>/seed<k> runs that exist",
@@ -426,6 +447,8 @@ def main(argv: list[str] | None = None) -> int:
             args.real_label_sigma,
             args.real_label_sigma_near,
             args.sigma_head_only,
+            args.val_plan,
+            args.spacing_weight,
         )
         return result["history"]
 

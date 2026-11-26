@@ -23,6 +23,8 @@ PAD = 2
 N_BINS = 360
 STATIONS = 16
 OUT_PER_STATION = 5
+# The output contract: stations 0.20 m apart along the centreline (track.STATION_SPACING_M).
+STATION_SPACING_M = 0.20
 
 
 def conv_out_length(length: int) -> int:
@@ -104,6 +106,8 @@ def loss_fn(
     station_weight: Any = None,
     sigma_frozen: Any = None,
     label_sigma: Any = None,
+    spacing_weight: float = 0.0,
+    spacing_scale_m: float = 0.01,
 ) -> Any:
     """Gaussian negative log likelihood on (x, y) with the predicted sigma of each station, plus a
     Huber loss on the two half widths. pred and target are [B, 16, 5]; the target's log_sigma
@@ -113,7 +117,11 @@ def loss_fn(
     predicted log_sigma is detached, so the validity (sigma) head learns only from the other
     samples (simulation, whose labels are exact). `label_sigma` [B, 16] (metres, 0 for exact
     labels) is the label's own noise: the likelihood uses the variance sigma^2 + label_sigma^2,
-    so the predicted sigma describes the net's error, not the self-label's (trackperc-v5)."""
+    so the predicted sigma describes the net's error, not the self-label's (trackperc-v5).
+    `spacing_weight` > 0 adds the station-spacing prior of the output contract (stations 0.20 m
+    apart along the centreline): weight * mean(((|p_k+1 - p_k| - 0.20) / spacing_scale_m)^2) over
+    the station pairs that both carry loss. It counters the shrinking of an uncertain far polyline
+    towards the car, which shortens the refined track and with it the valid range (trackperc-v6)."""
     import torch
     from torch.nn import functional
 
@@ -131,5 +139,15 @@ def loss_fn(
     ).sum(-1)
     per_station = nll + width_weight * huber
     if station_weight is None:
-        return per_station.mean()
-    return (per_station * station_weight).sum() / station_weight.sum().clamp(min=1.0)
+        loss = per_station.mean()
+    else:
+        loss = (per_station * station_weight).sum() / station_weight.sum().clamp(min=1.0)
+    if spacing_weight > 0.0:
+        gap = torch.hypot(pred[:, 1:, 0] - pred[:, :-1, 0], pred[:, 1:, 1] - pred[:, :-1, 1])
+        dev2 = ((gap - STATION_SPACING_M) / spacing_scale_m) ** 2
+        if station_weight is None:
+            loss = loss + spacing_weight * dev2.mean()
+        else:
+            pair = station_weight[:, 1:] * station_weight[:, :-1]
+            loss = loss + spacing_weight * (dev2 * pair).sum() / pair.sum().clamp(min=1.0)
+    return loss
